@@ -6,6 +6,43 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-11-17
+
+### ✨ Features
+
+- Slim iOS simulators with simslim while keeping Store and web services available (#2562).
+- Filter the device switcher, see running devices first, and boot devices in place (#2567).
+- Join the iPhone TestFlight beta from Remote settings (#2560).
+- Record and replay Maestro-compatible device flows and simulate GPS routes (#2557).
+- Open transcript images in a full-screen viewer on iPhone and iPad (#2558).
+- Fold iOS transcript activity into the same compact groups as the Mac (#2554).
+- Configure Android devices and inspect their logs (#2552).
+- Send activity-fold metadata and message times to remote transcripts (#2551).
+- Install `alas-host` on Linux with one command (#2546).
+- Drive Android devices with agent device tools (#2545).
+- Fold Machine checkouts in phone and peer views (#2541).
+- Keep the Inbox beside its session on iPad (#2540).
+
+### 🐛 Fixes
+
+- Serve terminals to phones paired before device-kind negotiation was added (#2566).
+- Let wide visual aids scroll horizontally on iPhone and iPad (#2563).
+- Show newly created mobile sessions before the next host refresh (#2564).
+- Start Codex when lifecycle hooks report warnings but no errors (#2559).
+- Deduplicate Inbox requests across paired hosts (#2556).
+- Restart headless peers after updates (#2549).
+- Forward small standard-input payloads without a dispatch thread (#2544).
+- Support the SwiftTerm 1.99.3 build plugin on iOS (#2543).
+
+### 🏗️ Internal
+
+- Repair process and device-flow replay flakes in CI (#2561).
+- Support Swift Crypto 5 (#2555).
+- Update Fastlane to 2.242.0 (#2553).
+- Detect and fail stalled AlasCore test runs (#2550).
+- Move transcript activity folding into AlasRemoteKit (#2547).
+- Publish the iOS app to TestFlight from release CI (#2542).
+
 ## [0.24.0] - 2026-11-16
 
 ### ✨ Features

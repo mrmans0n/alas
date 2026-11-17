@@ -1,0 +1,16 @@
+{
+  "version": "0.24.1",
+  "headline": {
+    "title": "Join the iPhone beta",
+    "body": "Scan the code to join the TestFlight beta and follow, answer, and steer sessions from your iPhone.",
+    "media": "media/0.24.1-iphone-beta.png"
+  },
+  "also": [
+    {
+      "title": "Record and replay device flows"
+    },
+    {
+      "title": "Slim iOS simulators"
+    }
+  ]
+}

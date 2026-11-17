@@ -104,7 +104,7 @@ final class HostHub {
     }
 
     func pair(origins: [String], code: String) async throws(RemotePairingError) {
-        let result = try await pairingClient.pair(origins: origins, code: code, deviceName: "Alas for iOS", client: "ios")
+        let result = try await pairingClient.pair(origins: origins, code: code, deviceName: RemotePairingClient.iosDeviceName, client: "ios")
         var allOrigins = [result.origin]
         for origin in origins where !allOrigins.contains(origin) {
             allOrigins.append(origin)
@@ -313,6 +313,13 @@ final class HostHub {
                 cacheSeq += 1
                 let seq = cacheSeq
                 Task.detached { await cache.save(sessions, for: id, seq: seq) }
+            case .sessionCreated(let session), .worktreeSessionCreated(let session):
+                // Listed now, as the web client does: the host's refreshed list can lag, and until
+                // then the new session's screen would read an unlisted session as ended.
+                var sessions = sessionLists[id] ?? []
+                sessions.removeAll { $0.id == session.id }
+                sessions.append(session)
+                sessionLists[id] = sessions
             case .hello:
                 // A re-broadcast hello on a live socket: the host's state changed.
                 send(.listSessions, to: id)

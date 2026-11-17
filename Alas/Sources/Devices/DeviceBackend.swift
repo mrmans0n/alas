@@ -65,6 +65,9 @@ protocol DeviceBackend: AnyObject {
     func network(_ id: String) async throws -> AndroidNetworkState
     func setNetwork(_ id: String, wifi: Bool?, data: Bool?) async throws -> AndroidNetworkState
     func clearData(_ id: String, appID: String) async throws
+    /// simslim's state of a booted simulator; iOS only.
+    func slim(_ id: String) async throws -> SimulatorSlimState
+    func setSlim(_ id: String, on: Bool) async throws -> SimulatorSlimState
     func setPermission(_ id: String, appID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction) async throws
     /// A fixed location, or nil to clear it; either stops a route.
     func setLocation(_ id: String, _ location: SimulatorLocation?) async throws

@@ -28,6 +28,9 @@ public enum RemotePairingError: Error, Equatable {
 public struct RemotePairingClient: Sendable {
     public typealias Transport = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
+    /// The device name the iOS app has paired under since its first release.
+    public static let iosDeviceName = "Alas for iOS"
+
     private let transport: Transport
 
     public init(transport: @escaping Transport = RemotePairingClient.urlSession(timeout: 4)) {

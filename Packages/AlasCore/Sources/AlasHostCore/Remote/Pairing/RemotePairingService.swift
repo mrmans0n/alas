@@ -54,7 +54,18 @@ public final class RemotePairingService {
     public init(store: RemoteDeviceStore, now: @escaping () -> Date = { Date() }) {
         self.store = store
         self.now = now
-        self.devices = store.load()
+        var devices = store.load()
+        // The iOS app paired as a browser until it named itself with `client: "ios"`, and browsers
+        // are never served terminals, so its terminal list waited forever on an unanswered `list`.
+        // Its fixed device name is a claim no weaker than that field: such records are phones.
+        var migrated = false
+        for index in devices.indices
+        where devices[index].kind == .browser && devices[index].name == RemotePairingClient.iosDeviceName {
+            devices[index].kind = .phone
+            migrated = true
+        }
+        self.devices = devices
+        if migrated { store.save(devices) }
     }
 
     /// Mints a short-lived single-use pairing code. Previously-issued codes stay

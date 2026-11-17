@@ -49,6 +49,8 @@ public enum DeviceCommand: Equatable, Sendable {
     case setNetwork(udid: String, wifi: Bool?, data: Bool?)
     /// Android only: the app's data, as a fresh install has it.
     case clearData(udid: String, bundleID: String)
+    /// iOS only: simslim's profile on or off, without a reboot.
+    case setSlim(udid: String, on: Bool)
     case setPermission(udid: String, bundleID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction)
     /// Nil clears the simulated location.
     case setLocation(udid: String, location: SimulatorLocation?)
@@ -86,6 +88,7 @@ public enum DeviceCommand: Equatable, Sendable {
         case .setAccessibility: "device_set_accessibility"
         case .setNetwork: "device_set_network"
         case .clearData: "device_clear_data"
+        case .setSlim: "device_set_slim"
         case .setPermission: "device_set_permission"
         case .setLocation: "device_set_location"
         case .push: "device_push"
@@ -106,6 +109,7 @@ public enum DeviceCommand: Equatable, Sendable {
         case .open(let udid), .snapshot(let udid, _, _), .screenshot(let udid),
              .tap(let udid, _, _, _), .swipe(let udid, _, _, _, _), .type(let udid, _, _, _), .button(let udid, _, _, _),
              .install(let udid, _), .launch(let udid, _, _), .setAppearance(let udid, _, _, _), .setAccessibility(let udid, _), .setNetwork(let udid, _, _), .clearData(let udid, _),
+             .setSlim(let udid, _),
              .setPermission(let udid, _, _, _), .setLocation(let udid, _), .push(let udid, _, _), .openURL(let udid, _, _),
              .logs(let udid, _, _, _, _, _, _), .clipboard(let udid, _), .rotate(let udid, _, _), .record(let udid, _),
              .runFlow(let udid, _), .recordFlow(let udid, _), .setRoute(let udid, _, _, _):
@@ -142,6 +146,7 @@ public enum DeviceCommand: Equatable, Sendable {
         var liquid_glass: String?
         var wifi: Bool?
         var data: Bool?
+        var on: Bool?
         var service: String?
         var action: String?
         var latitude: Double?
@@ -178,6 +183,7 @@ public enum DeviceCommand: Equatable, Sendable {
         "device_set_appearance": ["udid", "appearance", "text_size", "increase_contrast"],
         "device_set_network": ["udid", "wifi", "data"],
         "device_clear_data": ["udid", "bundle_id"],
+        "device_set_slim": ["udid", "on"],
         "device_set_accessibility": [
             "udid", "voiceover", "reduce_motion", "button_shapes", "reduce_transparency", "color_filter", "liquid_glass",
         ],
@@ -298,6 +304,9 @@ public enum DeviceCommand: Equatable, Sendable {
             return .setNetwork(udid: try udid(), wifi: params.wifi, data: params.data)
         case "device_clear_data":
             return .clearData(udid: try udid(), bundleID: try bundleID())
+        case "device_set_slim":
+            guard let on = params.on else { throw AlasCLIRequestError.malformed }
+            return .setSlim(udid: try udid(), on: on)
         case "device_set_permission":
             guard let service = params.service.flatMap(SimulatorPrivacyService.init(rawValue:)),
                   let action = params.action.flatMap(SimulatorPrivacyAction.init(rawValue:))

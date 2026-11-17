@@ -169,6 +169,14 @@ final class SimulatorBackend: DeviceBackend {
         throw Self.unsupported("device_clear_data")
     }
 
+    func slim(_ id: String) async throws -> SimulatorSlimState {
+        try await settings.slim(udid: id)
+    }
+
+    func setSlim(_ id: String, on: Bool) async throws -> SimulatorSlimState {
+        try await settings.setSlim(udid: id, on: on)
+    }
+
     private static func unsupported(_ tool: String) -> DeviceToolError {
         DeviceToolError(message: "device_unsupported: \(tool) isn't available on iOS.")
     }

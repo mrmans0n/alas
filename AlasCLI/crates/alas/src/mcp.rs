@@ -1119,6 +1119,19 @@ fn device_tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "device_set_slim",
+            "description": format!("Slim an iOS simulator with simslim, or bring it back to stock, without a reboot. Slim turns off about 150 background services and cuts the simulator's memory about 4x, so more simulators fit on the Mac; Siri, Spotlight, iCloud, widgets and the Photos and Contacts pickers stop working, while push notifications and universal links keep working. It stays slim across reboots on iOS 18.5 and newer. Takes up to 20 seconds. Returns slim, services_off, services, persistent and memory_mb. Needs simslim installed; Android devices don't support it. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "on": { "type": "boolean", "description": "true slims the simulator; false brings every service back." }
+                },
+                "required": ["udid", "on"]
+            }
+        }),
+        json!({
             "name": "device_set_permission",
             "description": format!("Grant, revoke or reset a privacy permission for an installed app, without the system prompt. On Android the services map to runtime permissions; those Android lacks answer device_unsupported. Changing a permission may end the running app. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
@@ -2345,6 +2358,13 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             Ok(Command::Device(alas_client::DeviceCommand::ClearData {
                 udid: required_limited_string(args, "udid", 64)?,
                 bundle_id: required_limited_string(args, "bundle_id", 255)?,
+            }))
+        }
+        "device_set_slim" => {
+            reject_arguments(args, name, &["udid", "on"])?;
+            Ok(Command::Device(alas_client::DeviceCommand::SetSlim {
+                udid: required_limited_string(args, "udid", 64)?,
+                on: optional_bool(args, "on")?.ok_or_else(|| "missing required argument 'on'".to_string())?,
             }))
         }
         "device_set_permission" => {
@@ -4708,6 +4728,7 @@ mod tests {
                 "device_set_accessibility",
                 "device_set_network",
                 "device_clear_data",
+                "device_set_slim",
                 "device_set_permission",
                 "device_set_location",
                 "device_push",
@@ -5700,6 +5721,8 @@ mod tests {
             ("device_launch", json!({ "udid": "U", "bundle_id": "x", "app_path": "/a.app" }), "device_launch does not accept 'app_path'"),
             ("device_set_appearance", json!({ "udid": "U" }), "pass at least one of appearance, text_size, increase_contrast"),
             ("device_set_network", json!({ "udid": "U" }), "pass at least one of wifi, data"),
+            ("device_set_slim", json!({ "udid": "U" }), "missing required argument 'on'"),
+            ("device_set_slim", json!({ "udid": "U", "on": "yes" }), "on must be a boolean"),
             ("device_flow_record", json!({ "udid": "U", "action": "start" }), "missing required argument 'name'"),
             ("device_flow_record", json!({ "udid": "U", "action": "start", "name": "../x" }), "name may only use letters, digits, '_' and '-'"),
             ("device_flow_record", json!({ "udid": "U", "action": "stop", "name": "x" }), "name is only for start"),
@@ -5762,7 +5785,7 @@ mod tests {
         for name in ["device_list", "device_snapshot", "device_screenshot", "device_logs"] {
             assert_eq!(annotation(name, "readOnlyHint"), json!(true), "{name}");
         }
-        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch", "device_set_appearance", "device_set_accessibility", "device_set_network", "device_clear_data", "device_set_permission", "device_set_location", "device_push", "device_open_url", "device_run_flow", "device_set_route"] {
+        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch", "device_set_appearance", "device_set_accessibility", "device_set_network", "device_clear_data", "device_set_slim", "device_set_permission", "device_set_location", "device_push", "device_open_url", "device_run_flow", "device_set_route"] {
             assert_eq!(annotation(name, "destructiveHint"), json!(true), "{name}");
         }
         for scope in [ToolScope::Visual, ToolScope::Remote, ToolScope::Workspace] {
