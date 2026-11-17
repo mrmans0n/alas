@@ -50,7 +50,10 @@ struct ForkWatchTests {
             let launched = arguments.withUnsafeMutableBufferPointer {
                 posix_spawn(&pid, executable, nil, nil, $0.baseAddress!, environ)
             }
-            guard launched == 0 else { outcome.spawnFailures += 1; continue }
+            guard launched == 0 else {
+                outcome.spawnFailures += 1
+                continue
+            }
             var watch = ForkWatch.start(pid: pid, watchExit: true, queue: queue) { exited in
                 if !exited { missed.increment() }
             }
