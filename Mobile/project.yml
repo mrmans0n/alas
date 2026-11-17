@@ -43,6 +43,8 @@ targets:
     dependencies:
       - package: AlasCore
         product: AlasRemoteKit
+      - package: AlasCore
+        product: AlasHighlight
       - package: Markdown
         product: Markdown
       - package: SwiftTerm

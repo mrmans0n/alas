@@ -1,4 +1,5 @@
 import AlasRemoteKit
+import AlasHighlight
 import SwiftUI
 
 /// Display helpers ported from the web client's `repo-filter.js`. They stay in
@@ -43,18 +44,8 @@ enum RepoDisplay {
     }
 
     private static func oklch(l: Double, c: Double, hue: Double) -> Color {
-        let h = hue * .pi / 180
-        let a = c * cos(h), b = c * sin(h)
-        let l_ = pow(l + 0.3963377774 * a + 0.2158037573 * b, 3)
-        let m_ = pow(l - 0.1055613458 * a - 0.0638541728 * b, 3)
-        let s_ = pow(l - 0.0894841775 * a - 1.2914855480 * b, 3)
-        func gamma(_ v: Double) -> Double {
-            let x = min(max(v, 0), 1)
-            return x <= 0.0031308 ? 12.92 * x : 1.055 * pow(x, 1 / 2.4) - 0.055
-        }
-        return Color(red: gamma(4.0767416621 * l_ - 3.3077115913 * m_ + 0.2309699292 * s_),
-                     green: gamma(-1.2684380046 * l_ + 2.6097574011 * m_ - 0.3413193965 * s_),
-                     blue: gamma(-0.0041960863 * l_ - 0.7034186147 * m_ + 1.7076147010 * s_))
+        let rgb = OKLCH(l: l, c: c, h: hue).linearSRGB()
+        return Color(.sRGBLinear, red: rgb.r, green: rgb.g, blue: rgb.b)
     }
 }
 

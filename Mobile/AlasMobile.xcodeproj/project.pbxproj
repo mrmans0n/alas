@@ -19,6 +19,7 @@
 		23849CE940217D28217E4F16 /* ShepherdMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEF6DC8B0A58927446DDA20F /* ShepherdMenu.swift */; };
 		271977086F72799EB499DD8E /* TranscriptSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */; };
 		28905A744E97862B779D9BBB /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5675178FB5741806BEB65930 /* InboxView.swift */; };
+		2BE58B40021BA91708E27FAD /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 0A11D3E22001482E10DB6220 /* SwiftTerm */; };
 		2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */; };
 		2E36A2487A0056C7F35094FE /* ToolCallCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BD5988CE50A901089331310 /* ToolCallCard.swift */; };
 		3035A23ED932E711B9CAD674 /* UsageRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57CF74CBCBAC2A5734FA01CA /* UsageRing.swift */; };
@@ -44,7 +45,7 @@
 		A14327552D08819581097496 /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E84291A6AA43082A7F684D /* HostStore.swift */; };
 		A3EFBAAFB1F782DBE2533C3F /* TranscriptImageViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC6BBF70EB1F96D5AC5A8594 /* TranscriptImageViewer.swift */; };
 		A59DD972FD0014D05D374C07 /* ComposerPickers.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB8F788F5756229A6125FB0A /* ComposerPickers.swift */; };
-		A6FDD0434FBF579996D90B20 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 0A11D3E22001482E10DB6220 /* SwiftTerm */; };
+		A6FDD0434FBF579996D90B20 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 98208F3704BAEEBFCA4EE7FB /* Markdown */; };
 		ADC23C11ED7EB665B1C1BAED /* TerminalScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFE4FA35BA2B54541B0ABD61 /* TerminalScreen.swift */; };
 		B15AA036BD9AD1D8D0125304 /* ChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED6F3B8B35385E6C2729ABAA /* ChangesView.swift */; };
 		B43121A298365C510EF57149 /* frame.html in Resources */ = {isa = PBXBuildFile; fileRef = B7A9014AA3A262509E8B3DB3 /* frame.html */; };
@@ -54,7 +55,7 @@
 		CB152CF506A31464F04D172F /* SessionRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21408E08006F4C64E22701EE /* SessionRegistry.swift */; };
 		CD0D017197AAB3BF52A44D12 /* TranscriptImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7728D27BA09D4A7193ABB64C /* TranscriptImage.swift */; };
 		D8B8FBA1F9B4014A6DFF2679 /* TerminalsList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 987B94F79FFA056339E54033 /* TerminalsList.swift */; };
-		E25E7EA6243D3DCDD5C3ACB4 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 98208F3704BAEEBFCA4EE7FB /* Markdown */; };
+		E25E7EA6243D3DCDD5C3ACB4 /* AlasHighlight in Frameworks */ = {isa = PBXBuildFile; productRef = FE403EEB6E8C9E313B1992FF /* AlasHighlight */; };
 		E55F6FE33979517F56313A84 /* ComposerBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57A94D2BB531632B6E5027AE /* ComposerBar.swift */; };
 		E77139BEB6A5145597C12214 /* HostHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */; };
 		EBF6C7E7768E637D9F235BB0 /* AlasRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = 3517313AC46E852EA7AE203C /* AlasRemoteKit */; };
@@ -168,8 +169,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				C4B6369656041E9CD53091A1 /* AlasRemoteKit in Frameworks */,
-				E25E7EA6243D3DCDD5C3ACB4 /* Markdown in Frameworks */,
-				A6FDD0434FBF579996D90B20 /* SwiftTerm in Frameworks */,
+				E25E7EA6243D3DCDD5C3ACB4 /* AlasHighlight in Frameworks */,
+				A6FDD0434FBF579996D90B20 /* Markdown in Frameworks */,
+				2BE58B40021BA91708E27FAD /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -407,6 +409,7 @@
 			name = AlasMobile;
 			packageProductDependencies = (
 				E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */,
+				FE403EEB6E8C9E313B1992FF /* AlasHighlight */,
 				98208F3704BAEEBFCA4EE7FB /* Markdown */,
 				0A11D3E22001482E10DB6220 /* SwiftTerm */,
 			);
@@ -844,6 +847,10 @@
 		E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AlasRemoteKit;
+		};
+		FE403EEB6E8C9E313B1992FF /* AlasHighlight */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AlasHighlight;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

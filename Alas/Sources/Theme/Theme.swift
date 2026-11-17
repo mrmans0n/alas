@@ -1,3 +1,4 @@
+import AlasHighlight
 import AppKit
 import Foundation
 import os
