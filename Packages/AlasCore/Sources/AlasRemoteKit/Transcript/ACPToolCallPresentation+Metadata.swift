@@ -1,9 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
-import AlasCode
 
 package func metadataObject(_ value: AnyCodable?) -> [String: AnyCodable]? {
     if let dict = value?.value as? [String: AnyCodable] { return dict }
