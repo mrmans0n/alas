@@ -24,3 +24,18 @@ struct HighlightChunksTests {
         #expect(chunks[1].spans == [HighlightSpan(range: NSRange(location: 0, length: 1), capture: .keyword)])
     }
 }
+
+struct CodeFenceTests {
+    @Test(arguments: [
+        (["```swift", "x", "```"], true),
+        (["~~~", "x", "~~~~"], true),
+        (["    indented"], true),
+        (["```swift", "x"], false),
+        (["```swift"], false),
+        (["````", "x", "```"], false),
+        (["```", "x", "~~~"], false),
+    ])
+    func closedOnlyByAMatchingFence(lines: [String], closed: Bool) {
+        #expect(CodeFence.isClosed(lines.map { Substring($0) }) == closed)
+    }
+}

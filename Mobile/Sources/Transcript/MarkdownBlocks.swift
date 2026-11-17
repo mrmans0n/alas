@@ -22,10 +22,11 @@ enum MarkdownBlock: Equatable {
     case image(source: String, alt: String)
 
     static func parse(_ text: String) -> [MarkdownBlock] {
-        Document(parsing: text).children.compactMap(block)
+        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        return Document(parsing: text).children.compactMap { block($0, lines: lines) }
     }
 
-    private static func block(_ markup: Markup) -> MarkdownBlock? {
+    private static func block(_ markup: Markup, lines: [Substring]) -> MarkdownBlock? {
         switch markup {
         case let p as Paragraph:
             if p.childCount == 1, let image = p.child(at: 0) as? Markdown.Image {
@@ -34,7 +35,9 @@ enum MarkdownBlock: Equatable {
                 .paragraph(inline(p))
             }
         case let h as Heading: .heading(h.level, inline(h))
-        case let c as CodeBlock: .code(language: c.language, chunks: highlighted(c.code, language: c.language))
+        case let c as CodeBlock:
+            // As on the Mac, a fence still streaming stays plain: re-highlighting it per delta is too slow.
+            .code(language: c.language, chunks: highlighted(c.code, language: isClosed(c, lines: lines) ? c.language : nil))
         case let l as UnorderedList: .list(l.listItems.map { inline($0) })
         case let l as OrderedList: .list(l.listItems.map { inline($0) })
         case let q as BlockQuote: .quote(inline(q))
@@ -45,6 +48,13 @@ enum MarkdownBlock: Equatable {
     }
 
     static let codeChunkLines = 100
+
+    private static func isClosed(_ block: CodeBlock, lines: [Substring]) -> Bool {
+        guard let range = block.range, !lines.isEmpty else { return true }
+        let first = min(max(range.lowerBound.line - 1, 0), lines.count - 1)
+        let last = min(max(range.upperBound.line - 1, first), lines.count - 1)
+        return CodeFence.isClosed(Array(lines[first ... last]))
+    }
 
     /// Highlights the whole block once, then splits it, so a construct spanning a chunk
     /// boundary (a block comment, a multi-line string) still colours on both sides.
