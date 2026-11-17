@@ -1,8 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
 
 /// Process-wide memo for tree-sitter highlight spans keyed by exact source
 /// text and file extension. Virtualized diff rows re-highlight identical

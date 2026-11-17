@@ -1,9 +1,5 @@
 import Foundation
 import SwiftTreeSitter
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
 
 /// Tree-sitter backed syntax highlighter. Produces `HighlightSpan`s
 /// against the input string's UTF-16 NSRange space (which is what the

@@ -1,9 +1,5 @@
 import Foundation
 import SwiftTreeSitter
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
 
 /// Turns one source file into its declarations using the language's tags
 /// query. Pure and synchronous; callers choose the thread.

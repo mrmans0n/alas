@@ -20,6 +20,7 @@ let package = Package(
     products: [
         .library(name: "AlasCore", targets: ["AlasCore"]),
         .library(name: "AlasRemoteKit", targets: ["AlasRemoteKit"]),
+        .library(name: "AlasHighlight", targets: ["AlasHighlight"]),
         .executable(name: "alas-host", targets: ["alas-host"]),
     ],
     dependencies: [
@@ -49,9 +50,13 @@ let package = Package(
             name: "AlasIntegrations",
             dependencies: [crypto, "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures"]
         ),
+        // Foundation and SwiftTreeSitter only: syntax highlighting and symbol
+        // extraction shared with the iOS app. Must build for iOS.
+        .target(name: "AlasHighlight", dependencies: [.product(name: "SwiftTreeSitter", package: "swift-tree-sitter")]),
         .target(
             name: "AlasCode",
             dependencies: [
+                "AlasHighlight",
                 "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasIntegrations",
                 .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),
             ]
