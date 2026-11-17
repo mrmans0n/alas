@@ -82,8 +82,9 @@ enum MarkdownBlock: Equatable {
                 if let sublist = child as? ListItemContainer {
                     nested += entries(sublist, depth: depth + 1, lines: lines)
                 } else {
-                    if !text.characters.isEmpty { text += AttributedString("\n") }
-                    text += inline(child)
+                    let piece = part(child)
+                    if !piece.characters.isEmpty, !text.characters.isEmpty { text += AttributedString("\n") }
+                    text += piece
                 }
             }
             out.append(ListEntry(depth: depth, marker: marker, text: text))
@@ -107,18 +108,18 @@ enum MarkdownBlock: Equatable {
     private static func inline(_ markup: Markup) -> AttributedString {
         var out = AttributedString()
         for child in markup.children {
-            if let code = child as? CodeBlock {
-                // A fence inside a list item or quote reads as inline code rather than vanishing.
-                if !out.characters.isEmpty { out += AttributedString("\n") }
-                out += styled(code.code.trimmingCharacters(in: .newlines), .code)
-            } else if child is BlockMarkup {
-                if !out.characters.isEmpty { out += AttributedString("\n") }
-                out += inline(child)
-            } else {
-                out += run(child, [])
-            }
+            let piece = part(child)
+            if child is BlockMarkup, !piece.characters.isEmpty, !out.characters.isEmpty { out += AttributedString("\n") }
+            out += piece
         }
         return out
+    }
+
+    /// One child of a flattened block: a fence inside a list item or quote reads as inline code
+    /// rather than vanishing, another block flattens in turn, inline markup keeps its styling.
+    private static func part(_ child: Markup) -> AttributedString {
+        if let code = child as? CodeBlock { return styled(code.code.trimmingCharacters(in: .newlines), .code) }
+        return child is BlockMarkup ? inline(child) : run(child, [])
     }
 
     private static func run(_ markup: Markup, _ intent: InlinePresentationIntent) -> AttributedString {

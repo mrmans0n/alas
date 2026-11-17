@@ -162,9 +162,11 @@ struct AgentMarkdown: View {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
                             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                ListMarker(marker: entry.marker, text: entry.text)
+                                ListMarker(marker: entry.marker)
                                 Text(entry.text)
                             }
+                            // One element per item, so VoiceOver reads a task's state and text once.
+                            .accessibilityElement(children: .combine)
                             .padding(.leading, CGFloat(entry.depth) * 16)
                         }
                     }
@@ -190,7 +192,6 @@ struct AgentMarkdown: View {
 
 private struct ListMarker: View {
     let marker: ListEntry.Marker
-    let text: AttributedString
 
     var body: some View {
         switch marker {
@@ -199,8 +200,7 @@ private struct ListMarker: View {
         case .task(let checked):
             Image(systemName: checked ? "checkmark.square.fill" : "square")
                 .foregroundStyle(checked ? Color.accentColor : .secondary)
-                .accessibilityLabel(Text(text))
-                .accessibilityAddTraits(checked ? .isSelected : [])
+                .accessibilityLabel(checked ? "Checked" : "Unchecked")
         }
     }
 }
