@@ -57,4 +57,28 @@ struct GGMutationModelsTests {
 
         #expect(decoded == value)
     }
+
+    @Test(arguments: [
+        (true, CodeHostMergeSettings.gitLab(mergeMethod: "merge", squashOption: "default_on"), GGLandMergeStrategy.mergeCommitsRebaseIfNeeded),
+        (true, .gitLab(mergeMethod: "merge", squashOption: "always"), .squashAndRebase),
+        (true, .gitLab(mergeMethod: "ff", squashOption: "default_off"), .squashAndRebase),
+        (true, .gitHub(allowsMergeCommit: true, requiresLinearHistory: false, allowedMergeMethods: nil), .mergeCommitsRebaseIfNeeded),
+        (true, .gitHub(allowsMergeCommit: false, requiresLinearHistory: false, allowedMergeMethods: nil), .squashAndRebase),
+        (true, .gitHub(allowsMergeCommit: true, requiresLinearHistory: true, allowedMergeMethods: nil), .squashAndRebase),
+        (true, .gitHub(allowsMergeCommit: true, requiresLinearHistory: false, allowedMergeMethods: ["squash"]), .squashAndRebase),
+        // Older gg can't keep a merge commit nor skip a rebase.
+        (false, .gitLab(mergeMethod: "merge", squashOption: "default_on"), .squashAndRebase),
+        // Unreadable settings keep gg's defaults.
+        (true, nil, .squashAndRebase),
+    ] as [(Bool, CodeHostMergeSettings?, GGLandMergeStrategy)])
+    func landStrategyMergesCommitsOnlyWhereTheRepositoryTakesThem(
+        supportsRebaseIfNeeded: Bool,
+        settings: CodeHostMergeSettings?,
+        expected: GGLandMergeStrategy
+    ) {
+        let strategy = GGLandMergeStrategy.decide(supportsRebaseIfNeeded: supportsRebaseIfNeeded, settings: settings)
+
+        #expect(strategy == expected)
+        #expect(strategy.landArguments == (expected == .squashAndRebase ? [] : ["--no-squash", "--rebase-if-needed"]))
+    }
 }

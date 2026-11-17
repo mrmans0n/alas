@@ -170,6 +170,19 @@ public enum ReviewMergeMethod: String, Codable, Equatable, Sendable {
     case rebase
 }
 
+/// How a repository lets its review requests merge into a base branch, as
+/// the forge reports it.
+public enum CodeHostMergeSettings: Equatable, Sendable {
+    /// GitLab project settings: `merge_method` ("merge", "rebase_merge",
+    /// "ff") and `squash_option` ("never", "always", "default_on",
+    /// "default_off").
+    case gitLab(mergeMethod: String, squashOption: String)
+    /// GitHub: whether the repository allows merge commits, and the rules
+    /// active on the base branch. `allowedMergeMethods` is the base's
+    /// `pull_request` rule's list, nil when no rule restricts it.
+    case gitHub(allowsMergeCommit: Bool, requiresLinearHistory: Bool, allowedMergeMethods: [String]?)
+}
+
 public enum ReviewCheckBucket: String, Codable, Equatable, Sendable {
     case pass
     case fail

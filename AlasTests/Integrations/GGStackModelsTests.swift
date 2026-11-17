@@ -48,6 +48,15 @@ struct GGStackModelsTests {
         #expect(first.id == "id-1")
         #expect(stack.entries[2].prState == nil)
         #expect(stack.entries[2].isCurrent)
+        // gg before `auto_merge` omits it: nothing is queued as far as Alas knows.
+        #expect(stack.entries.map(\.autoMerge) == [false, false, false])
+        // The shared fixture stays unqueued: a queued entry blocks sync and rebase.
+        let queuedJSON = Self.fixture.replacingOccurrences(
+            of: #""ci_status": "running", "is_current": false,"#,
+            with: #""ci_status": "running", "is_current": false, "auto_merge": true,"#
+        )
+        let queued = try #require(try GGStackSnapshot.decode(fromJSON: Data(queuedJSON.utf8)).stack)
+        #expect(queued.entries.map(\.autoMerge) == [false, true, false])
     }
 
     @Test func nonStackResponseDecodesWithNilStack() throws {
@@ -94,7 +103,7 @@ struct GGStackModelsTests {
             currentPosition: 2, behindBase: nil,
             entries: [
                 GGStackEntry(position: 1, sha: "oldaaaa", title: "old", ggId: "id-1", prNumber: 10, prState: .merged, approved: true, ciStatus: .success),
-                GGStackEntry(position: 2, sha: "oldbbbb", title: "old", prNumber: 20, prState: .open, ciStatus: .running, isCurrent: true),
+                GGStackEntry(position: 2, sha: "oldbbbb", title: "old", prNumber: 20, prState: .open, ciStatus: .running, isCurrent: true, autoMerge: true),
             ]
         )
 
@@ -104,6 +113,7 @@ struct GGStackModelsTests {
         #expect(merged.entries.map(\.prState) == [.merged, .open])
         #expect(merged.entries[0].approved)
         #expect(merged.entries[1].ciStatus == .running)
+        #expect(merged.entries.map(\.autoMerge) == [false, true])
     }
 
     @Test func localStackMatchesLegacyRemoteMetadataBySHA() {

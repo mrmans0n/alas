@@ -133,6 +133,12 @@ public struct GGStack: Codable, Equatable, Sendable {
         entries.first { sha.hasPrefix($0.sha) || $0.sha.hasPrefix(sha) }
     }
 
+    /// An entry still open on the forge has a merge queued: pushing its
+    /// branch (rebase, sync) would cancel that merge.
+    public var hasQueuedMerge: Bool {
+        entries.contains { $0.autoMerge && $0.prState != .merged && $0.prState != .closed }
+    }
+
     public func mergingRemoteMetadata(from remote: GGStack?) -> GGStack {
         guard let remote, name == remote.name else { return self }
         return GGStack(
@@ -162,7 +168,8 @@ public struct GGStack: Codable, Equatable, Sendable {
                     prState: match.prState,
                     approved: match.approved,
                     ciStatus: match.ciStatus,
-                    isCurrent: entry.isCurrent
+                    isCurrent: entry.isCurrent,
+                    autoMerge: match.autoMerge
                 )
             }
         )
@@ -309,10 +316,14 @@ public struct GGStackEntry: Codable, Equatable, Identifiable, Sendable {
     public let approved: Bool
     public let ciStatus: GGCIStatus?
     public let isCurrent: Bool
+    /// The forge has a merge queued for the entry: GitLab auto-merge or a
+    /// merge train, GitHub auto-merge. False when gg can't tell (older gg,
+    /// no request, or a listing without a forge refresh).
+    public let autoMerge: Bool
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case position, sha, title, ggId, ggParent, prNumber, prState,
-             approved, ciStatus, isCurrent
+             approved, ciStatus, isCurrent, autoMerge
     }
 
     public init(
@@ -325,7 +336,8 @@ public struct GGStackEntry: Codable, Equatable, Identifiable, Sendable {
         prState: GGPRState? = nil,
         approved: Bool = false,
         ciStatus: GGCIStatus? = nil,
-        isCurrent: Bool = false
+        isCurrent: Bool = false,
+        autoMerge: Bool = false
     ) {
         self.position = position
         self.sha = sha
@@ -337,6 +349,7 @@ public struct GGStackEntry: Codable, Equatable, Identifiable, Sendable {
         self.approved = approved
         self.ciStatus = ciStatus
         self.isCurrent = isCurrent
+        self.autoMerge = autoMerge
     }
 
     // Tolerant decode: unknown enum strings and future fields must not
@@ -355,6 +368,7 @@ public struct GGStackEntry: Codable, Equatable, Identifiable, Sendable {
         ciStatus = (try? c.decode(String.self, forKey: .ciStatus))
             .flatMap(GGCIStatus.init(rawValue:))
         isCurrent = (try? c.decode(Bool.self, forKey: .isCurrent)) ?? false
+        autoMerge = (try? c.decode(Bool.self, forKey: .autoMerge)) ?? false
     }
 }
 
