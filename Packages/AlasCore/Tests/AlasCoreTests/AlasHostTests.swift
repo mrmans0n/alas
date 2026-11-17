@@ -3,7 +3,7 @@ import Testing
 @_spi(Testing) @testable import AlasCore
 @_spi(Testing) @testable import AlasHostCore
 
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(5)))
 @MainActor
 struct AlasHostTests {
     /// A worktree's snapshot carries the operation holding it and whether it

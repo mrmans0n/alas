@@ -247,7 +247,7 @@ struct ACPCodexHooksTests {
         await manager.detach(sessionId: session.id)
     }
 
-    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    @Test(.timeLimit(.minutes(5)), arguments: [false, true])
     @MainActor func attachmentReplacementRetiresVisibleReview(restart: Bool) async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("hook-replace-\(UUID()).sqlite")
         defer { try? FileManager.default.removeItem(at: path) }

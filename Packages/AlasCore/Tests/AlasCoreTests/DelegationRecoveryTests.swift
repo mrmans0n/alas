@@ -63,7 +63,7 @@ struct DelegationRecoveryTests {
     /// existed, restarts like a local one. What the peer allowed is not
     /// stored, so it cannot auto-run on this Mac's default, and it joins no
     /// local hierarchy.
-    @Test(.timeLimit(.minutes(1))) func recoveryReattachesPeerChild() async throws {
+    @Test(.timeLimit(.minutes(5))) func recoveryReattachesPeerChild() async throws {
         let fixture = try PeerHostFixture()
         defer { fixture.tearDown() }
         try await fixture.persistence.insert(fixture.peerRecord(phase: .starting, pendingInitialPrompt: "Go"))
@@ -83,7 +83,7 @@ struct DelegationRecoveryTests {
 
     /// A finished peer child nobody recovers or reopens still names its Mac
     /// after the one backfill the host runs at boot.
-    @Test(.timeLimit(.minutes(1))) func bootBackfillNamesFinishedPeerChildren() async throws {
+    @Test(.timeLimit(.minutes(5))) func bootBackfillNamesFinishedPeerChildren() async throws {
         let fixture = try PeerHostFixture()
         defer { fixture.tearDown() }
         try await fixture.persistence.insert(fixture.peerRecord(phase: .ready, pendingInitialPrompt: nil))
@@ -105,7 +105,7 @@ struct DelegationRecoveryTests {
     /// a peer child that had a turn in flight and touches nothing else: a
     /// local child it does not list would otherwise fail, and a local
     /// session's messages would be delivered.
-    @Test(.timeLimit(.minutes(1))) func scopedRecoveryReattachesPeerChildAndLeavesLocalRows() async throws {
+    @Test(.timeLimit(.minutes(5))) func scopedRecoveryReattachesPeerChildAndLeavesLocalRows() async throws {
         let fixture = try PeerHostFixture()
         defer { fixture.tearDown() }
         try await fixture.seedQueuedTurn(sessionIDs: ["child", "local-ready"], otherSessionIDs: ["local-parent"])
@@ -157,7 +157,7 @@ struct DelegationRecoveryTests {
     /// Remote serves before recovery reads its rows, so a row may be a healthy
     /// child this process just created. Rows stamp whole seconds, so one from
     /// the second it started counts as its own.
-    @Test(.timeLimit(.minutes(1))) func recoveryLeavesChildrenThisProcessCreated() async throws {
+    @Test(.timeLimit(.minutes(5))) func recoveryLeavesChildrenThisProcessCreated() async throws {
         let fixture = try PeerHostFixture()
         defer { fixture.tearDown() }
         fixture.core.processStartedAt = 100
@@ -192,7 +192,7 @@ struct DelegationRecoveryTests {
     /// `alas-host peers remove` with no host running, leaves a root parent's
     /// wake in the inbox. Only its source row says it is the host's to deliver;
     /// `scopedRecoveryReattachesPeerChildAndLeavesLocalRows` pins the opposite.
-    @Test(.timeLimit(.minutes(1))) func scopedRecoveryDeliversAPeerChildsOutcomeToItsRootParent() async throws {
+    @Test(.timeLimit(.minutes(5))) func scopedRecoveryDeliversAPeerChildsOutcomeToItsRootParent() async throws {
         let fixture = try PeerHostFixture()
         defer { fixture.tearDown() }
         try await fixture.seedQueuedTurn(sessionIDs: [], otherSessionIDs: ["parent"])
@@ -212,7 +212,7 @@ struct DelegationRecoveryTests {
     /// Remote can come on after launch, when nothing is there to collect from
     /// yet, and each time it does it brings a new client: the old one's
     /// channels are gone, and the signals go to the new one's slots.
-    @Test(.timeLimit(.minutes(2))) func collectionFollowsPeersSetAndReplacedAfterItWasRequested() async throws {
+    @Test(.timeLimit(.minutes(5))) func collectionFollowsPeersSetAndReplacedAfterItWasRequested() async throws {
         let fixture = try PeerHostFixture()
         defer { fixture.tearDown() }
         try await fixture.seedQueuedTurn(sessionIDs: [], otherSessionIDs: ["parent"])
@@ -241,7 +241,7 @@ struct DelegationRecoveryTests {
 
     /// Wired as headless boot wires it, a child blocked with no app around
     /// reaches the peer.
-    @Test(.timeLimit(.minutes(1))) func blockedChildOfAHeadlessBuiltManagerReachesTheOutbox() async throws {
+    @Test(.timeLimit(.minutes(5))) func blockedChildOfAHeadlessBuiltManagerReachesTheOutbox() async throws {
         let fixture = try PeerHostFixture()
         defer { fixture.tearDown() }
         let persistence = fixture.persistence

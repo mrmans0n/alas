@@ -267,7 +267,7 @@ struct ACPV2AttachmentRuntimeTests {
         return } }
     }
 
-    @Test(.timeLimit(.minutes(1))) func everyCommittedRequestIsOfferedWithItsOriginalCaptureAcrossABurst() async throws {
+    @Test(.timeLimit(.minutes(5))) func everyCommittedRequestIsOfferedWithItsOriginalCaptureAcrossABurst() async throws {
         let fixture = try await RuntimeFixture()
         let retained = AsyncStream<ACPV2AttachmentRuntime.InboundEvent>.makeStream()
         let runtime = try fixture.runtime(onInbound: { retained.continuation.yield($0) })

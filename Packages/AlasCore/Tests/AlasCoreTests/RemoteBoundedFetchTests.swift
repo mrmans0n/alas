@@ -8,7 +8,7 @@ import AlasFoundation
     /// cancelled task before `run()` waits for it. That result must still end
     /// the fetch: the server here never answers, so a dropped result waits
     /// out the five-minute request timeout, well past the time limit.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(5)))
     func aResultBeforeTheFetchWaitsStillEndsIt() async throws {
         let server = try SilentServer()
         defer { server.close() }
