@@ -108,6 +108,10 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
                                       if case .groupHeader(let group, _, _, _) = item.kind {
                                           act(onGroup: id) { $0.showAll(group) }
                                       }
+                                  }, showsAll: { [unowned self] in shownExpanded.contains(Self.key(id, part: $0)) },
+                                  showAllPart: { [unowned self] in
+                                      input.expanded.wrappedValue.formSymmetricDifference([Self.key(id, part: $0)])
+                                      sync()
                                   })
             }
             .margins(.all, 0)
@@ -164,7 +168,8 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
             followsTail = true
             if pinned { scrollToBottom() }
         }
-        let toggled = expanded.symmetricDifference(shownExpanded)
+        // A part's key toggles its row, so the row re-measures and holds still like an expand.
+        let toggled = Set(expanded.symmetricDifference(shownExpanded).map(Self.rowID))
         let tappedGroup = tappedGroup
         self.tappedGroup = nil
         guard newIDs != ids || !reconfigure.isEmpty || !toggled.isEmpty else { return }
@@ -217,6 +222,11 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         // A prepend lands mid-scroll; holding it past this pass would fight the reader's finger.
         if prepended { anchor = nil }
     }
+
+    /// A part of a row kept in `expanded` beside the rows, such as a diff showing all its lines.
+    private static func key(_ id: String, part: String) -> String { id + "\u{1F}" + part }
+
+    private static func rowID(_ key: String) -> String { String(key.prefix { $0 != "\u{1F}" }) }
 
     /// A group's id follows its first member, so a page that continues the run re-keys its header.
     /// Maps a vanished group id to the row now holding that member: the member's own row when it is
