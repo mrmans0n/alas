@@ -48,7 +48,7 @@ struct JSONRPCFramerBoundsTests {
 }
 
 struct JSONRPCStdioFramingFailureTests {
-    @Test(.timeLimit(.minutes(1)), arguments: [JSONRPCProcessTerminationScope.processOnly, .processTree])
+    @Test(.timeLimit(.minutes(5)), arguments: [JSONRPCProcessTerminationScope.processOnly, .processTree])
     func terminationDuringStartupStillStopsThePublishedChild(scope: JSONRPCProcessTerminationScope) async throws {
         let transport = JSONRPCStdioTransport(
             executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", "read value"],
@@ -69,7 +69,7 @@ struct JSONRPCStdioFramingFailureTests {
 
     // The child never exits, so a stream that waits for it never ends and
     // the time limit fails the test.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(5)))
     func contentLengthFailureEndsConsumersWhileChildIsStillWaiting() async throws {
         let transport = JSONRPCStdioTransport(
             executable: URL(fileURLWithPath: "/bin/sh"),

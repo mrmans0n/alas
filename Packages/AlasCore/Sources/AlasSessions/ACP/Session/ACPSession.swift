@@ -2866,6 +2866,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// transcript carries its row. Idempotent: OpenCode has no explicit
     /// spawn notification, so Alas synthesizes one per child update.
     ///
+    /// A spawn from an adapter that reports the child's role where the task
+    /// was (`ACPSubagentSpawn.carriesTask(from:)`) registers no task; the
+    /// child's transcript shows the task as the message it was handed.
+    ///
     /// Returns the transcript indices to persist, or an empty set when the
     /// spawn told us nothing new.
     @discardableResult
@@ -2874,6 +2878,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         at timestamp: Date = Date(),
         flushingReplayCandidates: Bool = true
     ) -> Set<Int> {
+        let spawn = ACPSubagentSpawn.carriesTask(from: agentInfo) ? spawn : spawn.withoutTask
         let id = spawn.subagentSessionId
         guard !id.isEmpty else { return [] }
         nextPromptActivity.send()

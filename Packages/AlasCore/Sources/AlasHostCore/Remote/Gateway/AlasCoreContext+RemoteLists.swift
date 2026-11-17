@@ -99,6 +99,7 @@ extension AlasCoreContext {
     @_spi(AppHost) public func remoteWorktreeSummary(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeSummary {
         // A folder has no Git metrics to compute.
         if project.isFolder { return remoteWorktreeSummaryWithoutMetrics(project: project, worktree: worktree) }
+        await loadRepositoryKey(of: project)
         let config = environment.configuration()
         let git = GitService()
         do {
@@ -109,7 +110,7 @@ extension AlasCoreContext {
                 resolution: GitService.BaseResolution.forCommits(mode: config.changes.comparisonMode, userOverrodeBaseBranch: false)
             )
             let (changes, commitResult) = try await (status, commits)
-            return listedUnderPrimary(RemoteWorktreeSummaryBuilder.make(
+            return listed(RemoteWorktreeSummaryBuilder.make(
                 projectName: project.name,
                 worktree: worktree,
                 isMain: projects.isMain(worktree, in: project),
@@ -121,7 +122,7 @@ extension AlasCoreContext {
     }
 
     @_spi(AppHost) public func remoteWorktreeSummaryWithoutMetrics(project: ProjectConfig, worktree: Worktree) -> RemoteWorktreeSummary {
-        listedUnderPrimary(RemoteWorktreeSummaryBuilder.make(
+        listed(RemoteWorktreeSummaryBuilder.make(
             projectName: project.name,
             worktree: worktree,
             isMain: projects.isMain(worktree, in: project),
@@ -130,8 +131,12 @@ extension AlasCoreContext {
         ), project: project)
     }
 
-    /// A Machine checkout's worktree is shown under its local project, by that project's name.
-    private func listedUnderPrimary(_ summary: RemoteWorktreeSummary, project: ProjectConfig) -> RemoteWorktreeSummary {
+    /// A summary with its repository identity, as far as it is known. A
+    /// Machine checkout's worktree is shown under its local project, by that
+    /// project's name.
+    private func listed(_ summary: RemoteWorktreeSummary, project: ProjectConfig) -> RemoteWorktreeSummary {
+        var summary = summary
+        summary.repositoryKey = repositoryKey(of: project)
         guard let primaryId = project.linkedProjectId,
               let primary = projects.projects.first(where: { $0.id == primaryId })
         else { return summary }
@@ -153,7 +158,30 @@ extension AlasCoreContext {
             isFolder: summary.isFolder
         )
         listed.linkedProjectId = primaryId
+        listed.repositoryKey = summary.repositoryKey
         return listed
+    }
+
+    /// The project whose origin names the repository: a Machine checkout's
+    /// local project, since the link already matched their origins.
+    private func repositoryOwner(of project: ProjectConfig) -> ProjectConfig? {
+        if project.isFolder { return nil }
+        guard let primaryId = project.linkedProjectId else { return project.host == nil ? project : nil }
+        return projects.projects.first { $0.id == primaryId && $0.host == nil && !$0.isFolder }
+    }
+
+    private func repositoryKey(of project: ProjectConfig) -> String? {
+        repositoryOwner(of: project).flatMap { repositoryKeys[$0.id] ?? nil }
+    }
+
+    /// Reads the owning project's origin the first time it is needed. A
+    /// failed read is not remembered, so the next list tries again.
+    private func loadRepositoryKey(of project: ProjectConfig) async {
+        guard let owner = repositoryOwner(of: project), repositoryKeys[owner.id] == nil,
+              let remotes = try? await GitService().remotes(worktreePath: URL(fileURLWithPath: owner.path))
+        else { return }
+        repositoryKeys[owner.id] = .some(remotes.first { $0.name == "origin" && $0.direction == .fetch }
+            .flatMap { GitRemoteIdentity.normalized($0.url) })
     }
 
     nonisolated static let folderWorktreeCreationMessage = "Folder projects are not git repositories and cannot create worktrees."

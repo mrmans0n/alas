@@ -371,15 +371,13 @@ struct ACPInitializeTests {
           "protocolVersion": 1,
           "agentCapabilities": {
             "_meta": {
-              "goal": \(goalJSON),
-              "opencode/child-session-updates": true
+              "goal": \(goalJSON)
             }
           }
         }
         """.utf8))
 
         #expect(result.agentCapabilities?.meta.goal == nil)
-        #expect(result.agentCapabilities?.meta.openCodeChildSessionUpdates == true)
     }
 
     @Test("decodes auth method type variants")

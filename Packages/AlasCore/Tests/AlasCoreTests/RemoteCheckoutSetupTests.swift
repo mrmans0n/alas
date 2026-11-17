@@ -34,7 +34,7 @@ struct RemoteCheckoutSetupTests {
                 ? ProcessResult(exitCode: 0, stdout: "/home/me/code\nalas\thttps://github.com/you/alas\n", stderr: "")
                 : ProcessResult(exitCode: 0, stdout: "", stderr: "Cloning into 'alas-2'...")
         }
-        #expect(checkout == .init(path: "/home/me/code/alas-2", cloned: true))
+        #expect(checkout == "/home/me/code/alas-2")
         let clone = try #require(await commands.last)
         #expect(clone.contains("git clone --progress") && clone.contains("alas-2"))
     }

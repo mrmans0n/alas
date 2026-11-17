@@ -9,7 +9,7 @@ struct HostSessionsTests {
     /// The host's session verbs drive an agent end to end: a session is
     /// created and connected, takes a prompt, has its permission request
     /// answered once, and is stopped, renamed and archived.
-    @Test(.timeLimit(.minutes(1))) func sessionVerbsDriveAnAgent() async throws {
+    @Test(.timeLimit(.minutes(5))) func sessionVerbsDriveAnAgent() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         var attaching: Task<UUID?, Never>?
@@ -407,7 +407,7 @@ struct HostSessionsTests {
 
     /// The client that asked for an install can go away while it runs; the
     /// session still connects once the adapter is there.
-    @Test(.timeLimit(.minutes(1))) func anInstallOutlivesTheClientThatAskedForIt() async throws {
+    @Test(.timeLimit(.minutes(5))) func anInstallOutlivesTheClientThatAskedForIt() async throws {
         let setup = Mutex(ACPSetupResult.missing(reason: "the adapter is not installed"))
         let fixture = try Fixture(setupEvaluator: { _ in setup.withLock { $0 } })
         defer { fixture.tearDown() }
@@ -427,7 +427,7 @@ struct HostSessionsTests {
     }
 
     /// A paired Mac's other requests keep flowing while an install runs.
-    @Test(.timeLimit(.minutes(1))) func aSlowInstallDoesNotHoldTheConnection() async throws {
+    @Test(.timeLimit(.minutes(5))) func aSlowInstallDoesNotHoldTheConnection() async throws {
         let fixture = try Fixture(setupEvaluator: { _ in .missing(reason: "the adapter is not installed") })
         defer { fixture.tearDown() }
         let sessions = fixture.host.sessions
@@ -450,7 +450,7 @@ struct HostSessionsTests {
 
     /// An SSH worktree's agent runs on its SSH host, so that is where its
     /// missing adapter is installed, as the app's own Install does.
-    @Test(.timeLimit(.minutes(1))) func anSSHSessionsAdapterIsInstalledOnItsHost() async throws {
+    @Test(.timeLimit(.minutes(5))) func anSSHSessionsAdapterIsInstalledOnItsHost() async throws {
         let fixture = try Fixture(remoteHost: "box", remoteAdapterResolver: { _, _, _ in .missing(reason: "not on box") })
         defer { fixture.tearDown() }
         let targets = Mutex<[String]>([])
@@ -472,7 +472,7 @@ struct HostSessionsTests {
 
     /// A Remote client whose prompt fails hears why with the rejection, as
     /// the sessionConfig saying so may come later or not at all.
-    @Test(.timeLimit(.minutes(1))) func aRejectedRemotePromptCarriesItsReason() async throws {
+    @Test(.timeLimit(.minutes(5))) func aRejectedRemotePromptCarriesItsReason() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         var attaching: Task<Void, Never>?
@@ -685,7 +685,7 @@ struct HostSessionsTests {
     /// After another instance takes the session over, whatever this one still
     /// holds is refused: a setting the session drops, and an answer that would
     /// resume the agent beside the new writer.
-    @Test(.timeLimit(.minutes(1))) func settingsLostToATakeoverAreRefused() async throws {
+    @Test(.timeLimit(.minutes(5))) func settingsLostToATakeoverAreRefused() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         var attaching: Task<UUID?, Never>?

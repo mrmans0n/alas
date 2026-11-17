@@ -119,6 +119,10 @@ public final class AlasCoreContext {
     /// One per project: a free-name creation holds it from picking a free
     /// name until the worktree exists, so the next pick sees it.
     @ObservationIgnored var freeNameGates: [String: SerialGate] = [:]
+    /// Each git project's repository identity (normalized origin), read once
+    /// per project; nil inside when it has none. Remote lists use it to group
+    /// one repository's checkouts across machines.
+    @ObservationIgnored var repositoryKeys: [String: String?] = [:]
     /// The PR or stack publish running for each worktree; one waits for another.
     @ObservationIgnored var prCreateTasks: [String: Task<AlasCLIResponse, Never>] = [:]
     /// The agent `stack_ship` still running for each worktree after its

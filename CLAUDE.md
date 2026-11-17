@@ -52,6 +52,12 @@ Coverage is not a goal. Fewer, sharper tests beat many shallow ones.
 - Never synchronize with a fixed `Task.sleep`. Await the event, inject a
   clock, or poll a condition with a deadline. Reuse an existing polling or
   fixture helper instead of writing another private copy.
+- A `.timeLimit` on an AlasCore test is only for catching hangs: use
+  `.minutes(5)`. `swift test` starts every test at once, so a test's clock also
+  runs while it waits behind the others, for most of a CI run.
+- A `.timeLimit` on an AlasCore test is only for catching hangs: use
+  `.minutes(5)`. `swift test` starts every test at once, so a test's clock also
+  runs while it waits behind the others, for most of a CI run.
 - Git stays real. Tests that touch git are integration tests; do not fake or
   mock git. Keep them cheap instead: build only the repository the assertions
   need, reuse a template repository copied per test rather than re-running

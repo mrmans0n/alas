@@ -24,7 +24,7 @@ public struct RemoteWorktreeEntry: Identifiable, Equatable, Sendable {
             ?? closedSessions.first
     }
 
-    fileprivate var recency: Int64 {
+    var recency: Int64 {
         (activeSessions + closedSessions).map(\.updatedAt).max() ?? 0
     }
 }
@@ -35,6 +35,9 @@ public struct RemoteRepoSection: Identifiable, Equatable, Sendable {
     /// The owning Mac's name for federated rows; nil for the local host.
     public let hostName: String?
     public let worktrees: [RemoteWorktreeEntry]
+
+    /// The repository its worktrees report, when the host knows it.
+    public var repositoryKey: String? { worktrees.lazy.compactMap { $0.summary?.repositoryKey }.first }
 }
 
 public enum RemoteSessionDirectory {
@@ -80,35 +83,37 @@ public enum RemoteSessionDirectory {
     /// Worktrees waiting on the user first, then running ones, each group
     /// keeping the recency order `sections` gave it.
     public static func attentionFirst(_ worktrees: [RemoteWorktreeEntry]) -> [RemoteWorktreeEntry] {
+        attentionFirst(worktrees, by: \.self)
+    }
+
+    static func attentionFirst<Item>(_ items: [Item], by worktree: (Item) -> RemoteWorktreeEntry) -> [Item] {
         func rank(_ w: RemoteWorktreeEntry) -> Int { w.needsAttention ? 0 : w.isRunning ? 1 : 2 }
-        return worktrees.enumerated()
-            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+        return items.enumerated()
+            .sorted { (rank(worktree($0.element)), $0.offset) < (rank(worktree($1.element)), $1.offset) }
             .map(\.element)
     }
 
     public static func filter(_ sections: [RemoteRepoSection], by filter: RemoteSessionFilter, query: String) -> [RemoteRepoSection] {
-        sections.filter { matches($0, filter) && matches($0, query: query) }
+        sections.filter { matches(title: $0.title, worktrees: $0.worktrees, filter: filter, query: query) }
     }
 
     public static func counts(_ sections: [RemoteRepoSection]) -> [RemoteSessionFilter: Int] {
         Dictionary(uniqueKeysWithValues: RemoteSessionFilter.allCases.map { f in
-            (f, sections.filter { matches($0, f) }.count)
+            (f, sections.filter { matches(title: $0.title, worktrees: $0.worktrees, filter: f, query: "") }.count)
         })
     }
 
-    private static func matches(_ section: RemoteRepoSection, _ filter: RemoteSessionFilter) -> Bool {
-        switch filter {
+    static func matches(title: String, worktrees: [RemoteWorktreeEntry], filter: RemoteSessionFilter, query: String) -> Bool {
+        let kept = switch filter {
         case .all: true
-        case .running: section.worktrees.contains(where: \.isRunning)
-        case .dirty: section.worktrees.contains(where: \.isDirty)
+        case .running: worktrees.contains(where: \.isRunning)
+        case .dirty: worktrees.contains(where: \.isDirty)
         }
-    }
-
-    private static func matches(_ section: RemoteRepoSection, query: String) -> Bool {
+        guard kept else { return false }
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if needle.isEmpty { return true }
         let hit = { (text: String?) in text?.localizedCaseInsensitiveContains(needle) ?? false }
-        return hit(section.title) || section.worktrees.contains { w in
+        return hit(title) || worktrees.contains { w in
             hit(w.title) || hit(w.summary?.branch)
                 || (w.activeSessions + w.closedSessions).contains { hit($0.title) }
         }

@@ -22,47 +22,6 @@ struct ACPSubagentProtocolTests {
         #expect(meta["opencode/child-session-updates"] as? Bool == true)
     }
 
-    @Test("agent subagent support is read from sessionCapabilities")
-    func agentSubagentCapability() throws {
-        let json = """
-        {
-          "protocolVersion": 1,
-          "agentCapabilities": {
-            "loadSession": true,
-            "sessionCapabilities": { "resume": {}, "subagents": {} }
-          }
-        }
-        """
-        let result = try JSONDecoder().decode(ACPInitializeResult.self, from: Data(json.utf8))
-        #expect(result.agentCapabilities?.sessionCapabilities.supportsSubagents == true)
-        #expect(result.agentCapabilities?.meta.openCodeChildSessionUpdates == false)
-    }
-
-    @Test("OpenCode advertises subagents through agent _meta")
-    func openCodeAgentCapability() throws {
-        let json = """
-        {
-          "protocolVersion": 1,
-          "agentCapabilities": {
-            "_meta": { "opencode/child-session-updates": true }
-          }
-        }
-        """
-        let result = try JSONDecoder().decode(ACPInitializeResult.self, from: Data(json.utf8))
-        #expect(result.agentCapabilities?.sessionCapabilities.supportsSubagents == false)
-        #expect(result.agentCapabilities?.meta.openCodeChildSessionUpdates == true)
-    }
-
-    @Test("an agent that ignores the capability reports no subagent support")
-    func agentWithoutSubagentCapability() throws {
-        let json = """
-        { "protocolVersion": 1, "agentCapabilities": { "loadSession": true } }
-        """
-        let result = try JSONDecoder().decode(ACPInitializeResult.self, from: Data(json.utf8))
-        #expect(result.agentCapabilities?.sessionCapabilities.supportsSubagents == false)
-        #expect(result.agentCapabilities?.meta.openCodeChildSessionUpdates == false)
-    }
-
     @Test("decodes subagent_spawned with its capabilities")
     func decodesSpawn() throws {
         let json = """

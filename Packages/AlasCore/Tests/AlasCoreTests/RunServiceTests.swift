@@ -5,7 +5,7 @@ import Testing
 
 @MainActor
 struct RunServiceTests {
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(5)))
     func launchedScriptReceivesItsExactRunIdentity() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-run-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -30,7 +30,7 @@ struct RunServiceTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(5)))
     func failsInsteadOfWaitingWhenTheShellExitsWithoutPublishingCompletion() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-run-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -51,7 +51,7 @@ struct RunServiceTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(5)))
     func cancellingARunStopsTheScript() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-run-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -83,7 +83,7 @@ struct RunServiceTests {
         #expect(!FileManager.default.fileExists(atPath: capture.transcript), "a cancelled run leaves no capture behind")
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(5)))
     func cancellationKillsProcessesThatIgnoreSIGTERM() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-run-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -103,7 +103,7 @@ struct RunServiceTests {
         #expect(try await Self.processExits(pid), "the SIGTERM-ignoring child is gone")
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(5)))
     func cancellationReachesCommandsInScriptsOwnSession() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-run-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

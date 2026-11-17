@@ -127,7 +127,7 @@ public enum RemoteSessionCatalog {
     }
 }
 
-private extension RemoteSessionCatalog.HostID {
+extension RemoteSessionCatalog.HostID {
     var sortKey: String {
         switch self {
         case .server(let id): "server:\(id)"

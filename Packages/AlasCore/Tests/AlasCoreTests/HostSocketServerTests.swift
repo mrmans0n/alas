@@ -96,7 +96,7 @@ struct HostSocketServerTests {
 
     /// A host older than a request cannot decode it and answers under id 0;
     /// a one-shot request returns that answer instead of waiting for id 1.
-    @Test(.timeLimit(.minutes(1))) func aOneShotRequestReturnsAnOlderHostsRefusal() async throws {
+    @Test(.timeLimit(.minutes(5))) func aOneShotRequestReturnsAnOlderHostsRefusal() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("h-\(UUID().uuidString.prefix(8)).sock").path
         defer { unlink(path) }
         let listener = socket(AF_UNIX, streamSocketType, 0)
