@@ -125,7 +125,14 @@ struct JSONRPCFrameWriterTests {
         }
         defer { reading.cancel() }
         try await eventually { ready.withLock { $0 } }
-        #expect(throws: (any Error).self) { try transport.send(Data("ordinary".utf8)) }
+        // The child closed its stdin before announcing ready, but on Linux a
+        // process another test spawns concurrently can inherit the pipe's read
+        // end and hold it until it execs. A write then only fills the buffer,
+        // so keep writing until the pipe reports it has no reader.
+        try await eventually {
+            do { try transport.send(Data("ordinary".utf8)) } catch { return true }
+            return false
+        }
         try await eventually { finished.withLock { $0 } }
     }
     @Test func stdoutClosureInvalidatesWriterAndPreservesActualExitStatus() async throws {
