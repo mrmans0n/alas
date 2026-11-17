@@ -8,6 +8,9 @@ import Observation
 struct NewSessionPreset: Equatable {
     let hostID: UUID
     let projectId: String
+    /// The project's name on that machine, which a host too old to send
+    /// option project ids is matched by.
+    let projectName: String
     let worktreeId: String?
 }
 
@@ -261,8 +264,8 @@ final class NewSessionModel {
             // list is in the host's sidebar order, main first, so its head is not the newest.
             if presetPending, let preset {
                 presetPending = false
-                let inProject = RemoteNewSession.worktrees(all, projectId: preset.projectId, repoName: "")
-                if let target = inProject.first(where: { $0.id == preset.worktreeId }) ?? inProject.first {
+                if let target = all.first(where: { $0.id == preset.worktreeId })
+                    ?? RemoteNewSession.worktrees(all, projectId: preset.projectId, repoName: preset.projectName).first {
                     selectedWorktreeId = target.id
                     if filter.isEmpty {
                         filter = target.projectName

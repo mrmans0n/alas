@@ -245,7 +245,7 @@ struct WorktreesView: View {
                             }
                         } header: {
                             repoHeader(section, presets: presets([(hostID: group.host.id, projectId: section.worktrees.lazy.compactMap(\.projectId).first,
-                                                                    worktreeId: section.worktrees.first?.id)]))
+                                                                    projectName: section.title, worktreeId: section.worktrees.first?.id)]))
                         }
                     }
                 }
@@ -275,7 +275,12 @@ struct WorktreesView: View {
                 } header: {
                     repoHeader(group.title, count: group.rows.count,
                                detail: spansMachines ? "\(group.hostIDs.count) machines" : group.rows.first?.hostName,
-                               presets: presets(group.placements.map { (hostID: $0.hostID, projectId: Optional($0.projectId), worktreeId: Optional($0.worktreeId)) }))
+                               presets: presets(group.placements.map { placement in
+                                   (hostID: placement.hostID, projectId: Optional(placement.projectId),
+                                    // That machine's name for the project, which may differ from the header's.
+                                    projectName: group.rows.first { $0.hostID == placement.hostID }?.worktree.summary?.projectName ?? group.title,
+                                    worktreeId: Optional(placement.worktreeId))
+                               }))
                 }
             }
         }
@@ -294,14 +299,18 @@ struct WorktreesView: View {
 
     /// A project's machines as the paired connections the sheet talks to;
     /// one reached only through a relay can't start sessions from here.
-    private func presets(_ placements: [(hostID: RemoteSessionCatalog.HostID, projectId: String?, worktreeId: String?)]) -> [NewSessionPreset] {
+    private func presets(_ placements: [(hostID: RemoteSessionCatalog.HostID, projectId: String?, projectName: String,
+                                         worktreeId: String?)]) -> [NewSessionPreset] {
         placements.compactMap { placement in
             guard let projectId = placement.projectId else { return nil }
             let paired: UUID? = switch placement.hostID {
             case .pairing(let id): hub.hosts.contains { $0.id == id } ? id : nil
             case .server(let serverId): hub.hosts.first { $0.serverId == serverId }?.id
             }
-            return paired.map { NewSessionPreset(hostID: $0, projectId: projectId, worktreeId: placement.worktreeId) }
+            return paired.map {
+                NewSessionPreset(hostID: $0, projectId: projectId, projectName: placement.projectName,
+                                 worktreeId: placement.worktreeId)
+            }
         }
     }
 
