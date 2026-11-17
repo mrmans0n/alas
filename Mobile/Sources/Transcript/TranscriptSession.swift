@@ -50,6 +50,8 @@ struct TranscriptItem: Identifiable, Equatable {
         self.message = message
         foldItem = RemoteTranscriptFold.item(for: message, row: row)
         toolCall = if case .toolCall(let call) = row { ToolCallDisplay(call, worktreeRoot: worktreeRoot) } else { nil }
+        // ponytail: LineDiff runs on the main actor in publish() for each changed file-edit row;
+        // compute it off-main if large edits stutter the transcript.
         fileEditDiff = if case .fileEdit(let edit) = row { LineDiff.parsedDiff(old: edit.oldText, new: edit.newText) } else { nil }
     }
 

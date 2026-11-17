@@ -63,8 +63,9 @@ public enum LineDiff {
 
     private static func lines(_ text: String) -> [String] {
         guard !text.isEmpty else { return [] }
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        if text.hasSuffix("\n") { lines.removeLast() }
+        // `\r\n` is one Character, so split on any newline rather than on `\n`.
+        var lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
+        if text.last?.isNewline == true { lines.removeLast() }
         return lines
     }
 }

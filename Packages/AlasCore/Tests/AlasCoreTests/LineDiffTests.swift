@@ -20,4 +20,10 @@ struct LineDiffTests {
         #expect(diff.hunks.count == 1)
         #expect(diff.hunks[0].lines.map(\.kind) == [.add, .add])
     }
+
+    @Test func lineDiffSplitsCRLFLines() {
+        let diff = LineDiff.parsedDiff(old: "a\r\nb\r\n", new: "a\r\nc\r\n")
+        #expect(diff.hunks.map(\.header) == ["@@ -1,2 +1,2 @@"])
+        #expect(diff.hunks[0].lines.map(\.text) == ["a", "b", "c"])
+    }
 }
