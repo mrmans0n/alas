@@ -60,6 +60,7 @@ struct StackShepherdTests {
         canDispatch: Bool = true,
         isStackPublished: Bool = true,
         hasUnpublishedEntries: Bool? = nil,
+        hasQueuedMerge: Bool = false,
         now: Date = F.now
     ) -> StackShepherdObservation {
         StackShepherdObservation(
@@ -73,6 +74,7 @@ struct StackShepherdTests {
             canDispatch: canDispatch,
             isStackPublished: isStackPublished,
             hasUnpublishedEntries: hasUnpublishedEntries,
+            hasQueuedMerge: hasQueuedMerge,
             rules: .none,
             now: now
         )
@@ -272,12 +274,20 @@ struct StackShepherdTests {
 
     /// After the bottom lands, gg still lists its commit until the stack is
     /// rebased: the owner is asked once to restack with stack_ship, and the
-    /// rest is not ready to land until gg drops the landed commit.
+    /// rest is not ready to land until gg drops the landed commit. A merge
+    /// queued for the next entry holds the ask back: the restack's push would
+    /// cancel it.
     @Test func aLandingGGStillListsAsksTheOwnerOnceToRestack() {
         let requests = [Self.request(41, state: .merged), Self.request(42)]
         // `gg land` forgot #41, so only #42 is published.
-        let landed = StackShepherdPolicy.decide(
+        let queued = StackShepherdPolicy.decide(
             Self.record([41, 42]),
+            Self.observation(requests, present: ["c-42"], listed: ["c-41", "c-42"], hasQueuedMerge: true, now: F.earlier)
+        )
+        #expect(queued.restack.isEmpty && queued.record.restackRequestedFor == nil)
+
+        let landed = StackShepherdPolicy.decide(
+            queued.record,
             Self.observation(requests, present: ["c-42"], listed: ["c-41", "c-42"], now: F.earlier)
         )
         #expect(landed.record.entries[0].shepherd.phase == .merged)

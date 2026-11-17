@@ -536,6 +536,61 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         )
     }
 
+    public func mergeSettings(remote: CodeHostRemote, baseBranch: String, cwd: URL) async throws -> CodeHostMergeSettings {
+        let repository = try await runner.run(
+            "gh",
+            args: ["repo", "view", Self.highLevelRepositorySelector(remote: remote), "--json", "mergeCommitAllowed"],
+            cwd: cwd
+        )
+        guard repository.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh repo view", stderr: repository.stderr)
+        }
+        struct Repository: Decodable {
+            let mergeCommitAllowed: Bool
+        }
+        guard let settings = try? JSONDecoder().decode(Repository.self, from: Data(repository.stdout.utf8)) else {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh repo view merge settings")
+        }
+        // The rules of every active ruleset that targets the branch; a branch
+        // no ruleset targets answers an empty list.
+        let rules = try await runner.run(
+            "gh",
+            args: [
+                "api", "--hostname", remote.host,
+                "repos/\(remote.repositorySlug)/rules/branches/\(Self.encodedFilePath(baseBranch))",
+            ],
+            cwd: cwd
+        )
+        guard rules.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh api rules", stderr: rules.stderr)
+        }
+        struct Rule: Decodable {
+            struct Parameters: Decodable {
+                let allowedMergeMethods: [String]?
+
+                enum CodingKeys: String, CodingKey {
+                    case allowedMergeMethods = "allowed_merge_methods"
+                }
+            }
+            let type: String
+            let parameters: Parameters?
+        }
+        guard let branchRules = try? JSONDecoder().decode([Rule].self, from: Data(rules.stdout.utf8)) else {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh api branch rules")
+        }
+        let allowedMethodLists = branchRules
+            .filter { $0.type == "pull_request" }
+            .compactMap { $0.parameters?.allowedMergeMethods }
+        return .gitHub(
+            allowsMergeCommit: settings.mergeCommitAllowed,
+            requiresLinearHistory: branchRules.contains { $0.type == "required_linear_history" },
+            // Several rulesets can each restrict the methods; all of them apply.
+            allowedMergeMethods: allowedMethodLists.isEmpty
+                ? nil
+                : allowedMethodLists.dropFirst().reduce(allowedMethodLists[0]) { allowed, next in allowed.filter(next.contains) }
+        )
+    }
+
     public func isAvailable(cwd: URL) async -> Bool {
         do {
             let result = try await runner.run("gh", args: ["--version"], cwd: cwd)
