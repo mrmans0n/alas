@@ -244,7 +244,8 @@ struct WorktreesView: View {
                                 }
                             }
                         } header: {
-                            repoHeader(section, presets: presets([(hostID: group.host.id, projectId: section.worktrees.lazy.compactMap(\.projectId).first)]))
+                            repoHeader(section, presets: presets([(hostID: group.host.id, projectId: section.worktrees.lazy.compactMap(\.projectId).first,
+                                                                    worktreeId: section.worktrees.first?.id)]))
                         }
                     }
                 }
@@ -274,7 +275,7 @@ struct WorktreesView: View {
                 } header: {
                     repoHeader(group.title, count: group.rows.count,
                                detail: spansMachines ? "\(group.hostIDs.count) machines" : group.rows.first?.hostName,
-                               presets: presets(group.placements.map { (hostID: $0.hostID, projectId: Optional($0.projectId)) }))
+                               presets: presets(group.placements.map { (hostID: $0.hostID, projectId: Optional($0.projectId), worktreeId: Optional($0.worktreeId)) }))
                 }
             }
         }
@@ -293,14 +294,14 @@ struct WorktreesView: View {
 
     /// A project's machines as the paired connections the sheet talks to;
     /// one reached only through a relay can't start sessions from here.
-    private func presets(_ placements: [(hostID: RemoteSessionCatalog.HostID, projectId: String?)]) -> [NewSessionPreset] {
+    private func presets(_ placements: [(hostID: RemoteSessionCatalog.HostID, projectId: String?, worktreeId: String?)]) -> [NewSessionPreset] {
         placements.compactMap { placement in
             guard let projectId = placement.projectId else { return nil }
             let paired: UUID? = switch placement.hostID {
             case .pairing(let id): hub.hosts.contains { $0.id == id } ? id : nil
             case .server(let serverId): hub.hosts.first { $0.serverId == serverId }?.id
             }
-            return paired.map { NewSessionPreset(hostID: $0, projectId: projectId) }
+            return paired.map { NewSessionPreset(hostID: $0, projectId: projectId, worktreeId: placement.worktreeId) }
         }
     }
 

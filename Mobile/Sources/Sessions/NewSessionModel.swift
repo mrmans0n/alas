@@ -3,10 +3,12 @@ import Foundation
 import Observation
 
 /// A machine the sheet can start a session on, already set to one of its
-/// projects: what a project header's New session button opens with.
+/// projects and that project's most recent worktree there: what a project
+/// header's New session button opens with.
 struct NewSessionPreset: Equatable {
     let hostID: UUID
     let projectId: String
+    let worktreeId: String?
 }
 
 /// State behind the new-session sheet: picks a host, then either a worktree
@@ -72,7 +74,8 @@ final class NewSessionModel {
         select(host: presets.first { online.contains($0.hostID) }?.hostID ?? online.first)
     }
 
-    private var presetProjectId: String? { presets.first { $0.hostID == hostID }?.projectId }
+    private var preset: NewSessionPreset? { presets.first { $0.hostID == hostID } }
+    private var presetProjectId: String? { preset?.projectId }
 
     var onlineHosts: [PairedHost] { hub.hosts.filter { hub.state(of: $0.id) == .online } }
     var isCreating: Bool { phase == .creating }
@@ -254,14 +257,16 @@ final class NewSessionModel {
         case .worktreeList(let all):
             worktrees = all
             worktreesReloaded = true
-            // The preset's project: its newest worktree, with the list narrowed to the project.
-            if presetPending, let projectId = presetProjectId {
+            // The preset's most recent worktree, with the list narrowed to its project. The
+            // list is in the host's sidebar order, main first, so its head is not the newest.
+            if presetPending, let preset {
                 presetPending = false
-                if let first = RemoteNewSession.worktrees(all, projectId: projectId, repoName: "").first {
-                    selectedWorktreeId = first.id
+                let inProject = RemoteNewSession.worktrees(all, projectId: preset.projectId, repoName: "")
+                if let target = inProject.first(where: { $0.id == preset.worktreeId }) ?? inProject.first {
+                    selectedWorktreeId = target.id
                     if filter.isEmpty {
-                        filter = first.projectName
-                        presetFilter = first.projectName
+                        filter = target.projectName
+                        presetFilter = target.projectName
                     }
                 }
             }

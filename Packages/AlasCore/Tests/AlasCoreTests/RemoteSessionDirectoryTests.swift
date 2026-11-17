@@ -151,7 +151,8 @@ import Testing
             source(machine, serverId: "mac\(machine)", sessions: rows.map { _, project, key, at in
                 var summary = wt(project.uppercased(), "\(project)-\(machine)", path: "/r/\(project)")
                 summary.repositoryKey = key
-                return session("\(project)-\(machine)", project: project, worktreeId: project, at: at, worktree: summary)
+                return session("\(project)-\(machine)-\(at)", project: project, worktreeId: "\(project)-\(machine)-\(at)",
+                               at: at, worktree: summary)
             })
         }
         return RemoteSessionCatalog.projects(from: RemoteSessionCatalog.hosts(from: sources))
@@ -170,11 +171,12 @@ import Testing
         #expect(alas.hostIDs == [.server("mac2"), .server("mac1")])
     }
 
-    @Test func newSessionPlacementsPreferTheMachineUsedLast() throws {
-        let groups = projectGroups([(1, "alas", "k", 5), (2, "alas", "k", 9)])
+    @Test func newSessionPlacementsPreferTheMachineAndWorktreeUsedLast() throws {
+        let groups = projectGroups([(1, "alas", "k", 5), (1, "alas", "k", 7), (2, "alas", "k", 9)])
         let alas = try #require(groups.first { $0.id == "repo:k" })
         #expect(alas.placements.map(\.hostID) == [.server("mac2"), .server("mac1")])
         #expect(alas.placements.map(\.projectId) == ["alas", "alas"])
+        #expect(alas.placements.map(\.worktreeId) == ["alas-2-9", "alas-1-7"])
     }
 
     @Test func aMachineCheckoutStartsNewSessionsInItsLocalProject() {
