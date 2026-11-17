@@ -7,9 +7,9 @@ struct NewSessionSheet: View {
     @Environment(\.dismiss) private var dismiss
     let hub: HostHub
 
-    init(hub: HostHub, onCreated: @escaping (SessionRoute) -> Void) {
+    init(hub: HostHub, presets: [NewSessionPreset] = [], onCreated: @escaping (SessionRoute) -> Void) {
         self.hub = hub
-        _model = State(initialValue: NewSessionModel(hub: hub, onCreated: onCreated))
+        _model = State(initialValue: NewSessionModel(hub: hub, presets: presets, onCreated: onCreated))
     }
 
     var body: some View {

@@ -2,6 +2,18 @@ import AlasRemoteKit
 import Foundation
 import Observation
 
+/// A machine the sheet can start a session on, already set to one of its
+/// projects and that project's most recent worktree there: what a project
+/// header's New session button opens with.
+struct NewSessionPreset: Equatable {
+    let hostID: UUID
+    let projectId: String
+    /// The project's name on that machine, which a host too old to send
+    /// option project ids is matched by.
+    let projectName: String
+    let worktreeId: String?
+}
+
 /// State behind the new-session sheet: picks a host, then either a worktree
 /// that exists or a branch to create one from, and asks the host to start the
 /// session. Mirrors the web client's flow (app.js, worktree-creation.js).
@@ -36,6 +48,12 @@ final class NewSessionModel {
     private var worktreesReloaded = false
 
     @ObservationIgnored private let hub: HostHub
+    /// The machines to prefer, in order, each with its project to start in.
+    @ObservationIgnored private let presets: [NewSessionPreset]
+    /// The current machine's preset still has to pick its worktree.
+    @ObservationIgnored private var presetPending = false
+    /// The filter the preset typed, cleared again when the machine changes.
+    @ObservationIgnored private var presetFilter: String?
     @ObservationIgnored private let onCreated: (SessionRoute) -> Void
     @ObservationIgnored private var listener: ListenerToken?
     @ObservationIgnored private var recoveredWorktreeId: String?
@@ -44,18 +62,23 @@ final class NewSessionModel {
     @ObservationIgnored private var watchGeneration = 0
     @ObservationIgnored private var hostWasOnline = false
 
-    init(hub: HostHub, onCreated: @escaping (SessionRoute) -> Void) {
+    init(hub: HostHub, presets: [NewSessionPreset] = [], onCreated: @escaping (SessionRoute) -> Void) {
         self.hub = hub
+        self.presets = presets
         self.onCreated = onCreated
     }
 
-    /// Joins the first online host and loads its lists. Kept out of `init` because SwiftUI may
+    /// Joins the preferred online host, else the first, and loads its lists. Kept out of `init` because SwiftUI may
     /// construct a throwaway model each time the presenting view re-evaluates.
     func start() {
         guard !started else { return }
         started = true
-        select(host: onlineHosts.first?.id)
+        let online = onlineHosts.map(\.id)
+        select(host: presets.first { online.contains($0.hostID) }?.hostID ?? online.first)
     }
+
+    private var preset: NewSessionPreset? { presets.first { $0.hostID == hostID } }
+    private var presetProjectId: String? { preset?.projectId }
 
     var onlineHosts: [PairedHost] { hub.hosts.filter { hub.state(of: $0.id) == .online } }
     var isCreating: Bool { phase == .creating }
@@ -129,6 +152,9 @@ final class NewSessionModel {
         modelId = nil
         effortId = nil
         modeChosen = false
+        if let presetFilter, filter == presetFilter { filter = "" }
+        presetFilter = nil
+        presetPending = presetProjectId != nil
         phase = .editing
         outcomeUnknown = false
         guard let host else { return }
@@ -234,6 +260,19 @@ final class NewSessionModel {
         case .worktreeList(let all):
             worktrees = all
             worktreesReloaded = true
+            // The preset's most recent worktree, with the list narrowed to its project. The
+            // list is in the host's sidebar order, main first, so its head is not the newest.
+            if presetPending, let preset {
+                presetPending = false
+                if let target = all.first(where: { $0.id == preset.worktreeId })
+                    ?? RemoteNewSession.worktrees(all, projectId: preset.projectId, repoName: preset.projectName).first {
+                    selectedWorktreeId = target.id
+                    if filter.isEmpty {
+                        filter = target.projectName
+                        presetFilter = target.projectName
+                    }
+                }
+            }
             if !modeChosen {
                 modeChosen = true
                 mode = RemoteNewSession.defaultWorktreeMode(for: all)
@@ -254,7 +293,9 @@ final class NewSessionModel {
             // A Machine checkout is listed under its local project, which creates on the host.
             let primaries = all.filter { $0.linkedProjectId == nil }
             projects = primaries
-            if projectId == nil, let first = primaries.first { selectProject(first.id) }
+            if projectId == nil, let first = primaries.first(where: { $0.id == presetProjectId }) ?? primaries.first {
+                selectProject(first.id)
+            }
         case .branchList(let id, let names, let preferred) where id == projectId:
             branches = .loaded(names: names, preferredBase: preferred)
             base = RemoteNewSession.preselectedBase(in: branches)
