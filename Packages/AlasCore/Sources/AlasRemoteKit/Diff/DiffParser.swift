@@ -1,6 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
 
 public struct ParsedDiff: Equatable, Sendable {
     public var hunks: [Hunk]
