@@ -114,6 +114,12 @@ struct AndroidRecordingAndClipboardTests {
         #expect(await second == "two")
         timers[1].resume()
     }
+
+    @Test func anEmptyClipboardIsNotAConnectionFailure() {
+        #expect(AndroidScreenSession.resolveClipboardReply(nil, stopped: false) == "")
+        #expect(AndroidScreenSession.resolveClipboardReply(nil, stopped: true) == nil)
+        #expect(AndroidScreenSession.resolveClipboardReply("text", stopped: false) == "text")
+    }
 }
 
 @MainActor // AndroidLogSource and the stream are main-actor isolated.

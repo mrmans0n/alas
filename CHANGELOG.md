@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Treat an empty Android device clipboard as empty text instead of a connection failure.
+
 ## [0.24.1] - 2026-11-17
 
 ### ✨ Features
