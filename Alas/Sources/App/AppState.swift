@@ -5669,7 +5669,7 @@ final class AppState {
     /// projects folder, then linked to the primary.
     func setUpLinkedCheckout(primaryId: String, machine: Machine) async throws -> ProjectConfig {
         let origin = try await primaryOrigin(primaryId)
-        let checkout = try await RemoteCheckoutSetup.ensure(
+        let path = try await RemoteCheckoutSetup.ensure(
             host: machine.destination,
             projectsFolder: machine.projectsFolder,
             originURL: origin
@@ -5677,8 +5677,7 @@ final class AppState {
         return try await addLinkedCheckout(
             primaryId: primaryId,
             host: machine.destination,
-            realPath: checkout.path,
-            hidesMain: checkout.cloned
+            realPath: path
         )
     }
 
@@ -5686,7 +5685,7 @@ final class AppState {
     func adoptLinkedCheckout(primaryId: String, host: String, path: String) async throws -> ProjectConfig {
         let origin = try await primaryOrigin(primaryId)
         let realPath = try await RemoteCheckoutSetup.adopt(host: host, path: path, originURL: origin)
-        return try await addLinkedCheckout(primaryId: primaryId, host: host, realPath: realPath, hidesMain: false)
+        return try await addLinkedCheckout(primaryId: primaryId, host: host, realPath: realPath)
     }
 
     private func primaryOrigin(_ primaryId: String) async throws -> String {
@@ -5699,9 +5698,10 @@ final class AppState {
         return origin
     }
 
-    /// Adds the checkout as a record linked to the primary. A clone Alas made
-    /// keeps its main worktree out of the sidebar: it is not the user's own.
-    private func addLinkedCheckout(primaryId: String, host: String, realPath: String, hidesMain: Bool) async throws -> ProjectConfig {
+    /// Adds the checkout as a record linked to the primary. A record setup
+    /// creates keeps its main worktree out of the sidebar: the checkout only
+    /// backs worktrees. An SSH project the user already had keeps its rows.
+    private func addLinkedCheckout(primaryId: String, host: String, realPath: String) async throws -> ProjectConfig {
         // Setup awaited SSH; another create may have linked this machine meanwhile.
         if let existing = projectsManager.linkedProjects(of: primaryId).first(where: { $0.host == host }) {
             return existing
@@ -5728,7 +5728,7 @@ final class AppState {
         guard let linked = projectsManager.projects.first(where: { $0.id == project.id }), linked.linkedProjectId == primaryId else {
             throw RemoteCheckoutSetup.Failure.failed("\(RemotePath.display(virtualPath)) is already part of another project.")
         }
-        if hidesMain {
+        if standalone == nil {
             projectsManager.setWorktreeHidden(projectId: project.id, path: URL(fileURLWithPath: virtualPath), hidden: true)
         }
         guard saveProjects() else {

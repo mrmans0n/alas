@@ -5,18 +5,6 @@ import AlasModel
 /// Finds or clones a local project's repository on a Machine, the first time
 /// a worktree runs there.
 public enum RemoteCheckoutSetup {
-    public struct Checkout: Equatable, Sendable {
-        /// Absolute path on the machine.
-        public let path: String
-        /// Alas cloned it, so its main worktree is not the user's own checkout.
-        public let cloned: Bool
-
-        public init(path: String, cloned: Bool) {
-            self.path = path
-            self.cloned = cloned
-        }
-    }
-
     public enum Failure: LocalizedError, Equatable, Sendable {
         /// ssh itself failed: unreachable, or a host key or password is needed.
         case connection(String)
@@ -52,8 +40,8 @@ public enum RemoteCheckoutSetup {
         return name
     }
 
-    /// Uses the clone of `originURL` in the machine's projects folder, or
-    /// clones it there. Cancelling stops the clone; git removes what it left.
+    /// The absolute path of the clone of `originURL` in the machine's
+    /// projects folder, cloning it there if there is none. Cancelling stops the clone; git removes what it left.
     public static func ensure(
         host: String,
         projectsFolder: String,
@@ -61,7 +49,7 @@ public enum RemoteCheckoutSetup {
         runner: @escaping RemoteRepoValidator.Runner = { executable, args, timeout in
             try await Process.run(executable, args: args, timeout: timeout)
         }
-    ) async throws -> Checkout {
+    ) async throws -> String {
         guard let identity = GitRemoteIdentity.normalized(originURL),
               let repoName = identity.split(separator: "/").last.map(String.init)
         else { throw Failure.failed("\(originURL) names no repository a machine can clone.") }
@@ -80,7 +68,7 @@ public enum RemoteCheckoutSetup {
         }
         let children = String(listing.stdout.dropFirst(root.count))
         if let name = matchingClone(listing: children, identity: identity, repoName: repoName) {
-            return Checkout(path: "\(root)/\(name)", cloned: false)
+            return "\(root)/\(name)"
         }
         let taken = Set(children.split(whereSeparator: \.isNewline).map { String($0.prefix { $0 != "\t" }) })
         let name = freeCloneName(repoName: repoName, taken: taken)
@@ -95,7 +83,7 @@ public enum RemoteCheckoutSetup {
         guard clone.exitCode == 0 else {
             throw Failure.failed(cloneFailureMessage(stderr: clone.stderr, originHost: identity.prefix { $0 != "/" }))
         }
-        return Checkout(path: "\(root)/\(name)", cloned: true)
+        return "\(root)/\(name)"
     }
 
     /// A checkout the user points at instead: it must be a clone of `originURL`'s repository.

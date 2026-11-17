@@ -207,10 +207,11 @@ for a linked record and the project itself otherwise.
 - **Offline.** Rows render from `cachedWorktrees`, as SSH projects already do.
   The context menu gains "Reconnect to <label>", which runs the existing
   reconnect / connection-assistant path for that host.
-- **Main checkout.** When Alas cloned a repository on a machine, the clone's
-  main worktree path goes into that record's `hiddenWorktreePaths`, so the
-  sidebar does not show a stray `main ⌁ mini` row. An existing SSH project
-  that gets folded keeps its rows as they are.
+- **Main checkout.** When setup links a checkout on a machine (cloned, found
+  in the projects folder, or chosen), its main worktree path goes into that
+  record's `hiddenWorktreePaths`, so the sidebar does not show a stray
+  `main ⌁ mini` row. An existing SSH project that gets folded keeps its rows
+  as they are.
 - **Spaces.** A linked record is never a space member of its own.
   `AppState.swift:1880` (auto-add unassigned projects to a space) skips linked
   records. When a record becomes linked, it is removed from any space. Its
@@ -467,6 +468,6 @@ Each PR stands alone and is reviewable.
 1. **Machine fields.** A machine stores only a label, a destination and a
    projects folder. User, port, identity and jump host stay in
    `~/.ssh/config`.
-2. **Main checkout row.** When Alas clones on a machine, the clone's main
-   worktree is hidden from the sidebar. Folded existing SSH projects keep
-   theirs.
+2. **Main checkout row.** When setup links a checkout on a machine, whether
+   Alas cloned it, found it or the user chose it, its main worktree is hidden
+   from the sidebar. Folded existing SSH projects keep theirs.
