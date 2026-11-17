@@ -67,4 +67,23 @@ public struct ACPToolCallDiff: Codable, Equatable, Hashable, Sendable {
         }
         return String(String.UnicodeScalarView(scalars[lineStart..<end]))
     }
+
+    /// The patch's hunks for display; nil when invalid.
+    public func parsed() -> GitFilePatch? {
+        guard let patch, case .success(let file) = GitPatchParser.parse(patch, path: path) else { return nil }
+        return file
+    }
+}
+
+extension ACPToolCallDiff.Failure {
+    public init(_ failure: GitFilePatchFailure) {
+        switch failure {
+        case .truncated: self = .truncated
+        case .malformedHeader: self = .malformedHeader
+        case .malformedPath: self = .malformedPath
+        case .pathMismatch: self = .pathMismatch
+        case .malformedHunk: self = .malformedHunk
+        case .noHunks: self = .noHunks
+        }
+    }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import AlasRemoteKit
 
 /// One `git diff` per review instead of one per file. Each result is keyed by
 /// the file's new-side path; a path missing from the result had no section in

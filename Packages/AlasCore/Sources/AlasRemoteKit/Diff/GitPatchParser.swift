@@ -1,5 +1,4 @@
 import Foundation
-import AlasFoundation
 
 /// One file's change, read from an exact single-file git patch.
 public struct GitFilePatch: Equatable, Sendable {
