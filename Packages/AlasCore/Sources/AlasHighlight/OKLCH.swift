@@ -6,7 +6,7 @@ public struct OKLCH: Equatable, Sendable {
     public let h: Double  // 0...360
     public let a: Double  // 0...1
 
-        public enum ParseError: Error { case invalid(String) }
+    public enum ParseError: Error { case invalid(String) }
 
     public static func parse(_ s: String) throws -> OKLCH {
         let trimmed = s.trimmingCharacters(in: .whitespaces)
@@ -32,7 +32,10 @@ public struct OKLCH: Equatable, Sendable {
     }
 
     public init(l: Double, c: Double, h: Double, a: Double = 1) {
-        self.l = l; self.c = c; self.h = h; self.a = a
+        self.l = l
+        self.c = c
+        self.h = h
+        self.a = a
     }
 
     /// Convert OKLCH → clipped linear sRGB components. Reference: https://bottosson.github.io/posts/oklab/

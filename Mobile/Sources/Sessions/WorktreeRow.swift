@@ -1,5 +1,5 @@
-import AlasRemoteKit
 import AlasHighlight
+import AlasRemoteKit
 import SwiftUI
 
 /// Display helpers ported from the web client's `repo-filter.js`. They stay in
