@@ -10,10 +10,16 @@ struct DiffHunksView: View {
     /// The owner keeps the expanded state, so the transcript cell re-measures when it changes.
     let onShowAll: () -> Void
 
+    // ponytail: every shown line is a view in one self-sizing cell, so "Show all" stops here;
+    // render lines lazily (virtualized) to lift the ceiling.
+    static let expandedLineLimit = 2000
+
     private var lineCount: Int { diff.hunks.reduce(0) { $0 + $1.lines.count } }
 
+    private var shownLines: Int { min(maxLines, Self.expandedLineLimit) }
+
     private var visibleHunks: [ParsedDiff.Hunk] {
-        var remaining = maxLines
+        var remaining = shownLines
         var result: [ParsedDiff.Hunk] = []
         for hunk in diff.hunks where remaining > 0 {
             let lines = Array(hunk.lines.prefix(remaining))
@@ -36,7 +42,6 @@ struct DiffHunksView: View {
                     .padding(.horizontal, 8).padding(.vertical, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color(.tertiarySystemFill))
-                // ponytail: every line is a view; make it lazy if huge "Show all" diffs stutter.
                 ScrollView(.horizontal, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
                         // At least as wide as the card, so short lines' tints reach its edge.
@@ -47,11 +52,19 @@ struct DiffHunksView: View {
                     }
                 }
             }
-            if lineCount > maxLines {
-                Button("Show all \(lineCount) lines", action: onShowAll)
-                    .font(.footnote)
-                    .padding(.vertical, 6)
-                    .frame(maxWidth: .infinity)
+            if lineCount > shownLines {
+                if maxLines > shownLines {
+                    Text("\(lineCount - shownLines) more lines not shown")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Button("Show all \(lineCount) lines", action: onShowAll)
+                        .font(.footnote)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
+                }
             }
         }
         .font(.system(.footnote, design: .monospaced))
@@ -59,10 +72,10 @@ struct DiffHunksView: View {
     }
 
     private static func row(_ line: ParsedDiff.Hunk.Line, digits: Int) -> some View {
-        let (sign, tint): (String, Color?) = switch line.kind {
-        case .add: ("+", .green)
-        case .delete: ("\u{2212}", .red)
-        case .context: (" ", nil)
+        let (sign, tint, spoken): (String, Color?, String) = switch line.kind {
+        case .add: ("+", .green, "Added \(line.text)")
+        case .delete: ("\u{2212}", .red, "Removed \(line.text)")
+        case .context: (" ", nil, line.text)
         }
         return HStack(spacing: 6) {
             Text("\(pad(line.oldNumber, digits)) \(pad(line.newNumber, digits))").foregroundStyle(.secondary)
@@ -74,6 +87,8 @@ struct DiffHunksView: View {
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(tint?.opacity(0.15) ?? .clear)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(spoken)
     }
 
     private static func pad(_ number: Int?, _ digits: Int) -> String {

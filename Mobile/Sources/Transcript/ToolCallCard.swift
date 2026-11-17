@@ -15,13 +15,18 @@ struct ToolCallCard: View {
     var showAll: (Int) -> Void = { _ in }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button(action: toggle) { header }
+        // The header's padding sits inside its button, so the whole collapsed card is the tap target.
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: toggle) { header.padding(12) }
                 .buttonStyle(.plain)
                 .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-            if isExpanded { expandedBody }
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 8) { expandedBody }
+                    .padding([.horizontal, .bottom], 12)
+            }
         }
-        .card()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var header: some View {
@@ -41,7 +46,9 @@ struct ToolCallCard: View {
             }
             status
             Image(systemName: isExpanded ? "chevron.up" : "chevron.down").font(.caption).foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
 
@@ -58,7 +65,7 @@ struct ToolCallCard: View {
         case "canceled", "cancelled":
             Image(systemName: "stop.circle").foregroundStyle(.secondary).accessibilityLabel("Canceled")
         default:
-            Text(call.status).font(.caption).foregroundStyle(.secondary)
+            Text(call.status).font(.caption).foregroundStyle(.secondary).lineLimit(1).layoutPriority(1)
         }
     }
 

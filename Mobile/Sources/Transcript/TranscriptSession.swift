@@ -748,6 +748,8 @@ final class TranscriptSession {
     /// the turn's activity or a group's expansion changed, and reusing every item whose message did not.
     private func publish() {
         // The worktree comes with the hub's session list, which can land after the first frames.
+        // Clearing every item also recomputes file-edit diffs, which do not depend on the root; that
+        // happens about once per session, so it is not worth keeping them.
         if let root = summary?.worktree?.path, root != worktreeRoot {
             worktreeRoot = root
             messageItems = [:]
