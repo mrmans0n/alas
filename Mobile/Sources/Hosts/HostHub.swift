@@ -313,6 +313,13 @@ final class HostHub {
                 cacheSeq += 1
                 let seq = cacheSeq
                 Task.detached { await cache.save(sessions, for: id, seq: seq) }
+            case .sessionCreated(let session), .worktreeSessionCreated(let session):
+                // Listed now, as the web client does: the host's refreshed list can lag, and until
+                // then the new session's screen would read an unlisted session as ended.
+                var sessions = sessionLists[id] ?? []
+                sessions.removeAll { $0.id == session.id }
+                sessions.append(session)
+                sessionLists[id] = sessions
             case .hello:
                 // A re-broadcast hello on a live socket: the host's state changed.
                 send(.listSessions, to: id)
