@@ -13,8 +13,15 @@ public struct RemoteWorktreeEntry: Identifiable, Equatable, Sendable {
     /// An open session whose agent is mid-turn or parked on a prompt.
     public var isRunning: Bool { activeSessions.contains { $0.status != "idle" } }
     public var isDirty: Bool { (summary?.changedFileCount ?? 0) > 0 }
-    public var needsAttention: Bool {
-        activeSessions.contains { $0.status == "awaitingPermission" || $0.status == "awaitingInput" }
+    public var needsAttention: Bool { activeSessions.contains(where: \.isAwaitingUser) }
+
+    /// The session a tap on the worktree opens: one waiting on the user, else
+    /// one mid-turn, else the newest open one, else the newest closed one.
+    public var leadSession: RemoteSessionSummary? {
+        activeSessions.first(where: \.isAwaitingUser)
+            ?? activeSessions.first { $0.status != "idle" }
+            ?? activeSessions.first
+            ?? closedSessions.first
     }
 
     fileprivate var recency: Int64 {
@@ -70,6 +77,15 @@ public enum RemoteSessionDirectory {
         }
     }
 
+    /// Worktrees waiting on the user first, then running ones, each group
+    /// keeping the recency order `sections` gave it.
+    public static func attentionFirst(_ worktrees: [RemoteWorktreeEntry]) -> [RemoteWorktreeEntry] {
+        func rank(_ w: RemoteWorktreeEntry) -> Int { w.needsAttention ? 0 : w.isRunning ? 1 : 2 }
+        return worktrees.enumerated()
+            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+            .map(\.element)
+    }
+
     public static func filter(_ sections: [RemoteRepoSection], by filter: RemoteSessionFilter, query: String) -> [RemoteRepoSection] {
         sections.filter { matches($0, filter) && matches($0, query: query) }
     }
@@ -97,4 +113,9 @@ public enum RemoteSessionDirectory {
                 || (w.activeSessions + w.closedSessions).contains { hit($0.title) }
         }
     }
+}
+
+extension RemoteSessionSummary {
+    /// The agent is parked on a permission prompt or a question.
+    public var isAwaitingUser: Bool { status == "awaitingPermission" || status == "awaitingInput" }
 }

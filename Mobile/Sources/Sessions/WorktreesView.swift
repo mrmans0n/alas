@@ -52,22 +52,6 @@ struct WorktreesView: View {
         let host: RemoteSessionCatalog.Host
         let sections: [RemoteRepoSection]
         var id: RemoteSessionCatalog.HostID { host.id }
-
-        var rows: [CatalogRow] {
-            sections.flatMap { section in
-                [CatalogRow(id: .project(section.id), content: .project(section.title))]
-                    + section.worktrees.map {
-                        CatalogRow(id: .worktree(section.id, $0.id), content: .worktree($0))
-                    }
-            }
-        }
-    }
-
-    private struct CatalogRow: Identifiable {
-        enum ID: Hashable { case project(String), worktree(String, String) }
-        enum Content { case project(String), worktree(RemoteWorktreeEntry) }
-        let id: ID
-        let content: Content
     }
 
     private var allHosts: [RemoteSessionCatalog.Host] {
@@ -193,59 +177,77 @@ struct WorktreesView: View {
     }
 
     private func list(_ visible: [HostGroup]) -> some View {
+        // One Mac needs no header of its own; with several, each gets a
+        // collapsible one above its repos.
+        let showsHosts = allHosts.count > 1
         return List {
             ForEach(visible) { group in
-                Section {
-                    if revealingMatches || !model.collapsedHosts.contains(group.id) {
-                        ForEach(group.rows) { row in
-                            VStack(alignment: .leading) {
-                                switch row.content {
-                                case .project(let title):
-                                    HStack(spacing: 10) {
-                                        RepoTile(name: title)
-                                        Text(title).font(.headline)
-                                    }
-                                    .padding(.top, 8)
-                                    .accessibilityAddTraits(.isHeader)
-                                case .worktree(let entry):
-                                    WorktreeRow(entry: entry, selectedSessionId: selectedSessionID(in: entry, on: group.host)) { session in
-                                        guard let target = group.host.route(for: session.id) else { return }
-                                        open(SessionRoute(hostID: target.hostID, sessionId: target.sessionId))
-                                    }
+                if showsHosts {
+                    Section { EmptyView() } header: { hostHeader(group) }
+                }
+                if !showsHosts || revealingMatches || !model.collapsedHosts.contains(group.id) {
+                    ForEach(group.sections) { section in
+                        Section {
+                            ForEach(RemoteSessionDirectory.attentionFirst(section.worktrees)) { entry in
+                                WorktreeRow(entry: entry,
+                                            isSelected: selectedSessionID(in: entry, on: group.host) != nil) { session in
+                                    guard let target = group.host.route(for: session.id) else { return }
+                                    open(SessionRoute(hostID: target.hostID, sessionId: target.sessionId))
                                 }
                             }
+                        } header: {
+                            repoHeader(section)
                         }
                     }
-                } header: {
-                    Button {
-                        if !model.collapsedHosts.insert(group.id).inserted {
-                            model.collapsedHosts.remove(group.id)
-                        }
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "laptopcomputer")
-                            Text(group.host.name).lineLimit(1)
-                            Spacer(minLength: 8)
-                            Text("\(group.host.worktreeCount) worktrees")
-                                .font(.caption).foregroundStyle(.secondary)
-                            Image(systemName: model.collapsedHosts.contains(group.id) && !revealingMatches
-                                  ? "chevron.right" : "chevron.down")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .padding(.vertical, 8)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(revealingMatches)
-                    .accessibilityValue(model.collapsedHosts.contains(group.id) && !revealingMatches ? "Collapsed" : "Expanded")
-                    .textCase(nil)
                 }
             }
         }
-        .listStyle(.plain)
+        .listStyle(.insetGrouped)
         .contentMargins(.bottom, 56, for: .scrollContent)
+    }
+
+    private func repoHeader(_ section: RemoteRepoSection) -> some View {
+        HStack(spacing: 8) {
+            RepoTile(name: section.title, size: 22)
+            Text(section.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Text("\(section.worktrees.count)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("\(section.worktrees.count) worktrees")
+        }
+        .textCase(nil)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    private func hostHeader(_ group: HostGroup) -> some View {
+        Button {
+            if !model.collapsedHosts.insert(group.id).inserted {
+                model.collapsedHosts.remove(group.id)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "laptopcomputer")
+                Text(group.host.name).lineLimit(1)
+                Spacer(minLength: 8)
+                Text("\(group.host.worktreeCount) worktrees")
+                    .font(.caption).foregroundStyle(.secondary)
+                Image(systemName: model.collapsedHosts.contains(group.id) && !revealingMatches
+                      ? "chevron.right" : "chevron.down")
+                    .font(.caption.weight(.semibold))
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.primary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(revealingMatches)
+        .accessibilityValue(model.collapsedHosts.contains(group.id) && !revealingMatches ? "Collapsed" : "Expanded")
+        .textCase(nil)
     }
 
     private func hostPicker(_ hosts: [RemoteSessionCatalog.Host]) -> some View {

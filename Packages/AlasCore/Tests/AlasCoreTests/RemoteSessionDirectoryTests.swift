@@ -85,6 +85,34 @@ import Testing
         #expect(!sections([session("a", status: status, active: false)])[0].worktrees[0].needsAttention)
     }
 
+    @Test(arguments: [
+        (["idle", "streaming", "awaitingInput"], "s2"),
+        (["idle", "streaming"], "s1"),
+        (["idle", "idle"], "s0"),
+    ])
+    func leadSessionPrefersWaitingThenRunningThenNewest(statuses: [String], expected: String) throws {
+        // Index 0 is the newest, as `sections` sorts them.
+        let list = statuses.enumerated().map { session("s\($0.offset)", status: $0.element, at: Int64(10 - $0.offset)) }
+        let w = try #require(sections(list).first?.worktrees.first)
+        #expect(w.leadSession?.id == expected)
+    }
+
+    @Test func leadSessionFallsBackToTheNewestClosedOne() throws {
+        let w = try #require(sections([session("old", active: false, at: 1), session("new", active: false, at: 5)]).first?.worktrees.first)
+        #expect(w.leadSession?.id == "new")
+    }
+
+    @Test func attentionFirstKeepsRecencyWithinEachGroup() throws {
+        let list = [
+            session("a", worktreeId: "idleNew", at: 9),
+            session("b", status: "streaming", worktreeId: "running", at: 5),
+            session("c", status: "awaitingPermission", worktreeId: "waiting", at: 1),
+            session("d", worktreeId: "idleOld", at: 3),
+        ]
+        let worktrees = try #require(sections(list).first?.worktrees)
+        #expect(RemoteSessionDirectory.attentionFirst(worktrees).map(\.id) == ["waiting", "running", "idleNew", "idleOld"])
+    }
+
     @Test func closedSessionsNeverCountAsRunning() {
         let s = sections([session("a", status: "streaming", active: false)])
         #expect(RemoteSessionDirectory.filter(s, by: .running, query: "").isEmpty)
