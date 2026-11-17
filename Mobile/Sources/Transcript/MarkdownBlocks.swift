@@ -15,9 +15,9 @@ enum MarkdownBlock: Equatable {
     /// Split into runs of `codeChunkLines` lines so a long listing lays out and draws as many
     /// small texts instead of one view thousands of points tall.
     case code(language: String?, chunks: [CodeChunk])
-    case list([AttributedString])
+    case list([ListEntry])
     case quote(AttributedString)
-    case table([[String]])
+    case table(header: [AttributedString], rows: [[AttributedString]])
     /// `![alt](source)` on its own line; inside other text an image reads as its alt text.
     case image(source: String, alt: String)
 
@@ -38,11 +38,10 @@ enum MarkdownBlock: Equatable {
         case let c as CodeBlock:
             // As on the Mac, a fence still streaming stays plain: re-highlighting it per delta is too slow.
             .code(language: c.language, chunks: highlighted(c.code, language: isClosed(c, lines: lines) ? c.language : nil))
-        case let l as UnorderedList: .list(l.listItems.map { inline($0) })
-        case let l as OrderedList: .list(l.listItems.map { inline($0) })
+        case let l as ListItemContainer: .list(entries(l, depth: 0, lines: lines))
         case let q as BlockQuote: .quote(inline(q))
         case let t as Markdown.Table:
-            .table(([Array(t.head.cells)] + t.body.rows.map { Array($0.cells) }).map { $0.map(\.plainText) })
+            .table(header: t.head.cells.map { inline($0) }, rows: t.body.rows.map { $0.cells.map { inline($0) } })
         default: nil
         }
     }
@@ -66,11 +65,53 @@ enum MarkdownBlock: Equatable {
             .map { CodeChunk(text: $0.text, spans: $0.spans) }
     }
 
+    /// One entry per item, each nested list's items following their parent one level deeper.
+    private static func entries(_ list: ListItemContainer, depth: Int, lines: [Substring]) -> [ListEntry] {
+        var out: [ListEntry] = []
+        for (offset, item) in list.listItems.enumerated() {
+            let marker: ListEntry.Marker = if let box = item.checkbox {
+                .task(checked: box == .checked)
+            } else if let ordered = list as? OrderedList {
+                .number(writtenNumber(item, lines: lines) ?? "\(Int(ordered.startIndex) + offset).")
+            } else {
+                .bullet
+            }
+            var text = AttributedString()
+            var nested: [ListEntry] = []
+            for child in item.children {
+                if let sublist = child as? ListItemContainer {
+                    nested += entries(sublist, depth: depth + 1, lines: lines)
+                } else {
+                    if !text.characters.isEmpty { text += AttributedString("\n") }
+                    text += inline(child)
+                }
+            }
+            out.append(ListEntry(depth: depth, marker: marker, text: text))
+            out += nested
+        }
+        return out
+    }
+
+    /// The marker as the source wrote it (`1. 1. 1.` stays 1, 1, 1), delimiter included, as on the Mac.
+    /// swift-markdown's columns are 1-based UTF-8 byte offsets into the line.
+    private static func writtenNumber(_ item: ListItem, lines: [Substring]) -> String? {
+        guard let start = item.range?.lowerBound, lines.indices.contains(start.line - 1) else { return nil }
+        let rest = lines[start.line - 1].utf8.dropFirst(start.column - 1)
+        let digits = rest.prefix { (48 ... 57).contains($0) }
+        guard !digits.isEmpty, let delimiter = rest.dropFirst(digits.count).first,
+              delimiter == UInt8(ascii: ".") || delimiter == UInt8(ascii: ")") else { return nil }
+        return String(decoding: digits, as: UTF8.self) + String(UnicodeScalar(delimiter))
+    }
+
     /// Flattens a block's inline descendants (paragraphs inside list items and quotes join with a newline).
     private static func inline(_ markup: Markup) -> AttributedString {
         var out = AttributedString()
         for child in markup.children {
-            if child is BlockMarkup {
+            if let code = child as? CodeBlock {
+                // A fence inside a list item or quote reads as inline code rather than vanishing.
+                if !out.characters.isEmpty { out += AttributedString("\n") }
+                out += styled(code.code.trimmingCharacters(in: .newlines), .code)
+            } else if child is BlockMarkup {
                 if !out.characters.isEmpty { out += AttributedString("\n") }
                 out += inline(child)
             } else {
@@ -111,6 +152,19 @@ enum MarkdownBlock: Equatable {
         if !intent.isEmpty { a.inlinePresentationIntent = intent }
         return a
     }
+}
+
+struct ListEntry: Equatable {
+    enum Marker: Equatable {
+        case bullet
+        /// As written, delimiter included: "3." or "1)".
+        case number(String)
+        case task(checked: Bool)
+    }
+
+    let depth: Int
+    let marker: Marker
+    let text: AttributedString
 }
 
 @MainActor
