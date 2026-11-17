@@ -170,6 +170,20 @@ import Testing
         #expect(alas.hostIDs == [.server("mac2"), .server("mac1")])
     }
 
+    @Test func newSessionPlacementsPreferTheMachineUsedLast() throws {
+        let groups = projectGroups([(1, "alas", "k", 5), (2, "alas", "k", 9)])
+        let alas = try #require(groups.first { $0.id == "repo:k" })
+        #expect(alas.placements.map(\.hostID) == [.server("mac2"), .server("mac1")])
+        #expect(alas.placements.map(\.projectId) == ["alas", "alas"])
+    }
+
+    @Test func aMachineCheckoutStartsNewSessionsInItsLocalProject() {
+        var remote = wt("alas", "feature", path: "/m/feature")
+        remote.linkedProjectId = "p1"
+        let entry = sections([session("s2", project: "p-ssh", worktreeId: "w2", worktree: remote)])[0].worktrees[0]
+        #expect(entry.projectId == "p1")
+    }
+
     @Test(arguments: [
         // A folder, or a host too old to send keys.
         ([(1, "notes", nil), (2, "notes", nil)], 2),

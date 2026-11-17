@@ -15,6 +15,12 @@ public struct RemoteWorktreeEntry: Identifiable, Equatable, Sendable {
     public var isDirty: Bool { (summary?.changedFileCount ?? 0) > 0 }
     public var needsAttention: Bool { activeSessions.contains(where: \.isAwaitingUser) }
 
+    /// The host's project it is listed under: a Machine checkout's local
+    /// project, which is where the host creates its new worktrees.
+    public var projectId: String? {
+        summary?.linkedProjectId ?? (activeSessions + closedSessions).lazy.compactMap(\.projectId).first
+    }
+
     /// The session a tap on the worktree opens: one waiting on the user, else
     /// one mid-turn, else the newest open one, else the newest closed one.
     public var leadSession: RemoteSessionSummary? {
