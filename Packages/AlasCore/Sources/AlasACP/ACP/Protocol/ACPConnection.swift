@@ -55,10 +55,6 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
     public let mcpCapabilities: ACPMCPServerCapabilities
     public let providerCapabilities: EmptyObject?
     public let goalCapability: ACPGoalCapability?
-    /// True when the agent answered our subagent opt-in — either with the
-    /// standard `sessionCapabilities.subagents` or with OpenCode's
-    /// `_meta["opencode/child-session-updates"]`.
-    public let supportsSubagents: Bool
     /// Whether the agent advertised the `_auth/status_update` extension marker.
     public let advertisesAuthStatus: Bool
     public let supportsSteering: Bool
@@ -97,7 +93,6 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         mcpCapabilities: ACPMCPServerCapabilities,
         providerCapabilities: EmptyObject?,
         goalCapability: ACPGoalCapability? = nil,
-        supportsSubagents: Bool = false,
         advertisesAuthStatus: Bool = false,
         agentInfo: ACPImplementationInfo? = nil,
         supportsSteering: Bool = false,
@@ -122,7 +117,6 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         self.mcpCapabilities = mcpCapabilities
         self.providerCapabilities = providerCapabilities
         self.goalCapability = goalCapability
-        self.supportsSubagents = supportsSubagents
         self.advertisesAuthStatus = advertisesAuthStatus
         self.agentInfo = agentInfo
         self.supportsSteering = supportsSteering
@@ -423,8 +417,6 @@ public final class ACPConnection: @unchecked Sendable {
             mcpCapabilities: capabilities?.mcpCapabilities ?? .init(),
             providerCapabilities: capabilities?.providerCapabilities,
             goalCapability: result.meta?.goal ?? capabilities?.meta.goal,
-            supportsSubagents: capabilities?.sessionCapabilities.supportsSubagents == true
-                || capabilities?.meta.openCodeChildSessionUpdates == true,
             advertisesAuthStatus: capabilities?.advertisesAuthStatus ?? false,
             agentInfo: result.agentInfo,
             supportsSteering: result.supportsSteering,

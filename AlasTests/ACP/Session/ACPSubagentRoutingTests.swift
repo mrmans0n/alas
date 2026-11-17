@@ -1180,6 +1180,19 @@ struct ACPSubagentRoutingTests {
         #expect(run.state == .running)
     }
 
+    @Test("a revised description is the task unless the adapter reports a role there", arguments: [
+        ("@alas-ide/claude-agent-acp", "0.90.0", "Find the router", "Find the router"),
+        ("@alas-ide/codex-acp", "2.6.0-alas.2", "Find the router", "Find the router"),
+        ("@alas-ide/codex-acp", "2.7.0-alas.1", "explorer", nil),
+    ] as [(String, String, String, String?)])
+    func revisedDescriptionAsTask(adapter: String, version: String, description: String, task: String?) async throws {
+        let (runner, _, _) = try makeRunner()
+        runner.session.agentInfo = ACPImplementationInfo(name: adapter, version: version)
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","title":"Explore","description":"\#(description)","state":{"state":"running"}}}"#)
+
+        #expect(runner.session.subagentRun("agent_n")?.task == task)
+    }
+
     @Test("a revised session_message on the root never becomes a user turn")
     func revisedSessionMessageOnRootIsIgnored() async throws {
         let (runner, _, _) = try makeRunner()

@@ -18,7 +18,7 @@ import AlasCode
 public struct ACPSubagentSpawn: Codable, Equatable, Sendable {
     public let subagentSessionId: String
     public let name: String?
-    public let task: String?
+    public var task: String?
     public let capabilities: ACPSubagentCapabilities
     // The revised form's `subagent_update` is a patch: a member that is
     // present replaces the child's value, `null` included. A repeated
@@ -87,6 +87,33 @@ public struct ACPSubagentSpawn: Codable, Equatable, Sendable {
             additionalDirectories = dirs
             replacesAdditionalDirectories = true
         }
+    }
+}
+
+extension ACPSubagentSpawn {
+    /// The first codex-acp release whose `subagent_update.description` is the
+    /// child's Codex `agentRole` (`default`, `explorer`, …) and never its task
+    /// (agentclientprotocol/codex-acp#760). The task arrives as a
+    /// `session_message` into the child, which its transcript shows as a prompt.
+    static let codexRoleDescriptionVersion = SemanticVersion(major: 2, minor: 7, patch: 0)
+
+    /// Whether `task` from this adapter is the child's task. claude-agent-acp
+    /// and earlier codex-acp releases describe the task there.
+    public static func carriesTask(from agentInfo: ACPImplementationInfo?) -> Bool {
+        guard let agentInfo,
+              ACPManagedAdapterDescriptor.codex.verifiedPackageNames.contains(agentInfo.name),
+              let version = SemanticVersion(parsing: agentInfo.version)
+        else { return true }
+        return version < codexRoleDescriptionVersion
+    }
+
+    /// This spawn with no task. It also clears one an earlier build recorded
+    /// from the role, so a replayed announcement repairs a persisted row.
+    public var withoutTask: ACPSubagentSpawn {
+        var spawn = self
+        spawn.task = nil
+        spawn.clearsTask = true
+        return spawn
     }
 }
 
