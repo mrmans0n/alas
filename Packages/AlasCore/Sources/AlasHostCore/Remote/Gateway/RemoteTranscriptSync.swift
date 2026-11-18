@@ -75,6 +75,14 @@ public final class RemoteTranscriptSync {
         }
         toolContent[id] = content
     }
+    private var spilledImages: [String: String] = [:]          // "toolCallId#asset" → file path
+
+    public func cachedSpilledImage(_ key: String) -> String? { spilledImages[key] }
+    public func storeSpilledImage(_ key: String, _ path: String) {
+        // ponytail: wholesale reset at the cap; the files persist and a miss only rehashes.
+        if spilledImages.count >= Self.toolContentCacheLimit { spilledImages.removeAll() }
+        spilledImages[key] = path
+    }
     public func invalidateToolContent(_ id: String) { toolContent[id] = nil }
 
     /// The integer a client answers `requestID` by: the agent's own number

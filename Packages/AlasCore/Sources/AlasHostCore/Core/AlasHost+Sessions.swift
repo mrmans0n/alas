@@ -252,6 +252,11 @@ extension SessionsAPI {
         return await manager.reloadFullToolCallContent(sessionId: sessionID, toolCallId: toolCallID)
     }
 
+    /// The worktree a loaded session belongs to.
+    public func worktreeId(of sessionID: String) -> String? {
+        (try? liveManager(for: sessionID))?.liveSession(for: sessionID)?.worktreeId
+    }
+
     /// Up to 8 KiB of the ANSI-stripped output of a tool call's terminal in
     /// the loaded session, and its exit status once it has one; nil when the
     /// session no longer has the terminal.
