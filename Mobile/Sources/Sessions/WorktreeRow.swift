@@ -118,7 +118,12 @@ struct WorktreeRow: View {
         }
     }
 
-    private var branch: String { entry.summary?.branch ?? entry.title }
+    /// Folder projects and detached checkouts report no branch; name the
+    /// worktree instead.
+    private var branch: String {
+        if let branch = entry.summary?.branch, !branch.isEmpty { return branch }
+        return entry.title
+    }
 
     /// The whole name when it fits, else the part after the last slash,
     /// which is where branches differ.
