@@ -17,6 +17,13 @@ struct RightPaneStoreBaseBranchTests {
         )
     }
 
+    /// Waits for the base-branch probe that `state(for:)` started. A fixed
+    /// sleep lost the race to its git call on loaded CI runners.
+    private func probeSettles(_ state: RightPaneState) async throws {
+        let probe = try #require(state.baseBranchProbeTask)
+        await probe.value
+    }
+
     private func makeRepoOnMain(branch: String = "main") async throws -> URL {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-basebranch-\(UUID().uuidString)")
@@ -191,7 +198,7 @@ struct RightPaneStoreBaseBranchTests {
         let state = store.state(for: makeWorktree(at: repo, branch: "release/1.0"), baseBranch: "release/1.0", comparisonMode: .manual)
         #expect(state.baseBranch == "origin/release/1.0")
 
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await probeSettles(state)
         #expect(state.baseBranch == "origin/release/1.0")
     }
 
@@ -206,7 +213,7 @@ struct RightPaneStoreBaseBranchTests {
         let state = store.state(for: makeWorktree(at: repo, branch: "release/1.0"), baseBranch: "release/1.0", comparisonMode: .manual)
         #expect(state.baseBranch == "origin/release/1.0")
 
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await probeSettles(state)
         #expect(state.baseBranch == "release/1.0")
     }
 
@@ -220,7 +227,7 @@ struct RightPaneStoreBaseBranchTests {
         #expect(state.baseBranch == "origin/main")
         #expect(state.lastConfigBaseBranch == "main")
 
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await probeSettles(state)
         #expect(state.baseBranch == "main")
         #expect(state.lastConfigBaseBranch == "main")
 
@@ -247,7 +254,7 @@ struct RightPaneStoreBaseBranchTests {
         let state = store.state(for: makeWorktree(at: repo, branch: "main"), baseBranch: "main", comparisonMode: .manual)
         #expect(state.baseBranch == "origin/main")
 
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await probeSettles(state)
         #expect(state.baseBranch == "origin/main")
     }
 
@@ -259,7 +266,7 @@ struct RightPaneStoreBaseBranchTests {
         let state = store.state(for: makeWorktree(at: repo, branch: "main"), baseBranch: "main", comparisonMode: .manual)
         #expect(state.baseBranch == "origin/main")
 
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await probeSettles(state)
         #expect(state.baseBranch == "main")
     }
 
@@ -274,11 +281,12 @@ struct RightPaneStoreBaseBranchTests {
         let store = RightPaneStore(git: GitService())
         let state = store.state(for: makeWorktree(at: repo, branch: "main"), baseBranch: "main", comparisonMode: .manual)
         #expect(state.baseBranch == "origin/main")
+        let probe = try #require(state.baseBranchProbeTask)
 
         state.selectBaseBranch("develop")
         #expect(state.userOverrodeBaseBranch)
 
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await probe.value
         #expect(state.baseBranch == "develop")
     }
 
