@@ -1,0 +1,16 @@
+{
+  "version": "0.24.2",
+  "headline": {
+    "title": "Richer iPhone transcripts",
+    "body": "The iPhone beta renders detailed tool calls, syntax-colored code and diffs, tables, task lists, and Mermaid diagrams.",
+    "media": "media/0.24.2-richer-iphone-transcripts.png"
+  },
+  "also": [
+    {
+      "title": "Group worktrees by project"
+    },
+    {
+      "title": "Start sessions from projects"
+    }
+  ]
+}
