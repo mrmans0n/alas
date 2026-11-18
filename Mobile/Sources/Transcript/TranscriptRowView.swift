@@ -92,9 +92,20 @@ struct TranscriptRowView: View {
             } else {
                 titleCaption(aid.title, "Visual")
             }
+        case .questionAnswer(let answer):
+            notice(answer.displayText)
+        case .outcomeCard(let card):
+            // The origin says whether the request merged, closed or queued.
+            notice("\(card.origin.rawValue.capitalized) · \(card.title)")
+        case .failureIncident(let incident):
+            notice(incident.details.map { "\(incident.title)\n\n\($0)" } ?? incident.title)
         case .systemNotice(let text):
-            Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+            notice(text)
         }
+    }
+
+    private func notice(_ text: String) -> some View {
+        Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
     }
 
     private func bubble(_ text: String) -> some View {

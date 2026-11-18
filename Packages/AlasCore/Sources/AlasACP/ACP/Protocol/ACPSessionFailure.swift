@@ -45,8 +45,8 @@ public struct ACPSessionFailureAdvertisement: Codable, Equatable, Sendable {
 /// version falls back to its text. Every other field decodes on its own: a bad
 /// one never costs the record. `category` and `actions` keep their raw strings.
 public struct ACPSessionFailureRecord: Codable, Equatable, Sendable {
-    public enum Severity: String, Codable, Sendable { case warning, error }
-    public enum Category: String, Sendable { case connection, access, limit, request, service, unknown }
+    public typealias Severity = ACPFailureSeverity
+    public typealias Category = ACPFailureCategory
 
     /// The `kind` of a usage limit.
     public static let quotaExhaustedKind = "quota_exhausted"
@@ -118,6 +118,20 @@ public struct ACPSessionFailureRecord: Codable, Equatable, Sendable {
         reason = record.reason
         actions = []
         kind = record.kind
+    }
+
+    /// The record a peer forwarded, for a card that shows it. Peers never carry actions.
+    public init(remote: RemoteFailureIncident) {
+        version = ACPSessionFailureAdvertisement.supportedVersion
+        id = remote.id
+        revision = 1
+        category = remote.category
+        severity = remote.severity
+        title = remote.title
+        details = remote.details
+        reason = nil
+        actions = []
+        kind = remote.kind
     }
 
     /// This record for a surface that cannot act on it.

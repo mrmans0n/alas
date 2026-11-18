@@ -1,5 +1,6 @@
 import Foundation
 import AlasACP
+import AlasRemoteKit
 
 /// A structured failure the agent reported, kept as one transcript row per
 /// record id. It is never agent output: not progress, not last-agent text,

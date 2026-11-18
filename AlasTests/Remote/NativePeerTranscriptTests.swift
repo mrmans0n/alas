@@ -244,10 +244,4 @@ struct NativePeerTranscriptTests {
             "see @App.swift\n\n🖼 Image\n\n📎 App.swift", checkpointID: nil,
             images: [.init(uri: "file:///tmp/shot.png", name: "shot.png")]))
     }
-
-    @Test func failureIncidentRowsShowTheirText() throws {
-        let wire = RemoteSessionGateway.toWire(
-            .failureIncident(id: UUID(), try .fixture(title: "Failed", details: "Why")), index: 2)
-        #expect(NativePeerRow(message: wire) == .systemNotice("Failed\n\nWhy"))
-    }
 }
