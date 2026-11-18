@@ -1412,7 +1412,8 @@ struct StackShepherdTests {
         let after = core.stackShipStatus(sessionID: "session-1", worktreeID: "wt-1")
         if turnDelivery == .delivered {
             #expect(after == nil)
-            #expect(core.stackShipActivity["wt-1"] == nil)
+            // The delivered failure is cleared after the turn's delivery returns.
+            try await eventually { await MainActor.run { core.stackShipActivity["wt-1"] == nil } }
         } else {
             guard case .failed(let activitySession, let activityMessage) = activityBeforeStatus else {
                 Issue.record("expected failed activity, got \(String(describing: activityBeforeStatus))")
