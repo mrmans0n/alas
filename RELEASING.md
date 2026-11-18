@@ -23,12 +23,20 @@ $EDITOR CHANGELOG.md
 $EDITOR Alas/Resources/WhatsNew/0.1.2.json
 #    Optional media: Alas/Resources/WhatsNew/media/0.1.2-<slug>.gif (under ~2 MB)
 
-# 5. Bump the version in project.yml, regenerate Xcode project.
+# 5. Preview the TestFlight "What to Test" text. If the release has no
+#    mobile-facing What's New body or changelog item, add the explicit override.
+ruby scripts/testflight-notes.rb --version 0.1.2 \
+  --release-url https://github.com/mrmans0n/alas/releases/tag/v0.1.2
+# $EDITOR Mobile/TestFlight/WhatToTest/0.1.2.md
+
+# 6. Bump the version in project.yml, regenerate Xcode project.
 $EDITOR project.yml   # bump CFBundleShortVersionString + CFBundleVersion
 xcodegen
 
-# 6. Commit and tag.
+# 7. Commit and tag.
 git add CHANGELOG.md project.yml Alas.xcodeproj Alas/Resources/WhatsNew
+# If step 5 added an override:
+# git add Mobile/TestFlight/WhatToTest/0.1.2.md
 git commit -m "Bump version to 0.1.2"
 git tag v0.1.2
 git push origin main v0.1.2
@@ -100,6 +108,33 @@ swift test --package-path Packages/AlasCore --filter WhatsNewTests
 The release workflow runs it in the `whats-new-check` job, and `publish`
 needs that job, so an invalid entry (bad JSON, version/filename mismatch,
 missing media, unknown action, more than two `also` items) blocks the release.
+
+## TestFlight What to Test
+
+Every iOS beta upload passes app-specific English text to TestFlight followed
+by a blank line and the canonical GitHub Release URL. The text is generated
+from immutable content in the checked-out release ref, in this order:
+
+1. `Mobile/TestFlight/WhatToTest/<version>.md`, when the release needs curated
+   mobile copy that cannot be derived safely. Store only the app-specific body;
+   the generator owns and appends the release link;
+2. the versioned What's New headline body, when it mentions iPhone, iPad, iOS,
+   or mobile behavior;
+3. up to three mobile-facing bullets from that version's `CHANGELOG.md` section.
+
+For a `vX.Y.Z` release, the generator fails instead of reusing generic or stale
+copy when none of those sources exists. Add the versioned override and rerun:
+
+```bash
+ruby scripts/testflight-notes.rb --version X.Y.Z \
+  --release-url https://github.com/mrmans0n/alas/releases/tag/vX.Y.Z
+```
+
+Manual branch builds use a concise Alas beta checklist and link to the branch.
+Generated text must stay within Fastlane's effective 4,000-byte TestFlight
+limit. The iOS workflow prints the exact generated body before passing the same
+to Fastlane, so release verification can compare the submitted text with the
+tagged input.
 
 ## Draft script flags
 
