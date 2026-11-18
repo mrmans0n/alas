@@ -111,6 +111,15 @@ struct VisualAidCardState {
     var blocked = false
 }
 
+/// A tool call's terminal output as the host last sent it (`readToolTerminal`).
+struct ToolTerminalTail: Equatable {
+    let text: String
+    let exitCode: Int?
+    let signal: String?
+    /// False when the host no longer has the terminal.
+    let retained: Bool
+}
+
 enum RequestKind {
     case permission, question, plan, elicitation
 }
@@ -126,7 +135,12 @@ enum QueueAction {
 @MainActor @Observable
 final class TranscriptSession {
     private(set) var items: [TranscriptItem] = []
-    var expanded: Set<String> = []
+    var expanded: Set<String> = [] { didSet { pollTerminals() } }
+    /// Terminal tails by terminal id, for expanded tool calls.
+    private(set) var toolTerminals: [String: ToolTerminalTail] = [:]
+    /// Terminals read once after their call went final; their tail no longer changes.
+    @ObservationIgnored private var settledTerminals: Set<String> = []
+    @ObservationIgnored private var terminalPoll: Task<Void, Never>?
     var canLoadOlder = false
     /// True once the first snapshot arrived, so an empty transcript can say so.
     private(set) var hasSnapshot = false
@@ -289,6 +303,8 @@ final class TranscriptSession {
         // until every sent draft has an outcome, so a refusal still lands in the draft.
         if unsettled.isEmpty { listener = nil }
         watchGeneration += 1
+        terminalPoll?.cancel()
+        terminalPoll = nil
         // By message: a collapsed group's answers are cached but not in `items`.
         MarkdownBlockCache.shared.remove(ids: Array(messageItems.keys))
         // Unanswered reads die with the subscription; a reopened row asks again.
@@ -603,6 +619,8 @@ final class TranscriptSession {
         isStopping = false
         mentionCandidates = []
         mentionCandidatesQuery = nil
+        // A final read whose reply never came is asked again.
+        settledTerminals = settledTerminals.filter { toolTerminals[$0] != nil }
         // A send's reply died with the old subscription; the snapshot shows its outcome.
         for id in visualAids.keys where visualAids[id]?.pendingRequestId != nil {
             visualAids[id]?.pendingRequestId = nil
@@ -692,6 +710,11 @@ final class TranscriptSession {
                     self?.landDisplay(key, image)
                 }
             }
+            return
+        case .toolTerminal(let id, let terminalId, let text, _, let exitCode, let signal, let retained) where id == sessionId:
+            // Every follower of the session gets every reply, asked for or not.
+            let tail = ToolTerminalTail(text: text, exitCode: exitCode, signal: signal, retained: retained)
+            if toolTerminals[terminalId] != tail { toolTerminals[terminalId] = tail }
             return
         case .transcriptSnapshot(let id, _, _, _, _, _, _, _, _) where id == sessionId,
              .transcriptPage(let id, _, _, _) where id == sessionId:
@@ -807,6 +830,61 @@ final class TranscriptSession {
             }
         }
         refreshCanLoadOlder()
+        pollTerminals()
+    }
+
+    /// Reads the terminals of expanded tool calls: once a second while their call runs, then once
+    /// more when it ends. Only hosts that advertise the request get it; an older one fails to decode it.
+    private func pollTerminals() {
+        guard isOpen, hub.state(of: hostID) == .online,
+              hub.supports(PeerToolTerminalCapability.v1, on: hostID) else {
+            terminalPoll?.cancel()
+            terminalPoll = nil
+            return
+        }
+        let (running, settled) = expandedTerminals()
+        for id in settled where settledTerminals.insert(id).inserted { readTerminal(id) }
+        guard !running.isEmpty else {
+            terminalPoll?.cancel()
+            terminalPoll = nil
+            return
+        }
+        guard terminalPoll == nil else { return }
+        running.forEach(readTerminal)
+        terminalPoll = Task { @MainActor [weak self] in
+            repeat {
+                try? await Task.sleep(for: .seconds(1))
+            } while !Task.isCancelled && self?.pollRunningTerminals() == true
+        }
+    }
+
+    /// One poll tick; false, with the poll cleared, once no expanded call is running.
+    private func pollRunningTerminals() -> Bool {
+        let running = expandedTerminals().running
+        guard !running.isEmpty, hub.state(of: hostID) == .online else {
+            terminalPoll = nil
+            return false
+        }
+        running.forEach(readTerminal)
+        return true
+    }
+
+    private func readTerminal(_ terminalId: String) {
+        hub.send(.readToolTerminal(sessionId: sessionId, terminalId: terminalId), to: hostID)
+    }
+
+    /// The terminal ids of the expanded tool-call rows, split by whether their call still runs.
+    private func expandedTerminals() -> (running: [String], settled: [String]) {
+        var running: [String] = [], settled: [String] = []
+        for item in items where item.kind == .message && expanded.contains(item.id) {
+            guard case .toolCall(let call) = item.row else { continue }
+            if Self.isRunning(call) { running += call.terminalIds } else { settled += call.terminalIds }
+        }
+        return (running, settled)
+    }
+
+    static func isRunning(_ call: ACPToolCall) -> Bool {
+        call.status == "pending" || call.status == "in_progress"
     }
 
     /// Folds thinking and tool calls into activity groups as the Mac's transcript does.
