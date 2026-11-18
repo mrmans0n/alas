@@ -1,7 +1,8 @@
 name: iOS Release
 
 # Builds the iOS app from any ref and uploads it to TestFlight, or submits an
-# uploaded build for App Store review. release.yml calls it for every v* tag.
+# uploaded build for App Store review. release.yml calls it for every v* tag;
+# nightly.yml calls it with nightly: true when iOS inputs change on main.
 #
 # Secrets: IOS_SIGNING_P12_BASE64 and IOS_SIGNING_P12_PASSWORD hold the Apple
 # Development and Apple Distribution identities exported together as one .p12
@@ -33,6 +34,10 @@ on:
         type: string
       external:
         default: true
+        type: boolean
+      nightly:
+        description: "Build the next patch version, so the upload never lands on an approved version"
+        default: false
         type: boolean
 
 permissions:
@@ -98,7 +103,7 @@ jobs:
         if: inputs.submit_build == ''
         env:
           DEVELOPMENT_TEAM: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-        run: scripts/ios-testflight.sh --no-upload
+        run: scripts/ios-testflight.sh --no-upload ${{ inputs.nightly && '--nightly' || '' }}
 
       - name: Upload to TestFlight
         if: inputs.submit_build == ''
@@ -106,7 +111,7 @@ jobs:
         env:
           IPA: ${{ steps.build.outputs.ipa }}
           TESTFLIGHT_GROUPS: ${{ inputs.external && vars.IOS_TESTFLIGHT_GROUPS || '' }}
-          CHANGELOG: "Alas ${{ inputs.ref }} (${{ github.server_url }}/${{ github.repository }}/tree/${{ inputs.ref }})"
+          CHANGELOG: "Alas ${{ inputs.nightly && 'nightly ' || '' }}${{ inputs.ref }} (${{ github.server_url }}/${{ github.repository }}/tree/${{ inputs.ref }})"
         run: bundle exec fastlane beta ipa:"$IPA" groups:"$TESTFLIGHT_GROUPS" changelog:"$CHANGELOG"
 
       - name: Cleanup signing keychain
