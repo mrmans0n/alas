@@ -67,7 +67,9 @@ struct WorktreeRowPresentationTests {
     @Test func accessibilityLabelSaysEveryFieldARowCanHave() {
         let content = WorktreeRowAccessibilityContent(
             name: "feat/invoice-export",
+            ship: "Shipping stack · linting",
             statusNote: "1 file",
+            shepherd: "Shepherding #7, agent fixing",
             added: 48,
             deleted: 6,
             workspaceCheckout: "Workspace Release",
@@ -98,7 +100,9 @@ struct WorktreeRowPresentationTests {
     @Test func accessibilityLabelSkipsWhatARowDoesNotHave() {
         let label = WorktreeRowPresentation.accessibilityLabel(WorktreeRowAccessibilityContent(
             name: "main",
+            ship: nil,
             statusNote: nil,
+            shepherd: nil,
             added: 0,
             deleted: 0,
             workspaceCheckout: nil,
@@ -267,5 +271,20 @@ struct WorktreeRowPresentationTests {
         #expect(paused?.isLoud == true)
         #expect(WorktreeRowPresentation.shepherdNote(pr: nil, stack: Self.stackRecord([.watching]))?.number == "1 PR")
         #expect(WorktreeRowPresentation.shepherdNote(pr: nil, stack: Self.stackRecord([.merged, .merged])) == nil)
+    }
+
+    /// A linked record's row runs on another machine, so nothing local shows on it.
+    @Test func rowOnAnotherMachineShowsNoLiveActivity() {
+        let ship = StackShipActivity.running(
+            sessionID: "s", progress: StackShipProgress(phase: .pushing, position: 1, totalEntries: 2)
+        )
+        let activity = { (hasMachineBadge: Bool) in
+            WorktreeRowPresentation.liveActivity(
+                hasMachineBadge: hasMachineBadge, vms: [.macOS: .running], devices: [],
+                ship: ship, pr: Self.prRecord(.watching), stack: nil
+            )
+        }
+        #expect(activity(true) == .none)
+        #expect(activity(false).ship != nil)
     }
 }

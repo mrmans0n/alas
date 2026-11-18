@@ -86,7 +86,9 @@ enum WorktreeRowPresentation {
     /// Spoken for the whole row, so its parts read as one sentence.
     nonisolated static func accessibilityLabel(_ content: WorktreeRowAccessibilityContent) -> String {
         var parts = [content.name]
+        if let ship = content.ship { parts.append(ship) }
         if let statusNote = content.statusNote { parts.append(statusNote) }
+        if let shepherd = content.shepherd { parts.append(shepherd) }
         if content.added > 0 || content.deleted > 0 {
             parts.append("\(content.added) lines added, \(content.deleted) lines deleted")
         }
@@ -288,6 +290,24 @@ extension WorktreeRowPresentation {
 
         nonisolated static let none = LiveActivity(glyphs: [], ship: nil, shepherd: nil)
     }
+
+    /// A row a linked record on another machine contributes shows nothing
+    /// local: its VMs, devices and ships run elsewhere.
+    nonisolated static func liveActivity(
+        hasMachineBadge: Bool,
+        vms: [VMGuestOS: VMDeviceStatus],
+        devices: [OwnedDevice],
+        ship: StackShipActivity?,
+        pr: ShepherdRecord?,
+        stack: StackShepherdRecord?
+    ) -> LiveActivity {
+        guard !hasMachineBadge else { return .none }
+        return LiveActivity(
+            glyphs: resourceGlyphs(vms: vms, devices: devices),
+            ship: shipLine(ship),
+            shepherd: shepherdNote(pr: pr, stack: stack)
+        )
+    }
 }
 
 /// Everything a row can say, for its accessibility label. No defaults: a new
@@ -295,7 +315,10 @@ extension WorktreeRowPresentation {
 /// reflection, so one the label forgets fails.
 struct WorktreeRowAccessibilityContent {
     let name: String
+    /// The stack ship that takes over line 2.
+    let ship: String?
     let statusNote: String?
+    let shepherd: String?
     let added: Int
     let deleted: Int
     let workspaceCheckout: String?

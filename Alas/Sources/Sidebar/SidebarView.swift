@@ -304,18 +304,12 @@ struct SidebarView: View {
                                         onRunPluginDecoration: { state.runPluginDecoration($0) },
                                         isFiltering: WorktreeSidebarFilter.isActive(worktreeFilter),
                                         highlightedWorktreeId: highlightedWorktreeId,
-                                        machineBadge: { wt in
-                                            let host = state.projects.first { $0.id == wt.projectId }?.host
-                                            return WorktreeRowPresentation.machineBadge(
-                                                rowProjectId: wt.projectId,
-                                                groupProjectId: project.id,
-                                                host: host,
-                                                machines: state.config.machines,
-                                                reachability: host.map { RemoteHostStatusStore.shared.reachability(for: $0) } ?? .unknown
-                                            )
-                                        },
+                                        machineBadge: { wt in machineBadge(wt, in: project) },
                                         onRemoveLinkedCheckout: { wt in onRemoveProject(wt.projectId) },
-                                        onReconnectMachine: { wt in state.reconnectMachine(projectId: wt.projectId) }
+                                        onReconnectMachine: { wt in state.reconnectMachine(projectId: wt.projectId) },
+                                        liveActivity: { wt in liveActivity(wt, in: project) },
+                                        onOpenVM: { wt, guest in state.openVirtualMachine(in: wt, guest: guest) },
+                                        onShowDevice: { wt, id in state.showDevice(id, in: wt.id) }
                                     )
                                 }
                                 if let nativePeerSessions = state.nativePeerSessions {
@@ -441,6 +435,88 @@ struct SidebarView: View {
     /// primary's group but act on their own record.
     private func rowProject(_ worktree: Worktree, in group: ProjectConfig) -> ProjectConfig {
         state.projects.first { $0.id == worktree.projectId } ?? group
+    }
+
+    /// The machine a linked record's row runs on; nil for the group's own rows.
+    private func machineBadge(_ wt: Worktree, in group: ProjectConfig) -> WorktreeRowPresentation.MachineBadge? {
+        let host = state.projects.first { $0.id == wt.projectId }?.host
+        return WorktreeRowPresentation.machineBadge(
+            rowProjectId: wt.projectId,
+            groupProjectId: group.id,
+            host: host,
+            machines: state.config.machines,
+            reachability: host.map { RemoteHostStatusStore.shared.reachability(for: $0) } ?? .unknown
+        )
+    }
+
+    /// Read here rather than in the row, so a row never observes the VM
+    /// manager, the device panes or the shepherds itself.
+    private func liveActivity(_ wt: Worktree, in group: ProjectConfig) -> WorktreeRowPresentation.LiveActivity {
+        let hasMachineBadge = machineBadge(wt, in: group) != nil
+        guard !hasMachineBadge else {
+            return WorktreeRowPresentation.liveActivity(
+                hasMachineBadge: true, vms: [:], devices: [], ship: nil, pr: nil, stack: nil
+            )
+        }
+        var vms: [VMGuestOS: VMDeviceStatus] = [:]
+        if state.canOpenVirtualMachine(in: wt) {
+            for guest in [VMGuestOS.macOS, .linux] {
+                vms[guest] = sidebarVMStatus(worktreeID: wt.id, guest: guest)
+            }
+        }
+        return WorktreeRowPresentation.liveActivity(
+            hasMachineBadge: false,
+            vms: vms,
+            devices: ownedDevices(worktreeID: wt.id),
+            ship: state.core.stackShipActivity[wt.id],
+            pr: state.reviewShepherd.record(forWorktree: wt.id),
+            stack: state.stackShepherd.activeRecord(forWorktree: wt.id)
+        )
+    }
+
+    /// A VM's state from memory only. `vmDeviceStatus` also reads the VM
+    /// registry and bundle on disk, too slow for every sidebar render, so a
+    /// paused or stopped VM reads as stopped here and shows no glyph.
+    private func sidebarVMStatus(worktreeID: String, guest: VMGuestOS) -> VMDeviceStatus {
+        let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+        if state.vmManager.pausing.contains(id) { return .pausing }
+        if state.vmManager.isStarting(id) { return .starting }
+        if state.vmManager.running(worktreeID, guest: guest) != nil { return .running }
+        return .stopped
+    }
+
+    /// The devices this worktree used last, with their live state. An owned
+    /// `avd:<name>` follows its running emulator; ids that resolve to the
+    /// same emulator count once.
+    private func ownedDevices(worktreeID: String) -> [WorktreeRowPresentation.OwnedDevice] {
+        let simulators = state.devicePane.devices ?? []
+        let bootingSimulators = state.devicePane.bootingUDIDs
+        let androids = state.androidPane.devices ?? []
+        let bootingAVDs = state.androidPane.bootingAVDs
+        var seen: Set<String> = []
+        var owned: [WorktreeRowPresentation.OwnedDevice] = []
+        for id in state.deviceUseTracker.devices(ownedBy: worktreeID) {
+            if AgentDevice.isSimulatorID(id) {
+                let device = simulators.first { $0.udid == id }
+                let deviceState: WorktreeRowPresentation.ResourceState? =
+                    if device?.state == .booting || bootingSimulators.contains(id) { .starting }
+                    else if device?.state == .booted { .on }
+                    else { nil }
+                guard seen.insert(id).inserted else { continue }
+                owned.append(.init(id: id, name: device?.name ?? id, isAndroid: false, state: deviceState))
+            } else {
+                let avd = id.hasPrefix("avd:") ? String(id.dropFirst(4)) : nil
+                let running = androids.first { avd != nil ? $0.avdName == avd : $0.serial == id }
+                let deviceState: WorktreeRowPresentation.ResourceState? =
+                    if running?.state == .ready { .on }
+                    else if let avd, bootingAVDs.contains(avd) { .starting }
+                    else { nil }
+                guard seen.insert(running?.serial ?? id).inserted else { continue }
+                let name = running?.title ?? (avd ?? id).replacingOccurrences(of: "_", with: " ")
+                owned.append(.init(id: id, name: name, isAndroid: true, state: deviceState))
+            }
+        }
+        return owned
     }
 
     /// Matched worktree ids of the active space, in sidebar display order.

@@ -123,6 +123,10 @@ struct RepoGroupView: View {
     var machineBadge: (Worktree) -> WorktreeRowPresentation.MachineBadge? = { _ in nil }
     var onRemoveLinkedCheckout: (Worktree) -> Void = { _ in }
     var onReconnectMachine: (Worktree) -> Void = { _ in }
+    /// What a row is running: VMs, devices, a stack ship, a shepherd.
+    var liveActivity: (Worktree) -> WorktreeRowPresentation.LiveActivity = { _ in .none }
+    var onOpenVM: (Worktree, VMGuestOS) -> Void = { _, _ in }
+    var onShowDevice: (Worktree, String) -> Void = { _, _ in }
     @Environment(\.theme) var theme
     @Environment(\.designScale) private var scale
     @Environment(\.sidebarWorktreeDropTargets) private var dropTargets
@@ -307,7 +311,10 @@ struct RepoGroupView: View {
             isHighlighted: wt.id == highlightedWorktreeId,
             machineBadge: machineBadge(wt),
             onRemoveLinkedCheckout: { onRemoveLinkedCheckout(wt) },
-            onReconnectMachine: { onReconnectMachine(wt) }
+            onReconnectMachine: { onReconnectMachine(wt) },
+            liveActivity: liveActivity(wt),
+            onOpenVM: { guest in onOpenVM(wt, guest) },
+            onShowDevice: { id in onShowDevice(wt, id) }
         )
         .draggable(wt.id)
         .modifier(WorktreeRowDropTarget(id: wt.id, targets: dropTargets) { draggedId in
