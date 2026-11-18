@@ -83,7 +83,6 @@ struct NewSessionSheet: View {
                         .foregroundStyle(.secondary)
                 }
             }
-
         }
         .disabled(model.isCreating)
     }
