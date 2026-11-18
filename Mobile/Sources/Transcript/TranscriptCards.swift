@@ -1,3 +1,4 @@
+import AlasHighlight
 import AlasRemoteKit
 import SwiftUI
 
@@ -169,6 +170,11 @@ struct OutcomeCard: View {
                 }
                 .padding([.horizontal, .bottom], 12)
             }
+            if card.sections.isEmpty, card.origin == .shepherd {
+                Text("Nothing needs attention right now.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .padding([.horizontal, .bottom], 12)
+            }
             ForEach(card.sections.indices, id: \.self) { section(card.sections[$0], index: $0) }
             if let url = card.actionURL {
                 Button("Open in browser") { openURL(url) }
@@ -197,7 +203,11 @@ struct OutcomeCard: View {
     private func section(_ section: RemotePromptCard.Section, index: Int) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let title = section.title {
-                Text(title.uppercased()).font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                if card.origin == .review {
+                    pathText(title)
+                } else {
+                    Text(title.uppercased()).font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                }
             }
             ForEach(section.items.indices, id: \.self) { itemIndex in
                 item(section.items[itemIndex], id: "\(id):\(index):\(itemIndex)")
@@ -210,10 +220,17 @@ struct OutcomeCard: View {
 
     private func item(_ item: RemotePromptCard.Item, id: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            if let path = item.location?.path {
-                Text(path).font(.system(.footnote, design: .monospaced)).lineLimit(1).truncationMode(.head)
-            }
+            if card.origin != .review, let path = item.location?.path { pathText(path) }
             HStack(spacing: 8) {
+                if let lines = Self.lineLabel(item.location) {
+                    Text(lines)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 4)
+                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                        .accessibilityLabel(Self.lineLabel(item.location, spoken: true) ?? lines)
+                }
+                if let side = item.location?.side { Text(side).font(.caption).foregroundStyle(.tertiary) }
                 if let author = item.author { Text(author).font(.footnote).foregroundStyle(.secondary) }
                 Spacer(minLength: 0)
                 if let pill = Self.pill(item.status) {
@@ -223,8 +240,13 @@ struct OutcomeCard: View {
                         .overlay(Capsule().strokeBorder(pill.tint.opacity(0.4)))
                 }
             }
-            if let body = item.bodyMarkdown { AgentMarkdown(id: id, text: body).font(.footnote) }
-            if let excerpt = item.excerpt {
+            if let body = item.bodyMarkdown { AgentMarkdown(id: id, text: body) }
+            if let excerpt = item.excerpt, excerpt.style == .code {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Commented code").font(.caption).foregroundStyle(.tertiary)
+                    AgentMarkdown(id: "\(id):excerpt", text: Self.fenced(excerpt, path: item.location?.path))
+                }
+            } else if let excerpt = item.excerpt {
                 Text(excerpt.text)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -239,6 +261,38 @@ struct OutcomeCard: View {
         }
         .padding(.leading, 8)
         .overlay(alignment: .leading) { Rectangle().fill(Self.ruleTint(item.status, card.origin)).frame(width: 2) }
+    }
+
+    /// Directory dimmed, file name in bold, cut from the front.
+    private func pathText(_ path: String) -> some View {
+        let directory = (path as NSString).deletingLastPathComponent
+        let name = (path as NSString).lastPathComponent
+        return (Text(directory.isEmpty ? "" : directory + "/").foregroundColor(.secondary)
+            + Text(name).fontWeight(.semibold))
+            .font(.system(.footnote, design: .monospaced))
+            .lineLimit(1)
+            .truncationMode(.head)
+    }
+
+    /// "L12" or "L12–14"; spoken as "Line 12" or "Lines 12 to 14".
+    private static func lineLabel(_ location: RemotePromptCard.Location?, spoken: Bool = false) -> String? {
+        guard let start = location?.startLine else { return nil }
+        guard let end = location?.endLine, end != start else { return spoken ? "Line \(start)" : "L\(start)" }
+        return spoken ? "Lines \(start) to \(end)" : "L\(start)–\(end)"
+    }
+
+    /// A fence longer than any backtick run in the excerpt, so the code can't close it early. The
+    /// language falls back to the commented file's.
+    private static func fenced(_ excerpt: RemotePromptCard.Excerpt, path: String?) -> String {
+        var longest = 0
+        var run = 0
+        for character in excerpt.text {
+            run = character == "`" ? run + 1 : 0
+            longest = max(longest, run)
+        }
+        let fence = String(repeating: "`", count: max(3, longest + 1))
+        let language = excerpt.language ?? ACPCodeLanguage.highlighterExtension(forPath: path) ?? ""
+        return "\(fence)\(language)\n\(excerpt.text)\n\(fence)"
     }
 
     /// `PromptCardRow.style(for:)`, with the Mac theme's tints as system colours.
