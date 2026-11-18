@@ -1,3 +1,4 @@
+import AlasCore
 import Foundation
 
 /// What a worktree row shows, decided apart from how it draws it.
@@ -97,6 +98,192 @@ enum WorktreeRowPresentation {
         if let explanation = content.explanation { parts.append(explanation) }
         parts.append(content.lastActivity)
         return parts.joined(separator: ", ")
+    }
+}
+
+// MARK: - Live activity
+
+/// What a worktree is running right now: VMs and devices it owns, a stack
+/// ship in flight, a shepherd watching its pull requests. Decided here, drawn
+/// by the row.
+extension WorktreeRowPresentation {
+    enum ResourceKind: Equatable {
+        /// The strongest guest, when several VMs collapse into one glyph.
+        case vm(VMGuestOS)
+        case iosSimulator
+        case androidEmulator
+    }
+
+    enum ResourceState: Equatable {
+        case starting, on, paused
+    }
+
+    struct ResourceGlyph: Equatable {
+        let kind: ResourceKind
+        let state: ResourceState
+        let count: Int
+        let tooltip: String
+        /// The device a click shows; nil for VMs.
+        let deviceID: String?
+    }
+
+    struct OwnedDevice: Equatable {
+        let id: String
+        let name: String
+        let isAndroid: Bool
+        /// Nil when the device is shut down.
+        let state: ResourceState?
+    }
+
+    /// At most one glyph per kind, in the order VM, iOS simulator, Android
+    /// emulator, so a busy worktree keeps its name line.
+    nonisolated static func resourceGlyphs(
+        vms: [VMGuestOS: VMDeviceStatus],
+        devices: [OwnedDevice]
+    ) -> [ResourceGlyph] {
+        var glyphs: [ResourceGlyph] = []
+
+        var liveVMs: [(guest: VMGuestOS, state: ResourceState, word: String)] = []
+        for guest in [VMGuestOS.macOS, .linux] {
+            guard let status = vms[guest] else { continue }
+            switch status {
+            case .starting: liveVMs.append((guest, .starting, "starting"))
+            case .pausing: liveVMs.append((guest, .starting, "pausing"))
+            case .running: liveVMs.append((guest, .on, "running"))
+            case .paused: liveVMs.append((guest, .paused, "paused"))
+            case .notCreated, .stopped, .runningElsewhere: break
+            }
+        }
+        if let strongest = liveVMs.max(by: { rank($0.state) < rank($1.state) }) {
+            let tooltip = liveVMs.map { "\($0.guest == .macOS ? "macOS" : "Linux") VM \($0.word)" }.joined(separator: ", ")
+            glyphs.append(ResourceGlyph(
+                kind: .vm(strongest.guest), state: strongest.state, count: liveVMs.count,
+                tooltip: tooltip, deviceID: nil
+            ))
+        }
+
+        for android in [false, true] {
+            let live = devices.filter { $0.isAndroid == android && $0.state != nil }
+            guard let first = live.first else { continue }
+            let state: ResourceState = live.contains { $0.state == .starting } ? .starting : .on
+            let tooltip = live.map { device in
+                let name = android ? "\(device.name) (emulator)" : device.name
+                return "\(name) \(device.state == .starting ? "booting" : "booted")"
+            }.joined(separator: ", ")
+            glyphs.append(ResourceGlyph(
+                kind: android ? .androidEmulator : .iosSimulator, state: state,
+                count: live.count, tooltip: tooltip, deviceID: first.id
+            ))
+        }
+        return glyphs
+    }
+
+    /// Starting beats running beats paused; the first of equals wins.
+    private nonisolated static func rank(_ state: ResourceState) -> Int {
+        switch state {
+        case .starting: 2
+        case .on: 1
+        case .paused: 0
+        }
+    }
+
+    // MARK: Ship
+
+    struct ShipLine: Equatable {
+        let title: String
+        /// The entry in flight, only while linting or pushing with a known total.
+        let position: Int?
+        let total: Int?
+        let isFailure: Bool
+        let tooltip: String
+        let sessionID: String
+    }
+
+    nonisolated static func shipLine(_ activity: StackShipActivity?) -> ShipLine? {
+        switch activity {
+        case nil:
+            return nil
+        case .running(let sessionID, let progress)?:
+            let title = "Shipping stack · \(progress.phase.rawValue)"
+            let hasBar = (progress.phase == .linting || progress.phase == .pushing) && progress.totalEntries != nil
+            let position = hasBar ? progress.position : nil
+            let total = hasBar ? progress.totalEntries : nil
+            let tooltip = if let position, let total { "\(title) \(position)/\(total)" } else { title }
+            return ShipLine(
+                title: title, position: position, total: total,
+                isFailure: false, tooltip: tooltip, sessionID: sessionID
+            )
+        case .failed(let sessionID, let message)?:
+            let firstLine = message.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+            let short = firstLine.count > 60 ? String(firstLine.prefix(60)) + "…" : firstLine
+            return ShipLine(
+                title: "Ship failed: \(short)", position: nil, total: nil,
+                isFailure: true, tooltip: message, sessionID: sessionID
+            )
+        }
+    }
+
+    // MARK: Shepherd
+
+    struct ShepherdNote: Equatable {
+        /// "#2041", or "4 PRs" for a stack.
+        let number: String
+        let note: String?
+        /// Needs the user: leads line 2 like conflicts do.
+        let isLoud: Bool
+        let tooltip: String
+        let sessionID: String
+        /// A stack shepherd stands in for the gg stack chip.
+        let replacesStackChip: Bool
+    }
+
+    /// A stack shepherd wins over a single PR's. Finished and idle shepherds
+    /// say nothing.
+    nonisolated static func shepherdNote(pr: ShepherdRecord?, stack: StackShepherdRecord?) -> ShepherdNote? {
+        if let stack, !stack.isFinished {
+            let presentation = ShepherdPresentation.make(stack: stack, requests: [:], gatePasses: false)
+            let merged = stack.entries.filter { $0.shepherd.phase == .merged }.count
+            guard let (note, isLoud) = shepherdWording(presentation.badge, loud: "need you") else { return nil }
+            let number = "\(stack.entries.count) PRs"
+            let resolved = note ?? (merged > 0 ? "\(merged) merged" : nil)
+            return ShepherdNote(
+                number: number, note: resolved, isLoud: isLoud,
+                tooltip: presentation.tooltip, sessionID: stack.sessionID, replacesStackChip: true
+            )
+        }
+        guard let pr else { return nil }
+        let presentation = ShepherdPresentation.make(record: pr, request: nil, mergeGatePasses: false)
+        guard let (note, isLoud) = shepherdWording(presentation.badge, loud: "needs you") else { return nil }
+        return ShepherdNote(
+            number: presentation.number ?? "", note: note, isLoud: isLoud,
+            tooltip: presentation.tooltip, sessionID: pr.sessionID, replacesStackChip: false
+        )
+    }
+
+    /// Nil hides the shepherd; a nil note shows the number alone.
+    private nonisolated static func shepherdWording(
+        _ badge: ShepherdBadgeState,
+        loud: String
+    ) -> (note: String?, isLoud: Bool)? {
+        switch badge {
+        case .waiting: (nil, false)
+        case .fixing: ("agent fixing", false)
+        case .ready: ("ready to merge", false)
+        case .merging: ("merging", false)
+        case .queued: ("in merge queue", false)
+        case .attention: (loud, true)
+        case .merged, .closed, .noRequest, .unshepherded: nil
+        }
+    }
+
+    // MARK: Bundle
+
+    struct LiveActivity: Equatable {
+        var glyphs: [ResourceGlyph]
+        var ship: ShipLine?
+        var shepherd: ShepherdNote?
+
+        nonisolated static let none = LiveActivity(glyphs: [], ship: nil, shepherd: nil)
     }
 }
 
