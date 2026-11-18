@@ -95,6 +95,7 @@ struct SubagentScreen: View {
     let session: TranscriptSession
     let subagent: RemoteWireMessage.Subagent
     @State private var expanded: Set<String> = []
+    @Environment(\.scenePhase) private var scenePhase
 
     private var transcript: SubagentTranscript? { session.subagentTranscripts[subagent.id] }
 
@@ -121,11 +122,13 @@ struct SubagentScreen: View {
             .navigationTitle(SubagentStatus.name(subagent))
             .navigationSubtitle(SubagentStatus.label(state))
             .navigationBarTitleDisplayMode(.inline)
-            // Restarts when the child finishes, for one last read of its final rows.
-            .task(id: isLive) {
+            // Restarts when the child finishes, for one last read of its final rows, and stops in the
+            // background. A read that could not go out (host offline) is retried until a reply lands.
+            .task(id: [isLive, scenePhase == .active]) {
+                guard scenePhase == .active else { return }
                 repeat {
                     session.readSubagent(subagent.id)
-                    guard isLive else { return }
+                    guard isLive || transcript == nil else { return }
                     try? await Task.sleep(for: .seconds(2))
                 } while !Task.isCancelled
             }

@@ -58,7 +58,7 @@ struct TranscriptScreen: View {
             // its state first (DiffView's own onDisappear), and so a screen that came straight
             // back keeps what it holds.
             Task { @MainActor in
-                if visible || terminalsWorktree != nil || openedSubagent != nil || workspace?.hasPushedChild(screenID) == true { return }
+                if visible || terminalsWorktree != nil || openedSubagent != nil || delegatedChild != nil || workspace?.hasPushedChild(screenID) == true { return }
                 held = nil
                 workspaceToken = nil
             }
