@@ -214,10 +214,11 @@ extension WorktreeRowPresentation {
                 isFailure: false, tooltip: tooltip, sessionID: sessionID
             )
         case .failed(let sessionID, let message)?:
-            let firstLine = message.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+            let end = message.firstIndex(where: \.isNewline) ?? message.endIndex
+            let firstLine = message[..<end].trimmingCharacters(in: .whitespaces)
             let short = firstLine.count > 60 ? String(firstLine.prefix(60)) + "…" : firstLine
             return ShipLine(
-                title: "Ship failed: \(short)", position: nil, total: nil,
+                title: short.isEmpty ? "Ship failed" : "Ship failed: \(short)", position: nil, total: nil,
                 isFailure: true, tooltip: message, sessionID: sessionID
             )
         }
@@ -244,7 +245,9 @@ extension WorktreeRowPresentation {
             let presentation = ShepherdPresentation.make(stack: stack, requests: [:], gatePasses: false)
             let merged = stack.entries.filter { $0.shepherd.phase == .merged }.count
             guard let (note, isLoud) = shepherdWording(presentation.badge, loud: "need you") else { return nil }
-            let number = "\(stack.entries.count) PRs"
+            let count = stack.entries.count
+            let label = stack.remote.kind == .gitlab ? "MR" : "PR"
+            let number = "\(count) \(label)\(count == 1 ? "" : "s")"
             let resolved = note ?? (merged > 0 ? "\(merged) merged" : nil)
             return ShepherdNote(
                 number: number, note: resolved, isLoud: isLoud,

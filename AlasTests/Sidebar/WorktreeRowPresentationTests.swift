@@ -144,11 +144,11 @@ struct WorktreeRowPresentationTests {
     }
 
     @Test(arguments: [
-        ([.macOS: .running], [vmGlyph(.macOS, .on, count: 1, "macOS VM running")]),
+        ([.macOS: .running], [Self.vmGlyph(.macOS, .on, count: 1, "macOS VM running")]),
         ([.macOS: .running, .linux: .starting],
-         [vmGlyph(.linux, .starting, count: 2, "macOS VM running, Linux VM starting")]),
-        ([.macOS: .pausing], [vmGlyph(.macOS, .starting, count: 1, "macOS VM pausing")]),
-        ([.linux: .paused(savedAt: savedAt)], [vmGlyph(.linux, .paused, count: 1, "Linux VM paused")]),
+         [Self.vmGlyph(.linux, .starting, count: 2, "macOS VM running, Linux VM starting")]),
+        ([.macOS: .pausing], [Self.vmGlyph(.macOS, .starting, count: 1, "macOS VM pausing")]),
+        ([.linux: .paused(savedAt: Self.savedAt)], [Self.vmGlyph(.linux, .paused, count: 1, "Linux VM paused")]),
         ([.macOS: .stopped, .linux: .notCreated], []),
         ([.macOS: .runningElsewhere(label: "other")], []),
     ] as [([VMGuestOS: VMDeviceStatus], [Glyph])])
@@ -193,6 +193,7 @@ struct WorktreeRowPresentationTests {
         #expect(line?.title == "Ship failed: gg sync failed")
         #expect(line?.isFailure == true)
         #expect(line?.tooltip == "gg sync failed\nmore")
+        #expect(WorktreeRowPresentation.shipLine(.failed(sessionID: "s", message: "  \n"))?.title == "Ship failed")
         let long = WorktreeRowPresentation.shipLine(.failed(sessionID: "s", message: String(repeating: "x", count: 80)))
         #expect(long?.title == "Ship failed: " + String(repeating: "x", count: 60) + "…")
         #expect(WorktreeRowPresentation.shipLine(nil) == nil)
@@ -226,17 +227,18 @@ struct WorktreeRowPresentationTests {
     }
 
     @Test(arguments: [
-        (ShepherdPhase.watching, "#7", nil as String?),
-        (.fixing(dispatchedAt: savedAt), "#7", "agent fixing"),
-        (.merging, "#7", "merging"),
-        (.queued, "#7", "in merge queue"),
-        (.escalated(.attemptsExhausted), "#7", "needs you"),
-        (.paused, "#7", "needs you"),
+        (ShepherdPhase.watching, nil as String?, false),
+        (.fixing(dispatchedAt: Self.savedAt), "agent fixing", false),
+        (.merging, "merging", false),
+        (.queued, "in merge queue", false),
+        (.escalated(.attemptsExhausted), "needs you", true),
+        (.paused, "needs you", true),
     ])
-    func prShepherdMapsItsBadgeToANote(phase: ShepherdPhase, number: String, note: String?) {
+    func prShepherdMapsItsBadgeToANote(phase: ShepherdPhase, note: String?, isLoud: Bool) {
         let result = WorktreeRowPresentation.shepherdNote(pr: Self.prRecord(phase), stack: nil)
-        #expect(result?.number == number)
+        #expect(result?.number == "#7")
         #expect(result?.note == note)
+        #expect(result?.isLoud == isLoud)
         #expect(result?.sessionID == "pr-session")
         #expect(result?.replacesStackChip == false)
     }
@@ -259,18 +261,11 @@ struct WorktreeRowPresentationTests {
         #expect(WorktreeRowPresentation.shepherdNote(pr: nil, stack: fixing)?.note == "agent fixing")
         let stuck = Self.stackRecord([.watching, .escalated(.noProgress)])
         #expect(WorktreeRowPresentation.shepherdNote(pr: nil, stack: stuck)?.note == "need you")
+        #expect(WorktreeRowPresentation.shepherdNote(pr: nil, stack: stuck)?.isLoud == true)
+        let paused = WorktreeRowPresentation.shepherdNote(pr: nil, stack: Self.stackRecord([.watching, .paused]))
+        #expect(paused?.note == "need you")
+        #expect(paused?.isLoud == true)
+        #expect(WorktreeRowPresentation.shepherdNote(pr: nil, stack: Self.stackRecord([.watching]))?.number == "1 PR")
         #expect(WorktreeRowPresentation.shepherdNote(pr: nil, stack: Self.stackRecord([.merged, .merged])) == nil)
-    }
-
-    @Test(arguments: [
-        (ShepherdPhase.escalated(.deliveryFailed), true),
-        (.paused, true),
-        (.watching, false),
-        (.fixing(dispatchedAt: savedAt), false),
-        (.merging, false),
-        (.queued, false),
-    ])
-    func shepherdNoteLoudness(phase: ShepherdPhase, isLoud: Bool) {
-        #expect(WorktreeRowPresentation.shepherdNote(pr: Self.prRecord(phase), stack: nil)?.isLoud == isLoud)
     }
 }
