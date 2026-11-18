@@ -136,12 +136,23 @@ jobs:
           --package-path Packages/AlasCore --disable-automatic-resolution --skip-update
 
       - name: Test AlasCore
+        id: alas-core-tests
         # Hostless: no app, Ghostty, MLX, or submodules. Fails fast before
         # the app build starts. A run silent for 10 minutes is hung: the
-        # watchdog prints its stacks and fails it.
+        # watchdog prints its stacks and fails it. Buffer the verbose Swift
+        # Testing stream so GitHub's log transport cannot backpressure it.
         run: >-
-          scripts/run-with-stall-watchdog.sh 600
+          scripts/run-with-stall-watchdog.sh 600 --buffer-output
+          --log-file "$RUNNER_TEMP/alas-core-tests.log"
           swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update
+
+      - name: Upload AlasCore failure log
+        if: ${{ failure() && steps.alas-core-tests.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: alas-core-test-log-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/alas-core-tests.log
+          if-no-files-found: error
 
       - name: Set up Node for the push relay
         # The test glob needs Node 22+; the runner image's default may be older.
@@ -238,6 +249,9 @@ jobs:
 
       - name: Test CI acquisition retry harness
         run: bash scripts/tests/ci-acquisition-retry/run.sh
+
+      - name: Test stall watchdog harness
+        run: bash scripts/tests/stall-watchdog/run.sh
 
       - name: Test build-fff harness
         if: ${{ !cancelled() }}
