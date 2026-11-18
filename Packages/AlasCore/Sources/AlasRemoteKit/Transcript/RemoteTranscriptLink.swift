@@ -20,15 +20,15 @@ public enum RemoteTranscriptLink: Equatable, Sendable {
             // `//host/path` names an authority, not a local path.
             guard url.host == nil else { return .system }
             path = url.path.removingPercentEncoding ?? url.path
-        } else if !url.absoluteString.contains("://") {
+        } else if !url.absoluteString.contains("://"),
+                  !systemSchemes.contains(url.scheme?.lowercased() ?? "") {
             // `Package.swift:2` parses as a scheme; `mailto:` and friends have no line number.
-            path = url.absoluteString.removingPercentEncoding ?? url.absoluteString
+            path = trimmingPeriod(url.absoluteString.removingPercentEncoding ?? url.absoluteString)
             guard splitLine(path) != nil else { return .system }
         } else {
             return .system
         }
-        // Sentence punctuation can end up inside a link destination.
-        if path.hasSuffix("."), path.count > 1 { path.removeLast() }
+        path = trimmingPeriod(path)
         // `:line` or `:line:column`; the file viewer has no position to reveal.
         if let line = splitLine(path) { path = splitLine(line) ?? line }
         guard !path.isEmpty else { return .system }
@@ -44,6 +44,14 @@ public enum RemoteTranscriptLink: Equatable, Sendable {
         while path.hasPrefix("./") { path.removeFirst(2) }
         guard !path.isEmpty, !path.hasPrefix("/"), !path.split(separator: "/").contains("..") else { return .discard }
         return .file(path)
+    }
+
+    /// Schemes whose destination can be all digits, so `tel:123` is not read as file `tel`, line 123.
+    private static let systemSchemes: Set<String> = ["tel", "sms", "facetime", "facetime-audio", "mailto", "maps"]
+
+    /// Sentence punctuation can end up inside a link destination.
+    private static func trimmingPeriod(_ value: String) -> String {
+        value.hasSuffix(".") && value.count > 1 ? String(value.dropLast()) : value
     }
 
     /// `value` without a trailing `:N` (N > 0), or nil when it has none.

@@ -97,6 +97,9 @@ struct RemoteWorkspaceRulesTests {
         ("/wt/a-evil/x", .discard),
         ("src/%2e%2e/%2e%2e/etc/passwd", .discard),
         ("mailto:a@b.c", .system),
+        ("tel:123456789", .system),
+        ("sms:123456789", .system),
+        ("Package.swift:12.", .file("Package.swift")),
         ("/wt/a//etc/passwd", .file("etc/passwd")),
     ])
     func transcriptLinkRoutes(link: String, expected: RemoteTranscriptLink) throws {
