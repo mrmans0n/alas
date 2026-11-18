@@ -141,6 +141,8 @@ final class TranscriptSession {
     /// Terminals read once after their call went final; their tail no longer changes.
     @ObservationIgnored private var settledTerminals: Set<String> = []
     @ObservationIgnored private var terminalPoll: Task<Void, Never>?
+    /// Running terminals the current poll already read at least once.
+    @ObservationIgnored private var polledTerminals: Set<String> = []
     var canLoadOlder = false
     /// True once the first snapshot arrived, so an empty transcript can say so.
     private(set) var hasSnapshot = false
@@ -303,8 +305,7 @@ final class TranscriptSession {
         // until every sent draft has an outcome, so a refusal still lands in the draft.
         if unsettled.isEmpty { listener = nil }
         watchGeneration += 1
-        terminalPoll?.cancel()
-        terminalPoll = nil
+        stopTerminalPoll()
         // By message: a collapsed group's answers are cached but not in `items`.
         MarkdownBlockCache.shared.remove(ids: Array(messageItems.keys))
         // Unanswered reads die with the subscription; a reopened row asks again.
@@ -619,8 +620,10 @@ final class TranscriptSession {
         isStopping = false
         mentionCandidates = []
         mentionCandidatesQuery = nil
-        // A final read whose reply never came is asked again.
-        settledTerminals = settledTerminals.filter { toolTerminals[$0] != nil }
+        // A final read whose reply never came, or came before the exit, is asked again.
+        settledTerminals = settledTerminals.filter { id in
+            toolTerminals[id].map { $0.exitCode != nil || $0.signal != nil || !$0.retained } ?? false
+        }
         // A send's reply died with the old subscription; the snapshot shows its outcome.
         for id in visualAids.keys where visualAids[id]?.pendingRequestId != nil {
             visualAids[id]?.pendingRequestId = nil
@@ -834,23 +837,15 @@ final class TranscriptSession {
     }
 
     /// Reads the terminals of expanded tool calls: once a second while their call runs, then once
-    /// more when it ends. Only hosts that advertise the request get it; an older one fails to decode it.
+    /// more when it ends.
     private func pollTerminals() {
-        guard isOpen, hub.state(of: hostID) == .online,
-              hub.supports(PeerToolTerminalCapability.v1, on: hostID) else {
-            terminalPoll?.cancel()
-            terminalPoll = nil
-            return
-        }
+        guard !expanded.isEmpty, canReadTerminals else { return stopTerminalPoll() }
         let (running, settled) = expandedTerminals()
         for id in settled where settledTerminals.insert(id).inserted { readTerminal(id) }
-        guard !running.isEmpty else {
-            terminalPoll?.cancel()
-            terminalPoll = nil
-            return
-        }
+        guard !running.isEmpty else { return stopTerminalPoll() }
+        // A card expanded while the poll already runs gets its first read now, not on the next tick.
+        for id in running where polledTerminals.insert(id).inserted { readTerminal(id) }
         guard terminalPoll == nil else { return }
-        running.forEach(readTerminal)
         terminalPoll = Task { @MainActor [weak self] in
             repeat {
                 try? await Task.sleep(for: .seconds(1))
@@ -861,15 +856,27 @@ final class TranscriptSession {
     /// One poll tick; false, with the poll cleared, once no expanded call is running.
     private func pollRunningTerminals() -> Bool {
         let running = expandedTerminals().running
-        guard !running.isEmpty, hub.state(of: hostID) == .online else {
-            terminalPoll = nil
+        guard !running.isEmpty, canReadTerminals else {
+            stopTerminalPoll()
             return false
         }
         running.forEach(readTerminal)
         return true
     }
 
+    private func stopTerminalPoll() {
+        terminalPoll?.cancel()
+        terminalPoll = nil
+        polledTerminals = []
+    }
+
+    /// Only hosts that advertise the request get it: an older one fails to decode it.
+    private var canReadTerminals: Bool {
+        isOpen && hub.state(of: hostID) == .online && hub.supports(PeerToolTerminalCapability.v1, on: hostID)
+    }
+
     private func readTerminal(_ terminalId: String) {
+        guard canReadTerminals else { return }
         hub.send(.readToolTerminal(sessionId: sessionId, terminalId: terminalId), to: hostID)
     }
 
