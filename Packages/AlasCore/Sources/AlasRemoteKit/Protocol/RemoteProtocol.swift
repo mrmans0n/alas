@@ -399,6 +399,8 @@ public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, Se
     case readTranscriptImage(sessionId: String, path: String)
     /// The tail of a tool call's terminal; see `PeerToolTerminalCapability`.
     case readToolTerminal(sessionId: String, terminalId: String)
+    /// A subagent's own transcript; see `PeerSubagentCapability`.
+    case readSubagent(sessionId: String, subagentId: String)
     /// The phone's answer to a visual aid question. `action` is "answer" or
     /// "dismiss"; the gateway validates the choices against the question.
     /// `requestId` is an opaque correlation token echoed on any `visualAidRejected`, so one of several
@@ -416,7 +418,7 @@ public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, Se
 }
 
 extension RemoteClientMessageOf: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, capabilities, sha, visualId, selectedOptionIds, note, console, portForward, host, peerHost, repoHook, relayURL, relayToken, pushKinds, terminalId }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, capabilities, sha, visualId, selectedOptionIds, note, console, portForward, host, peerHost, repoHook, relayURL, relayToken, pushKinds, terminalId, subagentId }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -601,6 +603,9 @@ extension RemoteClientMessageOf: Codable {
         case "readToolTerminal":
             self = .readToolTerminal(sessionId: try c.decode(String.self, forKey: .sessionId),
                                      terminalId: try c.decode(String.self, forKey: .terminalId))
+        case "readSubagent":
+            self = .readSubagent(sessionId: try c.decode(String.self, forKey: .sessionId),
+                                 subagentId: try c.decode(String.self, forKey: .subagentId))
         case "console":
             self = .console(try c.decode(PeerConsoleRequest.self, forKey: .console))
         case "portForward":
@@ -803,6 +808,10 @@ extension RemoteClientMessageOf: Codable {
             try c.encode("readToolTerminal", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(terminalId, forKey: .terminalId)
+        case .readSubagent(let s, let subagentId):
+            try c.encode("readSubagent", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(subagentId, forKey: .subagentId)
         case .console(let request):
             try c.encode("console", forKey: .type)
             try c.encode(request, forKey: .console)
@@ -872,6 +881,8 @@ extension RemoteClientMessageOf {
             return "readFile\u{0}\(sessionId)\u{0}\(path)"
         case .readToolTerminal(let sessionId, let terminalId):
             return "readToolTerminal\u{0}\(sessionId)\u{0}\(terminalId)"
+        case .readSubagent(let sessionId, let subagentId):
+            return "readSubagent\u{0}\(sessionId)\u{0}\(subagentId)"
         default:
             return nil
         }
@@ -1001,6 +1012,10 @@ public enum RemoteServerMessageOf<ServerHost: Codable & Equatable & Sendable, Cl
     /// ANSI-stripped output and its exit status, or `retained: false` with
     /// empty text when the host no longer has the terminal.
     case toolTerminal(sessionId: String, terminalId: String, text: String, truncated: Bool, exitCode: Int?, signal: String?, retained: Bool)
+    /// The answer to `readSubagent`: the newest rows of the child's own
+    /// transcript that fit a frame, and its `ACPSubagentState` raw value, or
+    /// `found: false` with no state and no rows when the session has no such child.
+    case subagentTranscript(sessionId: String, subagentId: String, found: Bool, state: String?, messages: [RemoteWireMessage])
     /// The answer to `HostWorktreeRead.fileHistory`: `truncated` when more commits touched it.
     case fileHistory(sessionId: String, path: String, entries: [HostFileHistoryEntry], truncated: Bool)
     case fileHistoryFailed(sessionId: String, path: String, reason: RemoteFileAccessReason, message: String?)
@@ -1039,6 +1054,7 @@ extension RemoteServerMessageOf: Codable {
         case version, entries
         case data
         case terminalId, exitCode, signal, retained
+        case subagentId, found, state
     }
 
     public init(from decoder: Decoder) throws {
@@ -1308,6 +1324,13 @@ extension RemoteServerMessageOf: Codable {
                 exitCode: try c.decodeIfPresent(Int.self, forKey: .exitCode),
                 signal: try c.decodeIfPresent(String.self, forKey: .signal),
                 retained: try c.decode(Bool.self, forKey: .retained))
+        case "subagentTranscript":
+            self = .subagentTranscript(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                subagentId: try c.decode(String.self, forKey: .subagentId),
+                found: try c.decode(Bool.self, forKey: .found),
+                state: try c.decodeIfPresent(String.self, forKey: .state),
+                messages: try c.decode([RemoteWireMessage].self, forKey: .messages))
         case "fileBytes":
             self = .fileBytes(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -1618,6 +1641,13 @@ extension RemoteServerMessageOf: Codable {
             try c.encodeIfPresent(exitCode, forKey: .exitCode)
             try c.encodeIfPresent(signal, forKey: .signal)
             try c.encode(retained, forKey: .retained)
+        case .subagentTranscript(let s, let subagentId, let found, let state, let messages):
+            try c.encode("subagentTranscript", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(subagentId, forKey: .subagentId)
+            try c.encode(found, forKey: .found)
+            try c.encodeIfPresent(state, forKey: .state)
+            try c.encode(messages, forKey: .messages)
         case .fileBytes(let s, let path, let data, let byteSize):
             try c.encode("fileBytes", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -1760,6 +1790,12 @@ public enum PeerToolTerminalCapability: Sendable {
     /// Advertised in `hello` by hosts that serve `readToolTerminal`. Older
     /// hosts cannot decode it, so clients check this before sending.
     public static let v1 = "peerToolTerminal.v1"
+}
+
+public enum PeerSubagentCapability: Sendable {
+    /// Advertised in `hello` by hosts that serve `readSubagent`. Older hosts
+    /// cannot decode it, so clients check this before sending.
+    public static let v1 = "peerSubagent.v1"
 }
 
 public enum PeerSessionTabsCapability: Sendable {

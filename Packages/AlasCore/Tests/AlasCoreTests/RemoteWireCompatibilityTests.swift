@@ -83,7 +83,10 @@ import Testing
             case .read: .toolCall(.init(toolCallId: "t", title: "Read a", kind: "read", status: "completed"))
             case .subagent: .toolCall(.init(
                 toolCallId: "s", title: "Task", kind: "other", status: "completed",
-                metadata: AnyCodable(["subagent": AnyCodable(["version": AnyCodable(1), "id": AnyCodable("child")])])))
+                metadata: AnyCodable(["subagent": AnyCodable([
+                    "version": AnyCodable(1), "id": AnyCodable("child"), "name": AnyCodable("Explorer"),
+                    "state": AnyCodable("completed"),
+                ])])))
             // The Mac shows no row for a plan document with neither text nor a file.
             case .emptyPlanDocument: .planDocument(id: UUID(), ACPPlanDocument(planId: "p", kind: .markdown, markdown: "", file: nil))
             }
@@ -98,6 +101,9 @@ import Testing
             }
         }
         var isHidden: Bool? { self == .emptyPlanDocument ? true : nil }
+        var subagent: RemoteWireMessage.Subagent? {
+            self == .subagent ? .init(id: "child", name: "Explorer", task: nil, state: "completed", lastError: nil) : nil
+        }
     }
 
     @MainActor // `toWire` reads a `StreamingText`.
@@ -108,6 +114,7 @@ import Testing
         #expect(wire.phase == row.phase)
         #expect(wire.fold == row.fold)
         #expect(wire.isHidden == row.isHidden)
+        #expect(wire.subagent == row.subagent)
         #expect(RemoteSessionGateway.toWire(row.message, index: 0, createdAt: nil).createdAt == nil)
     }
 
@@ -191,6 +198,8 @@ enum RemoteWireSamples {
             RemoteSessionSummary(
                 id: "s1", title: "Fix the build", agentId: "claude", status: "streaming", canDrive: true,
                 tabIndex: 2, projectId: "p1", worktreeId: "w1", updatedAt: 1_800_000_000_000),
+            RemoteSessionSummary(
+                id: "s2", title: "Delegated", agentId: "codex", status: "idle", canDrive: true, parentSessionId: "s1"),
         ]),
         .transcriptDelta(
             sessionId: "s1", streamingState: "streaming", canDrive: true,
@@ -226,6 +235,12 @@ enum RemoteWireSamples {
         .peerHost(HostClientMessage(id: 4, request: .listSessions)),
         .toolTerminal(sessionId: "s1", terminalId: "t1", text: "ok\n", truncated: true, exitCode: 1, signal: nil, retained: true),
         .toolTerminal(sessionId: "s1", terminalId: "t2", text: "", truncated: false, exitCode: nil, signal: nil, retained: false),
+        .subagentTranscript(sessionId: "s1", subagentId: "c1", found: true, state: "running", messages: [
+            RemoteWireMessage(
+                stableId: "m3", kind: "toolCall", text: nil, json: #"{"title":"Explorer"}"#, index: 3,
+                subagent: .init(id: "c2", name: "Explorer", task: "Look around", state: "failed", lastError: "boom")),
+        ]),
+        .subagentTranscript(sessionId: "s1", subagentId: "gone", found: false, state: nil, messages: []),
     ]
 
     static let clientMessages: [RemoteClientMessage] = [
@@ -244,5 +259,6 @@ enum RemoteWireSamples {
         .setConfigOption(sessionId: "s1", configId: "thinking", value: .string("high")),
         .host(HostClientMessage(id: 5, request: .listSessions)),
         .readToolTerminal(sessionId: "s1", terminalId: "t1"),
+        .readSubagent(sessionId: "s1", subagentId: "c1"),
     ]
 }

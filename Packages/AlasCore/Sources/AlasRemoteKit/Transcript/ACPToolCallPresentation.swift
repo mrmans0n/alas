@@ -107,6 +107,12 @@ public struct ACPToolCallPresentation: Equatable, Sendable {
             )
         }
 
+        // A subagent's row is a "think" call whose id names the child
+        // (`ACPSubagentRowDescriptor.toolCallId`); a peer gets no metadata to tell it by.
+        if toolCall.toolCallId.hasPrefix("subagent:") {
+            return .init(label: "Subagent", iconSystemName: "person.2", style: .generic)
+        }
+
         if kind == "think" || lowerTitle == "guardian review" {
             return .init(label: "Review", iconSystemName: "checkmark.shield", style: .review)
         }

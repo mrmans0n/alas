@@ -35,6 +35,8 @@ import AlasSessions
     public var fullToolCallContent: @MainActor (_ sessionID: String, _ toolCallID: String) async -> String?
     /// The tail of a tool call's terminal, or nil when the host has no such terminal.
     public var toolTerminal: @MainActor (_ sessionID: String, _ terminalID: String) -> ACPTerminalOutputResult?
+    /// A live session's subagent, or nil when the session has no such child.
+    public var subagentRun: @MainActor (_ sessionID: String, _ subagentID: String) -> ACPSubagentRun?
 
     public init(
         sessionSummaries: @escaping @MainActor (_ tabIndex: @MainActor (_ sessionID: String, _ owner: SessionOwnerID) -> Int?) async
@@ -56,7 +58,8 @@ import AlasSessions
             mentions.isEmpty ? [] : nil
         },
         fullToolCallContent: @escaping @MainActor (_ sessionID: String, _ toolCallID: String) async -> String? = { _, _ in nil },
-        toolTerminal: @escaping @MainActor (_ sessionID: String, _ terminalID: String) -> ACPTerminalOutputResult? = { _, _ in nil }
+        toolTerminal: @escaping @MainActor (_ sessionID: String, _ terminalID: String) -> ACPTerminalOutputResult? = { _, _ in nil },
+        subagentRun: @escaping @MainActor (_ sessionID: String, _ subagentID: String) -> ACPSubagentRun? = { _, _ in nil }
     ) {
         self.sessionSummaries = sessionSummaries
         self.worktrees = worktrees
@@ -70,6 +73,7 @@ import AlasSessions
         self.mentionAttachments = mentionAttachments
         self.fullToolCallContent = fullToolCallContent
         self.toolTerminal = toolTerminal
+        self.subagentRun = subagentRun
     }
 
     /// The host's lists and creations; empty and refused without a host.
@@ -109,6 +113,9 @@ import AlasSessions
             },
             toolTerminal: { [weak host] sessionID, terminalID in
                 host?.sessions.toolTerminalTail(sessionID, terminalID: terminalID)
+            },
+            subagentRun: { [weak host] sessionID, subagentID in
+                host?.sessions.subagentRun(sessionID, subagentID: subagentID)
             }
         )
     }

@@ -26,6 +26,27 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
     public var createdAt: Int64? = nil
     /// A visible tool call's facts for the activity fold; the key is left out on other rows.
     public var fold: Fold? = nil
+    /// A subagent's row: the child it stands for, read with `readSubagent`.
+    /// The key is left out on other rows.
+    public var subagent: Subagent? = nil
+
+    public struct Subagent: Codable, Equatable, Sendable {
+        public let id: String
+        public let name: String?
+        public let task: String?
+        /// An `ACPSubagentState` raw value, such as "running" or "completed";
+        /// a client treats one it does not know as still running.
+        public let state: String
+        public let lastError: String?
+
+        public init(id: String, name: String?, task: String?, state: String, lastError: String?) {
+            self.id = id
+            self.name = name
+            self.task = task
+            self.state = state
+            self.lastError = lastError
+        }
+    }
 
     public struct Fold: Codable, Equatable, Sendable {
         /// Whether the call may join a run of quiet tool calls.
@@ -52,7 +73,7 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
     public init(
         stableId: String, kind: String, text: String?, json: String?, index: Int, isHidden: Bool? = nil,
         checkpointId: String? = nil, images: [Image]? = nil, card: String? = nil,
-        phase: String? = nil, createdAt: Int64? = nil, fold: Fold? = nil
+        phase: String? = nil, createdAt: Int64? = nil, fold: Fold? = nil, subagent: Subagent? = nil
     ) {
         self.stableId = stableId
         self.kind = kind
@@ -66,6 +87,7 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
         self.phase = phase
         self.createdAt = createdAt
         self.fold = fold
+        self.subagent = subagent
     }
 }
 
@@ -324,6 +346,8 @@ public struct RemoteSessionSummary: Equatable, Sendable {
     /// local to the Mac that sent it, exactly as before federation.
     public let serverId: String?
     public let serverName: String?
+    /// The session that delegated this one, in the same id space as `id`.
+    public let parentSessionId: String?
 
     public init(
         id: String,
@@ -338,7 +362,8 @@ public struct RemoteSessionSummary: Equatable, Sendable {
         updatedAt: Int64 = 0,
         worktree: RemoteWorktreeSummary? = nil,
         serverId: String? = nil,
-        serverName: String? = nil
+        serverName: String? = nil,
+        parentSessionId: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -353,13 +378,14 @@ public struct RemoteSessionSummary: Equatable, Sendable {
         self.worktree = worktree
         self.serverId = serverId
         self.serverName = serverName
+        self.parentSessionId = parentSessionId
     }
 }
 
 extension RemoteSessionSummary: Codable {
     private enum CodingKeys: String, CodingKey {
         case id, title, agentId, status, canDrive, isActive, tabIndex, projectId, worktreeId, updatedAt, worktree
-        case serverId, serverName
+        case serverId, serverName, parentSessionId
     }
 
     public init(from decoder: Decoder) throws {
@@ -377,7 +403,8 @@ extension RemoteSessionSummary: Codable {
             updatedAt: try c.decodeIfPresent(Int64.self, forKey: .updatedAt) ?? 0,
             worktree: try c.decodeIfPresent(RemoteWorktreeSummary.self, forKey: .worktree),
             serverId: try c.decodeIfPresent(String.self, forKey: .serverId),
-            serverName: try c.decodeIfPresent(String.self, forKey: .serverName)
+            serverName: try c.decodeIfPresent(String.self, forKey: .serverName),
+            parentSessionId: try c.decodeIfPresent(String.self, forKey: .parentSessionId)
         )
     }
 
@@ -396,6 +423,7 @@ extension RemoteSessionSummary: Codable {
         try c.encodeIfPresent(worktree, forKey: .worktree)
         try c.encodeIfPresent(serverId, forKey: .serverId)
         try c.encodeIfPresent(serverName, forKey: .serverName)
+        try c.encodeIfPresent(parentSessionId, forKey: .parentSessionId)
     }
 }
 

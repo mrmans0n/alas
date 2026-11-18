@@ -263,6 +263,11 @@ extension SessionsAPI {
         return ACPTerminalOutputResult(output: snapshot.text, truncated: snapshot.truncated, exitStatus: terminal.exitStatus)
     }
 
+    /// Subagent `subagentID` of the loaded session `sessionID`, or nil when it has no such child.
+    public func subagentRun(_ sessionID: String, subagentID: String) -> ACPSubagentRun? {
+        (try? liveManager(for: sessionID))?.liveSession(for: sessionID)?.subagentRun(subagentID)
+    }
+
     /// Adds `visual` to the transcript of session `sessionID`, which this
     /// instance must drive.
     public func showVisualAid(_ visual: ACPVisualAid, in sessionID: String, caller: HostCaller) async throws {

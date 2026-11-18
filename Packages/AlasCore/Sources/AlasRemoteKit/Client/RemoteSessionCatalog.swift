@@ -119,10 +119,15 @@ public enum RemoteSessionCatalog {
 
         // Display IDs belong to the owner; transport IDs remain in `routes`.
         var normalized: RemoteSessionSummary {
-            RemoteSessionSummary(id: nativeID, title: session.title, agentId: session.agentId,
-                                 status: session.status, canDrive: session.canDrive, isActive: session.isActive,
-                                 tabIndex: session.tabIndex, projectId: session.projectId,
-                                 worktreeId: session.worktreeId, updatedAt: session.updatedAt, worktree: session.worktree)
+            // A relayed parent is namespaced like the row's own id.
+            let parentID = session.parentSessionId.map { parent in
+                session.serverId.flatMap { RemoteFederatedSessionID.parse(parent, peers: [$0])?.sessionId } ?? parent
+            }
+            return RemoteSessionSummary(id: nativeID, title: session.title, agentId: session.agentId,
+                                        status: session.status, canDrive: session.canDrive, isActive: session.isActive,
+                                        tabIndex: session.tabIndex, projectId: session.projectId,
+                                        worktreeId: session.worktreeId, updatedAt: session.updatedAt, worktree: session.worktree,
+                                        parentSessionId: parentID)
         }
     }
 }

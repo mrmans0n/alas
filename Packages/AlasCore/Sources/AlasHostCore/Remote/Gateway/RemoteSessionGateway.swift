@@ -495,6 +495,14 @@ public final class RemoteSessionGateway {
             let tail = hostCalls.toolTerminal(id, terminalId)
             send(.toolTerminal(sessionId: id, terminalId: terminalId, text: tail?.output ?? "", truncated: tail?.truncated ?? false,
                                exitCode: tail?.exitStatus?.exitCode, signal: tail?.exitStatus?.signal, retained: tail != nil))
+        case .readSubagent(let id, let subagentId):
+            // A synchronous read: the connection drops duplicates by `fileRequestDedupKey`.
+            if let run = hostCalls.subagentRun(id, subagentId) {
+                send(.subagentTranscript(sessionId: id, subagentId: subagentId, found: true, state: run.state.rawValue,
+                                         messages: Self.wireTail(of: run, sessionId: id)))
+            } else {
+                send(.subagentTranscript(sessionId: id, subagentId: subagentId, found: false, state: nil, messages: []))
+            }
         case .readFile(let id, let path):
             let key = "readFile\u{0}\(id)\u{0}\(path)"
             guard inFlightFileRequests.insert(key).inserted else { return }
@@ -1031,6 +1039,21 @@ public final class RemoteSessionGateway {
         return wire
     }
 
+    /// A subagent's newest rows, bounded as `wireTail` bounds a session's.
+    private static func wireTail(of run: ACPSubagentRun, sessionId: String) -> [RemoteWireMessage] {
+        var wire: [RemoteWireMessage] = []
+        var remaining = RemoteTranscriptSync.payloadBudget(sessionId: sessionId)
+        for index in run.messages.indices.reversed().prefix(RemoteTranscriptSync.tailWindow) {
+            let row = toWire(run.messages[index], index: index,
+                             createdAt: Int64(run.createdAt(at: index).timeIntervalSince1970 * 1000))
+                .boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes)
+            guard row.byteCount + 1 <= remaining else { break }
+            remaining -= row.byteCount + 1
+            wire.append(row.message)
+        }
+        return wire.reversed()
+    }
+
     private func wireBatches(
         id: String, state: RemoteTranscriptSync, indices: [Int], hidden: Set<Int>
     ) async -> [[RemoteWireMessage]] {
@@ -1428,6 +1451,10 @@ public final class RemoteSessionGateway {
         if case .toolCall = message, wire.isHidden != true,
            case .toolCall(let facts) = ACPTranscriptFoldItem(message, hiddenToolCallIds: []) {
             wire.fold = .init(joins: facts.joins, verb: facts.verb.rawValue)
+        }
+        if case .toolCall(let call) = message, let subagent = ACPSubagentRowDescriptor(toolCall: call) {
+            wire.subagent = .init(id: subagent.subagentSessionId, name: subagent.name, task: subagent.task,
+                                  state: subagent.state.rawValue, lastError: subagent.lastError)
         }
         return wire
     }

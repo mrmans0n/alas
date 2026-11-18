@@ -239,6 +239,18 @@ struct ACPToolCallPresentationTests {
         #expect(presentation.style == .review)
     }
 
+    /// A peer gets a subagent's row without its metadata, so the row's id is all it can tell it by.
+    @Test("subagent row maps to subagent presentation, not review")
+    func subagentPresentation() {
+        var row = ACPSubagentRowDescriptor(subagentSessionId: "child", name: "Explorer", task: nil, state: .running, capabilities: .init())
+            .toolCall(executionStartedAt: nil, executionFinishedAt: nil)
+        row.metadata = nil
+        let presentation = ACPToolCallPresentation.resolve(row)
+
+        #expect(presentation.label == "Subagent")
+        #expect(presentation.iconSystemName == "person.2")
+    }
+
     @Test("execute kind keeps existing run fallback")
     func executeFallbackPresentation() {
         let presentation = ACPToolCallPresentation.resolve(toolCall(
