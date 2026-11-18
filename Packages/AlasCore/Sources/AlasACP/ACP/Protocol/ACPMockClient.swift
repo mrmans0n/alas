@@ -99,12 +99,40 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
         _ request: ACPRequest,
         onRequestHandoff: @Sendable () -> Void
     ) async throws -> ACPResponse {
+        try await handOff(request, onRequestHandoff: onRequestHandoff)
+    }
+
+    public func send(
+        _ request: ACPRequest,
+        beforeRequestHandoff: @Sendable (ACPBrokerGeneration?) async throws -> Void,
+        onRequestHandoff: @Sendable () throws -> Void
+    ) async throws -> ACPResponse {
+        try await beforeRequestHandoff(brokerGenerationForTesting)
+        return try await handOff(request, onRequestHandoff: onRequestHandoff)
+    }
+
+    /// Records the request before announcing its handoff, as a transport has
+    /// queued it by then. The announcement can release a caller on another
+    /// thread whose own request must be recorded after this one. A refused
+    /// handoff takes the request back: it never reached the agent.
+    private func handOff(
+        _ request: ACPRequest,
+        onRequestHandoff: () throws -> Void
+    ) async throws -> ACPResponse {
         if rejectsRequestsAfterShutdown, shutdownCount > 0 {
             requestsAfterShutdownCount += 1
             throw ACPClientError.notRunning
         }
-        sentLock.withLock { recordedRequests.append(request) }
-        onRequestHandoff()
+        let index = sentLock.withLock {
+            recordedRequests.append(request)
+            return recordedRequests.count - 1
+        }
+        do {
+            try onRequestHandoff()
+        } catch {
+            sentLock.withLock { _ = recordedRequests.remove(at: index) }
+            throw error
+        }
         if let script = responseScripts[request.method] {
             return try await script(request)
         }
@@ -115,16 +143,6 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
             throw ACPClientError.noScript(method: request.method)
         }
         return ACPResponse(body: try script(request))
-    }
-
-    public func send(
-        _ request: ACPRequest,
-        beforeRequestHandoff: @Sendable (ACPBrokerGeneration?) async throws -> Void,
-        onRequestHandoff: @Sendable () throws -> Void
-    ) async throws -> ACPResponse {
-        try await beforeRequestHandoff(brokerGenerationForTesting)
-        try onRequestHandoff()
-        return try await send(request)
     }
 
     /// Mock notifications just record the call. Tests can inspect
