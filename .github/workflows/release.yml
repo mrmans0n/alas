@@ -348,6 +348,7 @@ jobs:
     with:
       ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
       external: true
+      release: true
     secrets: inherit
 
   publish:

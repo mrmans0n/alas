@@ -330,6 +330,47 @@ release_architecture = release_steps.find { |step| step["name"] == "Verify relea
 raise "release workflow must use the materialized tested architecture verifier" unless
   release_architecture&.fetch("run", "") ==
     '"$RUNNER_TEMP/verify-release-architecture.sh" build/Build/Products/Release/Alas.app "$EXPECTED_ARCH"'
+
+ios_path = File.expand_path("../../../.github/workflows/ios-release.yml", __dir__)
+ios_workflow = YAML.safe_load(File.read(ios_path), aliases: true)
+ios_triggers = ios_workflow.fetch(true)
+raise "iOS release classification must be an explicit boolean input for both manual and reusable calls" unless
+  ios_triggers.dig("workflow_dispatch", "inputs", "release", "type") == "boolean" &&
+    ios_triggers.dig("workflow_dispatch", "inputs", "release", "default") == false &&
+    ios_triggers.dig("workflow_call", "inputs", "release", "type") == "boolean" &&
+    ios_triggers.dig("workflow_call", "inputs", "release", "default") == false
+release_ios_call = release_workflow.fetch("jobs").fetch("ios-app")
+raise "the tag release workflow must explicitly enable canonical release notes" unless
+  release_ios_call.dig("with", "release") == true
+ios_steps = ios_workflow.fetch("jobs").fetch("ios").fetch("steps")
+prepare_testflight_notes = ios_steps.find { |step| step["name"] == "Prepare TestFlight What to Test" }
+raise "iOS releases must derive immutable release-specific TestFlight notes from the checked-out ref" unless
+  prepare_testflight_notes&.fetch("if", "") == "inputs.submit_build == ''" &&
+    prepare_testflight_notes.dig("env", "RELEASE_REF") == "${{ inputs.ref }}" &&
+    prepare_testflight_notes.dig("env", "RELEASE") == "${{ inputs.release }}" &&
+    prepare_testflight_notes.fetch("run", "").include?('if [[ "$RELEASE" == "true" ]]; then') &&
+    prepare_testflight_notes.fetch("run", "").include?('release_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$RELEASE_REF"') &&
+    prepare_testflight_notes.fetch("run", "").include?('version="manual"; release_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$RELEASE_REF"') &&
+    !prepare_testflight_notes.fetch("run", "").include?("v[0-9]*") &&
+    prepare_testflight_notes.fetch("run", "").include?('ruby scripts/testflight-notes.rb') &&
+    prepare_testflight_notes.fetch("run", "").include?('--version "$version"') &&
+    prepare_testflight_notes.fetch("run", "").include?('--release-url "$release_url"') &&
+    prepare_testflight_notes.fetch("run", "").include?('> "$RUNNER_TEMP/testflight-notes.txt"')
+upload_testflight = ios_steps.find { |step| step["name"] == "Upload to TestFlight" }
+raise "TestFlight upload must pass the generated notes file to Fastlane without shell newline normalization" unless
+  upload_testflight&.dig("env", "CHANGELOG_FILE") == "${{ runner.temp }}/testflight-notes.txt" &&
+    upload_testflight.fetch("run", "").include?('changelog_file:"$CHANGELOG_FILE"') &&
+    !upload_testflight.fetch("run", "").include?("$(cat") &&
+    !upload_testflight.fetch("env", {}).key?("CHANGELOG")
+fastfile = File.read(File.expand_path("../../../Mobile/fastlane/Fastfile", __dir__))
+raise "Fastlane must read the generated notes file byte-for-byte" unless
+  fastfile.include?('require_relative "testflight_changelog"') &&
+    fastfile.include?("changelog: TestflightChangelog.read(options)")
+ci_contract_steps = jobs.fetch("ci-workflow-contract").fetch("steps")
+raise "CI must exercise the TestFlight notes generator" unless ci_contract_steps.any? do |step|
+  step["name"] == "Test TestFlight notes generator" && step["run"] == "bash scripts/tests/testflight-notes/run.sh"
+end
+
 project_path = File.expand_path("../../../project.yml", __dir__)
 project = YAML.safe_load(File.read(project_path), aliases: true)
 alas_settings = project.fetch("targets").fetch("Alas").fetch("settings").fetch("base")
