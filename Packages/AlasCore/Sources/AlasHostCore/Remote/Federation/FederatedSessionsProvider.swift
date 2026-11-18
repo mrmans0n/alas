@@ -318,6 +318,13 @@ public final class FederatedSessionsProvider {
             case .installAdapter:
                 // An older peer can't decode it; its client offers no Install.
                 guard links.peerSupports(PeerAdapterInstallCapability.v1, serverId: target.serverId) else { return true }
+            case .readToolTerminal(_, let terminalId):
+                // An older peer can't decode it: answer as for a terminal it no longer has.
+                guard links.peerSupports(PeerToolTerminalCapability.v1, serverId: target.serverId) else {
+                    downstream.send(.toolTerminal(sessionId: namespaced, terminalId: terminalId, text: "", truncated: false,
+                                                  exitCode: nil, signal: nil, retained: false))
+                    return true
+                }
             case .queueEdit(_, let itemId):
                 queueEditRequesters.append((namespaced, itemId, downstream.id))
                 if queueEditRequesters.count > Self.queueEditRequesterLimit {
