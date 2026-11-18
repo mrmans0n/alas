@@ -553,3 +553,81 @@ jobs:
           auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64)"
           git -c http.extraheader="AUTHORIZATION: basic $auth_header" \
             push origin --force "refs/tags/nightly"
+
+  # The iOS nightly runs beside the Mac one: a Mac build failure must not hold
+  # back TestFlight, nor the other way round. It tracks its own `ios-nightly`
+  # tag, so a failed upload is retried the next night instead of being lost
+  # when the Mac job moves `nightly`.
+  ios-changes:
+    name: Check iOS changes
+    # main only: the iOS job gets signing and App Store Connect secrets.
+    if: github.event_name == 'schedule' || (github.ref == 'refs/heads/main' && (inputs.ref == '' || inputs.ref == 'main'))
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.check.outputs.sha }}
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Diff the iOS app's inputs against the last iOS nightly
+        id: check
+        # Everything Mobile/project.yml and scripts/ios-testflight.sh build from.
+        # Most of AlasCore is Mac-only; the phone links AlasRemoteKit and AlasHighlight.
+        run: |
+          git fetch origin --tags --force
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify refs/tags/ios-nightly >/dev/null \
+             && git diff --quiet refs/tags/ios-nightly "$sha" -- \
+               Mobile \
+               Packages/AlasCore/Package.swift \
+               Packages/AlasCore/Sources/AlasRemoteKit \
+               Packages/AlasCore/Sources/AlasHighlight \
+               ThirdParty/treesitter-pack \
+               'Config/AlasMobile-*.xcconfig' \
+               Alas/Resources/VisualAid/frame.html \
+               Alas/Resources/Themes/light.json \
+               Alas/Resources/Themes/cool-slate.json \
+               scripts/ios-testflight.sh \
+               scripts/build-treesitter-pack.sh \
+               .github/workflows/ios-release.yml; then
+            echo "No iOS changes since the last iOS nightly. Skipping."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  ios-testflight:
+    name: iOS nightly to TestFlight
+    needs: ios-changes
+    if: needs.ios-changes.outputs.changed == 'true'
+    uses: ./.github/workflows/ios-release.yml
+    with:
+      # The exact commit diffed above, so the tag below names what was uploaded.
+      ref: ${{ needs.ios-changes.outputs.sha }}
+      # Internal testers only; external groups need Beta App Review.
+      external: false
+      nightly: true
+    secrets: inherit
+
+  ios-nightly-tag:
+    name: Move ios-nightly tag
+    needs: [ios-changes, ios-testflight]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Point ios-nightly at the uploaded commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ needs.ios-changes.outputs.sha }}
+        run: |
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/ios-nightly" -f sha="$SHA" -F force=true \
+            || gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref=refs/tags/ios-nightly -f sha="$SHA"

@@ -100,23 +100,28 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         collectionView = PinningCollectionView(frame: .zero, collectionViewLayout: layout)
         collectionView.backgroundColor = .systemBackground
         collectionView.delegate = self
-        let registration = UICollectionView.CellRegistration<UICollectionViewCell, String> { [unowned self] cell, _, id in
-            guard let item = itemsByID[id] else { return }
+        // Hosted rows can re-render after this controller is gone (a pop in progress, a cell the
+        // collection view still holds), so every capture is weak: an `unowned` one aborted there.
+        let registration = UICollectionView.CellRegistration<UICollectionViewCell, String> { [weak self] cell, _, id in
+            guard let self, let item = itemsByID[id] else { return }
             cell.contentConfiguration = UIHostingConfiguration {
                 TranscriptRowView(item: item, isExpanded: shownExpanded.contains(id), image: input.image,
-                                  session: input.session, toggle: { [unowned self] in
+                                  session: input.session, toggle: { [weak self] in
+                                      guard let self else { return }
                                       if case .groupHeader(let group, _, _, _) = item.kind {
                                           act(onGroup: id) { $0.toggle(group) }
                                       } else {
                                           input.expanded.wrappedValue.formSymmetricDifference([id])
                                           sync()
                                       }
-                                  }, showAll: { [unowned self] in
+                                  }, showAll: { [weak self] in
                                       if case .groupHeader(let group, _, _, _) = item.kind {
-                                          act(onGroup: id) { $0.showAll(group) }
+                                          self?.act(onGroup: id) { $0.showAll(group) }
                                       }
-                                  }, showsAll: { [unowned self] in shownExpanded.contains(Self.key(id, part: $0)) },
-                                  showAllPart: { [unowned self] in
+                                  }, showsAll: { [weak self] in
+                                      self?.shownExpanded.contains(Self.key(id, part: $0)) ?? false
+                                  }, showAllPart: { [weak self] in
+                                      guard let self else { return }
                                       input.expanded.wrappedValue.formSymmetricDifference([Self.key(id, part: $0)])
                                       sync()
                                   }, openSubagent: { [unowned self] in input.openSubagent($0) })
@@ -127,7 +132,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { view, indexPath, id in
             view.dequeueConfiguredReusableCell(using: registration, for: indexPath, item: id)
         }
-        collectionView.didLayout = { [unowned self] in holdPosition() }
+        collectionView.didLayout = { [weak self] in self?.holdPosition() }
         view = collectionView
     }
 

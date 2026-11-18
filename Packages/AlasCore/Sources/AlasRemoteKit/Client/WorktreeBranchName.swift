@@ -1,7 +1,28 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
+
+/// Effective naming settings for a project, as advertised by its host.
+public struct RemoteWorktreeBranchNaming: Codable, Equatable, Sendable {
+    public let prefix: String
+    public let template: String?
+    public let timeZoneIdentifier: String?
+
+    public init(prefix: String, template: String? = nil, timeZoneIdentifier: String? = nil) {
+        self.prefix = prefix
+        self.template = template
+        self.timeZoneIdentifier = timeZoneIdentifier
+    }
+
+    public var appliesRule: Bool { template != nil || !prefix.isEmpty }
+
+    public func compose(name: String, enabled: Bool = true, now: Date = Date()) -> String {
+        guard enabled else { return name }
+        var calendar = Calendar.autoupdatingCurrent
+        if let timeZoneIdentifier, let timeZone = TimeZone(identifier: timeZoneIdentifier) {
+            calendar.timeZone = timeZone
+        }
+        return WorktreeBranchName.compose(name: name, prefix: prefix, projectTemplate: template, now: now, calendar: calendar)
+    }
+}
 
 public enum WorktreeBranchName: Sendable {
     /// Blank settings inherit the next layer; absent templates preserve the
