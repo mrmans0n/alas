@@ -11,8 +11,9 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
     public let providesDurableOperationKeyDeduplication: Bool
 
     private let sentLock = NSLock()
-    private var recordedRequests: [ACPRequest] = []
-    public var sent: [ACPRequest] { sentLock.withLock { recordedRequests } }
+    /// Each with an identity, so a refused handoff takes back its own entry.
+    private var recordedRequests: [(id: UUID, request: ACPRequest)] = []
+    public var sent: [ACPRequest] { sentLock.withLock { recordedRequests.map(\.request) } }
     private var scripts: [String: (ACPRequest) throws -> Data] = [:]
     private var asyncScripts: [String: (ACPRequest) async throws -> Data] = [:]
     private var responseScripts: [String: (ACPRequest) async throws -> ACPResponse] = [:]
@@ -123,14 +124,12 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
             requestsAfterShutdownCount += 1
             throw ACPClientError.notRunning
         }
-        let index = sentLock.withLock {
-            recordedRequests.append(request)
-            return recordedRequests.count - 1
-        }
+        let entry = UUID()
+        sentLock.withLock { recordedRequests.append((entry, request)) }
         do {
             try onRequestHandoff()
         } catch {
-            sentLock.withLock { _ = recordedRequests.remove(at: index) }
+            sentLock.withLock { recordedRequests.removeAll { $0.id == entry } }
             throw error
         }
         if let script = responseScripts[request.method] {
@@ -149,7 +148,7 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
     /// `sent` (which holds both requests and notifications in arrival
     /// order) without needing to script a reply.
     public func notify(_ request: ACPRequest) async throws {
-        sentLock.withLock { recordedRequests.append(request) }
+        sentLock.withLock { recordedRequests.append((UUID(), request)) }
         if let script = notificationAsyncScripts[request.method] {
             try await script(request)
         }
