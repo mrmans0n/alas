@@ -1130,8 +1130,10 @@ public final class RemoteSessionGateway {
             guard asset.kind == .image || asset.mimeType?.lowercased().hasPrefix("image/") == true else { continue }
             // A file uri the phone can already fetch stays as it is.
             if let uri = asset.uri, !uri.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("data:") { continue }
-            // Checked before decoding: a row is re-sent on every delta.
-            let key = "\(call.toolCallId)#\(position)"
+            // Checked before decoding: a row is re-sent on every delta. The key carries the source's
+            // identity, as an update can replace the image at a position.
+            guard let source = asset.data ?? asset.uri else { continue }
+            let key = "\(call.toolCallId)#\(position)#\(source.utf8.count)#\(source.hashValue)"
             var path = state.cachedSpilledImage(key)
             if path == nil {
                 guard let data = [asset.data, asset.uri].lazy.compactMap({ $0 }).compactMap(Self.decodeInlineImage).first,
@@ -1142,7 +1144,7 @@ public final class RemoteSessionGateway {
             guard let path else { continue }
             // The inline source moves to `data` (a `data:` URI decodes there too), so it still inlines when it fits.
             call.assets[position] = ACPMessage.ToolCallAsset(
-                kind: asset.kind, data: asset.data ?? asset.uri, uri: path, mimeType: asset.mimeType, name: asset.name)
+                kind: asset.kind, data: source, uri: path, mimeType: asset.mimeType, name: asset.name)
         }
         return call
     }
