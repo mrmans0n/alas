@@ -12,6 +12,7 @@
 		06CEABA81FDA709351A18A6E /* WorktreeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E827B4E05449D23196D8F673 /* WorktreeRow.swift */; };
 		071E34299495A5835CCC2F75 /* SessionSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */; };
 		0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C859167B848F3A5C43EEE3D7 /* PeersView.swift */; };
+		144D4D88D96917B1FFFBEC15 /* SubagentCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B686F711B93C4B67C8D0CA0 /* SubagentCard.swift */; };
 		1635F671055BF795E113B685 /* PushRegistrar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C97D516817E514246987838F /* PushRegistrar.swift */; };
 		185E46AA928760C65408C50C /* NewSessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 416F4E87800E3DD89EE7DC25 /* NewSessionSheet.swift */; };
 		1B5C0283E882903921EC7AE9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 014513AD15C2212B8C007245 /* AppDelegate.swift */; };
@@ -112,6 +113,7 @@
 		1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptCollectionView.swift; sourceTree = "<group>"; };
 		21408E08006F4C64E22701EE /* SessionRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRegistry.swift; sourceTree = "<group>"; };
 		27A0D3457CA4F83043146752 /* SpikeTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeTranscript.swift; sourceTree = "<group>"; };
+		2B686F711B93C4B67C8D0CA0 /* SubagentCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubagentCard.swift; sourceTree = "<group>"; };
 		33A5D219FC6E604BC0767265 /* light.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = light.json; sourceTree = "<group>"; };
 		36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasMobileApp.swift; sourceTree = "<group>"; };
 		372565FA395364953D615BC3 /* TranscriptScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptScreen.swift; sourceTree = "<group>"; };
@@ -334,6 +336,7 @@
 				0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */,
 				21408E08006F4C64E22701EE /* SessionRegistry.swift */,
 				F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */,
+				2B686F711B93C4B67C8D0CA0 /* SubagentCard.swift */,
 				7BD5988CE50A901089331310 /* ToolCallCard.swift */,
 				14C04ACB163ACCFBE2BBD194 /* ToolCallGroupRow.swift */,
 				1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */,
@@ -586,6 +589,7 @@
 				23849CE940217D28217E4F16 /* ShepherdMenu.swift in Sources */,
 				C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */,
 				FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */,
+				144D4D88D96917B1FFFBEC15 /* SubagentCard.swift in Sources */,
 				56AB129852CC6503F3A8D52F /* TerminalConsole.swift in Sources */,
 				ADC23C11ED7EB665B1C1BAED /* TerminalScreen.swift in Sources */,
 				D8B8FBA1F9B4014A6DFF2679 /* TerminalsList.swift in Sources */,

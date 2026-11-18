@@ -15,6 +15,8 @@ struct TranscriptRowView: View {
     /// transcript keeps them with its expanded rows, so the cell re-measures and survives reuse.
     var showsAll: (String) -> Bool = { _ in false }
     var showAllPart: (String) -> Void = { _ in }
+    /// Pushes a subagent's transcript; offered only when the session's host serves it.
+    var openSubagent: (RemoteWireMessage.Subagent) -> Void = { _ in }
 
     var body: some View {
         content
@@ -68,7 +70,10 @@ struct TranscriptRowView: View {
                 .lineLimit(isExpanded ? nil : 2)
                 .onTapGesture(perform: toggle)
         case .toolCall(let call):
-            if let display = item.toolCall {
+            if let subagent = item.message.subagent {
+                SubagentCard(subagent: subagent, duration: item.toolCall?.duration,
+                             open: session?.supportsSubagents == true ? { openSubagent(subagent) } : nil)
+            } else if let display = item.toolCall {
                 ToolCallCard(item: item, call: call, display: display, isExpanded: isExpanded, toggle: toggle,
                              session: session, showsAll: { showsAll("section:\($0)") },
                              showAll: { showAllPart("section:\($0)") })

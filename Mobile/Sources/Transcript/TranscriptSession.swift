@@ -120,6 +120,14 @@ struct ToolTerminalTail: Equatable {
     let retained: Bool
 }
 
+/// A subagent's own transcript as the host last sent it (`readSubagent`).
+struct SubagentTranscript {
+    /// False when the session has no such child.
+    let found: Bool
+    let state: String?
+    let items: [TranscriptItem]
+}
+
 enum RequestKind {
     case permission, question, plan, elicitation
 }
@@ -143,6 +151,8 @@ final class TranscriptSession {
     @ObservationIgnored private var terminalPoll: Task<Void, Never>?
     /// Running terminals the current poll already read at least once.
     @ObservationIgnored private var polledTerminals: Set<String> = []
+    /// Subagent transcripts by subagent id, for open subagent screens.
+    private(set) var subagentTranscripts: [String: SubagentTranscript] = [:]
     var canLoadOlder = false
     /// True once the first snapshot arrived, so an empty transcript can say so.
     private(set) var hasSnapshot = false
@@ -306,6 +316,7 @@ final class TranscriptSession {
         if unsettled.isEmpty { listener = nil }
         watchGeneration += 1
         stopTerminalPoll()
+        subagentTranscripts = [:]
         // By message: a collapsed group's answers are cached but not in `items`.
         MarkdownBlockCache.shared.remove(ids: Array(messageItems.keys))
         // Unanswered reads die with the subscription; a reopened row asks again.
@@ -719,6 +730,16 @@ final class TranscriptSession {
             let tail = ToolTerminalTail(text: text, exitCode: exitCode, signal: signal, retained: retained)
             if toolTerminals[terminalId] != tail { toolTerminals[terminalId] = tail }
             return
+        case .subagentTranscript(let id, let subagentId, let found, let state, let messages) where id == sessionId:
+            // Rows whose message is unchanged keep their item, so a poll does not re-highlight them.
+            let old = Dictionary((subagentTranscripts[subagentId]?.items ?? []).map { ($0.id, $0) },
+                                 uniquingKeysWith: { _, newer in newer })
+            let items = messages.filter { $0.isHidden != true }.map { message in
+                old[message.stableId].flatMap { $0.message == message ? $0 : nil }
+                    ?? TranscriptItem(message: message, worktreeRoot: worktreeRoot)
+            }
+            subagentTranscripts[subagentId] = SubagentTranscript(found: found, state: state, items: items)
+            return
         case .transcriptSnapshot(let id, _, _, _, _, _, _, _, _) where id == sessionId,
              .transcriptPage(let id, _, _, _) where id == sessionId:
             fetchingOlder = false
@@ -878,6 +899,17 @@ final class TranscriptSession {
     private func readTerminal(_ terminalId: String) {
         guard canReadTerminals else { return }
         hub.send(.readToolTerminal(sessionId: sessionId, terminalId: terminalId), to: hostID)
+    }
+
+    /// Whether the host serves `readSubagent`; an older one fails to decode it.
+    var supportsSubagents: Bool {
+        hub.supports(PeerSubagentCapability.v1, on: hostID)
+    }
+
+    /// Asks for a subagent's transcript; checked on every call, as the capability goes with the connection.
+    func readSubagent(_ subagentId: String) {
+        guard isOpen, hub.state(of: hostID) == .online, supportsSubagents else { return }
+        hub.send(.readSubagent(sessionId: sessionId, subagentId: subagentId), to: hostID)
     }
 
     /// The terminal ids of the expanded tool-call rows, split by whether their call still runs.

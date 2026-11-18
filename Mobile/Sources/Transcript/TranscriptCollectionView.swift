@@ -15,10 +15,12 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
     /// Prompts this phone has sent; a change returns the scroller to the tail.
     var sendCount = 0
     var onFirstLayout: () -> Void = {}
+    var openSubagent: (RemoteWireMessage.Subagent) -> Void = { _ in }
 
     init(items: [TranscriptItem], expanded: Binding<Set<String>>, canLoadOlder: Bool,
          loadOlder: @escaping () -> Void, image: @escaping (String) -> UIImage? = { _ in nil },
-         session: TranscriptSession? = nil, sendCount: Int = 0, onFirstLayout: @escaping () -> Void = {})
+         session: TranscriptSession? = nil, sendCount: Int = 0, onFirstLayout: @escaping () -> Void = {},
+         openSubagent: @escaping (RemoteWireMessage.Subagent) -> Void = { _ in })
     {
         self.items = items
         _expanded = expanded
@@ -28,6 +30,7 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
         self.session = session
         self.sendCount = sendCount
         self.onFirstLayout = onFirstLayout
+        self.openSubagent = openSubagent
     }
 
     func makeUIViewController(context: Context) -> TranscriptCollectionController {
@@ -41,7 +44,8 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
 
     private var input: TranscriptCollectionController.Input {
         .init(items: items, expanded: $expanded, canLoadOlder: canLoadOlder, loadOlder: loadOlder,
-              image: image, session: session, sendCount: sendCount, onFirstLayout: onFirstLayout)
+              image: image, session: session, sendCount: sendCount, onFirstLayout: onFirstLayout,
+              openSubagent: openSubagent)
     }
 }
 
@@ -55,6 +59,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         var session: TranscriptSession?
         var sendCount: Int
         var onFirstLayout: () -> Void
+        var openSubagent: (RemoteWireMessage.Subagent) -> Void
     }
 
     /// The latest values from SwiftUI; `sync()` brings the collection view in line with them.
@@ -112,7 +117,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
                                   showAllPart: { [unowned self] in
                                       input.expanded.wrappedValue.formSymmetricDifference([Self.key(id, part: $0)])
                                       sync()
-                                  })
+                                  }, openSubagent: { [unowned self] in input.openSubagent($0) })
             }
             .margins(.all, 0)
         }
