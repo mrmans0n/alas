@@ -1090,12 +1090,15 @@ public final class RemoteSessionGateway {
     ) async -> (message: RemoteWireMessage, byteCount: Int)? {
         // Re-read across awaits: a reset can replace what the gateway holds;
         // the caller's generation check discards the stale serialization.
-        guard let message = state.messages[index] else { return nil }
+        guard var message = state.messages[index] else { return nil }
         // A visual aid's answer prompt stays a positional marker: the phone's card shows the answer.
         if hidden || ACPVisualAidQuestionForm.isAnswerPrompt(message) {
             return RemoteWireMessage(stableId: "m\(index)", kind: message.kind, text: nil, json: nil,
                                      index: index, isHidden: true)
                 .boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes)
+        }
+        if case .toolCall(let call) = message {
+            message = .toolCall(await spillingInlineImages(call, sessionId: id, state: state))
         }
         return Self.toWire(
             message, index: index,
@@ -1148,6 +1151,35 @@ public final class RemoteSessionGateway {
         guard let full = await hostCalls.fullToolCallContent(sessionId, toolCall.toolCallId) else { return nil }
         state.storeToolContent(toolCall.toolCallId, full)
         return full
+    }
+
+    /// The call with each inline-only image also written to a file on this Mac, named by `uri`,
+    /// so the phone can fetch what does not fit inline. The bytes stay in `data`: inline wins when it fits.
+    private func spillingInlineImages(
+        _ call: ACPMessage.ToolCall, sessionId: String, state: RemoteTranscriptSync
+    ) async -> ACPMessage.ToolCall {
+        var call = call
+        for (position, asset) in call.assets.enumerated() {
+            guard asset.kind == .image || asset.mimeType?.lowercased().hasPrefix("image/") == true else { continue }
+            // A file uri the phone can already fetch stays as it is.
+            if let uri = asset.uri, !uri.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("data:") { continue }
+            // Checked before decoding: a row is re-sent on every delta. The key carries the source's
+            // identity, as an update can replace the image at a position.
+            guard let source = asset.data ?? asset.uri else { continue }
+            let key = "\(call.toolCallId)#\(position)#\(source.utf8.count)#\(source.hashValue)"
+            var path = state.cachedSpilledImage(key)
+            if path == nil {
+                guard let data = [asset.data, asset.uri].lazy.compactMap({ $0 }).compactMap(Self.decodeInlineImage).first,
+                      data.count <= TranscriptImageFile.maxBytes else { continue }
+                path = await hostCalls.spillToolImage(sessionId, data)
+                if let path { state.storeSpilledImage(key, path) }
+            }
+            guard let path else { continue }
+            // The inline source moves to `data` (a `data:` URI decodes there too), so it still inlines when it fits.
+            call.assets[position] = ACPMessage.ToolCallAsset(
+                kind: asset.kind, data: source, uri: path, mimeType: asset.mimeType, name: asset.name)
+        }
+        return call
     }
 
     /// A transcript message as the session store encodes it, decoded.
@@ -1617,19 +1649,24 @@ public final class RemoteSessionGateway {
         guard asset.kind == .image || asset.mimeType?.lowercased().hasPrefix("image/") == true else { return nil }
         for source in [asset.data, asset.uri].compactMap({ $0 }) {
             guard source.utf8.count <= maximumBytes else { continue }
-            let payload: Substring
-            if source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("data:") {
-                guard let comma = source.firstIndex(of: ","),
-                      source[..<comma].lowercased().contains(";base64") else { continue }
-                payload = source[source.index(after: comma)...]
-            } else {
-                payload = source[...]
-            }
-            guard let data = Data(base64Encoded: String(payload), options: .ignoreUnknownCharacters),
-                  TranscriptImageFile.isImage(data) else { continue }
-            return data.base64EncodedString()
+            if let data = decodeInlineImage(source) { return data.base64EncodedString() }
         }
         return nil
+    }
+
+    /// The bytes of a base64 string or `data:` URI, when they are an image.
+    private static func decodeInlineImage(_ source: String) -> Data? {
+        let payload: Substring
+        if source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("data:") {
+            guard let comma = source.firstIndex(of: ","),
+                  source[..<comma].lowercased().contains(";base64") else { return nil }
+            payload = source[source.index(after: comma)...]
+        } else {
+            payload = source[...]
+        }
+        guard let data = Data(base64Encoded: String(payload), options: .ignoreUnknownCharacters),
+              TranscriptImageFile.isImage(data) else { return nil }
+        return data
     }
 
     private static func remoteAssetURI(_ uri: String?) -> String? {

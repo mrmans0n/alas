@@ -13,6 +13,19 @@ struct TranscriptImageFileTests {
         #expect(TranscriptImageFile.resolve(source, root: sshRoot) == .ssh(host: "test-host", path: expected))
     }
 
+    /// A spilled image lands under a content-addressed name, so the same bytes reuse one file.
+    @Test func spilledImagesAreContentAddressed() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("spill-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 1, 2, 3])
+        let first = try #require(TranscriptImageFile.spill(png, into: directory))
+        #expect(TranscriptImageFile.spill(png, into: directory) == first)
+        #expect(first.hasSuffix(".png"))
+        #expect(first.hasPrefix(directory.appendingPathComponent("tool-images").path))
+        #expect(try Data(contentsOf: URL(fileURLWithPath: first)) == png)
+        #expect(try #require(TranscriptImageFile.spill(Data([1, 2, 3]), into: directory)).hasSuffix(".img"))
+    }
+
     @Test(arguments: ["https://example.com/shot.png", "file://other-host/tmp/shot.png", "", "/.alas-remote/other/tmp/shot.png"])
     func invalidSourcesDoNotReadLocalDisk(_ source: String) {
         #expect(TranscriptImageFile.resolve(source, root: URL(fileURLWithPath: "/.alas-remote/test-host/repo")) == nil)
