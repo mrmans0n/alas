@@ -583,6 +583,15 @@ private struct NativePeerRowView: View {
                 .frame(minWidth: 640, minHeight: 480)
                 .toolbar { Button("Done") { showsVisualPreview = false } }
             }
+        case .questionAnswer(let answer):
+            ACPQuestionAnswerCard(answer: answer)
+        case .outcomeCard(let card):
+            PromptCardRow(card: ACPPromptCard(card), text: "", contentMaxWidth: contentMaxWidth, typography: typography)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .failureIncident(let incident):
+            ACPFailureIncidentCard(
+                incident: ACPFailureIncident(record: .init(remote: incident), endedTurn: incident.endedTurn),
+                actions: .readOnly)
         case .systemNotice(let text):
             ACPSystemNoticeView(text: text)
         }

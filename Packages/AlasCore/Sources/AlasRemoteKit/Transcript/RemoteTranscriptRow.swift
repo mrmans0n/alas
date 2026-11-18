@@ -15,6 +15,9 @@ public enum RemoteTranscriptRow: Equatable, Sendable {
     case plan([ACPPlanItem])
     case planDocument(ACPPlanDocument)
     case visualAid(ACPVisualAid)
+    case questionAnswer(ACPAnsweredQuestion)
+    case outcomeCard(RemotePromptCard)
+    case failureIncident(RemoteFailureIncident)
     case systemNotice(String)
 
     public init(message: RemoteWireMessage) {
@@ -64,6 +67,12 @@ public enum RemoteTranscriptRow: Equatable, Sendable {
             } else {
                 self = .systemNotice(message.text ?? "Plan details are unavailable.")
             }
+        case "questionAnswer":
+            self = Self.decode(message.json).map(Self.questionAnswer) ?? .systemNotice(text)
+        case "outcomeCard":
+            self = Self.decode(message.json).map(Self.outcomeCard) ?? .systemNotice(text)
+        case "failureIncident":
+            self = Self.decode(message.json).map(Self.failureIncident) ?? .systemNotice(text)
         default:
             self = .systemNotice(text)
         }
