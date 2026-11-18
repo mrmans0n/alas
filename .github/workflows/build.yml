@@ -796,6 +796,9 @@ jobs:
       - name: Test CI workflow contract
         run: bash scripts/tests/ci-workflow/run.sh
 
+      - name: Test TestFlight notes generator
+        run: bash scripts/tests/testflight-notes/run.sh
+
       - name: Test Swift build measurements
         run: bash scripts/tests/swift-build-metrics/run.sh
 

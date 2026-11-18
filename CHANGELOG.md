@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Keep a commit's GG-ID when Edit Commit… saves a message where git-gud wrote GG-ID and GG-Parent as separate paragraphs.
+- Treat an empty Android device clipboard as empty text instead of a connection failure.
+
 ### 🏗️ Internal
 
 - Upload a nightly iOS build to TestFlight for internal testers when the iOS app's inputs change on main.

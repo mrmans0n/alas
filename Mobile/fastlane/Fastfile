@@ -2,8 +2,10 @@
 # and signs; these lanes upload and promote. Both read the API key from
 # ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH (the .p8 file).
 #
-#   bundle exec fastlane beta ipa:<path> [groups:"A,B"] [changelog:"..."]
+#   bundle exec fastlane beta ipa:<path> [groups:"A,B"] changelog_file:<path>
 #   bundle exec fastlane submit build:<build number> version:<marketing version>
+
+require_relative "testflight_changelog"
 
 opt_out_usage
 default_platform(:ios)
@@ -26,7 +28,7 @@ platform :ios do
       api_key: asc_key,
       app_identifier: APP_ID,
       ipa: options.fetch(:ipa),
-      changelog: options[:changelog],
+      changelog: TestflightChangelog.read(options),
       distribute_external: groups.any?,
       groups: groups,
       # Internal testers get it once processing ends; external groups need it processed first.

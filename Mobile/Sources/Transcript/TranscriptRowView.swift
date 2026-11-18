@@ -92,9 +92,19 @@ struct TranscriptRowView: View {
             } else {
                 titleCaption(aid.title, "Visual")
             }
+        case .questionAnswer(let answer):
+            QuestionAnswerCard(answer: answer, isExpanded: isExpanded, toggle: toggle)
+        case .outcomeCard(let card):
+            OutcomeCard(id: item.id, card: card)
+        case .failureIncident(let incident):
+            FailureIncidentCard(incident: incident)
         case .systemNotice(let text):
-            Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+            notice(text)
         }
+    }
+
+    private func notice(_ text: String) -> some View {
+        Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
     }
 
     private func bubble(_ text: String) -> some View {
