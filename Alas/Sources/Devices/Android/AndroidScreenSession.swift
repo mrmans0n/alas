@@ -91,9 +91,15 @@ final class AndroidScreenSession {
         return Self.resolveClipboardReply(reply, stopped: stopped)
     }
 
-    static func resolveClipboardReply(_ reply: String?, stopped: Bool) -> String? {
-        if let reply { return reply }
-        return stopped ? nil : ""
+    static func resolveClipboardReply(_ reply: LatestReplyOutcome<String>, stopped: Bool) -> String? {
+        switch reply {
+        case .value(let text):
+            text
+        case .timedOut:
+            stopped ? nil : ""
+        case .replaced, .cancelled:
+            nil
+        }
     }
 
     private func launchServer(scid: String) throws -> Process {
