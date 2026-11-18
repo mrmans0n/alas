@@ -397,6 +397,8 @@ public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, Se
     case commitFileDiff(sessionId: String, sha: String, path: String)
     case readFile(sessionId: String, path: String)
     case readTranscriptImage(sessionId: String, path: String)
+    /// The tail of a tool call's terminal; see `PeerToolTerminalCapability`.
+    case readToolTerminal(sessionId: String, terminalId: String)
     /// The phone's answer to a visual aid question. `action` is "answer" or
     /// "dismiss"; the gateway validates the choices against the question.
     /// `requestId` is an opaque correlation token echoed on any `visualAidRejected`, so one of several
@@ -414,7 +416,7 @@ public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, Se
 }
 
 extension RemoteClientMessageOf: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, capabilities, sha, visualId, selectedOptionIds, note, console, portForward, host, peerHost, repoHook, relayURL, relayToken, pushKinds }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, capabilities, sha, visualId, selectedOptionIds, note, console, portForward, host, peerHost, repoHook, relayURL, relayToken, pushKinds, terminalId }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -596,6 +598,9 @@ extension RemoteClientMessageOf: Codable {
         case "readFile":
             self = .readFile(sessionId: try c.decode(String.self, forKey: .sessionId),
                              path: try c.decode(String.self, forKey: .path))
+        case "readToolTerminal":
+            self = .readToolTerminal(sessionId: try c.decode(String.self, forKey: .sessionId),
+                                     terminalId: try c.decode(String.self, forKey: .terminalId))
         case "console":
             self = .console(try c.decode(PeerConsoleRequest.self, forKey: .console))
         case "portForward":
@@ -794,6 +799,10 @@ extension RemoteClientMessageOf: Codable {
             try c.encode("readFile", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(path, forKey: .path)
+        case .readToolTerminal(let s, let terminalId):
+            try c.encode("readToolTerminal", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(terminalId, forKey: .terminalId)
         case .console(let request):
             try c.encode("console", forKey: .type)
             try c.encode(request, forKey: .console)
@@ -861,6 +870,8 @@ extension RemoteClientMessageOf {
             return "readTranscriptImage\u{0}\(sessionId)\u{0}\(path)"
         case .readFile(let sessionId, let path):
             return "readFile\u{0}\(sessionId)\u{0}\(path)"
+        case .readToolTerminal(let sessionId, let terminalId):
+            return "readToolTerminal\u{0}\(sessionId)\u{0}\(terminalId)"
         default:
             return nil
         }
@@ -986,6 +997,10 @@ public enum RemoteServerMessageOf<ServerHost: Codable & Equatable & Sendable, Cl
     case fileBytes(sessionId: String, path: String, data: Data, byteSize: Int)
     /// Session-scoped browser image response, separate from editor file replies.
     case transcriptImage(sessionId: String, path: String, data: Data?)
+    /// The answer to `readToolTerminal`: up to 8 KiB of the terminal's
+    /// ANSI-stripped output and its exit status, or `retained: false` with
+    /// empty text when the host no longer has the terminal.
+    case toolTerminal(sessionId: String, terminalId: String, text: String, truncated: Bool, exitCode: Int?, signal: String?, retained: Bool)
     /// The answer to `HostWorktreeRead.fileHistory`: `truncated` when more commits touched it.
     case fileHistory(sessionId: String, path: String, entries: [HostFileHistoryEntry], truncated: Bool)
     case fileHistoryFailed(sessionId: String, path: String, reason: RemoteFileAccessReason, message: String?)
@@ -1023,6 +1038,7 @@ extension RemoteServerMessageOf: Codable {
         case hook
         case version, entries
         case data
+        case terminalId, exitCode, signal, retained
     }
 
     public init(from decoder: Decoder) throws {
@@ -1283,6 +1299,15 @@ extension RemoteServerMessageOf: Codable {
             self = .transcriptImage(sessionId: try c.decode(String.self, forKey: .sessionId),
                                     path: try c.decode(String.self, forKey: .path),
                                     data: try c.decodeIfPresent(Data.self, forKey: .data))
+        case "toolTerminal":
+            self = .toolTerminal(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                terminalId: try c.decode(String.self, forKey: .terminalId),
+                text: try c.decode(String.self, forKey: .text),
+                truncated: try c.decode(Bool.self, forKey: .truncated),
+                exitCode: try c.decodeIfPresent(Int.self, forKey: .exitCode),
+                signal: try c.decodeIfPresent(String.self, forKey: .signal),
+                retained: try c.decode(Bool.self, forKey: .retained))
         case "fileBytes":
             self = .fileBytes(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -1584,6 +1609,15 @@ extension RemoteServerMessageOf: Codable {
             try c.encode(s, forKey: .sessionId)
             try c.encode(path, forKey: .path)
             try c.encodeIfPresent(data, forKey: .data)
+        case .toolTerminal(let s, let terminalId, let text, let truncated, let exitCode, let signal, let retained):
+            try c.encode("toolTerminal", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(terminalId, forKey: .terminalId)
+            try c.encode(text, forKey: .text)
+            try c.encode(truncated, forKey: .truncated)
+            try c.encodeIfPresent(exitCode, forKey: .exitCode)
+            try c.encodeIfPresent(signal, forKey: .signal)
+            try c.encode(retained, forKey: .retained)
         case .fileBytes(let s, let path, let data, let byteSize):
             try c.encode("fileBytes", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -1720,6 +1754,12 @@ public enum HostProtocolCapability: Sendable {
 public enum PeerAdapterInstallCapability: Sendable {
     /// Advertised in `hello` by hosts that serve `installAdapter`.
     public static let v1 = "peerAdapterInstall.v1"
+}
+
+public enum PeerToolTerminalCapability: Sendable {
+    /// Advertised in `hello` by hosts that serve `readToolTerminal`. Older
+    /// hosts cannot decode it, so clients check this before sending.
+    public static let v1 = "peerToolTerminal.v1"
 }
 
 public enum PeerSessionTabsCapability: Sendable {

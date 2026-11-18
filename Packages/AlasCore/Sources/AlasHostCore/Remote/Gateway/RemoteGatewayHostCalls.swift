@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasACP
 import AlasAgentKit
 import AlasSessions
 
@@ -32,6 +33,8 @@ import AlasSessions
     /// A tool call's full output, which a loaded transcript keeps only for
     /// its newest messages.
     public var fullToolCallContent: @MainActor (_ sessionID: String, _ toolCallID: String) async -> String?
+    /// The tail of a tool call's terminal, or nil when the host has no such terminal.
+    public var toolTerminal: @MainActor (_ sessionID: String, _ terminalID: String) -> ACPTerminalOutputResult?
 
     public init(
         sessionSummaries: @escaping @MainActor (_ tabIndex: @MainActor (_ sessionID: String, _ owner: SessionOwnerID) -> Int?) async
@@ -52,7 +55,8 @@ import AlasSessions
         mentionAttachments: @escaping @MainActor (_ mentions: [RemoteMention], _ sessionID: String) async -> [ACPMessage.Attachment]? = { mentions, _ in
             mentions.isEmpty ? [] : nil
         },
-        fullToolCallContent: @escaping @MainActor (_ sessionID: String, _ toolCallID: String) async -> String? = { _, _ in nil }
+        fullToolCallContent: @escaping @MainActor (_ sessionID: String, _ toolCallID: String) async -> String? = { _, _ in nil },
+        toolTerminal: @escaping @MainActor (_ sessionID: String, _ terminalID: String) -> ACPTerminalOutputResult? = { _, _ in nil }
     ) {
         self.sessionSummaries = sessionSummaries
         self.worktrees = worktrees
@@ -65,6 +69,7 @@ import AlasSessions
         self.mentionCandidates = mentionCandidates
         self.mentionAttachments = mentionAttachments
         self.fullToolCallContent = fullToolCallContent
+        self.toolTerminal = toolTerminal
     }
 
     /// The host's lists and creations; empty and refused without a host.
@@ -101,6 +106,9 @@ import AlasSessions
             },
             fullToolCallContent: { [weak host] sessionID, toolCallID in
                 await host?.sessions.fullToolCallContent(sessionID, toolCallID: toolCallID)
+            },
+            toolTerminal: { [weak host] sessionID, terminalID in
+                host?.sessions.toolTerminalTail(sessionID, terminalID: terminalID)
             }
         )
     }
