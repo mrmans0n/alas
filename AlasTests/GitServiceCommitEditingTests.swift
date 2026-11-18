@@ -155,6 +155,32 @@ struct GitServiceCommitEditingTests {
         )
     }
 
+    @Test func rewordKeepsGGIDThatGGWroteAsItsOwnParagraph() async throws {
+        let (repo, base) = try await makeRepoWithBase()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // gg appends GG-ID and GG-Parent as separate paragraphs.
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n\nGG-ID: c-stable\n\nGG-Parent: c-parent",
+            files: ["target.txt": "target\n"]
+        )
+        let editorBody = CommitMessage.split(try await commitBody(repo, target)).body
+        #expect(editorBody == "Original explanation.")
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: editorBody)
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Original explanation.\n\nGG-ID: c-stable\nGG-Parent: c-parent"
+        )
+    }
+
     @Test func rewordKeepsGGIDInsideFencedExample() async throws {
         let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
