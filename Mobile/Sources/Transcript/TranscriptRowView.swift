@@ -89,7 +89,7 @@ struct TranscriptRowView: View {
             }
             .card()
         case .planDocument(let doc):
-            titleCaption("Plan", doc.markdown ?? doc.planId)
+            if let display = doc.display { planDocument(display) }
         case .visualAid(let aid):
             if let session {
                 // Keyed by visual, so a reused cell never hands one visual's page or state to another.
@@ -97,9 +97,19 @@ struct TranscriptRowView: View {
             } else {
                 titleCaption(aid.title, "Visual")
             }
+        case .questionAnswer(let answer):
+            QuestionAnswerCard(answer: answer, isExpanded: isExpanded, toggle: toggle)
+        case .outcomeCard(let card):
+            OutcomeCard(id: item.id, card: card)
+        case .failureIncident(let incident):
+            FailureIncidentCard(incident: incident)
         case .systemNotice(let text):
-            Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+            notice(text)
         }
+    }
+
+    private func notice(_ text: String) -> some View {
+        Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
     }
 
     private func bubble(_ text: String) -> some View {
@@ -120,6 +130,28 @@ struct TranscriptRowView: View {
             .font(.caption.monospacedDigit())
             if let diff = item.fileEditDiff {
                 DiffHunksView(diff: diff, spans: item.fileEditSpans, maxLines: showsAll("diff") ? .max : 40) { showAllPart("diff") }
+            }
+        }
+        .card()
+    }
+
+    /// The plan in full, like the Mac's plan card. The host strips a file plan's path from the document
+    /// and sends it only in the row's text, as "Plan file: <path>".
+    private func planDocument(_ display: ACPPlanDocument.Display) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Plan", systemImage: "doc.text")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.tint)
+            if let markdown = display.markdown {
+                AgentMarkdown(id: item.id, text: markdown, session: session)
+            }
+            if display.showsFile {
+                let path = display.filePath
+                    ?? item.message.text.map { $0.hasPrefix("Plan file: ") ? String($0.dropFirst(11)) : $0 }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Plan file").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    Text(path ?? "Unavailable").font(.caption.monospaced()).textSelection(.enabled)
+                }
             }
         }
         .card()
@@ -163,6 +195,7 @@ struct AgentMarkdown: View {
                 case .paragraph(let s): Text(s)
                 case .heading(let level, let s): Text(s).font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
                 case .code(let language, let chunks): CodeBlockView(language: language, chunks: chunks)
+                case .mermaid(let source): MermaidBlockView(source: source)
                 case .list(let entries):
                     let widest = entries.compactMap { if case .number(let n) = $0.marker { n } else { nil } }
                         .max { $0.count < $1.count } ?? ""

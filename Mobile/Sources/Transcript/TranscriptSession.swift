@@ -118,6 +118,9 @@ struct ToolTerminalTail: Equatable {
     let signal: String?
     /// False when the host no longer has the terminal.
     let retained: Bool
+
+    /// The host still has the terminal and it has not exited.
+    var isAwaitingExit: Bool { retained && exitCode == nil && signal == nil }
 }
 
 /// A subagent's own transcript as the host last sent it (`readSubagent`).
@@ -633,7 +636,7 @@ final class TranscriptSession {
         mentionCandidatesQuery = nil
         // A final read whose reply never came, or came before the exit, is asked again.
         settledTerminals = settledTerminals.filter { id in
-            toolTerminals[id].map { $0.exitCode != nil || $0.signal != nil || !$0.retained } ?? false
+            toolTerminals[id].map { !$0.isAwaitingExit } ?? false
         }
         // A send's reply died with the old subscription; the snapshot shows its outcome.
         for id in visualAids.keys where visualAids[id]?.pendingRequestId != nil {
@@ -729,6 +732,8 @@ final class TranscriptSession {
             // Every follower of the session gets every reply, asked for or not.
             let tail = ToolTerminalTail(text: text, exitCode: exitCode, signal: signal, retained: retained)
             if toolTerminals[terminalId] != tail { toolTerminals[terminalId] = tail }
+            // A call can end before its terminal exits; keep reading until the exit lands.
+            if tail.isAwaitingExit { pollTerminals() }
             return
         case .subagentTranscript(let id, let subagentId, let found, let state, let messages) where id == sessionId:
             // Rows whose message is unchanged keep their item, so a poll does not re-highlight them.
@@ -912,12 +917,16 @@ final class TranscriptSession {
         hub.send(.readSubagent(sessionId: sessionId, subagentId: subagentId), to: hostID)
     }
 
-    /// The terminal ids of the expanded tool-call rows, split by whether their call still runs.
+    /// The terminal ids of the expanded tool-call rows, split by whether they still run: their call
+    /// runs, or their last tail has no exit yet.
     private func expandedTerminals() -> (running: [String], settled: [String]) {
         var running: [String] = [], settled: [String] = []
         for item in items where item.kind == .message && expanded.contains(item.id) {
             guard case .toolCall(let call) = item.row else { continue }
-            if Self.isRunning(call) { running += call.terminalIds } else { settled += call.terminalIds }
+            let live = Self.isRunning(call)
+            for id in call.terminalIds {
+                if live || toolTerminals[id]?.isAwaitingExit == true { running.append(id) } else { settled.append(id) }
+            }
         }
         return (running, settled)
     }

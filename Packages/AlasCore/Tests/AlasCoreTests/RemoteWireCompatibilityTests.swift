@@ -118,6 +118,79 @@ import Testing
         #expect(RemoteSessionGateway.toWire(row.message, index: 0, createdAt: nil).createdAt == nil)
     }
 
+    /// Answered questions, outcome cards and failure incidents reach the phone
+    /// as the values their cards draw, with their caption kept for older clients.
+    @MainActor // `toWire` reads a `StreamingText`.
+    @Test(arguments: StructuredRow.allCases)
+    func structuredRowsDecodeOnThePhone(_ row: StructuredRow) throws {
+        let wire = RemoteSessionGateway.toWire(try row.message(), index: 0)
+        #expect(wire.kind == row.kind)
+        #expect(wire.text == row.caption)
+        let decoded = RemoteTranscriptRow(message: wire)
+        switch (row, decoded) {
+        case (.questionAnswer, .questionAnswer(let answer)):
+            #expect(answer == StructuredRow.answer)
+        case (.outcomeCard, .outcomeCard(let card)):
+            #expect(ACPPromptCard(card) == StructuredRow.card)
+        case (.reviewOutcomeCard, .outcomeCard(let card)):
+            // The review action names a host path, so it never leaves the host.
+            #expect(!(wire.json ?? "").contains("action"))
+            #expect(card.actionURL == nil)
+        case (.failureIncident, .failureIncident(let incident)):
+            #expect(ACPFailureIncident(record: .init(remote: incident), endedTurn: incident.endedTurn)
+                == (try StructuredRow.incident()).strippingActions())
+        default:
+            Issue.record("\(row) decoded as \(decoded)")
+        }
+    }
+
+    @Test(arguments: ["questionAnswer", "outcomeCard", "failureIncident", "system"], [nil, "{"] as [String?])
+    func unreadableStructuredRowsShowTheirCaption(kind: String, json: String?) {
+        let wire = RemoteWireMessage(stableId: "s", kind: kind, text: "Caption", json: json, index: 0)
+        #expect(RemoteTranscriptRow(message: wire) == .systemNotice("Caption"))
+    }
+
+    enum StructuredRow: String, CaseIterable, Sendable {
+        case questionAnswer, outcomeCard, reviewOutcomeCard, failureIncident
+
+        var kind: String { self == .reviewOutcomeCard ? "outcomeCard" : rawValue }
+
+        static let answer = ACPAnsweredQuestion(
+            id: UUID(), title: "Rollout", message: "Choose the rollout", outcome: .answered,
+            items: [.init(question: "Strategy", description: nil, answer: "Gradual",
+                          options: [.init(title: "Gradual", description: "Small batches", selected: true)])])
+        static let card = ACPPromptCard(
+            origin: .merged, title: "PR merged", facts: [.init(kind: .branch, text: "feature")],
+            sections: [.init(title: "Checks", items: [.init(bodyMarkdown: "All green", status: .failed)])],
+            action: .url(URL(string: "https://example.com/pr/1")!))
+
+        static func incident() throws -> ACPFailureIncident {
+            let json = #"{"record":{"version":1,"id":"f1","revision":1,"category":"limit","severity":"warning","title":"Slow down","details":"Rate limited","actions":["retry"]},"endedTurn":true}"#
+            return try JSONDecoder().decode(ACPFailureIncident.self, from: Data(json.utf8))
+        }
+
+        func message() throws -> ACPMessage {
+            switch self {
+            case .questionAnswer: .questionAnswer(Self.answer)
+            case .outcomeCard: .outcomeCard(ACPOutcomeCard(card: Self.card, text: "PR #1 merged"))
+            case .reviewOutcomeCard:
+                .outcomeCard(ACPOutcomeCard(card: ACPPromptCard(
+                    origin: .queued, title: "Review queued", action: .reviewSession(.localChanges(
+                        worktreeID: "w", repositoryPath: URL(fileURLWithPath: "/host/repo"), scope: .all))),
+                text: "PR #1 merged"))
+            case .failureIncident: .failureIncident(id: UUID(), try Self.incident())
+            }
+        }
+
+        var caption: String {
+            switch self {
+            case .questionAnswer: Self.answer.displayText
+            case .outcomeCard, .reviewOutcomeCard: "PR #1 merged"
+            case .failureIncident: "Slow down\n\nRate limited"
+            }
+        }
+    }
+
     @Test(arguments: RemoteWireSamples.clientMessages)
     func phoneEncodedClientMessageDecodesOnTheMac(_ message: RemoteClientMessage) throws {
         let data = try JSONEncoder.sorted.encode(message)

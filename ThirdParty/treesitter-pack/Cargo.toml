@@ -15,7 +15,7 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 tree-sitter-bash = "0.25.1"
 tree-sitter-c = "0.24.2"
-tree-sitter-c-sharp = "0.23.5"
+tree-sitter-c-sharp = "0.24.0"
 # Preferred over `tree-sitter-clojure` (0.1.0, and stale): this one is current
 # and keeps `tree-sitter` to a dev-dependency, reaching the grammar through
 # `tree-sitter-language`. That matters because the `tree-sitter` crate sets
@@ -29,7 +29,7 @@ tree-sitter-css = "0.25.0"
 tree-sitter-dart = "0.3.0"
 tree-sitter-containerfile = "0.9.2"
 tree-sitter-elixir = "0.3.5"
-tree-sitter-erlang = "0.21.0"
+tree-sitter-erlang = "0.22.0"
 tree-sitter-go = "0.25.0"
 tree-sitter-graphql = "0.3.0"
 tree-sitter-haskell = "0.24.0"
