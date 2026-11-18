@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 🐛 Fixes
 
+- Keep a commit's GG-ID when Edit Commit… saves a message where git-gud wrote GG-ID and GG-Parent as separate paragraphs.
 - Treat an empty Android device clipboard as empty text instead of a connection failure.
 
 ## [0.24.2] - 2026-11-18
