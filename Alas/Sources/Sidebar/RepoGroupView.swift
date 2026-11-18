@@ -124,7 +124,8 @@ struct RepoGroupView: View {
     var onRemoveLinkedCheckout: (Worktree) -> Void = { _ in }
     var onReconnectMachine: (Worktree) -> Void = { _ in }
     /// What a row is running: VMs, devices, a stack ship, a shepherd.
-    var liveActivity: (Worktree) -> WorktreeRowPresentation.LiveActivity = { _ in .none }
+    /// Given whether the row has a machine badge, which rules out local activity.
+    var liveActivity: (Worktree, _ hasMachineBadge: Bool) -> WorktreeRowPresentation.LiveActivity = { _, _ in .none }
     var onOpenVM: (Worktree, VMGuestOS) -> Void = { _, _ in }
     var onShowDevice: (Worktree, String) -> Void = { _, _ in }
     @Environment(\.theme) var theme
@@ -264,7 +265,8 @@ struct RepoGroupView: View {
     }
 
     private func row(_ wt: Worktree) -> some View {
-        WorktreeRowView(
+        let badge = machineBadge(wt)
+        return WorktreeRowView(
             worktree: wt,
             isSelected: wt.id == selectedWorktreeId,
             isMain: isMain(wt),
@@ -309,10 +311,10 @@ struct RepoGroupView: View {
             pluginDecorations: pluginDecorations(wt),
             onRunPluginDecoration: onRunPluginDecoration,
             isHighlighted: wt.id == highlightedWorktreeId,
-            machineBadge: machineBadge(wt),
+            machineBadge: badge,
             onRemoveLinkedCheckout: { onRemoveLinkedCheckout(wt) },
             onReconnectMachine: { onReconnectMachine(wt) },
-            liveActivity: liveActivity(wt),
+            liveActivity: liveActivity(wt, badge != nil),
             onOpenVM: { guest in onOpenVM(wt, guest) },
             onShowDevice: { id in onShowDevice(wt, id) }
         )

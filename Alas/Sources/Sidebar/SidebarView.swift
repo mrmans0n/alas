@@ -307,9 +307,12 @@ struct SidebarView: View {
                                         machineBadge: { wt in machineBadge(wt, in: project) },
                                         onRemoveLinkedCheckout: { wt in onRemoveProject(wt.projectId) },
                                         onReconnectMachine: { wt in state.reconnectMachine(projectId: wt.projectId) },
-                                        liveActivity: { wt in liveActivity(wt, in: project) },
-                                        onOpenVM: { wt, guest in state.openVirtualMachine(in: wt, guest: guest) },
-                                        onShowDevice: { wt, id in state.showDevice(id, in: wt.id) }
+                                        liveActivity: { wt, hasMachineBadge in liveActivity(wt, hasMachineBadge: hasMachineBadge) },
+                                        onOpenVM: { wt, guest in
+                                            state.focusGlobalWorktree(id: wt.id, projectId: wt.projectId)
+                                            state.openVirtualMachine(in: wt, guest: guest)
+                                        },
+                                        onShowDevice: { wt, id in showDevice(id, in: wt) }
                                     )
                                 }
                                 if let nativePeerSessions = state.nativePeerSessions {
@@ -439,6 +442,8 @@ struct SidebarView: View {
 
     /// The machine a linked record's row runs on; nil for the group's own rows.
     private func machineBadge(_ wt: Worktree, in group: ProjectConfig) -> WorktreeRowPresentation.MachineBadge? {
+        // The group's own rows never have one; skip the project scan for them.
+        guard wt.projectId != group.id else { return nil }
         let host = state.projects.first { $0.id == wt.projectId }?.host
         return WorktreeRowPresentation.machineBadge(
             rowProjectId: wt.projectId,
@@ -451,11 +456,10 @@ struct SidebarView: View {
 
     /// Read here rather than in the row, so a row never observes the VM
     /// manager, the device panes or the shepherds itself.
-    private func liveActivity(_ wt: Worktree, in group: ProjectConfig) -> WorktreeRowPresentation.LiveActivity {
+    private func liveActivity(_ wt: Worktree, hasMachineBadge: Bool) -> WorktreeRowPresentation.LiveActivity {
         #if DEBUG
         if let scripted = DesignCaptureLiveActivity.shared.byBranch { return scripted[wt.branch] ?? .none }
         #endif
-        let hasMachineBadge = machineBadge(wt, in: group) != nil
         guard !hasMachineBadge else {
             return WorktreeRowPresentation.liveActivity(
                 hasMachineBadge: true, vms: [:], devices: [], ship: nil, pr: nil, stack: nil
@@ -477,6 +481,19 @@ struct SidebarView: View {
         )
     }
 
+    /// A device glyph's click: selects the row's worktree, makes sure it has a
+    /// right pane, then shows the device there. `showDevice` itself does not
+    /// focus, so an agent's `device_open` never steals the selection.
+    private func showDevice(_ id: String, in wt: Worktree) {
+        state.focusGlobalWorktree(id: wt.id, projectId: wt.projectId)
+        _ = state.rightPaneStore.state(
+            for: wt,
+            baseBranch: state.config.worktrees.baseBranch,
+            comparisonMode: state.config.changes.comparisonMode
+        )
+        state.showDevice(id, in: wt.id)
+    }
+
     /// A VM's state from memory only. `vmDeviceStatus` also reads the VM
     /// registry and bundle on disk, too slow for every sidebar render, so a
     /// paused or stopped VM reads as stopped here and shows no glyph.
@@ -492,13 +509,17 @@ struct SidebarView: View {
     /// `avd:<name>` follows its running emulator; ids that resolve to the
     /// same emulator count once.
     private func ownedDevices(worktreeID: String) -> [WorktreeRowPresentation.OwnedDevice] {
+        // Ownership first: a row that owns nothing never observes the device
+        // panes, so their polls do not redraw it.
+        let ids = state.deviceUseTracker.devices(ownedBy: worktreeID)
+        guard !ids.isEmpty else { return [] }
         let simulators = state.devicePane.devices ?? []
         let bootingSimulators = state.devicePane.bootingUDIDs
         let androids = state.androidPane.devices ?? []
         let bootingAVDs = state.androidPane.bootingAVDs
         var seen: Set<String> = []
         var owned: [WorktreeRowPresentation.OwnedDevice] = []
-        for id in state.deviceUseTracker.devices(ownedBy: worktreeID) {
+        for id in ids {
             if AgentDevice.isSimulatorID(id) {
                 let device = simulators.first { $0.udid == id }
                 let deviceState: WorktreeRowPresentation.ResourceState? =

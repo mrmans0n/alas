@@ -194,15 +194,17 @@ struct WorktreeRowPresentationTests {
         #expect(line?.sessionID == "s")
     }
 
-    @Test func failedShipTitlesTheFirstLineAndKeepsTheWholeMessageInTheTooltip() {
-        let line = WorktreeRowPresentation.shipLine(.failed(sessionID: "s", message: "gg sync failed\nmore"))
-        #expect(line?.title == "Ship failed: gg sync failed")
+    /// The title is the first line, cut at 60 characters; the tooltip keeps the whole message.
+    @Test(arguments: [
+        ("gg sync failed\nmore", "Ship failed: gg sync failed"),
+        ("  \n", "Ship failed"),
+        (String(repeating: "x", count: 80), "Ship failed: " + String(repeating: "x", count: 60) + "…"),
+    ])
+    func failedShipTitlesTheFirstLineAndKeepsTheMessageInTheTooltip(message: String, title: String) {
+        let line = WorktreeRowPresentation.shipLine(.failed(sessionID: "s", message: message))
+        #expect(line?.title == title)
+        #expect(line?.tooltip == message)
         #expect(line?.isFailure == true)
-        #expect(line?.tooltip == "gg sync failed\nmore")
-        #expect(WorktreeRowPresentation.shipLine(.failed(sessionID: "s", message: "  \n"))?.title == "Ship failed")
-        let long = WorktreeRowPresentation.shipLine(.failed(sessionID: "s", message: String(repeating: "x", count: 80)))
-        #expect(long?.title == "Ship failed: " + String(repeating: "x", count: 60) + "…")
-        #expect(WorktreeRowPresentation.shipLine(nil) == nil)
     }
 
     private static let remote = CodeHostRemote(
@@ -249,30 +251,38 @@ struct WorktreeRowPresentationTests {
         #expect(result?.replacesStackChip == false)
     }
 
-    @Test func mergedAndClosedPRShepherdsSayNothing() {
-        #expect(WorktreeRowPresentation.shepherdNote(pr: Self.prRecord(.merged), stack: nil) == nil)
-        #expect(WorktreeRowPresentation.shepherdNote(pr: Self.prRecord(.closed), stack: nil) == nil)
-        #expect(WorktreeRowPresentation.shepherdNote(pr: nil, stack: nil) == nil)
+    @Test(arguments: [
+        (Self.prRecord(.merged), nil),
+        (Self.prRecord(.closed), nil),
+        (nil, Self.stackRecord([.merged, .merged])),
+    ] as [(ShepherdRecord?, StackShepherdRecord?)])
+    func finishedShepherdsSayNothing(pr: ShepherdRecord?, stack: StackShepherdRecord?) {
+        #expect(WorktreeRowPresentation.shepherdNote(pr: pr, stack: stack) == nil)
     }
 
-    @Test func stackShepherdCountsPRsReplacesTheStackChipAndBeatsAPRShepherd() {
-        let stack = Self.stackRecord([.merged, .watching, .watching, .watching])
-        let result = WorktreeRowPresentation.shepherdNote(pr: Self.prRecord(.watching), stack: stack)
-        #expect(result?.number == "4 PRs")
-        #expect(result?.note == "1 merged")
+    @Test(arguments: [
+        ([ShepherdPhase.merged, .watching, .watching, .watching], "4 PRs", "1 merged" as String?, false),
+        ([.watching], "1 PR", nil, false),
+        ([.watching, .fixing(dispatchedAt: Self.savedAt)], "2 PRs", "agent fixing", false),
+        ([.watching, .escalated(.noProgress)], "2 PRs", "need you", true),
+        ([.watching, .paused], "2 PRs", "need you", true),
+    ])
+    func stackShepherdCountsItsPRsAndStandsInForTheStackChip(
+        phases: [ShepherdPhase], number: String, note: String?, isLoud: Bool
+    ) {
+        let result = WorktreeRowPresentation.shepherdNote(pr: nil, stack: Self.stackRecord(phases))
+        #expect(result?.number == number)
+        #expect(result?.note == note)
+        #expect(result?.isLoud == isLoud)
         #expect(result?.replacesStackChip == true)
         #expect(result?.sessionID == "stack-session")
+    }
 
-        let fixing = Self.stackRecord([.watching, .fixing(dispatchedAt: Self.savedAt)])
-        #expect(WorktreeRowPresentation.shepherdNote(pr: nil, stack: fixing)?.note == "agent fixing")
-        let stuck = Self.stackRecord([.watching, .escalated(.noProgress)])
-        #expect(WorktreeRowPresentation.shepherdNote(pr: nil, stack: stuck)?.note == "need you")
-        #expect(WorktreeRowPresentation.shepherdNote(pr: nil, stack: stuck)?.isLoud == true)
-        let paused = WorktreeRowPresentation.shepherdNote(pr: nil, stack: Self.stackRecord([.watching, .paused]))
-        #expect(paused?.note == "need you")
-        #expect(paused?.isLoud == true)
-        #expect(WorktreeRowPresentation.shepherdNote(pr: nil, stack: Self.stackRecord([.watching]))?.number == "1 PR")
-        #expect(WorktreeRowPresentation.shepherdNote(pr: nil, stack: Self.stackRecord([.merged, .merged])) == nil)
+    @Test func stackShepherdBeatsAPRShepherd() {
+        let result = WorktreeRowPresentation.shepherdNote(
+            pr: Self.prRecord(.watching), stack: Self.stackRecord([.watching, .watching])
+        )
+        #expect(result?.sessionID == "stack-session")
     }
 
     /// A linked record's row runs on another machine, so nothing local shows on it.

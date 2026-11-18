@@ -904,7 +904,7 @@ struct WorktreeRowView: View {
         switch kind {
         case .vm: ("display", "goal")
         case .iosSimulator: ("iphone", "sim")
-        case .androidEmulator: ("smartphone", "add")
+        case .androidEmulator: ("candybarphone", "add")
         }
     }
 
