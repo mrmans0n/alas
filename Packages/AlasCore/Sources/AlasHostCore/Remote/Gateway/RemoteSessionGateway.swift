@@ -1495,10 +1495,12 @@ public final class RemoteSessionGateway {
                 text: document.kind == .file ? document.file.map { "Plan file: \($0.path)" } : document.markdown,
                 json: Self.encodeJSON(remote), index: index,
                 isHidden: document.display == nil ? true : nil)
+        // Peers that do not know these kinds show `text`, as they did when it was all that was sent.
         case .questionAnswer(let answer):
-            return .init(stableId: sid, kind: "system", text: answer.displayText, json: nil, index: index)
+            return .init(stableId: sid, kind: "questionAnswer", text: answer.displayText,
+                         json: Self.encodeJSON(answer), index: index)
         case .outcomeCard(let card):
-            return .init(stableId: sid, kind: "system", text: card.text, json: nil, index: index)
+            return .init(stableId: sid, kind: "outcomeCard", text: card.text, json: Self.encodeJSON(card.card), index: index)
         case .visualAid(let visual):
             // Without json the phone falls back to a plain-text row with the title.
             return .init(
