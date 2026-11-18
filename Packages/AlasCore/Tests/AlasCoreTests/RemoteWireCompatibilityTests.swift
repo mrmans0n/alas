@@ -117,7 +117,7 @@ import Testing
     @Test(arguments: StructuredRow.allCases)
     func structuredRowsDecodeOnThePhone(_ row: StructuredRow) throws {
         let wire = RemoteSessionGateway.toWire(try row.message(), index: 0)
-        #expect(wire.kind == row.rawValue)
+        #expect(wire.kind == row.kind)
         #expect(wire.text == row.caption)
         let decoded = RemoteTranscriptRow(message: wire)
         switch (row, decoded) {
@@ -125,6 +125,10 @@ import Testing
             #expect(answer == StructuredRow.answer)
         case (.outcomeCard, .outcomeCard(let card)):
             #expect(ACPPromptCard(card) == StructuredRow.card)
+        case (.reviewOutcomeCard, .outcomeCard(let card)):
+            // The review action names a host path, so it never leaves the host.
+            #expect(!(wire.json ?? "").contains("action"))
+            #expect(card.actionURL == nil)
         case (.failureIncident, .failureIncident(let incident)):
             #expect(ACPFailureIncident(record: .init(remote: incident), endedTurn: incident.endedTurn)
                 == (try StructuredRow.incident()).strippingActions())
@@ -140,7 +144,9 @@ import Testing
     }
 
     enum StructuredRow: String, CaseIterable, Sendable {
-        case questionAnswer, outcomeCard, failureIncident
+        case questionAnswer, outcomeCard, reviewOutcomeCard, failureIncident
+
+        var kind: String { self == .reviewOutcomeCard ? "outcomeCard" : rawValue }
 
         static let answer = ACPAnsweredQuestion(
             id: UUID(), title: "Rollout", message: "Choose the rollout", outcome: .answered,
@@ -160,6 +166,11 @@ import Testing
             switch self {
             case .questionAnswer: .questionAnswer(Self.answer)
             case .outcomeCard: .outcomeCard(ACPOutcomeCard(card: Self.card, text: "PR #1 merged"))
+            case .reviewOutcomeCard:
+                .outcomeCard(ACPOutcomeCard(card: ACPPromptCard(
+                    origin: .queued, title: "Review queued", action: .reviewSession(.localChanges(
+                        worktreeID: "w", repositoryPath: URL(fileURLWithPath: "/host/repo"), scope: .all))),
+                text: "PR #1 merged"))
             case .failureIncident: .failureIncident(id: UUID(), try Self.incident())
             }
         }
@@ -167,7 +178,7 @@ import Testing
         var caption: String {
             switch self {
             case .questionAnswer: Self.answer.displayText
-            case .outcomeCard: "PR #1 merged"
+            case .outcomeCard, .reviewOutcomeCard: "PR #1 merged"
             case .failureIncident: "Slow down\n\nRate limited"
             }
         }

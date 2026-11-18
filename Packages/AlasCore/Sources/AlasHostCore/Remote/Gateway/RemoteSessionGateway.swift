@@ -1499,8 +1499,11 @@ public final class RemoteSessionGateway {
         case .questionAnswer(let answer):
             return .init(stableId: sid, kind: "questionAnswer", text: answer.displayText,
                          json: Self.encodeJSON(answer), index: index)
-        case .outcomeCard(let card):
-            return .init(stableId: sid, kind: "outcomeCard", text: card.text, json: Self.encodeJSON(card.card), index: index)
+        case .outcomeCard(let outcome):
+            // Peers can only open a link; other actions would carry host paths.
+            var card = outcome.card
+            if case .url = card.action {} else { card.action = nil }
+            return .init(stableId: sid, kind: "outcomeCard", text: outcome.text, json: Self.encodeJSON(card), index: index)
         case .visualAid(let visual):
             // Without json the phone falls back to a plain-text row with the title.
             return .init(
