@@ -44,6 +44,7 @@
 		90AE44675FE782B711960528 /* RequestCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06499964301D8FB5B30EB8B6 /* RequestCard.swift */; };
 		914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */; };
 		99BA0157FACF4F34F7E0E7F6 /* VisualAidWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67165C95A555833F59448D9E /* VisualAidWebView.swift */; };
+		9B0220416CC04BD52F1BB061 /* TranscriptCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A2CDBA4D181E23A6A5D5C87 /* TranscriptCards.swift */; };
 		9F9F8216D33B10E44F37D81E /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E48FA0BE7E008A99E5968A8 /* NotificationService.swift */; };
 		A14327552D08819581097496 /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E84291A6AA43082A7F684D /* HostStore.swift */; };
 		A3EFBAAFB1F782DBE2533C3F /* TranscriptImageViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC6BBF70EB1F96D5AC5A8594 /* TranscriptImageViewer.swift */; };
@@ -133,6 +134,7 @@
 		7728D27BA09D4A7193ABB64C /* TranscriptImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptImage.swift; sourceTree = "<group>"; };
 		7BD5988CE50A901089331310 /* ToolCallCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallCard.swift; sourceTree = "<group>"; };
 		836FA1B810A2D04B52F5C3BD /* QueueTray.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueueTray.swift; sourceTree = "<group>"; };
+		8A2CDBA4D181E23A6A5D5C87 /* TranscriptCards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptCards.swift; sourceTree = "<group>"; };
 		8AD039065974B934F0D88642 /* FrameMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameMeter.swift; sourceTree = "<group>"; };
 		92A428980D278E5A5E20E827 /* DiffHunksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffHunksView.swift; sourceTree = "<group>"; };
 		987B94F79FFA056339E54033 /* TerminalsList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalsList.swift; sourceTree = "<group>"; };
@@ -341,6 +343,7 @@
 				F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */,
 				7BD5988CE50A901089331310 /* ToolCallCard.swift */,
 				14C04ACB163ACCFBE2BBD194 /* ToolCallGroupRow.swift */,
+				8A2CDBA4D181E23A6A5D5C87 /* TranscriptCards.swift */,
 				1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */,
 				7728D27BA09D4A7193ABB64C /* TranscriptImage.swift */,
 				BC6BBF70EB1F96D5AC5A8594 /* TranscriptImageViewer.swift */,
@@ -599,6 +602,7 @@
 				D8B8FBA1F9B4014A6DFF2679 /* TerminalsList.swift in Sources */,
 				2E36A2487A0056C7F35094FE /* ToolCallCard.swift in Sources */,
 				355DF88ED367BFDE2D26FA63 /* ToolCallGroupRow.swift in Sources */,
+				9B0220416CC04BD52F1BB061 /* TranscriptCards.swift in Sources */,
 				2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */,
 				CD0D017197AAB3BF52A44D12 /* TranscriptImage.swift in Sources */,
 				A3EFBAAFB1F782DBE2533C3F /* TranscriptImageViewer.swift in Sources */,
