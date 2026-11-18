@@ -22,6 +22,10 @@ on:
         description: "Also send the build to the external TestFlight groups"
         default: false
         type: boolean
+      release:
+        description: "Use versioned release notes and the canonical GitHub Release URL"
+        default: false
+        type: boolean
       submit_build:
         description: "Skip building; submit this uploaded build number for App Store review (version read from Mobile/project.yml at ref)"
         default: ""
@@ -33,6 +37,9 @@ on:
         type: string
       external:
         default: true
+        type: boolean
+      release:
+        default: false
         type: boolean
 
 permissions:
@@ -55,6 +62,23 @@ jobs:
           ruby-version: "4.0"
           bundler-cache: true
           working-directory: Mobile
+
+      - name: Prepare TestFlight What to Test
+        if: inputs.submit_build == ''
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE: ${{ inputs.release }}
+        run: |
+          if [[ "$RELEASE" == "true" ]]; then
+            version="${RELEASE_REF#v}"; release_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$RELEASE_REF"
+          else
+            version="manual"; release_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$RELEASE_REF"
+          fi
+          ruby scripts/testflight-notes.rb \
+            --version "$version" \
+            --release-url "$release_url" \
+            > "$RUNNER_TEMP/testflight-notes.txt"
+          cat "$RUNNER_TEMP/testflight-notes.txt"
 
       - name: Write the App Store Connect key
         env:
@@ -106,8 +130,10 @@ jobs:
         env:
           IPA: ${{ steps.build.outputs.ipa }}
           TESTFLIGHT_GROUPS: ${{ inputs.external && vars.IOS_TESTFLIGHT_GROUPS || '' }}
-          CHANGELOG: "Alas ${{ inputs.ref }} (${{ github.server_url }}/${{ github.repository }}/tree/${{ inputs.ref }})"
-        run: bundle exec fastlane beta ipa:"$IPA" groups:"$TESTFLIGHT_GROUPS" changelog:"$CHANGELOG"
+          CHANGELOG_FILE: ${{ runner.temp }}/testflight-notes.txt
+        run: |
+          test -s "$CHANGELOG_FILE"
+          bundle exec fastlane beta ipa:"$IPA" groups:"$TESTFLIGHT_GROUPS" changelog_file:"$CHANGELOG_FILE"
 
       - name: Cleanup signing keychain
         if: always()
