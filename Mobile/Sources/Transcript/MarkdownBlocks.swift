@@ -84,19 +84,26 @@ enum MarkdownBlock: Equatable {
             } else {
                 .bullet
             }
+            // Children keep source order: text so far becomes the item's entry when a nested list
+            // starts, and text after it continues at this depth under a blank marker.
             var text = AttributedString()
-            var nested: [ListEntry] = []
+            var emitted = false
+            func flush() {
+                out.append(ListEntry(depth: depth, marker: emitted ? .continuation(marker) : marker, text: text))
+                emitted = true
+                text = AttributedString()
+            }
             for child in item.children {
                 if let sublist = child as? ListItemContainer {
-                    nested += entries(sublist, depth: depth + 1, lines: lines)
+                    if !emitted || !text.characters.isEmpty { flush() }
+                    out += entries(sublist, depth: depth + 1, lines: lines)
                 } else {
                     let piece = part(child)
                     if !piece.characters.isEmpty, !text.characters.isEmpty { text += AttributedString("\n") }
                     text += piece
                 }
             }
-            out.append(ListEntry(depth: depth, marker: marker, text: text))
-            out += nested
+            if !emitted || !text.characters.isEmpty { flush() }
         }
         return out
     }
@@ -164,11 +171,13 @@ enum MarkdownBlock: Equatable {
 }
 
 struct ListEntry: Equatable {
-    enum Marker: Equatable {
+    indirect enum Marker: Equatable {
         case bullet
         /// As written, delimiter included: "3." or "1)".
         case number(String)
         case task(checked: Bool)
+        /// Text after a nested list: no marker of its own, but the width of the item's `marker`.
+        case continuation(Marker)
     }
 
     let depth: Int

@@ -23,7 +23,7 @@ struct MermaidBlockView: View {
         let outcome = landed?.key == key ? landed?.outcome : MermaidRenderer.cached(key)
         content(outcome)
             .task(id: key) {
-                guard outcome == nil else { return }
+                // A cache hit lands too, so a later cache reset cannot take the diagram back to a spinner.
                 let rendered = await MermaidRenderer.render(key)
                 if !Task.isCancelled { landed = (key, rendered) }
             }
