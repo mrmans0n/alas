@@ -38,46 +38,73 @@ public struct CommitMessage: Sendable {
 
     public static func split(_ body: String) -> Self {
         let lines = body.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard let trailerRange = trailingTrailerRange(in: lines) else {
-            return Self(
-                body: body.trimmingCharacters(in: .whitespacesAndNewlines),
-                protectedTrailers: []
-            )
-        }
+        let trailerRange = trailingTrailerRange(in: lines)
 
-        var protectedTrailers: [ProtectedCommitTrailer] = []
+        var blockTrailers: [ProtectedCommitTrailer] = []
         var protectedLineIndices: Set<Int> = []
         var precedingTrailerLines = 0
-        var index = trailerRange.lowerBound
+        if let trailerRange {
+            var index = trailerRange.lowerBound
+            while index < trailerRange.upperBound {
+                var trailerEnd = index + 1
+                while trailerEnd < trailerRange.upperBound,
+                      isTrailerContinuation(lines[trailerEnd]),
+                      !isProtectedTrailerLine(lines[trailerEnd]) {
+                    trailerEnd += 1
+                }
 
-        while index < trailerRange.upperBound {
-            var trailerEnd = index + 1
-            while trailerEnd < trailerRange.upperBound,
-                  isTrailerContinuation(lines[trailerEnd]),
-                  !isProtectedTrailerLine(lines[trailerEnd]) {
-                trailerEnd += 1
+                if let trailer = protectedTrailer(
+                    in: lines[index],
+                    rawLines: Array(lines[index..<trailerEnd]),
+                    precedingTrailerLines: precedingTrailerLines
+                ) {
+                    blockTrailers.append(trailer)
+                    protectedLineIndices.formUnion(index..<trailerEnd)
+                } else {
+                    precedingTrailerLines += trailerEnd - index
+                }
+                index = trailerEnd
             }
-
-            if let trailer = protectedTrailer(
-                in: lines[index],
-                rawLines: Array(lines[index..<trailerEnd]),
-                precedingTrailerLines: precedingTrailerLines
-            ) {
-                protectedTrailers.append(trailer)
-                protectedLineIndices.formUnion(index..<trailerEnd)
-            } else {
-                precedingTrailerLines += trailerEnd - index
-            }
-            index = trailerEnd
         }
 
-        let editableLines = lines.enumerated().compactMap { index, line in
-            protectedLineIndices.contains(index) ? nil : line
+        // gg appends each trailer as its own paragraph, so a GG-ID often sits
+        // outside the terminal trailer block. Protect every GG trailer that
+        // `compose` would strip from the body, keeping message order.
+        var leadingTrailers: [ProtectedCommitTrailer] = []
+        var followingTrailers: [ProtectedCommitTrailer] = []
+        for range in protectedTrailerLineRanges(in: lines) where !protectedLineIndices.contains(range.lowerBound) {
+            let isLeading = range.lowerBound < (trailerRange?.lowerBound ?? lines.count)
+            guard let trailer = protectedTrailer(
+                in: lines[range.lowerBound],
+                rawLines: Array(lines[range]),
+                precedingTrailerLines: isLeading ? 0 : precedingTrailerLines
+            ) else { continue }
+            if isLeading {
+                leadingTrailers.append(trailer)
+            } else {
+                followingTrailers.append(trailer)
+            }
+            protectedLineIndices.formUnion(range)
+        }
+
+        // Drop the blank line a removed trailer paragraph would leave doubled.
+        var editableLines: [String] = []
+        var removedSinceLastKept = false
+        for (index, line) in lines.enumerated() {
+            if protectedLineIndices.contains(index) {
+                removedSinceLastKept = true
+                continue
+            }
+            if removedSinceLastKept, isBlank(line), editableLines.last.map(isBlank) ?? true {
+                continue
+            }
+            removedSinceLastKept = false
+            editableLines.append(line)
         }
         return Self(
             body: editableLines.joined(separator: "\n")
                 .trimmingCharacters(in: .whitespacesAndNewlines),
-            protectedTrailers: protectedTrailers
+            protectedTrailers: leadingTrailers + blockTrailers + followingTrailers
         )
     }
 
@@ -86,14 +113,10 @@ public struct CommitMessage: Sendable {
             return body.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        let bodyWithoutTerminalTrailers = split(body).body
-        var editableLines = removingShadowingProtectedTrailers(
-            from: bodyWithoutTerminalTrailers
-                .split(separator: "\n", omittingEmptySubsequences: false)
-                .map(String.init)
-        )
-        let editableBody = editableLines.joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let editableBody = split(body).body
+        var editableLines = editableBody
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
         guard let trailerRange = trailingTrailerRange(in: editableLines) else {
             let trailers = protectedTrailers
                 .flatMap(\.rawLines)
@@ -162,35 +185,45 @@ public struct CommitMessage: Sendable {
         isTrailerLine(line) || isCherryPickAnnotation(line) || isTrailerContinuation(line)
     }
 
+    private static func isBlank(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
     private static func isPatchDivider(_ line: String) -> Bool {
         line == "---" || line.hasPrefix("--- ")
     }
 
-    private static func removingShadowingProtectedTrailers(from lines: [String]) -> [String] {
+    /// `GG-ID`/`GG-Parent` lines outside fenced code, each with its continuation lines.
+    private static func protectedTrailerLineRanges(in lines: [String]) -> [Range<Int>] {
+        var ranges: [Range<Int>] = []
         var fencedCodeMarker: (marker: Character, length: Int)?
-        var isRemovingShadowTrailer = false
-        return lines.filter { line in
-            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-            if let marker = codeFence(in: trimmedLine) {
+        var index = 0
+        while index < lines.count {
+            if let marker = codeFence(in: lines[index].trimmingCharacters(in: .whitespaces)) {
                 if fencedCodeMarker == nil {
                     fencedCodeMarker = marker
                 } else if fencedCodeMarker?.marker == marker.marker,
                           marker.length >= fencedCodeMarker?.length ?? 0 {
                     fencedCodeMarker = nil
                 }
-                return true
+                index += 1
+                continue
             }
-            guard fencedCodeMarker == nil else { return true }
-            if isProtectedTrailerLine(line) {
-                isRemovingShadowTrailer = true
-                return false
+            guard fencedCodeMarker == nil, isProtectedTrailerLine(lines[index]) else {
+                index += 1
+                continue
             }
-            if isRemovingShadowTrailer, isTrailerContinuation(line) {
-                return false
+            var end = index + 1
+            while end < lines.count,
+                  isTrailerContinuation(lines[end]),
+                  !isProtectedTrailerLine(lines[end]),
+                  codeFence(in: lines[end].trimmingCharacters(in: .whitespaces)) == nil {
+                end += 1
             }
-            isRemovingShadowTrailer = false
-            return true
+            ranges.append(index..<end)
+            index = end
         }
+        return ranges
     }
 
     private static func codeFence(in line: String) -> (marker: Character, length: Int)? {
