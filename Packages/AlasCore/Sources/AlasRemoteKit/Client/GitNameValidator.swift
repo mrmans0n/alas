@@ -1,6 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
 
 /// Validates git branch names and worktree names to prevent invalid refs
 /// and filesystem-unsafe paths before shelling out to git.

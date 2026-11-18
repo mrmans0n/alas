@@ -35,10 +35,13 @@ private let logger = Logger(subsystem: "io.nlopez.alas", category: "RemoteCreati
     /// What the client says about the worktree-create hook; nil from
     /// clients that cannot ask their user.
     public var repoHook: RepoHookConsent?
+    /// Omitted by clients that always use the host's naming rule.
+    public var useBranchNaming: Bool?
 
     public init(
         projectID: String, base: String, branch: String, agentID: String,
-        modelID: String? = nil, effortID: String? = nil, repoHook: RepoHookConsent? = nil
+        modelID: String? = nil, effortID: String? = nil, repoHook: RepoHookConsent? = nil,
+        useBranchNaming: Bool? = nil
     ) {
         self.projectID = projectID
         self.base = base
@@ -47,6 +50,7 @@ private let logger = Logger(subsystem: "io.nlopez.alas", category: "RemoteCreati
         self.modelID = modelID
         self.effortID = effortID
         self.repoHook = repoHook
+        self.useBranchNaming = useBranchNaming
     }
 }
 
@@ -101,13 +105,8 @@ extension AlasHost {
         guard core.environment.admitsAgent(request.agentID, remoteHost: project.host) else { return refused() }
         // Clients send the typed name; the branch follows this Mac's naming
         // settings, as it does in its own New Worktree dialog.
-        let worktreeSettings = core.environment.configuration().worktrees
-        let branch = WorktreeBranchName.compose(
-            name: request.branch,
-            prefix: worktreeSettings.branchPrefix,
-            globalTemplate: worktreeSettings.branchTemplate,
-            projectTemplate: project.worktreeBranchTemplate
-        )
+        let naming = AlasCoreContext.remoteBranchNaming(for: project, settings: core.environment.configuration().worktrees)
+        let branch = naming.compose(name: request.branch, enabled: request.useBranchNaming != false)
         guard case .valid = GitNameValidator.validateBranchName(branch) else { return refused() }
         let branches: [String]
         do {

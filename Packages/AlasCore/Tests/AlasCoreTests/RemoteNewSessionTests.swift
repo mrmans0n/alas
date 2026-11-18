@@ -1,7 +1,36 @@
 import AlasRemoteKit
+import Foundation
 import Testing
 
 struct RemoteNewSessionTests {
+    @Test func projectNamingDistinguishesOlderHostsFromAnEmptyPrefix() throws {
+        let oldProject = Data(#"{"id":"p","name":"alas"}"#.utf8)
+        let currentProject = Data(#"{"id":"p","name":"alas","branchNaming":{"prefix":""}}"#.utf8)
+        let decoder = JSONDecoder()
+        #expect(try decoder.decode(RemoteProjectOption.self, from: oldProject).branchNaming == nil)
+        let naming = try #require(decoder.decode(RemoteProjectOption.self, from: currentProject).branchNaming)
+        #expect(naming.compose(name: "mobile-picker") == "mobile-picker")
+    }
+
+    @Test func projectTemplateTakesPrecedenceAndCanBeTurnedOff() {
+        let naming = RemoteWorktreeBranchNaming(prefix: "feature/", template: "mobile/{name}")
+        #expect(naming.compose(name: "Fix Picker") == "mobile/fix-picker")
+        #expect(naming.compose(name: "Fix-Picker", enabled: false) == "Fix-Picker")
+    }
+
+    @Test func turningOffHostNamingSurvivesTheCreateRequestWireFormat() throws {
+        typealias Message = RemoteClientMessageOf<OpaqueHostMessage, OpaqueHostMessage>
+        let request = Message.createWorktreeSession(
+            projectId: "p", base: "main", branch: "b", agentId: "a", useBranchNaming: false)
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let encoded = try encoder.encode(request)
+        #expect(try decoder.decode(Message.self, from: encoded) == request)
+        let legacy = Data(#"{"type":"createWorktreeSession","projectId":"p","base":"main","branch":"b","agentId":"a"}"#.utf8)
+        #expect(try decoder.decode(Message.self, from: legacy) == .createWorktreeSession(
+            projectId: "p", base: "main", branch: "b", agentId: "a"))
+    }
+
     @Test(arguments: [
         ("feature/x", true), ("a.b", true),
         ("", false), ("a b", false), ("/a", false), ("a/", false), ("a//b", false),

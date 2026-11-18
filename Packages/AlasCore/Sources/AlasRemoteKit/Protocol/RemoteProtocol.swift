@@ -330,7 +330,7 @@ public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, Se
     case listBranches(projectId: String)
     case createWorktreeSession(
         projectId: String, base: String, branch: String, agentId: String,
-        modelId: String? = nil, effortId: String? = nil, repoHook: RepoHookConsent? = nil)
+        modelId: String? = nil, effortId: String? = nil, repoHook: RepoHookConsent? = nil, useBranchNaming: Bool? = nil)
     case createSession(worktreeId: String, agentId: String, modelId: String? = nil, effortId: String? = nil)
     case subscribe(sessionId: String)
     case unsubscribe(sessionId: String)
@@ -416,7 +416,7 @@ public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, Se
 }
 
 extension RemoteClientMessageOf: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, capabilities, sha, visualId, selectedOptionIds, note, console, portForward, host, peerHost, repoHook, relayURL, relayToken, pushKinds, terminalId }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, capabilities, sha, visualId, selectedOptionIds, note, console, portForward, host, peerHost, repoHook, useBranchNaming, relayURL, relayToken, pushKinds, terminalId }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -440,7 +440,8 @@ extension RemoteClientMessageOf: Codable {
                 agentId: try c.decode(String.self, forKey: .agentId),
                 modelId: try c.decodeIfPresent(String.self, forKey: .modelId),
                 effortId: try c.decodeIfPresent(String.self, forKey: .effortId),
-                repoHook: try c.decodeIfPresent(RepoHookConsent.self, forKey: .repoHook))
+                repoHook: try c.decodeIfPresent(RepoHookConsent.self, forKey: .repoHook),
+                useBranchNaming: try c.decodeIfPresent(Bool.self, forKey: .useBranchNaming))
         case "createSession":
             self = .createSession(
                 worktreeId: try c.decode(String.self, forKey: .worktreeId),
@@ -632,7 +633,7 @@ extension RemoteClientMessageOf: Codable {
         case .listBranches(let projectId):
             try c.encode("listBranches", forKey: .type)
             try c.encode(projectId, forKey: .projectId)
-        case .createWorktreeSession(let projectId, let base, let branch, let agentId, let modelId, let effortId, let repoHook):
+        case .createWorktreeSession(let projectId, let base, let branch, let agentId, let modelId, let effortId, let repoHook, let useBranchNaming):
             try c.encode("createWorktreeSession", forKey: .type)
             try c.encode(projectId, forKey: .projectId)
             try c.encode(base, forKey: .base)
@@ -641,6 +642,7 @@ extension RemoteClientMessageOf: Codable {
             try c.encodeIfPresent(modelId, forKey: .modelId)
             try c.encodeIfPresent(effortId, forKey: .effortId)
             try c.encodeIfPresent(repoHook, forKey: .repoHook)
+            try c.encodeIfPresent(useBranchNaming, forKey: .useBranchNaming)
         case .createSession(let worktreeId, let agentId, let modelId, let effortId):
             try c.encode("createSession", forKey: .type)
             try c.encode(worktreeId, forKey: .worktreeId)
