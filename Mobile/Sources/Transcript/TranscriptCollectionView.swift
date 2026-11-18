@@ -31,17 +31,19 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> TranscriptCollectionController {
-        TranscriptCollectionController(input: input)
+        TranscriptCollectionController(input: input(context))
     }
 
     func updateUIViewController(_ controller: TranscriptCollectionController, context: Context) {
-        controller.input = input
+        controller.input = input(context)
         controller.sync()
     }
 
-    private var input: TranscriptCollectionController.Input {
+    /// Hosted cells do not inherit this view's environment, so its link handler is handed to them.
+    private func input(_ context: Context) -> TranscriptCollectionController.Input {
         .init(items: items, expanded: $expanded, canLoadOlder: canLoadOlder, loadOlder: loadOlder,
-              image: image, session: session, sendCount: sendCount, onFirstLayout: onFirstLayout)
+              image: image, session: session, sendCount: sendCount, onFirstLayout: onFirstLayout,
+              openURL: context.environment.openURL)
     }
 }
 
@@ -55,6 +57,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         var session: TranscriptSession?
         var sendCount: Int
         var onFirstLayout: () -> Void
+        var openURL: OpenURLAction
     }
 
     /// The latest values from SwiftUI; `sync()` brings the collection view in line with them.
@@ -113,6 +116,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
                                       input.expanded.wrappedValue.formSymmetricDifference([Self.key(id, part: $0)])
                                       sync()
                                   })
+                                  .environment(\.openURL, input.openURL)
             }
             .margins(.all, 0)
         }

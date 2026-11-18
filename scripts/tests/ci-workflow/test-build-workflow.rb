@@ -79,9 +79,20 @@ raise "AlasCore dependency resolution must use the bounded acquisition retry hel
     "scripts/retry-ci-acquisition.sh swift package resolve --package-path Packages/AlasCore --disable-automatic-resolution --skip-update"
 core_test = builder_steps.find { |step| step["name"] == "Test AlasCore" }
 raise "AlasCore tests must run once, under the stall watchdog, without implicit dependency resolution" unless
+  core_test&.fetch("id", "") == "alas-core-tests" &&
   core_test&.fetch("run", "") ==
-    "scripts/run-with-stall-watchdog.sh 600 swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update" &&
+    "scripts/run-with-stall-watchdog.sh 600 --buffer-output --log-file \"$RUNNER_TEMP/alas-core-tests.log\" swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update" &&
   builder_steps.count { |step| step.fetch("run", "").include?("swift test --package-path Packages/AlasCore") } == 1
+core_log_upload = builder_steps.find { |step| step["name"] == "Upload AlasCore failure log" }
+raise "AlasCore failures must retain their complete buffered log" unless
+  core_log_upload&.fetch("if", "") == "${{ failure() && steps.alas-core-tests.outcome == 'failure' }}" &&
+  core_log_upload&.fetch("uses", "") == "actions/upload-artifact@v7" &&
+  core_log_upload&.dig("with", "name") == "alas-core-test-log-${{ github.run_attempt }}" &&
+  core_log_upload&.dig("with", "path") == "${{ runner.temp }}/alas-core-tests.log" &&
+  core_log_upload&.dig("with", "if-no-files-found") == "error"
+raise "build-test must exercise the stall watchdog output harness" unless builder_steps.any? do |step|
+  step["name"] == "Test stall watchdog harness" && step["run"] == "bash scripts/tests/stall-watchdog/run.sh"
+end
 raise "test plan must assign four shards" unless builder_steps.any? do |step|
   step["run"] == "python3 scripts/ci_swift_tests.py plan --shard-count 4"
 end

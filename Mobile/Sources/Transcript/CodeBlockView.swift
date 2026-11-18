@@ -50,7 +50,7 @@ struct CodeBlockView: View {
 
 /// The Mac's theme colours, read from its bundled theme files, so code reads the same on both.
 struct ThemeTokens {
-    private let colors: [String: Color]
+    let colors: [String: Color]
 
     static let light = ThemeTokens(resource: "light")
     static let dark = ThemeTokens(resource: "cool-slate")

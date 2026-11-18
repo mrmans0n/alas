@@ -83,10 +83,23 @@ final class AndroidScreenSession {
         }
     }
 
-    /// The device's clipboard, after it copies its selection when `copy`; nil after 2 s.
+    /// The device's text clipboard. scrcpy sends no reply when Android has no
+    /// text clipboard, so a timeout from a still-running session means empty.
     func copyClipboard(copy: Bool) async -> String? {
         guard controlSocket != nil else { return nil }
-        return await clipboard.request(timeout: .seconds(2)) { send(ScrcpyControl.getClipboard(copy: copy)) }
+        let reply = await clipboard.request(timeout: .seconds(2)) { send(ScrcpyControl.getClipboard(copy: copy)) }
+        return Self.resolveClipboardReply(reply, stopped: stopped)
+    }
+
+    static func resolveClipboardReply(_ reply: LatestReplyOutcome<String>, stopped: Bool) -> String? {
+        switch reply {
+        case .value(let text):
+            text
+        case .timedOut:
+            stopped ? nil : ""
+        case .replaced, .cancelled:
+            nil
+        }
     }
 
     private func launchServer(scid: String) throws -> Process {

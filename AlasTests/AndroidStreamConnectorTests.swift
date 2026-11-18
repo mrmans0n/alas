@@ -106,13 +106,32 @@ struct AndroidRecordingAndClipboardTests {
         async let first = reply.request(timeout: .seconds(2)) {}
         try await eventually("first timer", within: .seconds(5)) { timers.count == 1 }
         reply.deliver("one")
-        #expect(await first == "one")
+        #expect((await first).value == "one")
         async let second = reply.request(timeout: .seconds(2)) {}
         try await eventually("second timer", within: .seconds(5)) { timers.count == 2 }
         timers[0].resume() // The first request's timeout fires late.
         reply.deliver("two")
-        #expect(await second == "two")
+        #expect((await second).value == "two")
         timers[1].resume()
+    }
+
+    @Test func aNewClipboardRequestDoesNotTurnTheReplacedOneIntoEmptyText() async throws {
+        var timers: [CheckedContinuation<Void, Never>] = []
+        let reply = LatestReply<String> { _ in await withCheckedContinuation { timers.append($0) } }
+        async let first = reply.request(timeout: .seconds(2)) {}
+        try await eventually("first timer", within: .seconds(5)) { timers.count == 1 }
+        async let second = reply.request(timeout: .seconds(2)) {}
+        try await eventually("second timer", within: .seconds(5)) { timers.count == 2 }
+        #expect(AndroidScreenSession.resolveClipboardReply(await first, stopped: false) == nil)
+        reply.deliver("new")
+        #expect((await second).value == "new")
+        timers.forEach { $0.resume() }
+    }
+
+    @Test func anEmptyClipboardIsNotAConnectionFailure() {
+        #expect(AndroidScreenSession.resolveClipboardReply(.timedOut, stopped: false) == "")
+        #expect(AndroidScreenSession.resolveClipboardReply(.timedOut, stopped: true) == nil)
+        #expect(AndroidScreenSession.resolveClipboardReply(.value("text"), stopped: false) == "text")
     }
 }
 

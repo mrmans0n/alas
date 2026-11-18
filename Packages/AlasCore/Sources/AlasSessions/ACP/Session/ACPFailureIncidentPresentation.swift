@@ -99,22 +99,11 @@ public struct ACPFailureIncidentPresentation: Equatable, Sendable {
         return Self(
             title: record.title,
             details: record.details,
-            categoryLabel: categoryLabel(record.knownCategory),
-            severityLabel: isError ? "Error" : "Warning",
+            categoryLabel: record.knownCategory.label,
+            severityLabel: record.severity.label,
             tone: isError ? .error : (isActiveRetry ? .warningActive : .muted),
             actions: ACPFailureActionPolicy.visibleActions(rawActions: record.actions, context: context)
         )
-    }
-
-    private static func categoryLabel(_ category: ACPSessionFailureRecord.Category) -> String {
-        switch category {
-        case .connection: "Connection"
-        case .access: "Access"
-        case .limit: "Limit"
-        case .request: "Request"
-        case .service: "Service"
-        case .unknown: "Other"
-        }
     }
 }
 
