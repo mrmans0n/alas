@@ -733,6 +733,8 @@ final class AppState {
     @ObservationIgnored
     let simulatorStreams = SimulatorStreamClient()
     let androidPane = AndroidPaneModel()
+    /// Which worktree last used each simulator or emulator, for the sidebar.
+    let deviceUseTracker = DeviceUseTracker()
     /// Android screens, through scrcpy; the SDK comes from `androidPane`.
     @ObservationIgnored lazy var androidStreams = AndroidStreamClient { [weak self] in self?.androidPane.control }
     /// Runs agents' `device_*` calls and tracks who drives each device.

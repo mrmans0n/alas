@@ -310,7 +310,15 @@ struct RightPaneView: View {
     private func devicesSwitcher(rps: RightPaneState) -> some View {
         DevicesSwitcher(
             state: state.devicesTabState(worktree: worktree, selection: rps.devicesSelection),
-            onSelect: { rps.devicesSelection = $0 },
+            onSelect: {
+                rps.devicesSelection = $0
+                switch $0 {
+                case .simulator(let id), .android(let id):
+                    state.deviceUseTracker.noteUse(deviceID: id, worktreeID: worktree.id)
+                default:
+                    break
+                }
+            },
             onBoot: { target in
                 switch target {
                 case .simulator(let udid):

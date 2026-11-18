@@ -20,6 +20,7 @@ extension AppState {
             inAppNotifications.post("No iOS simulator to open \(appName) on", severity: .error, worktreeID: worktree.id)
             return
         }
+        deviceUseTracker.noteUse(deviceID: device.udid, worktreeID: worktree.id)
         if let pane {
             pane.devicesSelection = .simulator(device.udid)
             pane.activeTab = .device
