@@ -252,6 +252,17 @@ extension SessionsAPI {
         return await manager.reloadFullToolCallContent(sessionId: sessionID, toolCallId: toolCallID)
     }
 
+    /// Up to 8 KiB of the ANSI-stripped output of a tool call's terminal in
+    /// the loaded session, and its exit status once it has one; nil when the
+    /// session no longer has the terminal.
+    public func toolTerminalTail(_ sessionID: String, terminalID: String) -> ACPTerminalOutputResult? {
+        guard let terminal = (try? liveManager(for: sessionID))?.liveSession(for: sessionID)?.terminalHost.terminal(id: terminalID) else {
+            return nil
+        }
+        let snapshot = terminal.snapshot(byteLimit: 8192)
+        return ACPTerminalOutputResult(output: snapshot.text, truncated: snapshot.truncated, exitStatus: terminal.exitStatus)
+    }
+
     /// Adds `visual` to the transcript of session `sessionID`, which this
     /// instance must drive.
     public func showVisualAid(_ visual: ACPVisualAid, in sessionID: String, caller: HostCaller) async throws {

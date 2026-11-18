@@ -499,6 +499,28 @@ struct HostSessionsTests {
         Issue.record("Missing prompt rejection")
     }
 
+    /// A peer reads a tool terminal's ANSI-stripped tail and exit status, and
+    /// hears that a terminal the host no longer has is not retained.
+    @Test(.timeLimit(.minutes(5))) func aPeerReadsAToolTerminalsTail() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.host.sessions.create(.worktree(fixture.ref), agentID: "codex", caller: .app).id
+        let live = try #require(fixture.core.sessionManagers.values.compactMap { $0.liveSession(for: id) }.first)
+        live.terminalHost.appendMetadataOutput(terminalId: "t1", data: Data("\u{1B}[31mfailed\u{1B}[0m\n".utf8), replace: false)
+        live.terminalHost.recordMetadataExit(terminalId: "t1", exitStatus: ACPTerminalExitStatus(exitCode: 2, signal: nil))
+        var replies: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(host: fixture.host) { replies.append($0) }
+        defer { gateway.close() }
+
+        await gateway.handle(.readToolTerminal(sessionId: id, terminalId: "t1"))
+        await gateway.handle(.readToolTerminal(sessionId: id, terminalId: "gone"))
+
+        #expect(replies == [
+            .toolTerminal(sessionId: id, terminalId: "t1", text: "failed\n", truncated: false, exitCode: 2, signal: nil, retained: true),
+            .toolTerminal(sessionId: id, terminalId: "gone", text: "", truncated: false, exitCode: nil, signal: nil, retained: false),
+        ])
+    }
+
     @Test(arguments: [
         (ACPSession.AgentState.ready, ACPSession.SetupState.ready, nil, nil),
         (.spawning, .checking, nil, nil),

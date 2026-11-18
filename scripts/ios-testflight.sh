@@ -6,14 +6,23 @@
 # and either an Apple ID signed in to Xcode (Settings > Accounts) or an App
 # Store Connect API key in ASC_KEY_PATH, ASC_KEY_ID and ASC_ISSUER_ID.
 #
-# Usage: scripts/ios-testflight.sh [--no-upload]
+# Usage: scripts/ios-testflight.sh [--no-upload] [--nightly]
 # --no-upload exports the .ipa to .build/ios-testflight/<build>/export instead;
 # CI uploads that with fastlane (Mobile/fastlane/Fastfile).
+# --nightly builds the next patch version, so nightlies stay uploadable after
+# the version in Mobile/project.yml is approved.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 upload=1
-[[ "${1:-}" == "--no-upload" ]] && upload=0
+nightly=0
+for arg in "$@"; do
+  case $arg in
+    --no-upload) upload=0 ;;
+    --nightly) nightly=1 ;;
+    *) echo "Usage: $0 [--no-upload] [--nightly]" >&2; exit 64 ;;
+  esac
+done
 
 team=${DEVELOPMENT_TEAM:-$(sed -n 's/^DEVELOPMENT_TEAM *= *//p' Config/AlasMobile-Local.xcconfig 2>/dev/null | tr -d '[:space:]')}
 if [[ -z "$team" || "$team" == YOURTEAMID ]]; then
@@ -31,11 +40,18 @@ build=$(date -u +%Y%m%d%H%M)
 out=.build/ios-testflight/$build
 mkdir -p "$out"
 
+# App Store Connect takes only x.y.z versions (no suffix) and refuses new builds
+# for a version once it is approved, so nightlies ride the next patch version.
+version=()
+if [[ $nightly == 1 ]]; then
+  version=(MARKETING_VERSION="$(sed -n 's/^ *MARKETING_VERSION: "\(.*\)"/\1/p' Mobile/project.yml | awk -F. '{ printf "%d.%d.%d", $1, $2, $3 + 1 }')")
+fi
+
 xcodebuild -project Mobile/AlasMobile.xcodeproj -scheme AlasMobile -configuration Release \
   -destination 'generic/platform=iOS' -archivePath "$out/Alas.xcarchive" \
   -skipPackagePluginValidation \
   -allowProvisioningUpdates ${auth[@]+"${auth[@]}"} \
-  DEVELOPMENT_TEAM="$team" CURRENT_PROJECT_VERSION="$build" archive
+  DEVELOPMENT_TEAM="$team" CURRENT_PROJECT_VERSION="$build" ${version[@]+"${version[@]}"} archive
 
 cat > "$out/ExportOptions.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

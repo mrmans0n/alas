@@ -297,6 +297,8 @@ enum RemoteWireSamples {
         .host(.response(id: 3, result: .remotePairingCode(
             code: "123456", expiresAt: Date(timeIntervalSince1970: 1_800_000_000.25), link: nil))),
         .peerHost(HostClientMessage(id: 4, request: .listSessions)),
+        .toolTerminal(sessionId: "s1", terminalId: "t1", text: "ok\n", truncated: true, exitCode: 1, signal: nil, retained: true),
+        .toolTerminal(sessionId: "s1", terminalId: "t2", text: "", truncated: false, exitCode: nil, signal: nil, retained: false),
     ]
 
     static let clientMessages: [RemoteClientMessage] = [
@@ -314,5 +316,6 @@ enum RemoteWireSamples {
         .queueMove(sessionId: "s1", itemId: "q1", targetItemId: "q2"),
         .setConfigOption(sessionId: "s1", configId: "thinking", value: .string("high")),
         .host(HostClientMessage(id: 5, request: .listSessions)),
+        .readToolTerminal(sessionId: "s1", terminalId: "t1"),
     ]
 }

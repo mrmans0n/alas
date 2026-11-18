@@ -490,6 +490,11 @@ public final class RemoteSessionGateway {
             let reply = await hostCalls.inspection.remoteRead(.transcriptImage(path: path), sessionId: id)
             let data: Data? = if case .fileBytes(_, _, let bytes, _) = reply { bytes } else { nil }
             send(.transcriptImage(sessionId: id, path: path, data: data))
+        case .readToolTerminal(let id, let terminalId):
+            // A synchronous read: the connection drops duplicates by `fileRequestDedupKey`.
+            let tail = hostCalls.toolTerminal(id, terminalId)
+            send(.toolTerminal(sessionId: id, terminalId: terminalId, text: tail?.output ?? "", truncated: tail?.truncated ?? false,
+                               exitCode: tail?.exitStatus?.exitCode, signal: tail?.exitStatus?.signal, retained: tail != nil))
         case .readFile(let id, let path):
             let key = "readFile\u{0}\(id)\u{0}\(path)"
             guard inFlightFileRequests.insert(key).inserted else { return }
