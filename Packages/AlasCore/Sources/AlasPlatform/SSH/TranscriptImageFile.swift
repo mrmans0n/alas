@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 #if canImport(ImageIO)
 import ImageIO
@@ -66,6 +67,27 @@ public enum TranscriptImageFile {
         if signatures.contains(where: { bytes.starts(with: $0) }) { return true }
         return bytes.count == 12 && bytes.starts(with: Array("RIFF".utf8)) && Array(bytes[8...]) == Array("WEBP".utf8)
         #endif
+    }
+
+    /// Writes `data` to `<directory>/tool-images/<sha256>.<ext>` unless that file exists, returning
+    /// its path. The content-addressed name makes repeats free.
+    public static func spill(_ data: Data, into directory: URL) -> String? {
+        let bytes = [UInt8](data.prefix(12))
+        let ext = if bytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) { "png" }
+        else if bytes.starts(with: [0xFF, 0xD8, 0xFF]) { "jpg" }
+        else if bytes.starts(with: Array("GIF8".utf8)) { "gif" }
+        else if bytes.count == 12, bytes.starts(with: Array("RIFF".utf8)), Array(bytes[8...]) == Array("WEBP".utf8) { "webp" }
+        else { "img" }
+        let folder = directory.appendingPathComponent("tool-images", isDirectory: true)
+        let name = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let url = folder.appendingPathComponent("\(name).\(ext)")
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: url.path) { try data.write(to: url, options: .atomic) }
+            return url.path
+        } catch {
+            return nil
+        }
     }
 
     public static func read(_ source: String, root: URL?, maxBytes: Int = maxBytes) async -> Data? {

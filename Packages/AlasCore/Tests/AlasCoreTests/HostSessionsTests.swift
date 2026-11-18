@@ -521,6 +521,34 @@ struct HostSessionsTests {
         ])
     }
 
+    /// An image that only the transcript holds inline reaches the phone with a file it can
+    /// fetch, so one too large for the row is not lost.
+    @Test(.timeLimit(.minutes(5))) func anInlineToolImageReachesAPeerAsASpilledFile() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.host.sessions.create(.worktree(fixture.ref), agentID: "codex", caller: .app).id
+        let live = try #require(fixture.core.sessionManagers.values.compactMap { $0.liveSession(for: id) }.first)
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        var call = ACPMessage.ToolCall(toolCallId: "shot", title: "screenshot", status: "completed", content: "", preview: nil)
+        call.assets = [ACPToolCallAsset.image(data: png, uri: nil, name: nil)]
+        live.transcript.messages.append(.toolCall(call))
+        let replies = Mutex<[RemoteServerMessage]>([])
+        let gateway = RemoteSessionGateway(host: fixture.host) { message in replies.withLock { $0.append(message) } }
+        defer { gateway.close() }
+        gateway.hostCalls.spillToolImage = { _, _ in "/spilled/shot.png" }
+
+        await gateway.handle(.subscribe(sessionId: id))
+
+        let toolRows = { @Sendable () -> [RemoteWireMessage] in replies.withLock { $0 }.flatMap { reply -> [RemoteWireMessage] in
+            if case .transcriptSnapshot(_, _, _, let messages, _, _, _, _, _) = reply { return messages }
+            return []
+        }.filter { $0.kind == "toolCall" } }
+        try await eventually { !toolRows().isEmpty }
+        let json = try #require(toolRows().first?.json)
+        let wire = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: Data(json.utf8))
+        #expect(wire.assets.first?.uri == "/spilled/shot.png")
+    }
+
     @Test(arguments: [
         (ACPSession.AgentState.ready, ACPSession.SetupState.ready, nil, nil),
         (.spawning, .checking, nil, nil),
