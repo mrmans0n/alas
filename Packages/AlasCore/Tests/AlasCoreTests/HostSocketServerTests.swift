@@ -134,6 +134,10 @@ final class SocketClient {
     private var nextID = 0
     private var responses: [Int: HostResponse] = [:]
     private(set) var events: [HostEvent] = []
+    /// What a wait that times out reports: lines that did not decode, and
+    /// why the reader stopped, if it has.
+    private var undecodableLines = 0
+    private var readerEnd: String?
 
     init(path: String) throws {
         let fd = socket(AF_UNIX, streamSocketType, 0)
@@ -147,12 +151,19 @@ final class SocketClient {
             while true {
                 let count = read(fd, &chunk, chunk.count)
                 if count < 0, errno == EINTR { continue }
-                guard count > 0 else { return }
+                guard count > 0 else {
+                    let end = count == 0 ? "EOF" : "errno \(errno)"
+                    Task { @MainActor in self?.readerEnd = end }
+                    return
+                }
                 pending.append(contentsOf: chunk[0 ..< count])
                 while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
                     let line = Data(pending[pending.startIndex ..< newline])
                     pending.removeSubrange(pending.startIndex ... newline)
-                    guard let message = try? JSONDecoder().decode(HostServerMessage.self, from: line) else { continue }
+                    guard let message = try? JSONDecoder().decode(HostServerMessage.self, from: line) else {
+                        Task { @MainActor in self?.undecodableLines += 1 }
+                        continue
+                    }
                     Task { @MainActor in self?.deliver(message) }
                 }
             }
@@ -168,13 +179,33 @@ final class SocketClient {
         let id = nextID
         var line = try JSONEncoder().encode(HostClientMessage(id: id, request: request))
         line.append(UInt8(ascii: "\n"))
-        _ = line.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-        try await eventually(within: .seconds(30), sourceLocation: sourceLocation) { await self.responses[id] != nil }
+        let written = line.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+        try await reportingState(of: "request \(id), \(written) of \(line.count) bytes written", at: sourceLocation) {
+            try await eventually(within: .seconds(30), sourceLocation: sourceLocation) { await self.responses[id] != nil }
+        }
         return try #require(responses[id])
     }
 
     func waitForEvent(sourceLocation: SourceLocation = #_sourceLocation, _ matches: @escaping @Sendable (HostEvent) -> Bool) async throws {
-        try await eventually(within: .seconds(30), sourceLocation: sourceLocation) { await self.events.contains(where: matches) }
+        try await reportingState(of: "an event", at: sourceLocation) {
+            try await eventually(within: .seconds(30), sourceLocation: sourceLocation) { await self.events.contains(where: matches) }
+        }
+    }
+
+    /// Runs a wait and, when it times out, records what the client had seen.
+    private func reportingState(
+        of awaited: String, at sourceLocation: SourceLocation, _ wait: () async throws -> Void
+    ) async throws {
+        do {
+            try await wait()
+        } catch {
+            let reader = readerEnd.map { "ended with \($0)" } ?? "running"
+            Issue.record(
+                "Waiting for \(awaited): \(responses.count) responses, \(events.count) events, \(undecodableLines) undecodable lines, reader \(reader)",
+                sourceLocation: sourceLocation
+            )
+            throw error
+        }
     }
 
     private func deliver(_ message: HostServerMessage) {
