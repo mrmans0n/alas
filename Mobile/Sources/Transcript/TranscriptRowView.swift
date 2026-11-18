@@ -206,6 +206,7 @@ private struct ListMarker: View {
             Image(systemName: checked ? "checkmark.square.fill" : "square")
                 .foregroundStyle(checked ? Color.accentColor : .secondary)
                 .accessibilityLabel(checked ? "Checked" : "Unchecked")
+        case .continuation(let parent): ListMarker(marker: parent, widest: widest).hidden().accessibilityHidden(true)
         }
     }
 }
