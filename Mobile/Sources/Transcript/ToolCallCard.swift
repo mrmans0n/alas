@@ -80,7 +80,18 @@ struct ToolCallCard: View {
             TranscriptImage(id: "\(item.id):asset:\(index)", source: asset.uri ?? "", data: asset.data,
                             label: Self.label(asset), session: session)
         }
-        if display.sections.isEmpty, !display.showsContent, images.isEmpty {
+        // A host that lost the terminal says so only once the call ended; until then the call is still "Working…".
+        let tails = call.terminalIds.compactMap { id in
+            session?.toolTerminals[id].flatMap { $0.retained || !TranscriptSession.isRunning(call) ? (id, $0) : nil }
+        }
+        ForEach(tails, id: \.0) { _, tail in
+            if tail.retained {
+                ToolTerminalTailView(tail: tail)
+            } else {
+                Text("Terminal output not retained.").font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        if display.sections.isEmpty, !display.showsContent, images.isEmpty, tails.isEmpty {
             Text(emptyLine).font(.footnote).foregroundStyle(.secondary)
         }
     }
@@ -133,4 +144,43 @@ struct ToolCallCard: View {
         let url = URL(string: uri).flatMap { $0.scheme == nil ? nil : $0 } ?? URL(fileURLWithPath: uri)
         return url.lastPathComponent.isEmpty ? "Image" : url.lastPathComponent
     }
+}
+
+/// The phone's `ACPTerminalTailView`: the terminal's plain-text tail, at most 300 pt tall and
+/// following the bottom as it grows, then how the command ended.
+private struct ToolTerminalTailView: View {
+    let tail: ToolTerminalTail
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Text(tail.text)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .id(Self.bottom)
+                }
+                .frame(maxHeight: 300)
+                .fixedSize(horizontal: false, vertical: true)
+                .onAppear { proxy.scrollTo(Self.bottom, anchor: .bottom) }
+                .onChange(of: tail.text) { proxy.scrollTo(Self.bottom, anchor: .bottom) }
+            }
+            Group {
+                if let signal = tail.signal {
+                    Text("Killed (\(signal))").foregroundStyle(.secondary)
+                } else if let code = tail.exitCode {
+                    Text("Exited \(code)").foregroundStyle(code == 0 ? .green : .red)
+                }
+            }
+            .padding([.horizontal, .bottom], 8)
+        }
+        .font(.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemBackground).opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private static let bottom = "bottom"
 }
