@@ -109,7 +109,7 @@ struct ToolCallCard: View {
             .font(.caption.monospaced())
             switch section.body {
             case .hunks(let diff):
-                DiffHunksView(diff: diff, maxLines: showsAll(section.id) ? .max : 40) { showAll(section.id) }
+                DiffHunksView(diff: diff, spans: display.sectionSpans[section.id] ?? [], maxLines: showsAll(section.id) ? .max : 40) { showAll(section.id) }
             case .unavailable:
                 Text("Change unavailable").font(.footnote).foregroundStyle(.secondary)
             }

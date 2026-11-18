@@ -1,3 +1,4 @@
+import AlasHighlight
 import AlasRemoteKit
 import Observation
 import UIKit
@@ -9,6 +10,8 @@ struct ToolCallDisplay: Equatable {
     /// Set only once the call finished.
     let duration: String?
     let sections: [ACPToolCallDiffSection]
+    /// Each hunks section's line spans, by section id.
+    let sectionSpans: [Int: [[HighlightSpan]]]
     let showsContent: Bool
 
     init(_ call: ACPToolCall, worktreeRoot: String?) {
@@ -16,6 +19,9 @@ struct ToolCallDisplay: Equatable {
         target = ACPToolCallPresentation.target(for: call, label: presentation.label)
         duration = call.executionDuration.map { ACPToolCallDurationFormatter.string(for: $0) }
         sections = ACPToolCallPresentation.diffSections(call.diffs, status: call.status, worktreeRoot: worktreeRoot)
+        sectionSpans = sections.reduce(into: [:]) { spans, section in
+            if case .hunks(let diff) = section.body { spans[section.id] = DiffHunksView.spans(for: diff, path: section.path) }
+        }
         showsContent = ACPToolCallPresentation.showsContent(call.content, alongside: call.diffs)
     }
 }
@@ -39,6 +45,7 @@ struct TranscriptItem: Identifiable, Equatable {
     let toolCall: ToolCallDisplay?
     /// Set only for file-edit rows.
     let fileEditDiff: ParsedDiff?
+    let fileEditSpans: [[HighlightSpan]]
     /// Shown inside an expanded group.
     var isGroupMember = false
 
@@ -50,9 +57,16 @@ struct TranscriptItem: Identifiable, Equatable {
         self.message = message
         foldItem = RemoteTranscriptFold.item(for: message, row: row)
         toolCall = if case .toolCall(let call) = row { ToolCallDisplay(call, worktreeRoot: worktreeRoot) } else { nil }
-        // ponytail: LineDiff runs on the main actor in publish() for each changed file-edit row;
-        // compute it off-main if large edits stutter the transcript.
-        fileEditDiff = if case .fileEdit(let edit) = row { LineDiff.parsedDiff(old: edit.oldText, new: edit.newText) } else { nil }
+        // ponytail: LineDiff and the diff tokenizing run on the main actor in publish() for each
+        // changed diff row; compute them off-main if large edits stutter the transcript.
+        if case .fileEdit(let edit) = row {
+            let diff = LineDiff.parsedDiff(old: edit.oldText, new: edit.newText)
+            fileEditDiff = diff
+            fileEditSpans = DiffHunksView.spans(for: diff, path: edit.path)
+        } else {
+            fileEditDiff = nil
+            fileEditSpans = []
+        }
     }
 
     init(header kind: Kind, id: String, first: TranscriptItem) {
@@ -63,6 +77,7 @@ struct TranscriptItem: Identifiable, Equatable {
         foldItem = first.foldItem
         toolCall = first.toolCall
         fileEditDiff = first.fileEditDiff
+        fileEditSpans = first.fileEditSpans
     }
 }
 

@@ -114,7 +114,7 @@ struct TranscriptRowView: View {
             }
             .font(.caption.monospacedDigit())
             if let diff = item.fileEditDiff {
-                DiffHunksView(diff: diff, maxLines: showsAll("diff") ? .max : 40) { showAllPart("diff") }
+                DiffHunksView(diff: diff, spans: item.fileEditSpans, maxLines: showsAll("diff") ? .max : 40) { showAllPart("diff") }
             }
         }
         .card()
