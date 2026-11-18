@@ -37,9 +37,20 @@ extension AlasCoreContext {
 
     /// Projects a worktree can be created in, which folder projects cannot.
     func remoteProjectOptions() -> [RemoteProjectOption] {
-        projects.projects.filter { !$0.isFolder }.map {
-            RemoteProjectOption(id: $0.id, name: $0.name, linkedProjectId: $0.linkedProjectId)
+        let settings = environment.configuration().worktrees
+        return projects.projects.filter { !$0.isFolder }.map {
+            RemoteProjectOption(id: $0.id, name: $0.name, linkedProjectId: $0.linkedProjectId,
+                                branchNaming: Self.remoteBranchNaming(for: $0, settings: settings))
         }
+    }
+
+    static func remoteBranchNaming(for project: ProjectConfig, settings: AppConfig.Worktrees) -> RemoteWorktreeBranchNaming {
+        RemoteWorktreeBranchNaming(
+            prefix: settings.branchPrefix,
+            template: WorktreeBranchName.normalizedTemplate(project.worktreeBranchTemplate)
+                ?? WorktreeBranchName.normalizedTemplate(settings.branchTemplate),
+            timeZoneIdentifier: TimeZone.autoupdatingCurrent.identifier
+        )
     }
 
     /// Visible worktrees that no operation is creating or removing, with

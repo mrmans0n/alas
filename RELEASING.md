@@ -130,7 +130,8 @@ ruby scripts/testflight-notes.rb --version X.Y.Z \
   --release-url https://github.com/mrmans0n/alas/releases/tag/vX.Y.Z
 ```
 
-Manual branch builds use a concise Alas beta checklist and link to the branch.
+Manual branch builds use a concise Alas beta checklist and link to the branch;
+nightlies use the same checklist and link to the built commit.
 Generated text must stay within Fastlane's effective 4,000-byte TestFlight
 limit. The iOS workflow prints the exact generated body before passing the same
 to Fastlane, so release verification can compare the submitted text with the

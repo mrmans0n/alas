@@ -29,6 +29,16 @@ struct SessionRoute: Hashable {
     let sessionId: String
 }
 
+private enum WorktreesDestination: Hashable {
+    case session(SessionRoute)
+    case creating
+
+    var session: SessionRoute? {
+        if case .session(let route) = self { return route }
+        return nil
+    }
+}
+
 /// Sessions grouped by their owning machine, then repo and worktree, or by
 /// project across machines.
 struct WorktreesView: View {
@@ -39,14 +49,14 @@ struct WorktreesView: View {
     var searchActive = false
     var onPairMac: () -> Void = {}
 
-    @State private var path: [SessionRoute] = []
+    @State private var path: [WorktreesDestination] = []
     /// The session in the detail column, where there is room for one (iPad).
-    @State private var selected: SessionRoute?
+    @State private var selected: WorktreesDestination?
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var searchPresented: Bool
     @State private var newSessionPresented = false
-    /// Where the sheet starts: a project header's machines, or none for the toolbar's.
-    @State private var newSessionPresets: [NewSessionPreset] = []
+    @State private var newSession: NewSessionModel?
+    @State private var dismissingFormForCreation = false
 
     init(hub: HostHub, model: WorktreesModel, title: String = "Worktrees", searchActive: Bool = false,
          onPairMac: @escaping () -> Void = {}) {
@@ -97,11 +107,12 @@ struct WorktreesView: View {
             if sizeClass == .regular {
                 NavigationSplitView {
                     directory(hosts: hosts, all: all, counts: counts, visible: visible)
+                        .disabled(showsCreation)
                 } detail: {
                     // Its own stack, for the diffs and files a session pushes.
                     NavigationStack {
                         if let selected {
-                            TranscriptScreen(hostID: selected.hostID, sessionId: selected.sessionId).id(selected)
+                            destination(selected).id(selected)
                         } else {
                             ContentUnavailableView("No session selected", systemImage: "bubble.left.and.bubble.right",
                                                    description: Text("Choose a session from the list."))
@@ -111,11 +122,18 @@ struct WorktreesView: View {
             } else {
                 NavigationStack(path: $path) {
                     directory(hosts: hosts, all: all, counts: counts, visible: visible)
-                        .navigationDestination(for: SessionRoute.self) { route in
-                            TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
-                        }
+                        .navigationDestination(for: WorktreesDestination.self, destination: destination)
                 }
             }
+        }
+        .sheet(isPresented: $newSessionPresented, onDismiss: didDismissNewSessionForm) {
+            if let newSession {
+                NewSessionSheet(model: newSession, showCreatingWorktree: showCreatingWorktree)
+            }
+        }
+        .onChange(of: newSession?.phase) { _, _ in restoreNewSessionFormIfNeeded() }
+        .onChange(of: newSession?.createdRoute) { _, route in
+            if let route { finishNewSession(route) }
         }
         // Split View resizes swap the hierarchy; the open session moves with it.
         .onChange(of: sizeClass) { _, size in
@@ -148,12 +166,70 @@ struct WorktreesView: View {
     }
 
     private func open(_ route: SessionRoute) {
+        guard !showsCreation else { return }
+        open(.session(route))
+    }
+
+    private func open(_ destination: WorktreesDestination) {
         if sizeClass == .regular {
-            selected = route
-        } else if path.last != route {
+            selected = destination
+        } else if path.last != destination {
             // A double tap must not push the same transcript twice.
-            path.append(route)
+            path.append(destination)
         }
+    }
+
+    @ViewBuilder
+    private func destination(_ destination: WorktreesDestination) -> some View {
+        switch destination {
+        case .session(let route):
+            TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
+        case .creating:
+            if let newSession {
+                CreatingWorktreeTranscript(model: newSession)
+            }
+        }
+    }
+
+    private var showsCreation: Bool { selected == .creating || path.last == .creating }
+
+    private func showCreatingWorktree() {
+        dismissingFormForCreation = true
+        open(.creating)
+        newSessionPresented = false
+    }
+
+    private func didDismissNewSessionForm() {
+        if dismissingFormForCreation {
+            dismissingFormForCreation = false
+            restoreNewSessionFormIfNeeded()
+        } else if !newSessionPresented {
+            newSession = nil
+        }
+    }
+
+    private func restoreNewSessionFormIfNeeded() {
+        guard showsCreation, !dismissingFormForCreation, let newSession,
+              !newSession.isCreating, newSession.createdRoute == nil else { return }
+        if selected == .creating { selected = nil }
+        if path.last == .creating { path.removeLast() }
+        newSessionPresented = true
+    }
+
+    private func finishNewSession(_ route: SessionRoute) {
+        let formWasPresented = newSessionPresented
+        newSessionPresented = false
+        if showsCreation {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                if selected == .creating { selected = .session(route) }
+                if path.last == .creating { path[path.count - 1] = .session(route) }
+            }
+        } else {
+            open(route)
+        }
+        if !formWasPresented { newSession = nil }
     }
 
     @ViewBuilder
@@ -199,17 +275,11 @@ struct WorktreesView: View {
                     }
                 }
             }
-            .sheet(isPresented: $newSessionPresented) {
-                NewSessionSheet(hub: hub, presets: newSessionPresets) { route in
-                    newSessionPresented = false
-                    open(route)
-                }
-            }
             .onChange(of: searchActive) { _, active in searchPresented = active }
             // A forgotten Mac's transcripts pop instead of reading as ended.
             .onChange(of: hub.hosts.map(\.id)) { _, ids in
-                path.removeAll { !ids.contains($0.hostID) }
-                if let selected, !ids.contains(selected.hostID) { self.selected = nil }
+                path.removeAll { $0.session.map { !ids.contains($0.hostID) } ?? false }
+                if let route = selected?.session, !ids.contains(route.hostID) { selected = nil }
             }
             .onChange(of: hosts.map(\.id), initial: true) { _, ids in
                 if let selected = model.selectedHost, !ids.contains(selected) { model.selectedHost = nil }
@@ -293,7 +363,8 @@ struct WorktreesView: View {
     }
 
     private func startNewSession(in presets: [NewSessionPreset]) {
-        newSessionPresets = presets
+        guard newSession == nil else { return }
+        newSession = NewSessionModel(hub: hub, presets: presets)
         newSessionPresented = true
     }
 
@@ -405,7 +476,7 @@ struct WorktreesView: View {
     }
 
     private func selectedSessionID(in entry: RemoteWorktreeEntry, on host: RemoteSessionCatalog.Host) -> String? {
-        guard let selected else { return nil }
+        guard let selected = selected?.session else { return nil }
         return entry.activeSessions.first { session in
             guard let route = host.route(for: session.id) else { return false }
             return selected == SessionRoute(hostID: route.hostID, sessionId: route.sessionId)

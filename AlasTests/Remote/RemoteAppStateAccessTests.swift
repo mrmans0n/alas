@@ -1204,7 +1204,7 @@ struct RemoteAppStateAccessTests {
     }
 
     /// The list drives worktree creation, so folder projects are left out.
-    @Test func remoteProjectsPreserveConfiguredGitProjectIDsAndNames() async {
+    @Test func remoteProjectsPreserveConfiguredGitProjectIDsAndNaming() async {
         let firstProject = ProjectConfig(
             id: "project-first",
             name: "First Project",
@@ -1217,20 +1217,22 @@ struct RemoteAppStateAccessTests {
             name: "Second Project",
             path: "/tmp/second-project",
             color: "green",
-            addedAt: Date()
+            addedAt: Date(),
+            worktreeBranchTemplate: "project/{name}"
         )
         let folder = ProjectConfig(
             id: "project-folder", name: "Notes", path: "/tmp/notes", color: "red", addedAt: Date(), kind: .folder)
         let state = AppState(store: ProjectMemoryStore(
             projectsFile: ProjectsFile(projects: [firstProject, folder, secondProject])
         ))
+        state.config.worktrees.branchPrefix = "feature/"
+        state.config.worktrees.branchTemplate = "global/{name}"
 
         let projects = await RemoteGatewayHostCalls.host(state.host).projects()
 
-        #expect(projects == [
-            RemoteProjectOption(id: "project-first", name: "First Project"),
-            RemoteProjectOption(id: "project-second", name: "Second Project"),
-        ])
+        #expect(projects.map(\.id) == ["project-first", "project-second"])
+        #expect(projects.map(\.name) == ["First Project", "Second Project"])
+        #expect(projects.map { $0.branchNaming?.compose(name: "Mobile Picker") } == ["global/mobile-picker", "project/mobile-picker"])
     }
 
     @Test func remoteBranchesReturnsBranchesAndPrefersMain() async throws {
@@ -1266,7 +1268,8 @@ struct RemoteAppStateAccessTests {
         #expect(result == .failure("Repository is no longer available."))
     }
 
-    @Test func remoteSessionsProviderCreatesWorktreeSessionAndFocusesIt() async throws {
+    @Test(arguments: [(nil, "feature/phone"), (false, "phone")] as [(Bool?, String)])
+    func remoteSessionsProviderCreatesWorktreeSessionAndFocusesIt(useBranchNaming: Bool?, expectedBranch: String) async throws {
         let repository = try await makeRemoteBranchesRepository()
         let worktreeRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-remote-create-root-\(UUID().uuidString)")
@@ -1291,7 +1294,7 @@ struct RemoteAppStateAccessTests {
 
         let result = await createRemoteWorktreeSession(
             state, projectId: project.id, base: "main", branch: "phone", agentId: "claude",
-            caller: .remotePeer(deviceID: "phone"), branchPrefix: "feature/"
+            caller: .remotePeer(deviceID: "phone"), branchPrefix: "feature/", useBranchNaming: useBranchNaming
         )
 
         guard case let .success(summary) = result else {
@@ -1301,7 +1304,7 @@ struct RemoteAppStateAccessTests {
         let worktree = try #require(summary.worktree)
         let worktreeId = Worktree.makeId(path: URL(fileURLWithPath: worktree.path))
         defer { cleanupRemoteRenameFiles(worktreeId: worktreeId) }
-        #expect(worktree.branch == "feature/phone")
+        #expect(worktree.branch == expectedBranch)
         #expect(FileManager.default.fileExists(atPath: worktree.path))
         #expect(state.selectedWorktreeId == worktreeId)
         let tab = try #require(firstACPTab(in: state, worktreeId: worktreeId))
@@ -2544,12 +2547,13 @@ struct RemoteAppStateAccessTests {
     /// `branchPrefix`, pinned so the user's own settings don't leak in.
     private func createRemoteWorktreeSession(
         _ state: AppState, projectId: String, base: String, branch: String, agentId: String, caller: HostCaller = .app,
-        branchPrefix: String = ""
+        branchPrefix: String = "", useBranchNaming: Bool? = nil
     ) async -> RemoteCreateWorktreeSessionResult {
         state.config.worktrees.branchPrefix = branchPrefix
         state.config.worktrees.branchTemplate = nil
         let result = await RemoteGatewayHostCalls.host(state.host).createWorktreeSession(
-            RemoteWorktreeSessionCreation(projectID: projectId, base: base, branch: branch, agentID: agentId), caller
+            RemoteWorktreeSessionCreation(projectID: projectId, base: base, branch: branch, agentID: agentId,
+                                          useBranchNaming: useBranchNaming), caller
         )
         if case .success(let summary) = result, let worktreeID = summary.worktreeId {
             state.sessionCreated(summary.id, worktreeID: worktreeID)

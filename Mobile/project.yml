@@ -39,6 +39,7 @@ targets:
       Release: ../Config/AlasMobile-Release.xcconfig
     sources:
       - path: Sources
+      - path: ../Alas/Sources/UI/Boids.swift
       - path: Resources/Assets.xcassets
       # Shared with the Mac: the frame visual aid fragments are wrapped in.
       - path: ../Alas/Resources/VisualAid/frame.html

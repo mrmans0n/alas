@@ -289,10 +289,14 @@ public struct RemoteProjectOption: Codable, Equatable, Sendable {
     /// it there. Nil for a project of its own, and from older hosts.
     public var linkedProjectId: String? = nil
 
-    public init(id: String, name: String, linkedProjectId: String? = nil) {
+    /// Nil on hosts that do not advertise their naming settings.
+    public let branchNaming: RemoteWorktreeBranchNaming?
+
+    public init(id: String, name: String, linkedProjectId: String? = nil, branchNaming: RemoteWorktreeBranchNaming? = nil) {
         self.id = id
         self.name = name
         self.linkedProjectId = linkedProjectId
+        self.branchNaming = branchNaming
     }
 }
 
