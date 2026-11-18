@@ -1,7 +1,8 @@
 name: iOS Release
 
 # Builds the iOS app from any ref and uploads it to TestFlight, or submits an
-# uploaded build for App Store review. release.yml calls it for every v* tag.
+# uploaded build for App Store review. release.yml calls it for every v* tag;
+# nightly.yml calls it with nightly: true when iOS inputs change on main.
 #
 # Secrets: IOS_SIGNING_P12_BASE64 and IOS_SIGNING_P12_PASSWORD hold the Apple
 # Development and Apple Distribution identities exported together as one .p12
@@ -41,6 +42,10 @@ on:
       release:
         default: false
         type: boolean
+      nightly:
+        description: "Build the next patch version, so the upload never lands on an approved version"
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -68,9 +73,12 @@ jobs:
         env:
           RELEASE_REF: ${{ inputs.ref }}
           RELEASE: ${{ inputs.release }}
+          NIGHTLY: ${{ inputs.nightly }}
         run: |
           if [[ "$RELEASE" == "true" ]]; then
             version="${RELEASE_REF#v}"; release_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$RELEASE_REF"
+          elif [[ "$NIGHTLY" == "true" ]]; then
+            version="nightly"; release_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$RELEASE_REF"
           else
             version="manual"; release_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$RELEASE_REF"
           fi
@@ -122,7 +130,7 @@ jobs:
         if: inputs.submit_build == ''
         env:
           DEVELOPMENT_TEAM: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-        run: scripts/ios-testflight.sh --no-upload
+        run: scripts/ios-testflight.sh --no-upload ${{ inputs.nightly && '--nightly' || '' }}
 
       - name: Upload to TestFlight
         if: inputs.submit_build == ''
