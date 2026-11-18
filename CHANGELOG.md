@@ -6,6 +6,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Treat an empty Android device clipboard as empty text instead of a connection failure.
+
+## [0.24.2] - 2026-11-18
+
+### ✨ Features
+
+- Hide the setup-only main worktree for every linked Machine checkout, whether Alas cloned it, found it, or the user chose it (#2571).
+- Group a repository's worktrees across paired machines on iPhone and iPad, with Machine/Project grouping and per-machine filtering (#2573, #2578).
+- Show Mac-style tool-call cards on iPhone and iPad, including parsed diff hunks, file-edit previews, status and duration, expandable output, and images (#2576).
+- Start a session from a project header on iPhone and iPad, preset to the most recently used online machine and newest worktree (#2579).
+- Use merge commits for eligible git-gud stack landings and protect queued merges from rebase, sync, and restack pushes (#2581).
+- Syntax-highlight fenced code blocks on iPhone and iPad with Mac theme colours, language labels, and Copy (#2584).
+- Render nested lists, task lists, and tables on iPhone and iPad with source numbering, accessibility labels, and horizontal scrolling for wide tables (#2585).
+- Add Mac-style syntax colours to diff hunks on iPhone and iPad (#2586).
+- Render closed Mermaid fences on iPhone and iPad with light and dark themes, bounded rendering, failure fallback, and tap-to-view (#2587).
+
+### 🐛 Fixes
+
+- Prevent codex-acp 2.7+ role tokens such as `default` from replacing subagent task labels (#2570).
+- Keep the Mac right-pane icon rail visible beside the Devices toolbar and let the device chip truncate in narrow panes (#2582).
+
+### 🏗️ Internal
+
+- Give time-limited AlasCore tests five minutes so parallel runs do not trip one-minute limits while retaining the ten-minute stall watchdog (#2572).
+- Move shared tool-call presentation and diff parsers into AlasRemoteKit (#2574).
+- Update tree-sitter-proto to 0.6.1 (#2577).
+- Stabilize the closed-pipe test under parallel Linux spawning (#2580).
+- Move syntax highlighting and symbol extraction to the shared AlasHighlight module for Mac and mobile (#2583).
+- Prevent verbose AlasCore tests from backpressuring CI logs while retaining complete failure diagnostics.
+
 ## [0.24.1] - 2026-11-17
 
 ### ✨ Features
