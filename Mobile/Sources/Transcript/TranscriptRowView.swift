@@ -158,13 +158,18 @@ struct AgentMarkdown: View {
                 case .paragraph(let s): Text(s)
                 case .heading(let level, let s): Text(s).font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
                 case .code(let language, let chunks): CodeBlockView(language: language, chunks: chunks)
-                case .list(let items):
+                case .list(let entries):
+                    let widest = entries.compactMap { if case .number(let n) = $0.marker { n } else { nil } }
+                        .max { $0.count < $1.count } ?? ""
                     VStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text("\u{2022}")
-                                Text(item)
+                        ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                ListMarker(marker: entry.marker, widest: widest)
+                                Text(entry.text)
                             }
+                            // One element per item, so VoiceOver reads a task's state and text once.
+                            .accessibilityElement(children: .combine)
+                            .padding(.leading, CGFloat(entry.depth) * 16)
                         }
                     }
                 case .quote(let s):
@@ -174,16 +179,54 @@ struct AgentMarkdown: View {
                 case .image(let source, let alt):
                     TranscriptImage(id: "\(id):block:\(index)", source: source, label: alt.isEmpty ? "Image" : alt,
                                     session: session)
-                case .table(let rows):
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(rows.enumerated()), id: \.offset) { i, cells in
-                            Text(cells.joined(separator: "  |  "))
-                                .font(.footnote.weight(i == 0 ? .semibold : .regular))
-                        }
+                case .table(let header, let rows):
+                    let table = MarkdownTable(header: header, rows: rows)
+                    // Scrolls sideways only when the columns are wider than the transcript.
+                    ViewThatFits(in: .horizontal) {
+                        table
+                        ScrollView(.horizontal) { table }
                     }
                 }
             }
         }
+    }
+}
+
+private struct ListMarker: View {
+    let marker: ListEntry.Marker
+    /// The longest number in the list; a hidden copy sizes the column, so it scales with Dynamic Type.
+    let widest: String
+
+    var body: some View {
+        switch marker {
+        case .bullet: Text("\u{2022}").frame(minWidth: 12)
+        case .number(let n): Text(widest).hidden().overlay(alignment: .trailing) { Text(n) }.monospacedDigit()
+        case .task(let checked):
+            Image(systemName: checked ? "checkmark.square.fill" : "square")
+                .foregroundStyle(checked ? Color.accentColor : .secondary)
+                .accessibilityLabel(checked ? "Checked" : "Unchecked")
+        case .continuation(let parent): ListMarker(marker: parent, widest: widest).hidden().accessibilityHidden(true)
+        }
+    }
+}
+
+private struct MarkdownTable: View {
+    let header: [AttributedString]
+    let rows: [[AttributedString]]
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+            GridRow {
+                ForEach(header.indices, id: \.self) { Text(header[$0]).fontWeight(.semibold) }
+            }
+            Rectangle().fill(.separator).frame(height: 1).gridCellUnsizedAxes(.horizontal)
+            ForEach(rows.indices, id: \.self) { r in
+                GridRow {
+                    ForEach(rows[r].indices, id: \.self) { Text(rows[r][$0]) }
+                }
+            }
+        }
+        .font(.footnote)
     }
 }
 

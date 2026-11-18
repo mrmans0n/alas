@@ -22,6 +22,9 @@ struct CodeBlockView: View {
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
+                // 44 pt hit area without growing the header row.
+                .padding(.vertical, 14).padding(.horizontal, 6).contentShape(Rectangle())
+                .padding(.vertical, -14).padding(.horizontal, -6)
             }
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(chunks.enumerated()), id: \.offset) { _, chunk in
