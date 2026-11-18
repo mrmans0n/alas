@@ -152,11 +152,14 @@ struct GGAvailabilityTests {
         #expect(!(await old.probeCapabilities()).syncJSONL)
     }
 
-    @Test func landJSONLCapabilityUsesLandHelpAndDefaultsOff() async {
+    @Test func landCapabilitiesUseLandHelpAndDefaultOff() async {
         let current = GGService(runner: HelpGGRunner(
-            split: "", unstack: "", land: "--json --jsonl"
+            split: "", unstack: "", land: "--json --jsonl --rebase-if-needed"
         ))
-        #expect((await current.probeCapabilities()).landJSONL)
+        let probed = await current.probeCapabilities()
+        #expect(probed.landJSONL && probed.landRebaseIfNeeded)
+        let old = await GGService(runner: HelpGGRunner(split: "", unstack: "", land: "--json --jsonl")).probeCapabilities()
+        #expect(!old.landRebaseIfNeeded)
         #expect(!GGCapabilities(structuredSplit: false, keepCurrentUnstack: false).landJSONL)
     }
 

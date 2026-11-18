@@ -187,6 +187,31 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         )
     }
 
+    /// GitLab merge settings are project-wide; `baseBranch` does not change them.
+    public func mergeSettings(remote: CodeHostRemote, baseBranch: String, cwd: URL) async throws -> CodeHostMergeSettings {
+        let result = try await runner.run(
+            "glab",
+            args: ["api", "projects/\(Self.encodedProjectPath(remote.repositorySlug))", "--hostname", remote.host],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api projects", stderr: result.stderr)
+        }
+        struct Project: Decodable {
+            let mergeMethod: String
+            let squashOption: String
+
+            enum CodingKeys: String, CodingKey {
+                case mergeMethod = "merge_method"
+                case squashOption = "squash_option"
+            }
+        }
+        guard let project = try? JSONDecoder().decode(Project.self, from: Data(result.stdout.utf8)) else {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab api projects merge settings")
+        }
+        return .gitLab(mergeMethod: project.mergeMethod, squashOption: project.squashOption)
+    }
+
     public func isAvailable(cwd: URL) async -> Bool {
         do {
             let result = try await runner.run("glab", args: ["--version"], cwd: cwd)

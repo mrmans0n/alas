@@ -1,8 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
 
 /// Grammars and highlight queries from the bundled tree-sitter pack, a Rust
 /// staticlib linked into the app. `PlatformServices.install()` sets the real

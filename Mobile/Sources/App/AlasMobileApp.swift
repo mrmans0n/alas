@@ -15,6 +15,7 @@ struct AlasMobileApp: App {
     private let registrar: PushRegistrar
 
     init() {
+        GrammarPack.install()
         let hub = HostHub()
         _hub = State(initialValue: hub)
         let registry = SessionRegistry(hub: hub)

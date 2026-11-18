@@ -88,6 +88,9 @@ public final class StackShepherd {
         public var worktreeContext: @MainActor (_ worktreeID: String) -> WorktreeContext?
         /// The stack gg reports for the worktree at `path`, nil off-stack.
         public var loadStack: @MainActor (_ path: URL) async throws -> GGStack?
+        /// The stack with the forge's state read fresh, which `loadStack`
+        /// may skip: only it tells whether an entry has a merge queued.
+        public var loadStackWithForgeState: @MainActor (_ path: URL) async throws -> GGStack?
         /// `gg sync` of `plan` through the guarded path the stack drawer's
         /// Sync uses.
         /// `onEvent` hears each event the sync streams.
@@ -140,10 +143,12 @@ public final class StackShepherd {
                 _ sessionID: String,
                 _ isStillWanted: @escaping @MainActor () -> Bool
             ) async -> ReviewShepherd.ArchiveResult,
-            servesWorktree: @escaping @MainActor (_ worktreeID: String) -> Bool = { _ in true }
+            servesWorktree: @escaping @MainActor (_ worktreeID: String) -> Bool = { _ in true },
+            loadStackWithForgeState: @escaping @MainActor (_ path: URL) async throws -> GGStack? = { _ in nil }
         ) {
             self.worktreeContext = worktreeContext
             self.loadStack = loadStack
+            self.loadStackWithForgeState = loadStackWithForgeState
             self.syncStack = syncStack
             self.rebaseStack = rebaseStack
             self.sessionState = sessionState
@@ -673,7 +678,7 @@ public final class StackShepherd {
             landed: onStack.map { StackShepherdPolicy.landedEntryIDs(of: current, in: $0) } ?? [],
             shipPlan: current.shipPlan ?? .wholeStack
         )
-        let observation = StackShepherdObservation(
+        var observation = StackShepherdObservation(
             requests: fetched,
             presentEntryIDs: onStack.map { Set($0.entries.filter { $0.prNumber != nil }.map(\.id)) },
             listedEntryIDs: onStack.map { Set($0.entries.map(\.id)) },
@@ -687,7 +692,17 @@ public final class StackShepherd {
             rules: rules,
             now: now()
         )
-        let decision = StackShepherdPolicy.decide(current, observation)
+        var decision = StackShepherdPolicy.decide(current, observation)
+        // Only a restack about to be requested needs to know whether a merge
+        // is queued, and only a listing with the forge's state tells.
+        if !decision.restack.isEmpty {
+            let forgeStack = try? await effects.loadStackWithForgeState(context.path)
+            guard records[id] == current else { return }
+            if let forgeStack, forgeStack.name == id.stackName, forgeStack.hasQueuedMerge {
+                observation.hasQueuedMerge = true
+                decision = StackShepherdPolicy.decide(current, observation)
+            }
+        }
         if decision.isRetired {
             stackShepherdLogger.notice("Retiring stack shepherd record \(id.storageKey, privacy: .private): no entries are left")
             remove(id)

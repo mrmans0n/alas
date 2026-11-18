@@ -45,6 +45,8 @@ struct WorktreesView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var searchPresented: Bool
     @State private var newSessionPresented = false
+    /// Where the sheet starts: a project header's machines, or none for the toolbar's.
+    @State private var newSessionPresets: [NewSessionPreset] = []
 
     init(hub: HostHub, model: WorktreesModel, title: String = "Worktrees", searchActive: Bool = false,
          onPairMac: @escaping () -> Void = {}) {
@@ -193,12 +195,12 @@ struct WorktreesView: View {
                 }
                 if !hub.hosts.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
-                        Button("New session", systemImage: "plus") { newSessionPresented = true }
+                        Button("New session", systemImage: "plus") { startNewSession(in: []) }
                     }
                 }
             }
             .sheet(isPresented: $newSessionPresented) {
-                NewSessionSheet(hub: hub) { route in
+                NewSessionSheet(hub: hub, presets: newSessionPresets) { route in
                     newSessionPresented = false
                     open(route)
                 }
@@ -242,7 +244,8 @@ struct WorktreesView: View {
                                 }
                             }
                         } header: {
-                            repoHeader(section)
+                            repoHeader(section, presets: presets([(hostID: group.host.id, projectId: section.worktrees.lazy.compactMap(\.projectId).first,
+                                                                    projectName: section.title, worktreeId: section.worktrees.first?.id)]))
                         }
                     }
                 }
@@ -271,7 +274,13 @@ struct WorktreesView: View {
                     }
                 } header: {
                     repoHeader(group.title, count: group.rows.count,
-                               detail: spansMachines ? "\(group.hostIDs.count) machines" : group.rows.first?.hostName)
+                               detail: spansMachines ? "\(group.hostIDs.count) machines" : group.rows.first?.hostName,
+                               presets: presets(group.placements.map { placement in
+                                   (hostID: placement.hostID, projectId: Optional(placement.projectId),
+                                    // That machine's name for the project, which may differ from the header's.
+                                    projectName: group.rows.first { $0.hostID == placement.hostID }?.worktree.summary?.projectName ?? group.title,
+                                    worktreeId: Optional(placement.worktreeId))
+                               }))
                 }
             }
         }
@@ -279,11 +288,33 @@ struct WorktreesView: View {
         .contentMargins(.bottom, 56, for: .scrollContent)
     }
 
-    private func repoHeader(_ section: RemoteRepoSection) -> some View {
-        repoHeader(section.title, count: section.worktrees.count, detail: nil)
+    private func repoHeader(_ section: RemoteRepoSection, presets: [NewSessionPreset]) -> some View {
+        repoHeader(section.title, count: section.worktrees.count, detail: nil, presets: presets)
     }
 
-    private func repoHeader(_ title: String, count: Int, detail: String?) -> some View {
+    private func startNewSession(in presets: [NewSessionPreset]) {
+        newSessionPresets = presets
+        newSessionPresented = true
+    }
+
+    /// A project's machines as the paired connections the sheet talks to;
+    /// one reached only through a relay can't start sessions from here.
+    private func presets(_ placements: [(hostID: RemoteSessionCatalog.HostID, projectId: String?, projectName: String,
+                                         worktreeId: String?)]) -> [NewSessionPreset] {
+        placements.compactMap { placement in
+            guard let projectId = placement.projectId else { return nil }
+            let paired: UUID? = switch placement.hostID {
+            case .pairing(let id): hub.hosts.contains { $0.id == id } ? id : nil
+            case .server(let serverId): hub.hosts.first { $0.serverId == serverId }?.id
+            }
+            return paired.map {
+                NewSessionPreset(hostID: $0, projectId: projectId, projectName: placement.projectName,
+                                 worktreeId: placement.worktreeId)
+            }
+        }
+    }
+
+    private func repoHeader(_ title: String, count: Int, detail: String?, presets: [NewSessionPreset]) -> some View {
         HStack(spacing: 8) {
             RepoTile(name: title, size: 22)
             Text(title)
@@ -302,10 +333,24 @@ struct WorktreesView: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("\(count) worktrees")
+            if !presets.isEmpty {
+                Button("New session in \(title)", systemImage: "plus.circle") { startNewSession(in: presets) }
+                    .labelStyle(.iconOnly)
+                    .font(.subheadline)
+                    .foregroundStyle(.tint)
+                    .buttonStyle(.borderless)
+                    // Offered as the header's action instead, since the header reads as one element.
+                    .accessibilityHidden(true)
+            }
         }
         .textCase(nil)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
+        .accessibilityActions {
+            if !presets.isEmpty {
+                Button("New session in \(title)") { startNewSession(in: presets) }
+            }
+        }
     }
 
     private func hostHeader(_ group: HostGroup) -> some View {

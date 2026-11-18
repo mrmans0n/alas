@@ -1,9 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
-import AlasCode
 
 public enum ACPCodeLanguage: Sendable {
     public static func highlighterExtension(for label: String?) -> String? {

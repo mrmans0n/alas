@@ -84,7 +84,7 @@ struct TranscriptRowView: View {
             }
             .card()
         case .planDocument(let doc):
-            titleCaption("Plan", doc.markdown ?? doc.planId)
+            if let display = doc.display { planDocument(display) }
         case .visualAid(let aid):
             if let session {
                 // Keyed by visual, so a reused cell never hands one visual's page or state to another.
@@ -114,7 +114,29 @@ struct TranscriptRowView: View {
             }
             .font(.caption.monospacedDigit())
             if let diff = item.fileEditDiff {
-                DiffHunksView(diff: diff, maxLines: showsAll("diff") ? .max : 40) { showAllPart("diff") }
+                DiffHunksView(diff: diff, spans: item.fileEditSpans, maxLines: showsAll("diff") ? .max : 40) { showAllPart("diff") }
+            }
+        }
+        .card()
+    }
+
+    /// The plan in full, like the Mac's plan card. The host strips a file plan's path from the document
+    /// and sends it only in the row's text, as "Plan file: <path>".
+    private func planDocument(_ display: ACPPlanDocument.Display) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Plan", systemImage: "doc.text")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.tint)
+            if let markdown = display.markdown {
+                AgentMarkdown(id: item.id, text: markdown, session: session)
+            }
+            if display.showsFile {
+                let path = display.filePath
+                    ?? item.message.text.map { $0.hasPrefix("Plan file: ") ? String($0.dropFirst(11)) : $0 }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Plan file").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    Text(path ?? "Unavailable").font(.caption.monospaced()).textSelection(.enabled)
+                }
             }
         }
         .card()
@@ -157,21 +179,20 @@ struct AgentMarkdown: View {
                 switch block {
                 case .paragraph(let s): Text(s)
                 case .heading(let level, let s): Text(s).font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
-                case .code(_, let chunks):
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(chunks.enumerated()), id: \.offset) { _, chunk in Text(chunk) }
-                    }
-                    .font(.system(.footnote, design: .monospaced))
-                    .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
-                case .list(let items):
+                case .code(let language, let chunks): CodeBlockView(language: language, chunks: chunks)
+                case .mermaid(let source): MermaidBlockView(source: source)
+                case .list(let entries):
+                    let widest = entries.compactMap { if case .number(let n) = $0.marker { n } else { nil } }
+                        .max { $0.count < $1.count } ?? ""
                     VStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text("\u{2022}")
-                                Text(item)
+                        ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                ListMarker(marker: entry.marker, widest: widest)
+                                Text(entry.text)
                             }
+                            // One element per item, so VoiceOver reads a task's state and text once.
+                            .accessibilityElement(children: .combine)
+                            .padding(.leading, CGFloat(entry.depth) * 16)
                         }
                     }
                 case .quote(let s):
@@ -181,16 +202,54 @@ struct AgentMarkdown: View {
                 case .image(let source, let alt):
                     TranscriptImage(id: "\(id):block:\(index)", source: source, label: alt.isEmpty ? "Image" : alt,
                                     session: session)
-                case .table(let rows):
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(rows.enumerated()), id: \.offset) { i, cells in
-                            Text(cells.joined(separator: "  |  "))
-                                .font(.footnote.weight(i == 0 ? .semibold : .regular))
-                        }
+                case .table(let header, let rows):
+                    let table = MarkdownTable(header: header, rows: rows)
+                    // Scrolls sideways only when the columns are wider than the transcript.
+                    ViewThatFits(in: .horizontal) {
+                        table
+                        ScrollView(.horizontal) { table }
                     }
                 }
             }
         }
+    }
+}
+
+private struct ListMarker: View {
+    let marker: ListEntry.Marker
+    /// The longest number in the list; a hidden copy sizes the column, so it scales with Dynamic Type.
+    let widest: String
+
+    var body: some View {
+        switch marker {
+        case .bullet: Text("\u{2022}").frame(minWidth: 12)
+        case .number(let n): Text(widest).hidden().overlay(alignment: .trailing) { Text(n) }.monospacedDigit()
+        case .task(let checked):
+            Image(systemName: checked ? "checkmark.square.fill" : "square")
+                .foregroundStyle(checked ? Color.accentColor : .secondary)
+                .accessibilityLabel(checked ? "Checked" : "Unchecked")
+        case .continuation(let parent): ListMarker(marker: parent, widest: widest).hidden().accessibilityHidden(true)
+        }
+    }
+}
+
+private struct MarkdownTable: View {
+    let header: [AttributedString]
+    let rows: [[AttributedString]]
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+            GridRow {
+                ForEach(header.indices, id: \.self) { Text(header[$0]).fontWeight(.semibold) }
+            }
+            Rectangle().fill(.separator).frame(height: 1).gridCellUnsizedAxes(.horizontal)
+            ForEach(rows.indices, id: \.self) { r in
+                GridRow {
+                    ForEach(rows[r].indices, id: \.self) { Text(rows[r][$0]) }
+                }
+            }
+        }
+        .font(.footnote)
     }
 }
 

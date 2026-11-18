@@ -18,6 +18,24 @@ extension RemoteSessionCatalog {
         /// Newest first, across machines.
         public let rows: [Row]
 
+        /// A machine a new session in this project can start on, by that
+        /// machine's own id for the project, with its most recent worktree.
+        public struct Placement: Equatable, Sendable {
+            public let hostID: HostID
+            public let projectId: String
+            public let worktreeId: String
+        }
+
+        /// Each machine's project, the machine used most recently first.
+        public var placements: [Placement] {
+            var seen = Set<HostID>()
+            // Rows are newest first, so a machine's first row is its newest worktree.
+            return rows.compactMap { row in
+                guard let projectId = row.worktree.projectId, seen.insert(row.hostID).inserted else { return nil }
+                return Placement(hostID: row.hostID, projectId: projectId, worktreeId: row.worktree.id)
+            }
+        }
+
         /// The machines it spans, in row order.
         public var hostIDs: [HostID] {
             var seen = Set<HostID>()

@@ -19,6 +19,7 @@
 		23849CE940217D28217E4F16 /* ShepherdMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEF6DC8B0A58927446DDA20F /* ShepherdMenu.swift */; };
 		271977086F72799EB499DD8E /* TranscriptSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */; };
 		28905A744E97862B779D9BBB /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5675178FB5741806BEB65930 /* InboxView.swift */; };
+		2BE58B40021BA91708E27FAD /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 0A11D3E22001482E10DB6220 /* SwiftTerm */; };
 		2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */; };
 		2E36A2487A0056C7F35094FE /* ToolCallCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BD5988CE50A901089331310 /* ToolCallCard.swift */; };
 		3035A23ED932E711B9CAD674 /* UsageRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57CF74CBCBAC2A5734FA01CA /* UsageRing.swift */; };
@@ -29,12 +30,15 @@
 		46268AFCCF46CCDD017FCE7C /* DiffHunksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92A428980D278E5A5E20E827 /* DiffHunksView.swift */; };
 		468E5015B45747F86FC3A04F /* QueueTray.swift in Sources */ = {isa = PBXBuildFile; fileRef = 836FA1B810A2D04B52F5C3BD /* QueueTray.swift */; };
 		4890F4ED46FAF3D1F5FA0BE4 /* NewSessionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B8568ACBAA2AEDD6BB231F /* NewSessionModel.swift */; };
+		4B7EADFD451E201FB1F49451 /* GrammarPack.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC78E86F9CD60E848A8135C3 /* GrammarPack.swift */; };
 		56AB129852CC6503F3A8D52F /* TerminalConsole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01778058ACE3C53D047B6348 /* TerminalConsole.swift */; };
 		5BAE5DB8CB923C7AC98F2884 /* TranscriptRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18514DE5113754F3401217CA /* TranscriptRowView.swift */; };
 		6C866751DA7A18248BB79315 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E2591444903E4ABB996767C9 /* Assets.xcassets */; };
 		7000D63FB53A488810B6E422 /* InboxModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB4C7CE3F100F5656449A2C /* InboxModel.swift */; };
 		73EBA862C5723051512FE382 /* FrameMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AD039065974B934F0D88642 /* FrameMeter.swift */; };
+		73F72BC3A07A4BEA0D33FEE1 /* BeautifulMermaid in Frameworks */ = {isa = PBXBuildFile; productRef = 8B6365539322A7F7C1451249 /* BeautifulMermaid */; };
 		7DAFD28FE14392621FCDBF53 /* SessionListCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB90BAD33068D0FA5A49EE21 /* SessionListCache.swift */; };
+		82768FC0D800B66EDDFC9B99 /* MermaidBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3D6661CD737A1ADDE5B9897 /* MermaidBlockView.swift */; };
 		86D9AB9FE0BDDAC8209FCCA2 /* ImageStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21958EE58C9376495D96344 /* ImageStaging.swift */; };
 		90418683B56D8FDCE540EB72 /* WorktreesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFC88463B7E1083C886AC282 /* WorktreesView.swift */; };
 		90AE44675FE782B711960528 /* RequestCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06499964301D8FB5B30EB8B6 /* RequestCard.swift */; };
@@ -44,7 +48,7 @@
 		A14327552D08819581097496 /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E84291A6AA43082A7F684D /* HostStore.swift */; };
 		A3EFBAAFB1F782DBE2533C3F /* TranscriptImageViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC6BBF70EB1F96D5AC5A8594 /* TranscriptImageViewer.swift */; };
 		A59DD972FD0014D05D374C07 /* ComposerPickers.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB8F788F5756229A6125FB0A /* ComposerPickers.swift */; };
-		A6FDD0434FBF579996D90B20 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 0A11D3E22001482E10DB6220 /* SwiftTerm */; };
+		A6FDD0434FBF579996D90B20 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 98208F3704BAEEBFCA4EE7FB /* Markdown */; };
 		ADC23C11ED7EB665B1C1BAED /* TerminalScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFE4FA35BA2B54541B0ABD61 /* TerminalScreen.swift */; };
 		B15AA036BD9AD1D8D0125304 /* ChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED6F3B8B35385E6C2729ABAA /* ChangesView.swift */; };
 		B43121A298365C510EF57149 /* frame.html in Resources */ = {isa = PBXBuildFile; fileRef = B7A9014AA3A262509E8B3DB3 /* frame.html */; };
@@ -54,7 +58,10 @@
 		CB152CF506A31464F04D172F /* SessionRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21408E08006F4C64E22701EE /* SessionRegistry.swift */; };
 		CD0D017197AAB3BF52A44D12 /* TranscriptImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7728D27BA09D4A7193ABB64C /* TranscriptImage.swift */; };
 		D8B8FBA1F9B4014A6DFF2679 /* TerminalsList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 987B94F79FFA056339E54033 /* TerminalsList.swift */; };
-		E25E7EA6243D3DCDD5C3ACB4 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 98208F3704BAEEBFCA4EE7FB /* Markdown */; };
+		D9D22B71C3A3A47B85DCCD63 /* light.json in Resources */ = {isa = PBXBuildFile; fileRef = 33A5D219FC6E604BC0767265 /* light.json */; };
+		DF598609D6139DEEC76F939F /* CodeBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1D5D2BB1BAC229CEC583231 /* CodeBlockView.swift */; };
+		E25E7EA6243D3DCDD5C3ACB4 /* AlasHighlight in Frameworks */ = {isa = PBXBuildFile; productRef = FE403EEB6E8C9E313B1992FF /* AlasHighlight */; };
+		E4947A2F3BC9605489AF746D /* cool-slate.json in Resources */ = {isa = PBXBuildFile; fileRef = 9F0B4947542B7AB2F010C5B2 /* cool-slate.json */; };
 		E55F6FE33979517F56313A84 /* ComposerBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57A94D2BB531632B6E5027AE /* ComposerBar.swift */; };
 		E77139BEB6A5145597C12214 /* HostHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */; };
 		EBF6C7E7768E637D9F235BB0 /* AlasRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = 3517313AC46E852EA7AE203C /* AlasRemoteKit */; };
@@ -107,6 +114,7 @@
 		1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptCollectionView.swift; sourceTree = "<group>"; };
 		21408E08006F4C64E22701EE /* SessionRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRegistry.swift; sourceTree = "<group>"; };
 		27A0D3457CA4F83043146752 /* SpikeTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeTranscript.swift; sourceTree = "<group>"; };
+		33A5D219FC6E604BC0767265 /* light.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = light.json; sourceTree = "<group>"; };
 		36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasMobileApp.swift; sourceTree = "<group>"; };
 		372565FA395364953D615BC3 /* TranscriptScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptScreen.swift; sourceTree = "<group>"; };
 		416F4E87800E3DD89EE7DC25 /* NewSessionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionSheet.swift; sourceTree = "<group>"; };
@@ -128,9 +136,11 @@
 		8AD039065974B934F0D88642 /* FrameMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameMeter.swift; sourceTree = "<group>"; };
 		92A428980D278E5A5E20E827 /* DiffHunksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffHunksView.swift; sourceTree = "<group>"; };
 		987B94F79FFA056339E54033 /* TerminalsList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalsList.swift; sourceTree = "<group>"; };
+		9F0B4947542B7AB2F010C5B2 /* cool-slate.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "cool-slate.json"; sourceTree = "<group>"; };
 		B2B8568ACBAA2AEDD6BB231F /* NewSessionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionModel.swift; sourceTree = "<group>"; };
 		B7A9014AA3A262509E8B3DB3 /* frame.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = frame.html; sourceTree = "<group>"; };
 		BC6BBF70EB1F96D5AC5A8594 /* TranscriptImageViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptImageViewer.swift; sourceTree = "<group>"; };
+		BC78E86F9CD60E848A8135C3 /* GrammarPack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrammarPack.swift; sourceTree = "<group>"; };
 		BEF6DC8B0A58927446DDA20F /* ShepherdMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShepherdMenu.swift; sourceTree = "<group>"; };
 		BFE4FA35BA2B54541B0ABD61 /* TerminalScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalScreen.swift; sourceTree = "<group>"; };
 		C0E84291A6AA43082A7F684D /* HostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStore.swift; sourceTree = "<group>"; };
@@ -138,6 +148,7 @@
 		C859167B848F3A5C43EEE3D7 /* PeersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeersView.swift; sourceTree = "<group>"; };
 		C97D516817E514246987838F /* PushRegistrar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistrar.swift; sourceTree = "<group>"; };
 		CFC88463B7E1083C886AC282 /* WorktreesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreesView.swift; sourceTree = "<group>"; };
+		D1D5D2BB1BAC229CEC583231 /* CodeBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeBlockView.swift; sourceTree = "<group>"; };
 		D8C41B3901C2155F0CB451B1 /* PairHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairHostView.swift; sourceTree = "<group>"; };
 		DC497CD9E3E3ACCED5B931CD /* FileViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileViewer.swift; sourceTree = "<group>"; };
 		E21958EE58C9376495D96344 /* ImageStaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageStaging.swift; sourceTree = "<group>"; };
@@ -149,6 +160,7 @@
 		ED6F3B8B35385E6C2729ABAA /* ChangesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesView.swift; sourceTree = "<group>"; };
 		EEB4C7CE3F100F5656449A2C /* InboxModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxModel.swift; sourceTree = "<group>"; };
 		EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneProtocol.swift; sourceTree = "<group>"; };
+		F3D6661CD737A1ADDE5B9897 /* MermaidBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidBlockView.swift; sourceTree = "<group>"; };
 		F555B239BFDC686B6F661BF3 /* AlasMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AlasMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSettingsSheet.swift; sourceTree = "<group>"; };
 		FB90BAD33068D0FA5A49EE21 /* SessionListCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListCache.swift; sourceTree = "<group>"; };
@@ -168,8 +180,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				C4B6369656041E9CD53091A1 /* AlasRemoteKit in Frameworks */,
-				E25E7EA6243D3DCDD5C3ACB4 /* Markdown in Frameworks */,
-				A6FDD0434FBF579996D90B20 /* SwiftTerm in Frameworks */,
+				E25E7EA6243D3DCDD5C3ACB4 /* AlasHighlight in Frameworks */,
+				A6FDD0434FBF579996D90B20 /* Markdown in Frameworks */,
+				2BE58B40021BA91708E27FAD /* SwiftTerm in Frameworks */,
+				73F72BC3A07A4BEA0D33FEE1 /* BeautifulMermaid in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -279,6 +293,16 @@
 			path = Requests;
 			sourceTree = "<group>";
 		};
+		BFAEC282010B72D3F4A5E551 /* Themes */ = {
+			isa = PBXGroup;
+			children = (
+				9F0B4947542B7AB2F010C5B2 /* cool-slate.json */,
+				33A5D219FC6E604BC0767265 /* light.json */,
+			);
+			name = Themes;
+			path = ../Alas/Resources/Themes;
+			sourceTree = "<group>";
+		};
 		C7AF09C68FC5773484E44408 = {
 			isa = PBXGroup;
 			children = (
@@ -287,6 +311,7 @@
 				5DCBB4F5E953BC7D6DCB2D6C /* Packages */,
 				117FB60A904CAB45AAADD266 /* Resources */,
 				F615C7A44BB3004E95410496 /* Sources */,
+				BFAEC282010B72D3F4A5E551 /* Themes */,
 				6D718A3BCDCFDAC212416D09 /* VisualAid */,
 				D95E4E9B0E600B48EF875905 /* Products */,
 			);
@@ -307,8 +332,11 @@
 		D4974DEDF2DA5907B0A209CC /* Transcript */ = {
 			isa = PBXGroup;
 			children = (
+				D1D5D2BB1BAC229CEC583231 /* CodeBlockView.swift */,
 				92A428980D278E5A5E20E827 /* DiffHunksView.swift */,
+				BC78E86F9CD60E848A8135C3 /* GrammarPack.swift */,
 				0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */,
+				F3D6661CD737A1ADDE5B9897 /* MermaidBlockView.swift */,
 				21408E08006F4C64E22701EE /* SessionRegistry.swift */,
 				F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */,
 				7BD5988CE50A901089331310 /* ToolCallCard.swift */,
@@ -394,6 +422,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = F452CEC9DEF1A90F68F71159 /* Build configuration list for PBXNativeTarget "AlasMobile" */;
 			buildPhases = (
+				10F93AD59F712B143D8B346A /* Build TreeSitter Pack */,
 				F2004AFA10DDE701AC8ABDA7 /* Sources */,
 				774DCBB851809F6F902A0A26 /* Resources */,
 				4FB8E1D7D0E5989F88C8FBDF /* Frameworks */,
@@ -407,8 +436,10 @@
 			name = AlasMobile;
 			packageProductDependencies = (
 				E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */,
+				FE403EEB6E8C9E313B1992FF /* AlasHighlight */,
 				98208F3704BAEEBFCA4EE7FB /* Markdown */,
 				0A11D3E22001482E10DB6220 /* SwiftTerm */,
+				8B6365539322A7F7C1451249 /* BeautifulMermaid */,
 			);
 			productName = AlasMobile;
 			productReference = F555B239BFDC686B6F661BF3 /* AlasMobile.app */;
@@ -460,6 +491,7 @@
 			mainGroup = C7AF09C68FC5773484E44408;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				F8B5618A5A014301702BD355 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */,
 				65D697BACE7C69B167FC0CCF /* XCRemoteSwiftPackageReference "swift-markdown" */,
 				C04FA493EB1D6CB7F8F9D4AB /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				486008F89972136FF8B733D3 /* XCLocalSwiftPackageReference "../Packages/AlasCore" */,
@@ -481,11 +513,35 @@
 			buildActionMask = 2147483647;
 			files = (
 				6C866751DA7A18248BB79315 /* Assets.xcassets in Resources */,
+				E4947A2F3BC9605489AF746D /* cool-slate.json in Resources */,
 				B43121A298365C510EF57149 /* frame.html in Resources */,
+				D9D22B71C3A3A47B85DCCD63 /* light.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		10F93AD59F712B143D8B346A /* Build TreeSitter Pack */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build TreeSitter Pack";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "SRCROOT=\"${SRCROOT}/..\" \"${SRCROOT}/../scripts/build-treesitter-pack.sh\"";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		391D5C500AE932283DC0AB74 /* Sources */ = {
@@ -505,6 +561,7 @@
 				0144E12D60D9B05A662DDE7C /* AlasMobileApp.swift in Sources */,
 				1B5C0283E882903921EC7AE9 /* AppDelegate.swift in Sources */,
 				B15AA036BD9AD1D8D0125304 /* ChangesView.swift in Sources */,
+				DF598609D6139DEEC76F939F /* CodeBlockView.swift in Sources */,
 				E55F6FE33979517F56313A84 /* ComposerBar.swift in Sources */,
 				A59DD972FD0014D05D374C07 /* ComposerPickers.swift in Sources */,
 				46268AFCCF46CCDD017FCE7C /* DiffHunksView.swift in Sources */,
@@ -513,6 +570,7 @@
 				F089F4FEFE5CB481C1682375 /* FileViewer.swift in Sources */,
 				FEF3659FCEE49A303B28CC95 /* FilesView.swift in Sources */,
 				73EBA862C5723051512FE382 /* FrameMeter.swift in Sources */,
+				4B7EADFD451E201FB1F49451 /* GrammarPack.swift in Sources */,
 				E77139BEB6A5145597C12214 /* HostHub.swift in Sources */,
 				3EE566AA82CA5B1B212F5ADE /* HostStore.swift in Sources */,
 				86D9AB9FE0BDDAC8209FCCA2 /* ImageStaging.swift in Sources */,
@@ -520,6 +578,7 @@
 				28905A744E97862B779D9BBB /* InboxView.swift in Sources */,
 				EC970213412064871D907E2A /* LazyStackTranscriptView.swift in Sources */,
 				06C1EDC0F3ABD15E11DA59DD /* MarkdownBlocks.swift in Sources */,
+				82768FC0D800B66EDDFC9B99 /* MermaidBlockView.swift in Sources */,
 				4890F4ED46FAF3D1F5FA0BE4 /* NewSessionModel.swift in Sources */,
 				185E46AA928760C65408C50C /* NewSessionSheet.swift in Sources */,
 				FB774A2243E6DDC0B91251BC /* PairHostView.swift in Sources */,
@@ -569,14 +628,18 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 61BA32ECEBF540DADC9AC4A3 /* AlasMobile-Debug.xcconfig */;
 			buildSettings = {
+				"ARCHS[sdk=iphonesimulator*]" = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = AlasMobile.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				HEADER_SEARCH_PATHS = "$(inherited) $(SRCROOT)/../.build/treesitter-pack/include";
 				INFOPLIST_FILE = Sources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = "$(inherited) $(SRCROOT)/../.build/treesitter-pack/$(PLATFORM_NAME)-arm64/install/lib";
+				OTHER_LDFLAGS = "$(inherited) -lalas_treesitter_pack";
 				PRODUCT_NAME = Alas;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -587,14 +650,18 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 4AEC4569F211161953B0F178 /* AlasMobile-Release.xcconfig */;
 			buildSettings = {
+				"ARCHS[sdk=iphonesimulator*]" = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = AlasMobile.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				HEADER_SEARCH_PATHS = "$(inherited) $(SRCROOT)/../.build/treesitter-pack/include";
 				INFOPLIST_FILE = Sources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = "$(inherited) $(SRCROOT)/../.build/treesitter-pack/$(PLATFORM_NAME)-arm64/install/lib";
+				OTHER_LDFLAGS = "$(inherited) -lalas_treesitter_pack";
 				PRODUCT_NAME = Alas;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -824,6 +891,14 @@
 				minimumVersion = 1.99.3;
 			};
 		};
+		F8B5618A5A014301702BD355 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/lukilabs/beautiful-mermaid-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.4;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -836,6 +911,11 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = AlasRemoteKit;
 		};
+		8B6365539322A7F7C1451249 /* BeautifulMermaid */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F8B5618A5A014301702BD355 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */;
+			productName = BeautifulMermaid;
+		};
 		98208F3704BAEEBFCA4EE7FB /* Markdown */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 65D697BACE7C69B167FC0CCF /* XCRemoteSwiftPackageReference "swift-markdown" */;
@@ -844,6 +924,10 @@
 		E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AlasRemoteKit;
+		};
+		FE403EEB6E8C9E313B1992FF /* AlasHighlight */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AlasHighlight;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

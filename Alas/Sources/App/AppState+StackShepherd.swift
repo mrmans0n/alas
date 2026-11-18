@@ -44,7 +44,8 @@ extension AppState {
                 await self?.archiveShepherdWorktreeIfAllowed(
                     worktreeID, sessionID: sessionID, isStillWanted: isStillWanted
                 ) ?? .declined
-            }
+            },
+            loadStackWithForgeState: { path in try await GGService().currentStack(worktreePath: path.path) }
         )
     }
 

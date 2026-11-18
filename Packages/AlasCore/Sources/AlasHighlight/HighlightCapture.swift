@@ -1,8 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
 
 /// A simplified syntax-highlight category derived from a tree-sitter
 /// capture name (e.g. "keyword.control" -> .keyword).

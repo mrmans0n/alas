@@ -26,6 +26,9 @@ packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
     minorVersion: 1.99.3
+  BeautifulMermaidSwift:
+    url: https://github.com/lukilabs/beautiful-mermaid-swift
+    from: 1.0.4
 
 targets:
   AlasMobile:
@@ -40,13 +43,22 @@ targets:
       # Shared with the Mac: the frame visual aid fragments are wrapped in.
       - path: ../Alas/Resources/VisualAid/frame.html
         buildPhase: resources
+      # Shared with the Mac: the syntax colour themes code blocks are painted with.
+      - path: ../Alas/Resources/Themes/light.json
+        buildPhase: resources
+      - path: ../Alas/Resources/Themes/cool-slate.json
+        buildPhase: resources
     dependencies:
       - package: AlasCore
         product: AlasRemoteKit
+      - package: AlasCore
+        product: AlasHighlight
       - package: Markdown
         product: Markdown
       - package: SwiftTerm
         product: SwiftTerm
+      - package: BeautifulMermaidSwift
+        product: BeautifulMermaid
       - target: AlasNotificationService
         embed: true
     settings:
@@ -54,6 +66,16 @@ targets:
         PRODUCT_NAME: Alas
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # The Rust grammar pack is built arm64-only for the phone.
+        ARCHS[sdk=iphonesimulator*]: arm64
+        HEADER_SEARCH_PATHS: $(inherited) $(SRCROOT)/../.build/treesitter-pack/include
+        LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/../.build/treesitter-pack/$(PLATFORM_NAME)-arm64/install/lib
+        OTHER_LDFLAGS: $(inherited) -lalas_treesitter_pack
+    preBuildScripts:
+      # The script resolves the crate under SRCROOT, which must be the repo root.
+      - name: Build TreeSitter Pack
+        script: 'SRCROOT="${SRCROOT}/.." "${SRCROOT}/../scripts/build-treesitter-pack.sh"'
+        basedOnDependencyAnalysis: false
     entitlements:
       path: AlasMobile.entitlements
       properties:

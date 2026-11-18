@@ -1,3 +1,4 @@
+import AlasHighlight
 import Testing
 @testable import Alas
 

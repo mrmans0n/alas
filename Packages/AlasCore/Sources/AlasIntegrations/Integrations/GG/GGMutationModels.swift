@@ -30,9 +30,12 @@ public struct GGCapabilities: Equatable, Sendable {
     /// `gg sync --until` and `--draft`: Ship can publish part of a stack.
     public var syncUntilDraft: Bool = false
     public var landJSONL: Bool = false
+    /// `gg land --rebase-if-needed`: after a merge-commit landing, gg rebases
+    /// the rest of the stack only when the next entry can't merge as it is.
+    public var landRebaseIfNeeded: Bool = false
     public var localStackSnapshot: Bool = false
 
-    public init(structuredSplit: Bool, keepCurrentUnstack: Bool, clientOperationID: Bool = false, stagedOnlyAmend: Bool = false, syncJSONL: Bool = false, syncUntilDraft: Bool = false, landJSONL: Bool = false, localStackSnapshot: Bool = false) {
+    public init(structuredSplit: Bool, keepCurrentUnstack: Bool, clientOperationID: Bool = false, stagedOnlyAmend: Bool = false, syncJSONL: Bool = false, syncUntilDraft: Bool = false, landJSONL: Bool = false, landRebaseIfNeeded: Bool = false, localStackSnapshot: Bool = false) {
         self.structuredSplit = structuredSplit
         self.keepCurrentUnstack = keepCurrentUnstack
         self.clientOperationID = clientOperationID
@@ -40,6 +43,7 @@ public struct GGCapabilities: Equatable, Sendable {
         self.syncJSONL = syncJSONL
         self.syncUntilDraft = syncUntilDraft
         self.landJSONL = landJSONL
+        self.landRebaseIfNeeded = landRebaseIfNeeded
         self.localStackSnapshot = localStackSnapshot
     }
 }
@@ -231,6 +235,9 @@ public enum GGMutationError: Error, Equatable, Sendable {
     case syncTerminalFailure(message: String)
     /// The installed gg lacks `gg sync --until` or `--draft`.
     case scopedSyncUnsupported
+    /// An open entry has a merge queued on the forge (auto-merge or a merge
+    /// train), and pushing its branch would cancel it.
+    case queuedMerge
 }
 
 extension GGMutationError: LocalizedError {
@@ -244,6 +251,7 @@ extension GGMutationError: LocalizedError {
         case .stagingFailed: "Staging failed. Fix the staging error and try again."
         case .syncTerminalFailure(let message): message
         case .scopedSyncUnsupported: "The installed gg cannot publish part of a stack or open drafts. Update gg, then try again."
+        case .queuedMerge: "A merge is queued for an entry of this stack. Rebasing or syncing would push its branch and cancel that merge. Wait for it to merge, or cancel its auto-merge, then try again."
         }
     }
 }

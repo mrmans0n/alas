@@ -1,3 +1,4 @@
+import AlasHighlight
 import SwiftUI
 
 /// Sidebar badge for harness activity.

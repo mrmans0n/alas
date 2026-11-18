@@ -1,8 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
 
 public enum SymbolKind: String, Codable, Sendable, CaseIterable {
     case `class`, `struct`, `enum`, interface, module, type

@@ -1,3 +1,4 @@
+import AlasHighlight
 import AlasRemoteKit
 import SwiftUI
 
@@ -6,6 +7,8 @@ import SwiftUI
 /// cut, with "Show all N lines" below. Long lines do not wrap; a hunk scrolls sideways instead.
 struct DiffHunksView: View {
     let diff: ParsedDiff
+    /// Each line's syntax spans, counted across hunks; see `spans(for:path:)`.
+    let spans: [[HighlightSpan]]
     let maxLines: Int
     /// The owner keeps the expanded state, so the transcript cell re-measures when it changes.
     let onShowAll: () -> Void
@@ -13,6 +16,27 @@ struct DiffHunksView: View {
     // ponytail: every shown line is a view in one self-sizing cell, so "Show all" stops here;
     // render lines lazily (virtualized) to lift the ceiling.
     static let expandedLineLimit = 2000
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// As the Mac's `DiffSelectableTextBuilder`: each line tokenized alone with the file's language,
+    /// keeping the spans that start past the previous one's end. Empty when the path has no grammar.
+    /// Only the lines "Show all" can reach are tokenized.
+    static func spans(for diff: ParsedDiff, path: String) -> [[HighlightSpan]] {
+        guard let ext = ACPCodeLanguage.highlighterExtension(forPath: path) else { return [] }
+        return diff.hunks.flatMap(\.lines).prefix(expandedLineLimit).map { line in
+            let length = (line.text as NSString).length
+            var cursor = 0
+            return TreeSitterHighlighter.tokenize(line: line.text, fileExtension: ext)
+                .filter { $0.range.location >= 0 && NSMaxRange($0.range) <= length }
+                .sorted { $0.range.location < $1.range.location }
+                .filter { span in
+                    guard span.range.location >= cursor else { return false }
+                    cursor = NSMaxRange(span.range)
+                    return true
+                }
+        }
+    }
 
     private var lineCount: Int { diff.hunks.reduce(0) { $0 + $1.lines.count } }
 
@@ -31,10 +55,13 @@ struct DiffHunksView: View {
 
     var body: some View {
         let hunks = visibleHunks
+        let tokens = ThemeTokens.forScheme(colorScheme)
+        // Where each hunk's first line sits in `spans`.
+        let starts = hunks.reduce(into: [0]) { $0.append($0.last! + $1.lines.count) }
         // Wide enough for the largest number shown; the font is monospaced, so padding aligns them.
         let digits = String(hunks.flatMap(\.lines).map { max($0.oldNumber ?? 0, $0.newNumber ?? 0) }.max() ?? 0).count
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(hunks.enumerated()), id: \.offset) { _, hunk in
+            ForEach(Array(hunks.enumerated()), id: \.offset) { hunkIndex, hunk in
                 Text(hunk.header)
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -46,8 +73,14 @@ struct DiffHunksView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         // At least as wide as the card, so short lines' tints reach its edge.
                         Color.clear.frame(height: 0).containerRelativeFrame(.horizontal)
-                        ForEach(Array(hunk.lines.enumerated()), id: \.offset) { _, line in
-                            Self.row(line, digits: digits)
+                        ForEach(Array(hunk.lines.enumerated()), id: \.offset) { lineIndex, line in
+                            let index = starts[hunkIndex] + lineIndex
+                            let text = tokens.attributed(
+                                line.text,
+                                spans: index < spans.count ? spans[index] : [],
+                                changedLine: line.kind != .context
+                            )
+                            Self.row(line, text: text, digits: digits)
                         }
                     }
                 }
@@ -71,7 +104,7 @@ struct DiffHunksView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    private static func row(_ line: ParsedDiff.Hunk.Line, digits: Int) -> some View {
+    private static func row(_ line: ParsedDiff.Hunk.Line, text: AttributedString, digits: Int) -> some View {
         let (sign, tint, spoken): (String, Color?, String) = switch line.kind {
         case .add: ("+", .green, "Added \(line.text)")
         case .delete: ("\u{2212}", .red, "Removed \(line.text)")
@@ -80,7 +113,7 @@ struct DiffHunksView: View {
         return HStack(spacing: 6) {
             Text("\(pad(line.oldNumber, digits)) \(pad(line.newNumber, digits))").foregroundStyle(.secondary)
             Text(sign).foregroundStyle(tint ?? .secondary)
-            Text(line.text)
+            Text(text)
         }
         .lineLimit(1)
         .fixedSize()
