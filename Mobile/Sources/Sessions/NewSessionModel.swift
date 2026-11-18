@@ -37,11 +37,13 @@ final class NewSessionModel {
     private(set) var projectId: String?
     var base: String?
     var branch = ""
+    var useBranchNaming = true
+    private(set) var createdRoute: SessionRoute?
     private(set) var agentId: String?
     var modelId: String?
     var effortId: String?
     /// A repo hook the host holds the create for, until the user answers.
-    var pendingHook: PeerRepoHook?
+    private(set) var pendingHook: PeerRepoHook?
     /// The connection dropped mid-create: the worktree may or may not exist.
     private(set) var outcomeUnknown = false
     private var sessionsReloaded = false
@@ -54,7 +56,6 @@ final class NewSessionModel {
     @ObservationIgnored private var presetPending = false
     /// The filter the preset typed, cleared again when the machine changes.
     @ObservationIgnored private var presetFilter: String?
-    @ObservationIgnored private let onCreated: (SessionRoute) -> Void
     @ObservationIgnored private var listener: ListenerToken?
     @ObservationIgnored private var recoveredWorktreeId: String?
     @ObservationIgnored private var modeChosen = false
@@ -62,25 +63,31 @@ final class NewSessionModel {
     @ObservationIgnored private var watchGeneration = 0
     @ObservationIgnored private var hostWasOnline = false
 
-    init(hub: HostHub, presets: [NewSessionPreset] = [], onCreated: @escaping (SessionRoute) -> Void) {
+    init(hub: HostHub, presets: [NewSessionPreset] = []) {
         self.hub = hub
         self.presets = presets
-        self.onCreated = onCreated
     }
 
-    /// Joins the preferred online host, else the first, and loads its lists. Kept out of `init` because SwiftUI may
-    /// construct a throwaway model each time the presenting view re-evaluates.
+    /// Keeps the project header's machine selected while it reconnects. For a project
+    /// on several machines prefer an online one, or the first online machine for a global create.
     func start() {
         guard !started else { return }
         started = true
         let online = onlineHosts.map(\.id)
-        select(host: presets.first { online.contains($0.hostID) }?.hostID ?? online.first)
+        let preferred = presets.first { online.contains($0.hostID) } ?? presets.first
+        select(host: preferred?.hostID ?? online.first)
     }
 
     private var preset: NewSessionPreset? { presets.first { $0.hostID == hostID } }
     private var presetProjectId: String? { preset?.projectId }
 
     var onlineHosts: [PairedHost] { hub.hosts.filter { hub.state(of: $0.id) == .online } }
+    var machineOptions: [PairedHost] {
+        hub.hosts.filter { $0.id == hostID || hub.state(of: $0.id) == .online }
+    }
+    var showsMachine: Bool { !presets.isEmpty || machineOptions.count > 1 || !hostIsOnline }
+    var hostIsOnline: Bool { hostID.map { hub.state(of: $0) == .online } ?? false }
+    var hostName: String? { hub.hosts.first { $0.id == hostID }?.name }
     var isCreating: Bool { phase == .creating }
 
     var error: String? {
@@ -120,17 +127,29 @@ final class NewSessionModel {
         return []
     }
 
-    var branchError: String? { branch.isEmpty ? nil : RemoteBranchName.validationMessage(branch) }
+    var branchNaming: RemoteWorktreeBranchNaming? { projects?.first { $0.id == projectId }?.branchNaming }
+
+    var branchPreview: String? {
+        guard !branch.isEmpty, let branchNaming else { return nil }
+        return branchNaming.compose(name: branch, enabled: useBranchNaming)
+    }
+
+    var branchError: String? {
+        guard !branch.isEmpty else { return nil }
+        guard let branchPreview else { return RemoteBranchName.validationMessage(branch) }
+        if case .invalid(let message) = GitNameValidator.validateBranchName(branchPreview) { return message }
+        return nil
+    }
 
     var canCreate: Bool {
-        guard !isCreating, !outcomeUnknown, agentId != nil else { return false }
+        guard hostIsOnline, !isCreating, !outcomeUnknown, agentId != nil else { return false }
         switch mode {
         case .existing:
             return selectedWorktreeId != nil
         case .new:
             guard projectId != nil, let base, branchNames.contains(base)
             else { return false }
-            return RemoteBranchName.validationMessage(branch) == nil
+            return !branch.isEmpty && branchError == nil
         }
     }
 
@@ -148,6 +167,7 @@ final class NewSessionModel {
         selectedWorktreeId = nil
         projectId = nil
         base = nil
+        useBranchNaming = true
         agentId = nil
         modelId = nil
         effortId = nil
@@ -161,7 +181,7 @@ final class NewSessionModel {
         listener = hub.addListener(host) { [weak self] message in self?.receive(message) }
         hostWasOnline = hub.state(of: host) == .online
         watchHost(generation: watchGeneration)
-        loadLists()
+        if hostWasOnline { loadLists() }
     }
 
     func setMode(_ newMode: Mode) {
@@ -182,6 +202,7 @@ final class NewSessionModel {
         projectId = id
         branches = nil
         base = nil
+        useBranchNaming = true
         send(.listBranches(projectId: id))
         reconcileAgent()
     }
@@ -233,7 +254,9 @@ final class NewSessionModel {
     private func sendWorktreeSession(consent: RepoHookConsent) {
         guard let projectId, let base, let agentId else { return }
         send(.createWorktreeSession(projectId: projectId, base: base, branch: branch, agentId: agentId,
-                                    modelId: modelId, effortId: effortId, repoHook: consent), creating: true)
+                                    modelId: modelId, effortId: effortId, repoHook: consent,
+                                    useBranchNaming: branchNaming?.appliesRule == true && !useBranchNaming ? false : nil),
+             creating: true)
     }
 
     // MARK: - Wire
@@ -303,16 +326,17 @@ final class NewSessionModel {
             branches = .failed(failure)
         case .sessionList:
             sessionsReloaded = true
-        case .sessionCreated(let session), .worktreeSessionCreated(let session):
+        case .sessionCreated(let session) where mode == .existing,
+             .worktreeSessionCreated(let session) where mode == .new:
             guard isCreating, let hostID else { return }
             phase = .editing
             hub.send(.listSessions, to: hostID)
-            onCreated(SessionRoute(hostID: hostID, sessionId: session.id))
+            createdRoute = SessionRoute(hostID: hostID, sessionId: session.id)
         case .createSessionFailed(let failure):
-            guard isCreating else { return }
+            guard isCreating, mode == .existing else { return }
             phase = .failed(failure)
         case .worktreeSessionCreationFailed(let stage, let failure, let worktreeId):
-            guard isCreating else { return }
+            guard isCreating, mode == .new else { return }
             phase = .failed(failure)
             // The worktree exists without its session: offer it instead of creating a second one.
             if stage == .session, let worktreeId, !worktreeId.isEmpty {
@@ -323,7 +347,7 @@ final class NewSessionModel {
                 reconcileAgent()
             }
         case .worktreeSessionNeedsRepoHookApproval(let hook):
-            guard isCreating else { return }
+            guard isCreating, mode == .new else { return }
             pendingHook = hook
         default:
             break

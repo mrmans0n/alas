@@ -3,14 +3,9 @@ import SwiftUI
 
 /// Starts a session on a worktree that exists, or on a new one the host creates.
 struct NewSessionSheet: View {
-    @State private var model: NewSessionModel
+    @Bindable var model: NewSessionModel
     @Environment(\.dismiss) private var dismiss
-    let hub: HostHub
-
-    init(hub: HostHub, presets: [NewSessionPreset] = [], onCreated: @escaping (SessionRoute) -> Void) {
-        self.hub = hub
-        _model = State(initialValue: NewSessionModel(hub: hub, presets: presets, onCreated: onCreated))
-    }
+    let showCreatingWorktree: () -> Void
 
     var body: some View {
         NavigationStack {
@@ -32,23 +27,13 @@ struct NewSessionSheet: View {
                     if model.isCreating {
                         ProgressView()
                     } else {
-                        Button("Create") { model.create() }.disabled(!model.canCreate)
+                        Button("Create") {
+                            model.create()
+                            if model.mode == .new, model.isCreating { showCreatingWorktree() }
+                        }
+                        .disabled(!model.canCreate)
                     }
                 }
-            }
-            .confirmationDialog(
-                model.pendingHook.map { "Run the \($0.event.title.lowercased()) hook?" } ?? "",
-                isPresented: Binding(get: { model.pendingHook != nil }, set: { shown in
-                    // Runs after a button's action, so only an outside tap still finds the hook.
-                    if !shown { Task { @MainActor in if model.pendingHook != nil { model.answerHook(nil) } } }
-                }),
-                titleVisibility: .visible, presenting: model.pendingHook
-            ) { hook in
-                Button("Run") { model.answerHook(.approve(hash: hook.hash)) }
-                Button("Skip") { model.answerHook(.skip) }
-                Button("Cancel", role: .cancel) { model.answerHook(nil) }
-            } message: { hook in
-                Text(hook.text)
             }
         }
         .interactiveDismissDisabled(model.isLocked)
@@ -61,29 +46,13 @@ struct NewSessionSheet: View {
 
     private var form: some View {
         Form {
-            let hosts = model.onlineHosts
-            // Also when the chosen Mac dropped while another is online, so the user can move to that one.
-            if hosts.count > 1 || (!hosts.isEmpty && !hosts.contains { $0.id == model.hostID }) {
+            if model.showsMachine {
                 Section {
                     Picker("Machine", selection: Binding(get: { model.hostID }, set: { model.select(host: $0) })) {
-                        ForEach(hosts) { Text($0.name).tag(Optional($0.id)) }
+                        ForEach(model.machineOptions) { Text($0.name).tag(Optional($0.id)) }
                     }
                 }
             }
-            Section {
-                Picker("Worktree", selection: Binding(get: { model.mode }, set: { model.setMode($0) })) {
-                    Text("Existing").tag(RemoteNewSession.WorktreeMode.existing)
-                    Text("New worktree").tag(RemoteNewSession.WorktreeMode.new)
-                }
-                .pickerStyle(.segmented)
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets())
-            }
-            .disabled(model.isCreating)
-
-            if model.mode == .existing { existingSection } else { newWorktreeSections }
-            agentSections
-
             if let error = model.error {
                 Section {
                     Text(error).foregroundStyle(.red)
@@ -92,6 +61,29 @@ struct NewSessionSheet: View {
                     }
                 }
             }
+            if model.hostIsOnline {
+                Section {
+                    Picker("Worktree", selection: Binding(get: { model.mode }, set: { model.setMode($0) })) {
+                        Text("Existing").tag(RemoteNewSession.WorktreeMode.existing)
+                        Text("New worktree").tag(RemoteNewSession.WorktreeMode.new)
+                    }
+                    .pickerStyle(.segmented)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
+                }
+                .disabled(model.outcomeUnknown)
+                Group {
+                    if model.mode == .existing { existingSection } else { newWorktreeSections }
+                    agentSections
+                }
+                .disabled(model.outcomeUnknown)
+            } else {
+                Section {
+                    Label("Waiting for \(model.hostName ?? "the machine") to come online", systemImage: "wifi.slash")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
         }
         .disabled(model.isCreating)
     }
@@ -193,10 +185,27 @@ struct NewSessionSheet: View {
             }
 
             Section {
-                TextField("New branch", text: $model.branch)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                BranchNameField(text: $model.branch)
+                if let naming = model.branchNaming, naming.appliesRule {
+                    Toggle(isOn: $model.useBranchNaming) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(naming.template == nil ? "Use branch prefix" : "Use branch template")
+                            Text(naming.template ?? naming.prefix)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             } footer: {
-                if let message = model.branchError { Text(message).foregroundStyle(.red) }
+                VStack(alignment: .leading, spacing: 4) {
+                    if let preview = model.branchPreview {
+                        Text("Branch to create: \(preview)").font(.footnote.monospaced())
+                            .textSelection(.enabled)
+                    } else if model.branchNaming == nil {
+                        Text("This Mac applies its branch naming settings on create.")
+                    }
+                    if let message = model.branchError { Text(message).foregroundStyle(.red) }
+                }
             }
         }
     }
@@ -248,7 +257,7 @@ struct NewSessionSheet: View {
             Section("Review") {
                 LabeledContent("Repository", value: model.projects?.first { $0.id == model.projectId }?.name ?? "Not selected")
                 LabeledContent("Base", value: model.base ?? "Not selected")
-                LabeledContent("Branch", value: model.branch.isEmpty ? "Not entered" : model.branch)
+                LabeledContent("Branch", value: model.branchPreview ?? (model.branch.isEmpty ? "Not entered" : model.branch))
             }
         }
     }

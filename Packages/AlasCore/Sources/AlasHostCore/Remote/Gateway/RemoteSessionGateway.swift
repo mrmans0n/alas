@@ -179,10 +179,10 @@ public final class RemoteSessionGateway {
             refreshProjectList()
         case .listBranches(let projectId):
             refreshBranchList(projectId: projectId)
-        case .createWorktreeSession(let projectId, let base, let branch, let agentId, let modelId, let effortId, let repoHook):
+        case .createWorktreeSession(let projectId, let base, let branch, let agentId, let modelId, let effortId, let repoHook, let useBranchNaming):
             let result = await hostCalls.createWorktreeSession(RemoteWorktreeSessionCreation(
                 projectID: projectId, base: base, branch: branch, agentID: agentId, modelID: modelId, effortID: effortId,
-                repoHook: repoHook
+                repoHook: repoHook, useBranchNaming: useBranchNaming
             ), hostCaller)
             switch result {
             case .success(let summary):
