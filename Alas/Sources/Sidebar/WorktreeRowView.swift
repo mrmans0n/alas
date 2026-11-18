@@ -827,7 +827,7 @@ struct WorktreeRowView: View {
     private func accessibilityLabel(status: StatusPresentation?, worktreeStatus: WorktreeDirtyState, showsExplanation: Bool) -> String {
         WorktreeRowPresentation.accessibilityLabel(WorktreeRowAccessibilityContent(
             name: worktree.title,
-            ship: liveActivity.ship.map { $0.isFailure ? $0.title : $0.tooltip },
+            ship: liveActivity.ship.map { $0.isFailure ? "Ship failed: \($0.tooltip)" : $0.tooltip },
             statusNote: status?.note,
             shepherd: liveActivity.shepherd.map(Self.shepherdAccessibilityText),
             added: diffStats.added,
@@ -878,6 +878,7 @@ struct WorktreeRowView: View {
                     Spinner(lineWidth: 1.2, duration: 0.7, color: color)
                         .frame(width: 9, height: 9)
                 } else {
+                    // Reserved: the sidebar does not feed paused VMs yet (reading one is a disk read).
                     Icon(name: symbol, size: 10, color: color)
                         .opacity(glyph.state == .paused ? 0.45 : 1)
                 }
@@ -942,7 +943,8 @@ struct WorktreeRowView: View {
         .font(scale.metaFont)
         .frame(maxWidth: .infinity, alignment: .leading)
         .help(ship.tooltip)
-        .accessibilityLabel(ship.isFailure ? ship.title : ship.tooltip)
+        // A failure's tooltip is its whole message.
+        .accessibilityLabel(ship.isFailure ? "Ship failed: \(ship.tooltip)" : ship.tooltip)
         .accessibilityHint("Opens the session shipping the stack")
         .padding(.leading, textInset)
     }

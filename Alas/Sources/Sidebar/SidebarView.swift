@@ -452,6 +452,9 @@ struct SidebarView: View {
     /// Read here rather than in the row, so a row never observes the VM
     /// manager, the device panes or the shepherds itself.
     private func liveActivity(_ wt: Worktree, in group: ProjectConfig) -> WorktreeRowPresentation.LiveActivity {
+        #if DEBUG
+        if let scripted = DesignCaptureLiveActivity.shared.byBranch { return scripted[wt.branch] ?? .none }
+        #endif
         let hasMachineBadge = machineBadge(wt, in: group) != nil
         guard !hasMachineBadge else {
             return WorktreeRowPresentation.liveActivity(
@@ -503,7 +506,7 @@ struct SidebarView: View {
                     else if device?.state == .booted { .on }
                     else { nil }
                 guard seen.insert(id).inserted else { continue }
-                owned.append(.init(id: id, name: device?.name ?? id, isAndroid: false, state: deviceState))
+                owned.append(.init(id: id, name: device?.name ?? id, isAndroid: false, isEmulator: false, state: deviceState))
             } else {
                 let avd = id.hasPrefix("avd:") ? String(id.dropFirst(4)) : nil
                 let running = androids.first { avd != nil ? $0.avdName == avd : $0.serial == id }
@@ -513,7 +516,8 @@ struct SidebarView: View {
                     else { nil }
                 guard seen.insert(running?.serial ?? id).inserted else { continue }
                 let name = running?.title ?? (avd ?? id).replacingOccurrences(of: "_", with: " ")
-                owned.append(.init(id: id, name: name, isAndroid: true, state: deviceState))
+                let isEmulator = avd != nil || running?.isEmulator == true || id.hasPrefix("emulator-")
+                owned.append(.init(id: id, name: name, isAndroid: true, isEmulator: isEmulator, state: deviceState))
             }
         }
         return owned

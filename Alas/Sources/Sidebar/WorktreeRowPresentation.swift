@@ -133,6 +133,8 @@ extension WorktreeRowPresentation {
         let id: String
         let name: String
         let isAndroid: Bool
+        /// An Android emulator rather than a phone; false for simulators.
+        let isEmulator: Bool
         /// Nil when the device is shut down.
         let state: ResourceState?
     }
@@ -169,7 +171,7 @@ extension WorktreeRowPresentation {
             guard let first = live.first else { continue }
             let state: ResourceState = live.contains { $0.state == .starting } ? .starting : .on
             let tooltip = live.map { device in
-                let name = android ? "\(device.name) (emulator)" : device.name
+                let name = device.isEmulator ? "\(device.name) (emulator)" : device.name
                 return "\(name) \(device.state == .starting ? "booting" : "booted")"
             }.joined(separator: ", ")
             glyphs.append(ResourceGlyph(

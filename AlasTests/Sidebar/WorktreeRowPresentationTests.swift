@@ -163,15 +163,17 @@ struct WorktreeRowPresentationTests {
     @Test func devicesShowOneGlyphPerPlatformAndSkipShutDownOnes() {
         typealias Device = WorktreeRowPresentation.OwnedDevice
         let glyphs = WorktreeRowPresentation.resourceGlyphs(vms: [:], devices: [
-            Device(id: "A", name: "iPhone 17 Pro", isAndroid: false, state: .on),
-            Device(id: "B", name: "iPad", isAndroid: false, state: nil),
-            Device(id: "C", name: "Pixel 9", isAndroid: true, state: .starting),
+            Device(id: "A", name: "iPhone 17 Pro", isAndroid: false, isEmulator: false, state: .on),
+            Device(id: "B", name: "iPad", isAndroid: false, isEmulator: false, state: nil),
+            Device(id: "C", name: "Pixel 9", isAndroid: true, isEmulator: true, state: .starting),
+            Device(id: "D", name: "Pixel 8", isAndroid: true, isEmulator: false, state: .on),
         ])
         #expect(glyphs == [
             Glyph(kind: .iosSimulator, state: .on, count: 1, tooltip: "iPhone 17 Pro booted", deviceID: "A"),
-            Glyph(kind: .androidEmulator, state: .starting, count: 1, tooltip: "Pixel 9 (emulator) booting", deviceID: "C"),
+            Glyph(kind: .androidEmulator, state: .starting, count: 2,
+                  tooltip: "Pixel 9 (emulator) booting, Pixel 8 booted", deviceID: "C"),
         ])
-        let shutDown = [Device(id: "B", name: "iPad", isAndroid: false, state: nil)]
+        let shutDown = [Device(id: "B", name: "iPad", isAndroid: false, isEmulator: false, state: nil)]
         #expect(WorktreeRowPresentation.resourceGlyphs(vms: [:], devices: shutDown).isEmpty)
     }
 
@@ -286,5 +288,6 @@ struct WorktreeRowPresentationTests {
         }
         #expect(activity(true) == .none)
         #expect(activity(false).ship != nil)
+        #expect(activity(false).glyphs.map(\.kind) == [.vm(.macOS)])
     }
 }

@@ -41,7 +41,8 @@
 # "Other sessions" bucket, an empty project, an overflowing tab row), expands both online Macs,
 # collapses the local projects and selects a peer worktree. peers-hover also hovers the Peers
 # header so the "+" pair control shows; peers-rename opens the peer worktree rename sheet
-# (DesignCaptureSidebar).
+# (DesignCaptureSidebar). live-activity scripts the demo rows' VM, device, ship and shepherd
+# activity instead (DesignCaptureLiveActivity).
 # workspace-checkout and workspace-checkout-bottom show the workspace checkout details sheet (top, and
 # scrolled to work items and reviews) over a scripted three-repository checkout, and vm-setup, vm-stopped,
 # vm-running and vm-attention show 2x2 galleries of VM tab states built from the tab's chrome
