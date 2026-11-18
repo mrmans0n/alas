@@ -93,11 +93,11 @@ struct TranscriptRowView: View {
                 titleCaption(aid.title, "Visual")
             }
         case .questionAnswer(let answer):
-            notice(answer.displayText)
+            QuestionAnswerCard(answer: answer, isExpanded: isExpanded, toggle: toggle)
         case .outcomeCard(let card):
-            notice(card.title)
+            OutcomeCard(id: item.id, card: card)
         case .failureIncident(let incident):
-            notice(incident.details.map { "\(incident.title)\n\n\($0)" } ?? incident.title)
+            FailureIncidentCard(incident: incident)
         case .systemNotice(let text):
             notice(text)
         }
