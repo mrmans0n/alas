@@ -499,7 +499,7 @@ public final class RemoteSessionGateway {
             // A synchronous read: the connection drops duplicates by `fileRequestDedupKey`.
             if let run = hostCalls.subagentRun(id, subagentId) {
                 send(.subagentTranscript(sessionId: id, subagentId: subagentId, found: true, state: run.state.rawValue,
-                                         messages: Self.wireTail(of: run, sessionId: id)))
+                                         messages: Self.wireTail(of: run, sessionId: id, subagentId: subagentId)))
             } else {
                 send(.subagentTranscript(sessionId: id, subagentId: subagentId, found: false, state: nil, messages: []))
             }
@@ -1039,14 +1039,24 @@ public final class RemoteSessionGateway {
         return wire
     }
 
-    /// A subagent's newest rows, bounded as `wireTail` bounds a session's.
-    private static func wireTail(of run: ACPSubagentRun, sessionId: String) -> [RemoteWireMessage] {
+    /// Child rows that keep their full tool-call content; older ones are cut
+    /// as the transcript cuts rows that leave its window.
+    private static let subagentFullRows = 10
+
+    /// A subagent's newest rows that fit an eighth of a session frame: the
+    /// phone re-reads a running child every 2 s, so each reply stays small.
+    private static func wireTail(of run: ACPSubagentRun, sessionId: String, subagentId: String) -> [RemoteWireMessage] {
+        let budget = RemoteTranscriptSync.payloadBudget(sessionId: sessionId) / 8 - 6 * subagentId.utf8.count
         var wire: [RemoteWireMessage] = []
-        var remaining = RemoteTranscriptSync.payloadBudget(sessionId: sessionId)
-        for index in run.messages.indices.reversed().prefix(RemoteTranscriptSync.tailWindow) {
-            let row = toWire(run.messages[index], index: index,
-                             createdAt: Int64(run.createdAt(at: index).timeIntervalSince1970 * 1000))
-                .boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes)
+        var remaining = budget
+        for (offset, index) in run.messages.indices.reversed().prefix(RemoteTranscriptSync.tailWindow).enumerated() {
+            var message = run.messages[index]
+            if offset >= subagentFullRows, case .toolCall(var call) = message {
+                call.truncateForOffWindow()
+                message = .toolCall(call)
+            }
+            let row = toWire(message, index: index, createdAt: Int64(run.createdAt(at: index).timeIntervalSince1970 * 1000))
+                .boundedForTransport(maximumBytes: budget)
             guard row.byteCount + 1 <= remaining else { break }
             remaining -= row.byteCount + 1
             wire.append(row.message)

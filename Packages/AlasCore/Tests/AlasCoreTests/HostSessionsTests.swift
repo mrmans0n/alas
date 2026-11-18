@@ -525,14 +525,15 @@ struct HostSessionsTests {
         ])
     }
 
-    /// A peer reads a subagent's own transcript and state, and hears that a
-    /// subagent the session does not have was not found.
+    /// A peer reads a subagent's own transcript and state, bounded to a small
+    /// reply, and hears that a subagent the session does not have was not found.
     @Test(.timeLimit(.minutes(5))) func aPeerReadsASubagentsTranscript() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let id = try await fixture.host.sessions.create(.worktree(fixture.ref), agentID: "codex", caller: .app).id
         let live = try #require(fixture.core.sessionManagers.values.compactMap { $0.liveSession(for: id) }.first)
         live.registerSubagent(.init(subagentSessionId: "child", name: "Explorer"))
+        live.applySubagentUpdate(.agentThoughtChunk(.text(String(repeating: "x", count: 2 << 20))), subagentSessionId: "child")
         live.applySubagentUpdate(.agentMessageChunk(.text("Looked around")), subagentSessionId: "child")
         var replies: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(host: fixture.host) { replies.append($0) }
@@ -546,8 +547,9 @@ struct HostSessionsTests {
             Issue.record("expected the child's transcript, got \(replies)")
             return
         }
-        #expect(messages.map(\.kind) == ["agent"])
-        #expect(messages.map(\.text) == ["Looked around"])
+        // A row too large for the child's small budget arrives as a notice.
+        #expect(messages.map(\.kind) == ["systemNotice", "agent"])
+        #expect(messages.last?.text == "Looked around")
         #expect(replies[1] == .subagentTranscript(sessionId: id, subagentId: "gone", found: false, state: nil, messages: []))
     }
 
