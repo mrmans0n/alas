@@ -50,7 +50,7 @@ struct CodeBlockView: View {
 
 /// The Mac's theme colours, read from its bundled theme files, so code reads the same on both.
 struct ThemeTokens {
-    private let colors: [String: Color]
+    let colors: [String: Color]
 
     static let light = ThemeTokens(resource: "light")
     static let dark = ThemeTokens(resource: "cool-slate")
@@ -71,12 +71,18 @@ struct ThemeTokens {
     }
 
     func attributed(_ chunk: CodeChunk) -> AttributedString {
-        var out = AttributedString(chunk.text)
+        attributed(chunk.text, spans: chunk.spans)
+    }
+
+    /// On a changed diff line a comment keeps the foreground, as the Mac's `EditorTheme` does.
+    func attributed(_ text: String, spans: [HighlightSpan], changedLine: Bool = false) -> AttributedString {
+        var out = AttributedString(text)
         out.foregroundColor = colors["fg"]
-        for span in chunk.spans {
+        for span in spans {
             // Every span paints, so a plain capture nested in a coloured one (a string's
             // interpolated name) returns to the foreground, as on the Mac.
-            if let color = span.capture.themeToken.flatMap({ colors[$0] }) ?? colors["fg"],
+            let token = changedLine && span.capture == .comment ? nil : span.capture.themeToken
+            if let color = token.flatMap({ colors[$0] }) ?? colors["fg"],
                let range = Range(span.range, in: out) {
                 out[range].foregroundColor = color
             }

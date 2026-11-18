@@ -26,6 +26,9 @@ packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
     minorVersion: 1.99.3
+  BeautifulMermaidSwift:
+    url: https://github.com/lukilabs/beautiful-mermaid-swift
+    from: 1.0.4
 
 targets:
   AlasMobile:
@@ -54,6 +57,8 @@ targets:
         product: Markdown
       - package: SwiftTerm
         product: SwiftTerm
+      - package: BeautifulMermaidSwift
+        product: BeautifulMermaid
       - target: AlasNotificationService
         embed: true
     settings:
