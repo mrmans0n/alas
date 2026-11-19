@@ -6302,8 +6302,13 @@ extension ACPSessionManager {
         // Always sync the queue — it can change (drain/clear) with no new
         // transcript rows, so this must run before any early-return below.
         session.deliveredQueuedPromptIDs = result.deliveredQueuedPromptIDs
+        // A writer's queue can hold a prompt whose store write hasn't landed yet, such as one
+        // submitted during a takeover's final refresh; the store's copy would drop it.
+        let unpersisted = _ownedLeases.contains(sessionId)
+            ? session.queue.filter { item in !result.queue.contains { $0.id == item.id } }
+            : []
         session.restoreQueue(
-            result.queue,
+            result.queue + unpersisted,
             markLegacySendingUncertain: true,
             persistedUsageLimit: result.row.usageLimit
         )

@@ -1569,6 +1569,21 @@ import Foundation
                 "takeOver must refresh queue from the store before spawning attach")
     }
 
+    @Test("a writer's mirror refresh keeps a queued prompt the store hasn't written yet")
+    func writerRefreshKeepsUnpersistedQueuedPrompt() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("refresh-queue-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = tempManager(instanceId: "A", store: store)
+        let session = manager.createSession(agentId: "claude")
+        _ = await manager.acquireWriterLease(sessionId: session.id)
+        await manager.flushPersistence()
+        // As a prompt submitted while a takeover's final refresh reads the store.
+        session.enqueue(blocks: [.text("submitted during the refresh")])
+        await manager.refreshMirror(sessionId: session.id)
+        #expect(session.queue.count == 1)
+    }
+
     // MARK: - Fix 1 (P1): releaseAllOwnedLeases skips attaching sessions
 
     @Test("releaseAllOwnedLeases skips attaching sessions but releases non-attaching ones")
