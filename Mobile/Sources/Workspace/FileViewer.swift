@@ -26,12 +26,14 @@ struct FileViewer: View {
                     if FileKind(path: path) == .markdown, !showSource {
                         ScrollView {
                             AgentMarkdown(id: "file:\(path)", text: reply.text, session: session,
-                                          resolve: { FileKind.worktreePath($0, besideFile: path) })
+                                          resolve: { FileKind.imageSource($0, besideFile: path) })
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding()
                                 // A file link opens in this viewer, a relative one taken from this file's folder.
                                 .environment(\.openURL, OpenURLAction { url in
                                     let relative = url.scheme == nil && url.host == nil && !url.path.hasPrefix("/")
+                                    // A link to a heading of this document (`#install`) keeps it open.
+                                    if relative, url.path.isEmpty { return .handled }
                                     let target = relative ? URL(fileURLWithPath: FileKind.worktreePath(url.path, besideFile: path),
                                                                 relativeTo: session.worktreeRoot.map { URL(fileURLWithPath: $0 + "/") })
                                         : url
@@ -91,12 +93,18 @@ enum FileKind: Equatable {
         }
     }
 
-    /// `ref`, from a document at worktree path `file`, as a worktree path: a relative reference is
-    /// taken from the document's folder, `..` included; an absolute one or a URL is left alone.
-    static func worktreePath(_ ref: String, besideFile file: String) -> String {
-        guard !ref.hasPrefix("/"), URL(string: ref)?.scheme == nil else { return ref }
+    /// A markdown image source from a document at worktree path `file`: a relative one, its URL
+    /// escapes decoded, taken from the document's folder; an absolute one or a URL left alone.
+    static func imageSource(_ source: String, besideFile file: String) -> String {
+        guard !source.hasPrefix("/"), URL(string: source)?.scheme == nil else { return source }
+        return worktreePath(source.removingPercentEncoding ?? source, besideFile: file)
+    }
+
+    /// `relative`, a decoded path from a document at worktree path `file`, as a worktree path taken
+    /// from the document's folder, `..` included.
+    static func worktreePath(_ relative: String, besideFile file: String) -> String {
         let folder = (file as NSString).deletingLastPathComponent
-        let joined = URL(fileURLWithPath: "/" + (folder as NSString).appendingPathComponent(ref)).standardized.path
+        let joined = URL(fileURLWithPath: "/" + (folder as NSString).appendingPathComponent(relative)).standardized.path
         return String(joined.dropFirst())
     }
 }
