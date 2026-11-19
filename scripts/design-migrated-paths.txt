@@ -343,6 +343,8 @@ Alas/Sources/App/RootView.swift
 Alas/Sources/Diagnostics/MemoryReportWindow.swift
 Alas/Sources/Devices/DevicesEmptyState.swift
 Alas/Sources/Devices/DeviceSettingsPopover.swift
-Alas/Sources/Devices/DevicesSwitcher.swift
+Alas/Sources/Devices/DevicesAddPanel.swift
 Alas/Sources/Devices/DeviceStage.swift
-Alas/Sources/Devices/VMDeviceCard.swift
+Alas/Sources/Devices/DeviceEntryHeader.swift
+Alas/Sources/Devices/DevicesRailList.swift
+Alas/Sources/Devices/VMEntryScreen.swift

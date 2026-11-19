@@ -11,7 +11,7 @@ struct DeviceTabView: View {
     var body: some View {
         // Each second, for the agent's driving window.
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            content(state.devicesTabState(worktree: worktree, selection: nil), now: context.date)
+            content(state.devicesTabState(worktree: worktree, lastUsed: nil), now: context.date)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .devicesPolling(state)

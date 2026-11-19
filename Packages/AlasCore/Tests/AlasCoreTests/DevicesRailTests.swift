@@ -9,7 +9,7 @@ struct DevicesRailTests {
 
     private static func running(_ ids: [String], android: AndroidListing? = nil) -> [DevicesTabState.Running] {
         DevicesTabState.resolve(
-            simulators: ids.map(booted), listError: nil, vms: [:], selection: nil, bootingUDIDs: [],
+            simulators: ids.map(booted), listError: nil, vms: [:], lastUsed: nil, bootingUDIDs: [],
             agentDriving: [], android: android
         ).running
     }

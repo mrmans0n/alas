@@ -9,17 +9,6 @@ struct DevicesTabStateTests {
     static let mid = SimulatorDevice(udid: "mid", name: "iPad Pro", runtimeName: "iOS 26.0", state: .shutdown)
     static let stoppedVMs: [VMGuestOS: VMDeviceStatus] = [.macOS: .stopped, .linux: .notCreated]
 
-    struct Case: Sendable, CustomTestStringConvertible {
-        let name: String
-        var simulators: [SimulatorDevice]? = [off, on]
-        var listError: String? = nil
-        var vms: [VMGuestOS: VMDeviceStatus] = [:]
-        var selection: DevicesTarget? = nil
-        var booting: Set<String> = []
-        let stage: DevicesTabState.Stage
-        var testDescription: String { name }
-    }
-
     static let emulator = AndroidDevice(
         serial: "emulator-5554", state: .ready, model: "sdk_gphone64_arm64", avdName: "Medium_Phone", release: "16"
     )
@@ -27,26 +16,17 @@ struct DevicesTabStateTests {
 
     private func resolve(
         simulators: [SimulatorDevice]? = [off], vms: [VMGuestOS: VMDeviceStatus] = [:],
-        selection: DevicesTarget? = nil, android: AndroidListing?
+        lastUsed: DevicesTarget? = nil, android: AndroidListing?
     ) -> DevicesTabState {
         .resolve(
-            simulators: simulators, listError: nil, vms: vms, selection: selection,
+            simulators: simulators, listError: nil, vms: vms, lastUsed: lastUsed,
             bootingUDIDs: [], agentDriving: [], android: android
         )
     }
 
-    @Test func theChipFindsAnAndroidSelection() {
-        let state = resolve(
-            selection: .android("avd:Medium_Phone"),
-            android: AndroidListing(devices: [Self.emulator], avds: ["Medium_Phone"], bootingAVDs: [], note: nil)
-        )
-        #expect(state.selectedRow?.target == .android("emulator-5554"))
-        #expect(state.selectedRow?.status == "Booted")
-    }
-
     @Test func rowsCarryStatusAndBootability() {
         let state = DevicesTabState.resolve(
-            simulators: [Self.off, Self.on], listError: nil, vms: [.macOS: .stopped], selection: nil,
+            simulators: [Self.off, Self.on], listError: nil, vms: [.macOS: .stopped], lastUsed: nil,
             bootingUDIDs: [], agentDriving: [.simulator("on"), .android("emulator-5554")],
             android: AndroidListing(devices: [Self.emulator], avds: ["Medium_Phone", "Pixel_9"], bootingAVDs: [], note: nil),
             agentNames: [.simulator("on"): "Claude"]
@@ -73,28 +53,9 @@ struct DevicesTabStateTests {
         #expect(state.androidRows.map(\.tone) == [.live, .idle, .idle, .busy])
     }
 
-    @Test func aSelectedAVDFollowsItsEmulatorOnceItRuns() {
-        let state = resolve(
-            selection: .android("avd:Medium_Phone"),
-            android: AndroidListing(devices: [Self.emulator], avds: ["Medium_Phone"], bootingAVDs: [], note: nil)
-        )
-        #expect(state.selected == .android("emulator-5554"))
-        #expect(state.stage == .android(
-            AndroidTarget(id: "emulator-5554", title: "Medium Phone", device: Self.emulator, avdName: "Medium_Phone"), .ready
-        ))
-    }
-
-    /// With no simulator booted, a ready Android device comes before a running VM.
-    @Test func aReadyAndroidDeviceIsTheDefaultWhenNoSimulatorIsBooted() {
-        let state = resolve(
-            vms: [.macOS: .running], android: AndroidListing(devices: [Self.emulator], avds: [], bootingAVDs: [], note: nil)
-        )
-        #expect(state.selected == .android("emulator-5554"))
-    }
-
     @Test func anAndroidDeviceAnAgentDrivesIsBusy() {
         let state = DevicesTabState.resolve(
-            simulators: [Self.off], listError: nil, vms: [:], selection: nil, bootingUDIDs: [],
+            simulators: [Self.off], listError: nil, vms: [:], lastUsed: nil, bootingUDIDs: [],
             agentDriving: [.android("emulator-5554")],
             android: AndroidListing(devices: [Self.emulator], avds: [], bootingAVDs: [], note: nil)
         )
@@ -108,58 +69,12 @@ struct DevicesTabStateTests {
         #expect(state.androidNote == note)
     }
 
-    private func resolve(_ c: Case) -> DevicesTabState {
-        .resolve(
-            simulators: c.simulators, listError: c.listError, vms: c.vms, selection: c.selection,
-            bootingUDIDs: c.booting, agentDriving: []
+    @Test func theSimulatorsNoteSaysWhyThereAreNone() {
+        let noXcode = DevicesTabState.resolve(
+            simulators: nil, listError: "no simctl", vms: Self.stoppedVMs, lastUsed: nil, bootingUDIDs: [], agentDriving: []
         )
-    }
-
-    @Test(arguments: [
-        Case(name: "a selected simulator stays", selection: .simulator("off"), stage: .simulator(off, .shutDown)),
-        Case(name: "a deleted simulator falls back to the first booted", selection: .simulator("gone"),
-             stage: .simulator(on, .booted)),
-        Case(name: "a selected VM that doesn't exist yet stays", vms: stoppedVMs, selection: .vm(.linux),
-             stage: .vm(.linux, .notCreated)),
-        Case(name: "a VM selection on a Mac without VMs falls back", selection: .vm(.macOS),
-             stage: .simulator(on, .booted)),
-    ])
-    func selectionFallsBackOnlyWhenItsDeviceIsGone(_ c: Case) {
-        #expect(resolve(c).stage == c.stage)
-    }
-
-    @Test(arguments: [
-        Case(name: "a booted simulator first", vms: [.macOS: .running, .linux: .notCreated], stage: .simulator(on, .booted)),
-        Case(name: "then a running VM", simulators: [off], vms: [.macOS: .stopped, .linux: .running],
-             stage: .vm(.linux, .running)),
-        Case(name: "then the first simulator", simulators: [off], vms: stoppedVMs, stage: .simulator(off, .shutDown)),
-    ])
-    func defaultPrefersABootedSimulatorThenARunningVM(_ c: Case) {
-        #expect(resolve(c).stage == c.stage)
-    }
-
-    @Test func noSimulatorsFallsBackToTheMacOSVM() {
-        let noXcode = resolve(Case(name: "", simulators: nil, listError: "no simctl", vms: Self.stoppedVMs, stage: .loading))
-        #expect(noXcode.stage == .vm(.macOS, .stopped))
         #expect(noXcode.simulatorsNote == "Install Xcode to use iOS simulators")
-        let none = resolve(Case(name: "", simulators: [], vms: Self.stoppedVMs, stage: .loading))
-        #expect(none.stage == .vm(.macOS, .stopped))
-        #expect(none.simulatorsNote == "No iOS simulators")
-        #expect(resolve(Case(name: "", simulators: nil, listError: "no simctl", stage: .loading)).stage
-            == .unavailable("no simctl"))
-        #expect(resolve(Case(name: "", simulators: [], stage: .loading)).stage == .noSimulators)
-    }
-
-    @Test func loadingDoesNotJumpToAStoppedVM() {
-        #expect(resolve(Case(name: "", simulators: nil, vms: Self.stoppedVMs, stage: .loading)).stage == .loading)
-        #expect(resolve(Case(name: "", simulators: nil, vms: [.macOS: .running], stage: .loading)).stage
-            == .vm(.macOS, .running))
-    }
-
-    @Test func bootingCountsBeforeSimctlSaysSo() {
-        let state = resolve(Case(name: "", selection: .simulator("off"), booting: ["off"], stage: .loading))
-        #expect(state.stage == .simulator(Self.off, .booting))
-        #expect(state.simulatorRows.first { $0.target == .simulator("off") }?.tone == .busy)
+        #expect(resolve(simulators: [], vms: Self.stoppedVMs, android: nil).simulatorsNote == "No iOS simulators")
     }
 
     @Test(arguments: [
@@ -172,7 +87,7 @@ struct DevicesTabStateTests {
         (.notCreated, "Not created", .idle),
     ])
     func vmRowsCarryToneAndDetail(status: VMDeviceStatus, detail: String, tone: DevicesTabState.Tone) {
-        let row = resolve(Case(name: "", vms: [.macOS: status], stage: .loading)).vmRows.first
+        let row = resolve(vms: [.macOS: status], android: nil).vmRows.first
         #expect(row?.title == "macOS VM")
         #expect(row?.detail == detail)
         #expect(row?.tone == tone)
@@ -180,7 +95,7 @@ struct DevicesTabStateTests {
 
     @Test func anAgentDrivingMakesARowBusy() {
         let state = DevicesTabState.resolve(
-            simulators: [Self.on], listError: nil, vms: [.macOS: .running], selection: nil,
+            simulators: [Self.on], listError: nil, vms: [.macOS: .running], lastUsed: nil,
             bootingUDIDs: [], agentDriving: [.simulator("on"), .vm(.macOS)]
         )
         #expect(state.simulatorRows.map(\.tone) == [.busy])
@@ -214,17 +129,17 @@ struct DevicesTabStateTests {
         #expect(listing.sections[1].rows.map(\.target) == [.simulator("off")])
     }
 
-    @Test func olderRuntimesFoldUnlessSelectedOrShown() {
+    @Test func olderRuntimesFoldUnlessLastUsedOrShown() {
         let sims = [Self.old, Self.off, Self.mid]
-        let folded = resolve(simulators: sims, selection: .simulator("off"), android: nil)
+        let folded = resolve(simulators: sims, lastUsed: .simulator("off"), android: nil)
             .switcherListing(query: "", showsOlderRuntimes: false)
         #expect(folded.sections.map(\.kind) == [.runtime("iOS 26.5")])
         #expect(folded.foldedRuntimeCount == 2)
 
-        let selectedOld = resolve(simulators: sims, selection: .simulator("old"), android: nil)
+        let lastUsedOld = resolve(simulators: sims, lastUsed: .simulator("old"), android: nil)
             .switcherListing(query: "", showsOlderRuntimes: false)
-        #expect(selectedOld.sections.map(\.kind) == [.runtime("iOS 26.5"), .runtime("iOS 18.6")])
-        #expect(selectedOld.foldedRuntimeCount == 1)
+        #expect(lastUsedOld.sections.map(\.kind) == [.runtime("iOS 26.5"), .runtime("iOS 18.6")])
+        #expect(lastUsedOld.foldedRuntimeCount == 1)
 
         let shown = resolve(simulators: sims, android: nil).switcherListing(query: "", showsOlderRuntimes: true)
         #expect(shown.sections.map(\.kind) == [.runtime("iOS 26.5"), .runtime("iOS 26.0"), .runtime("iOS 18.6")])
@@ -263,7 +178,7 @@ struct DevicesTabStateTests {
         let zeta = SimulatorDevice(udid: "zeta", name: "iPhone Zeta", runtimeName: "iOS 26.5", state: .booted)
         let state = DevicesTabState.resolve(
             simulators: [zeta, Self.off, Self.on, Self.mid], listError: nil,
-            vms: [.macOS: .running, .linux: .starting], selection: nil, bootingUDIDs: ["off"], agentDriving: [],
+            vms: [.macOS: .running, .linux: .starting], lastUsed: nil, bootingUDIDs: ["off"], agentDriving: [],
             android: AndroidListing(
                 devices: [Self.phone, Self.emulator], avds: ["Medium_Phone", "Pixel_9", "Tablet"],
                 bootingAVDs: ["Tablet"], note: nil
@@ -294,20 +209,20 @@ struct DevicesTabStateTests {
     @Test func withNothingRunningTheRailSaysWhyOrOffersADevice() {
         #expect(resolve(simulators: nil, android: nil).empty == .loading)
         let noXcode = DevicesTabState.resolve(
-            simulators: nil, listError: "no simctl", vms: [:], selection: nil, bootingUDIDs: [], agentDriving: []
+            simulators: nil, listError: "no simctl", vms: [:], lastUsed: nil, bootingUDIDs: [], agentDriving: []
         )
         #expect(noXcode.empty == .unavailable("no simctl"))
         #expect(resolve(simulators: [], android: nil).empty == .noSimulators)
         let simulator = resolve(simulators: [Self.off], vms: Self.stoppedVMs, android: nil)
         #expect(simulator.empty == .nothingRunning(suggested: simulator.simulatorRows.first))
         let vmOnly = DevicesTabState.resolve(
-            simulators: nil, listError: "no simctl", vms: Self.stoppedVMs, selection: nil, bootingUDIDs: [], agentDriving: []
+            simulators: nil, listError: "no simctl", vms: Self.stoppedVMs, lastUsed: nil, bootingUDIDs: [], agentDriving: []
         )
         #expect(vmOnly.empty == .nothingRunning(suggested: vmOnly.vmRows.first))
     }
 
     @Test func theLastUsedDeviceIsOfferedFirst() {
-        let state = resolve(simulators: [Self.off, Self.mid], selection: .simulator("mid"), android: nil)
+        let state = resolve(simulators: [Self.off, Self.mid], lastUsed: .simulator("mid"), android: nil)
         #expect(state.empty == .nothingRunning(suggested: state.simulatorRows.last))
     }
 }

@@ -219,7 +219,7 @@ struct RightPaneView: View {
             case .schedules:
                 SchedulesTabView(state: state, worktree: worktree)
             case .device:
-                DevicesTabView(state: state, worktree: worktree, rps: rps)
+                DevicesRailView(state: state, worktree: worktree, rps: rps)
             }
         } else {
             RightPaneLoadingSkeletonView(activeTab: rps.activeTab)
@@ -302,69 +302,9 @@ struct RightPaneView: View {
             onRunPluginCommand: { state.runPluginCommand($0, slot: .changesToolbar, worktreeID: worktree.id) },
             onOpenPreview: { state.openWebPreview(in: worktree) },
             onNewRunScript: { state.newRunScript(scope: $0, in: worktree) },
-            deviceSwitcher: rps.activeTab == .device ? AnyView(devicesSwitcher(rps: rps)) : nil,
-            deviceActions: rps.activeTab == .device ? devicesActions(rps: rps) : nil
+            deviceActions: rps.activeTab == .device
+                ? AnyView(AddDeviceButton(state: state, worktree: worktree, rps: rps)) : nil
         )
-    }
-
-    private func devicesSwitcher(rps: RightPaneState) -> some View {
-        DevicesSwitcher(
-            state: state.devicesTabState(worktree: worktree, selection: rps.devicesLastUsed),
-            onSelect: {
-                rps.devicesLastUsed = $0
-                switch $0 {
-                case .simulator(let id), .android(let id):
-                    state.noteDeviceUse(id, worktreeID: worktree.id)
-                default:
-                    break
-                }
-            },
-            onBoot: { target in
-                switch target {
-                case .simulator(let udid):
-                    guard let device = state.devicePane.devices?.first(where: { $0.udid == udid }) else { return }
-                    Task { await state.devicePane.boot(device) }
-                case .android(let id) where id.hasPrefix("avd:"):
-                    Task { await state.androidPane.boot(avd: String(id.dropFirst(4))) }
-                default:
-                    break
-                }
-            }
-        )
-    }
-
-    private func devicesActions(rps: RightPaneState) -> AnyView? {
-        let tabState = state.devicesTabState(worktree: worktree, selection: rps.devicesLastUsed)
-        if case .android(let target, .ready) = tabState.stage, let device = target.device {
-            return AnyView(AndroidActions(
-                device: device, pane: state.androidPane, control: state.deviceControl, recorder: state.deviceRecorder,
-                flowRecorder: state.deviceFlowRecorder, worktree: worktree.path,
-                onOpenLogs: {
-                    state.openDeviceLogs(worktreeID: worktree.id, udid: device.serial, name: device.title, platform: .android)
-                }
-            ) {
-                Task {
-                    // Saves a recording before the device goes.
-                    await state.deviceRecorder.simulatorStopped(udid: device.serial)
-                    await state.androidPane.shutDown(device)
-                    // Back to the AVD's row, to boot it again.
-                    rps.devicesLastUsed = target.avdName.map { .android(AndroidListing.avdID($0)) }
-                }
-            })
-        }
-        guard case .simulator(let device, let stage) = tabState.stage else { return nil }
-        return AnyView(DevicesActions(
-            device: device, booted: stage == .booted, client: state.simulatorStreams, control: state.deviceControl,
-            canChangeSettings: stage == .booted
-                && VMDriver.allowsViewInput(state.deviceControl.driver(udid: device.udid)),
-            onShutDown: { Task { await state.devicePane.shutDown(device) } },
-            onOpenLogs: { state.openDeviceLogs(worktreeID: worktree.id, udid: device.udid, name: device.name, platform: .ios) },
-            accessibilityOverlay: state.devicePane.accessibilityOverlays.contains(device.udid),
-            onToggleAccessibilityOverlay: { state.devicePane.toggleAccessibilityOverlay(udid: device.udid) },
-            recorder: state.deviceRecorder,
-            agentName: { state.computerUseAgentName($0) },
-            flowRecorder: state.deviceFlowRecorder, worktree: worktree.path
-        ))
     }
 
     /// Keyboard equivalent of tapping a rail tab. Handled here rather than in

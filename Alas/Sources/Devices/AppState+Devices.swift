@@ -13,17 +13,11 @@ extension AppState {
         return response
     }
 
-    /// Selects the device in the agent's worktree and shows its Devices tab.
+    /// Shows the device an agent opened in its worktree: expanded in the rail, or its center tab.
     func showDevice(_ udid: String, in worktreeID: String?) {
         Task { await devicePane.refresh() }
-        guard let worktreeID, let pane = rightPaneStore.activeState(worktreeId: worktreeID) else { return }
-        noteDeviceUse(udid, worktreeID: worktreeID)
-        pane.devicesLastUsed = AgentDevice.isSimulatorID(udid) ? .simulator(udid) : .android(udid)
-        pane.activeTab = .device
-        if !config.rightPaneVisible {
-            config.rightPaneVisible = true
-            saveConfig()
-        }
+        guard let worktreeID else { return }
+        revealDevice(AgentDevice.isSimulatorID(udid) ? .simulator(udid) : .android(udid), worktreeID: worktreeID)
     }
 }
 

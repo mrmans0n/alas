@@ -7,18 +7,20 @@ import SwiftUI
 /// Design-capture targets for the Devices tab. The real tab lists the Mac's simulators through
 /// `simctl`, streams a booted one over XPC and reads VM state from the VM manager, none of which a
 /// capture may touch. Each target draws a gallery of tab states in a panel over the main window,
-/// from the tab's own views (`DevicesSwitcher`, `DevicesActions`, `DeviceStage`, `VMDeviceCard`,
-/// `DevicesEmptyState`, `DeviceSettingsPopover`) and the same `DevicesTabState` resolver, over
-/// scripted devices and an in-memory `DeviceAgentControl`. A scripted simulator's screen is a
-/// painted placeholder (`DesignCaptureDevices.demoScreen`); no frame is streamed, no simulator is
-/// booted, no VM is read. Debug builds only, and only on a capture profile.
+/// from the tab's own views (`DevicesRailList`, `DeviceEntryHeader`, `DeviceEntryActions`,
+/// `DeviceStage`, `DevicesEmptyState`, `DevicesAddPanel`, `DeviceSettingsPopover`) and the same
+/// `DevicesTabState` resolver, over scripted devices and an in-memory `DeviceAgentControl`. A
+/// scripted simulator's screen is a painted placeholder (`DesignCaptureDevices.demoScreen`) and a
+/// VM's a gradient; no frame is streamed, no simulator is booted, no VM is read. Debug builds
+/// only, and only on a capture profile.
 ///
-/// - devices: a simulator an agent drives while an app launches, one you drive with an agent
-///   waiting and a failed app install, a running macOS VM an agent drives, a paused Linux VM.
-/// - devices-empty: loading, no Xcode, no simulators, a shut-down simulator with a boot error,
-///   booting, a VM that is not set up.
+/// - devices: one simulator an agent drives while an app launches; one you drive while an agent
+///   waits and an install failed; a simulator and the macOS VM, at 300 and 420 pt; three devices
+///   with one collapsed and the VM in a tab.
+/// - devices-empty: loading, no Xcode, no simulators, nothing running with a boot error, a
+///   simulator booting, a VM starting.
 /// - devices-settings: the simulator settings popover over scripted values.
-/// - devices-switcher: the switcher's popover open, as it opens, filtered, and hovering a shut-down row.
+/// - devices-switcher: + Add's popover: as it opens, filtered, and hovering a shut-down row.
 @MainActor
 enum DesignCaptureDevices {
     static let targets: Set<String> = ["devices", "devices-empty", "devices-settings", "devices-switcher"]
@@ -157,9 +159,12 @@ enum DesignCaptureDevices {
         let id = UUID()
         let label: String
         let content: AnyView
-        init(_ label: String, _ content: some View) {
+        /// The cell's width, when not the gallery's.
+        let width: CGFloat?
+        init(_ label: String, _ content: some View, width: CGFloat? = nil) {
             self.label = label
             self.content = AnyView(content)
+            self.width = width
         }
     }
 
@@ -187,7 +192,7 @@ enum DesignCaptureDevices {
                     .font(.system(size: 10.5, design: .monospaced))
                     .foregroundColor(theme.color("fg-dim"))
                 VStack(spacing: 0) { cell.content }
-                    .frame(width: columns == 4 ? 340 : 360, height: columns == 4 ? 560 : height)
+                    .frame(width: cell.width ?? (columns == 4 ? 340 : 360), height: columns == 4 ? 560 : height)
                     .background(theme.color("bg-1"))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
@@ -215,42 +220,57 @@ enum DesignCaptureDevices {
         }
     }
 
-    /// The tab's toolbar chip and actions over a resolved state, then its stage.
-    private static func tab(
-        _ resolved: DevicesTabState, control: DeviceAgentControl, @ViewBuilder stage: () -> some View
-    ) -> some View {
-        var booted = false
-        var device: SimulatorDevice?
-        if case .simulator(let simulator, let simulatorStage) = resolved.stage {
-            device = simulator
-            booted = simulatorStage == .booted
-        }
-        return VStack(spacing: 0) {
+    /// The rail as the pane shows it: the toolbar's + Add over the stack.
+    private static func railChrome(@ViewBuilder _ content: () -> some View) -> some View {
+        VStack(spacing: 0) {
             HStack(spacing: 6) {
-                DevicesSwitcher(state: resolved, onSelect: { _ in }, onBoot: { _ in })
+                Text("Devices")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.secondary)
                 Spacer(minLength: 0)
-                if let device {
-                    DevicesActions(
-                        device: device, booted: booted, client: SimulatorStreamClient(), control: control,
-                        canChangeSettings: booted, onShutDown: {}, onOpenLogs: {},
-                        accessibilityOverlay: false, onToggleAccessibilityOverlay: {},
-                        recorder: fakeRecorder(), agentName: { _ in "Claude" },
-                        flowRecorder: DeviceFlowRecorder(), worktree: FileManager.default.temporaryDirectory)
-                }
+                ToolbarBtn(icon: "plus", tooltip: "Add a device") {}
             }
             .padding(.horizontal, 8)
             .frame(height: 34)
             Divider()
-            stage()
+            content()
+        }
+    }
+
+    /// What a scripted VM shows: no VM runs in a capture.
+    private static var vmScreen: some View {
+        LinearGradient(
+            colors: [Color(red: 0.16, green: 0.2, blue: 0.3), Color(red: 0.32, green: 0.42, blue: 0.56)],
+            startPoint: .top, endPoint: .bottom
+        )
+        .overlay(Text("macOS VM").font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.8)))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .padding(12)
+    }
+
+    @ViewBuilder
+    private static func actions(_ device: DevicesTabState.Running, control: DeviceAgentControl) -> some View {
+        switch device.screen {
+        case .simulator(let simulator, let stage):
+            DeviceEntryActions(
+                kind: .simulator(simulator), ready: stage == .booted, control: control, recorder: fakeRecorder(),
+                flowRecorder: DeviceFlowRecorder(), worktree: FileManager.default.temporaryDirectory,
+                accessibilityOverlay: false, onToggleAccessibilityOverlay: {}, onOpenLogs: {},
+                onScreenshot: { "" }, onShutDown: {}, onNotice: { _ in }
+            )
+        case .vm(_, let status):
+            VMEntryActions(running: status == .running) {}
+        case .android:
+            EmptyView()
         }
     }
 
     private static func resolve(
         simulators: [SimulatorDevice]?, listError: String? = nil, vms: [VMGuestOS: VMDeviceStatus] = [:],
-        selection: DevicesTarget?, booting: Set<String> = [], driving: Set<DevicesTarget> = []
+        lastUsed: DevicesTarget?, booting: Set<String> = [], driving: Set<DevicesTarget> = []
     ) -> DevicesTabState {
         .resolve(
-            simulators: simulators, listError: listError, vms: vms, selection: selection, bootingUDIDs: booting,
+            simulators: simulators, listError: listError, vms: vms, lastUsed: lastUsed, bootingUDIDs: booting,
             agentDriving: driving)
     }
 
@@ -269,14 +289,13 @@ enum DesignCaptureDevices {
             serial: "emulator-5554", state: .ready, model: "sdk_gphone64_arm64", avdName: "Medium_Phone", release: "16")
         let state = DevicesTabState.resolve(
             simulators: simulators, listError: nil, vms: [.macOS: .stopped, .linux: .notCreated],
-            selection: .simulator(phone.udid), bootingUDIDs: [], agentDriving: [.android(emulator.serial)],
+            lastUsed: .simulator(phone.udid), bootingUDIDs: [], agentDriving: [.android(emulator.serial)],
             android: AndroidListing(devices: [emulator], avds: ["Medium_Phone", "Pixel_9", "Pixel_Tablet"], bootingAVDs: [], note: nil),
             agentNames: [.android(emulator.serial): "Claude"]
         )
         func open(query: String = "", hovered: DevicesTarget? = nil) -> some View {
             VStack(alignment: .leading, spacing: 6) {
-                DevicesSwitcher(state: state, onSelect: { _ in }, onBoot: { _ in })
-                DevicesSwitcherPanel(state: state, query: query, hovered: hovered, onSelect: { _ in }, onBoot: { _ in }, onClose: {})
+                DevicesAddPanel(state: state, query: query, hovered: hovered, onSelect: { _ in }, onBoot: { _ in }, onClose: {})
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.gray.opacity(0.35), lineWidth: 0.5))
                     .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
@@ -313,42 +332,57 @@ enum DesignCaptureDevices {
 
         let now = Date()
         let client = SimulatorStreamClient()
-        func stage(_ device: SimulatorDevice, control: DeviceAgentControl, install: DevicePaneModel.AppInstall?) -> some View {
+        let second = SimulatorDevice(
+            udid: demoUDIDPrefix + "SECOND", name: "iPhone 17", runtimeName: "iOS 26.5", state: .booted,
+            deviceTypeIdentifier: "demo.phone")
+        func phoneStage(_ device: SimulatorDevice, control: DeviceAgentControl, install: DevicePaneModel.AppInstall?) -> some View {
             DeviceStage(
                 device: device, shape: shape, client: client, control: control, agentName: { _ in "Claude" }, now: now,
                 appInstall: install, onDropApp: { _ in }, onDismissAppInstall: {}, notice: nil, onPaste: {}, onCopy: {},
                 accessibilityOverlay: false, flowRecorder: DeviceFlowRecorder())
         }
-        let agentVMDriver = VMDriverStatus.make(
-            driver: .agent(sessionID: "demo-agent", tool: "computer_click", at: now.addingTimeInterval(-4)), agentName: "Claude", now: now)
-        let macOS = DevicesTarget.vm(.macOS)
+        func rail(
+            _ devices: DevicesTabState, collapsed: Set<DevicesTarget> = [], inCenter: Set<DevicesTarget> = [],
+            control: DeviceAgentControl, install: DevicePaneModel.AppInstall? = nil
+        ) -> some View {
+            railChrome {
+                DevicesRailList(
+                    entries: DevicesRail.entries(devices.running, collapsed: collapsed, inCenter: inCenter),
+                    scrollRequest: .constant(nil), onToggleCollapsed: { _ in }, onOpenInTab: { _ in },
+                    onBringBack: { _ in }, onUse: { _ in },
+                    aspect: { device in
+                        if case .vm = device.screen { return 10.0 / 16.0 }
+                        return Double(shape.heightPoints / shape.widthPoints)
+                    },
+                    stage: { device in
+                        switch device.screen {
+                        case .simulator(let simulator, .booted): phoneStage(simulator, control: control, install: install)
+                        case .vm(_, .running): vmScreen
+                        default: DeviceEntryStage.waitingState(for: device.screen)
+                        }
+                    },
+                    actions: { actions($0, control: control) }
+                )
+            }
+        }
+        let phoneTarget = DevicesTarget.simulator(phoneUDID)
+        let withVM = resolve(
+            simulators: [phone, air], vms: [.macOS: .running, .linux: .stopped], lastUsed: nil, driving: [phoneTarget])
         return [
-            Cell("simulator: agent driving, app launching", tab(
-                resolve(simulators: [phone, air, pad], vms: [.macOS: .running, .linux: .stopped], selection: .simulator(phoneUDID), driving: [.simulator(phoneUDID)]),
-                control: control
-            ) { stage(phone, control: control, install: .launching("Lantern")) }),
-            Cell("simulator: you drive, agent waiting, install failed", tab(
-                resolve(simulators: [userDevice, air], selection: .simulator(userDevice.udid)),
-                control: userControl
-            ) {
-                stage(userDevice, control: userControl, install: .failed("Couldn't open Lantern: the app was built for a device."))
-            }),
-            Cell("VM: macOS running, agent driving", tab(
-                resolve(simulators: [phone, air], vms: [.macOS: .running, .linux: .stopped], selection: macOS, driving: [macOS]),
-                control: control
-            ) {
-                VMDeviceCard(
-                    guest: .macOS, status: .running, driver: agentVMDriver, now: now,
-                    onOpen: {}, onTakeOver: {}, onHandBack: {})
-            }),
-            Cell("VM: Linux paused", tab(
-                resolve(simulators: [phone, air], vms: [.macOS: .stopped, .linux: .paused(savedAt: now.addingTimeInterval(-7_200))], selection: .vm(.linux)),
-                control: control
-            ) {
-                VMDeviceCard(
-                    guest: .linux, status: .paused(savedAt: now.addingTimeInterval(-7_200)), driver: nil, now: now,
-                    onOpen: {}, onTakeOver: {}, onHandBack: {})
-            }),
+            Cell("one simulator: agent driving, app launching", rail(
+                resolve(simulators: [phone, air, pad], vms: [.macOS: .stopped], lastUsed: nil, driving: [phoneTarget]),
+                control: control, install: .launching("Lantern")
+            ), width: 300),
+            Cell("you drive, agent waiting, install failed", rail(
+                resolve(simulators: [userDevice, air], lastUsed: nil), control: userControl,
+                install: .failed("Couldn't open Lantern: the app was built for a device.")
+            ), width: 300),
+            Cell("simulator and macOS VM", rail(withVM, control: control), width: 300),
+            Cell("simulator and macOS VM, 420 pt", rail(withVM, control: control), width: 420),
+            Cell("three: one collapsed, the VM in a tab", rail(
+                resolve(simulators: [phone, second], vms: [.macOS: .running], lastUsed: nil, driving: [phoneTarget]),
+                collapsed: [.simulator(second.udid)], inCenter: [.vm(.macOS)], control: control
+            ), width: 300),
         ]
     }
 
@@ -356,39 +390,39 @@ enum DesignCaptureDevices {
 
     private static func emptyCells() -> [Cell] {
         let control = makeControl()
-        let now = Date()
+        func rail(_ devices: DevicesTabState) -> some View {
+            railChrome {
+                DevicesRailList(
+                    entries: DevicesRail.entries(devices.running, collapsed: [], inCenter: []),
+                    scrollRequest: .constant(nil), onToggleCollapsed: { _ in }, onOpenInTab: { _ in },
+                    onBringBack: { _ in }, onUse: { _ in }, aspect: { _ in nil },
+                    stage: { DeviceEntryStage.waitingState(for: $0.screen) },
+                    actions: { actions($0, control: control) }
+                )
+            }
+        }
         let shutDown = SimulatorDevice(
             udid: demoUDIDPrefix + "OFF", name: "iPhone 17 Pro", runtimeName: "iOS 26.5", state: .shutdown, deviceTypeIdentifier: "demo.phone")
         return [
-            Cell("loading", tab(resolve(simulators: nil, selection: nil), control: control) {
-                DevicesEmptyState(title: "Looking for devices…")
-            }),
-            Cell("no Xcode", tab(resolve(simulators: nil, listError: "x", selection: nil), control: control) {
+            Cell("loading", railChrome { DevicesEmptyState(title: "Looking for devices…") }),
+            Cell("no Xcode", railChrome {
                 DevicesEmptyState(
                     symbol: "iphone.slash", title: "iOS simulators need Xcode",
                     detail: "Install it, or select it with `sudo xcode-select -s /Applications/Xcode.app`.")
             }),
-            Cell("no simulators", tab(resolve(simulators: [], selection: nil), control: control) {
+            Cell("no simulators", railChrome {
                 DevicesEmptyState(
                     symbol: "iphone", title: "No iOS simulators",
                     detail: "Create one in Xcode under Window › Devices and Simulators.")
             }),
-            Cell("simulator shut down, boot failed", tab(resolve(simulators: [shutDown, air], selection: .simulator(shutDown.udid)), control: control) {
+            Cell("nothing running, boot failed", railChrome {
                 DevicesEmptyState(
-                    symbol: "iphone", title: "\(shutDown.name) is shut down",
+                    symbol: "iphone", title: "No devices running",
                     detail: "Unable to boot device in current state: Booting", detailTone: "warn",
-                    action: .init(title: "Boot", icon: "power") {})
+                    action: .init(title: "Boot \(shutDown.name)", icon: "power") {})
             }),
-            Cell("simulator booting", tab(
-                resolve(simulators: [shutDown, air], selection: .simulator(shutDown.udid), booting: [shutDown.udid]), control: control
-            ) {
-                DevicesEmptyState(title: "Booting \(shutDown.name)…", detail: "The first boot can take a minute.")
-            }),
-            Cell("VM not set up", tab(
-                resolve(simulators: [], vms: [.macOS: .notCreated, .linux: .notCreated], selection: .vm(.macOS)), control: control
-            ) {
-                VMDeviceCard(guest: .macOS, status: .notCreated, driver: nil, now: now, onOpen: {}, onTakeOver: {}, onHandBack: {})
-            }),
+            Cell("simulator booting", rail(resolve(simulators: [shutDown, air], lastUsed: nil, booting: [shutDown.udid]))),
+            Cell("VM starting", rail(resolve(simulators: [], vms: [.macOS: .starting], lastUsed: nil))),
         ]
     }
 
