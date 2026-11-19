@@ -844,6 +844,97 @@ final class AppState {
             idleAgents: idleAgents
         )
     }
+
+    /// What the hover popover on a sidebar badge shows. Built only when the
+    /// popover opens; nil when the session is no longer in an open tab.
+    func agentBadgePopoverModel(sessionId: String, worktreeId: String) -> AgentBadgePopoverModel? {
+        let activity = harness.activityBySession[sessionId]
+        let status = activity.map { Self.popoverStatus(for: $0.state) } ?? .idle
+        for tab in tabs.tabs(forWorktree: worktreeId) {
+            switch tab {
+            case .acpSession(let s) where s.sessionId == sessionId:
+                return acpBadgePopoverModel(sessionId: sessionId, tabTitle: s.title, worktreeId: worktreeId, activity: activity, status: status)
+            case .terminal(let s) where s.root.leaves().contains(where: { $0.sessionId == sessionId }):
+                guard let activity else { return nil }
+                return AgentBadgePopoverModel(
+                    agentName: activity.agent.displayName,
+                    agentLogoAsset: activity.agent.logoAssetName,
+                    title: s.title,
+                    status: status,
+                    since: activity.updatedAt,
+                    body: AgentBadgePopoverModel.body(
+                        status: status,
+                        // The hook's notification body is the closest a pane has to the request.
+                        permissionTitle: activity.lastBody.flatMap { ACPSessionTranscriptReader.replyExcerpt($0) },
+                        plan: nil,
+                        reply: activity.lastBody.flatMap { ACPSessionTranscriptReader.replyExcerpt($0) }
+                    )
+                )
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+
+    private func acpBadgePopoverModel(
+        sessionId: String,
+        tabTitle: String,
+        worktreeId: String,
+        activity: HarnessService.HarnessActivityState?,
+        status: AgentBadgePopoverModel.Status
+    ) -> AgentBadgePopoverModel? {
+        let manager = acpManager(forWorktreeId: worktreeId)
+        let row = manager?.sessionRows.first { $0.id == sessionId }
+        let rowUpdatedAt = row.map { Date(timeIntervalSince1970: TimeInterval($0.updatedAt)) }
+        guard let session = manager?.liveSession(for: sessionId) else {
+            guard let row else { return nil }
+            let agent = ACPHarnessBridge.agentKind(for: row.agentId)
+            return AgentBadgePopoverModel(
+                agentName: agent.displayName,
+                agentLogoAsset: agent.logoAssetName,
+                title: row.title.isEmpty ? tabTitle : row.title,
+                status: .idle,
+                since: rowUpdatedAt,
+                body: .none
+            )
+        }
+        let agent = activity?.agent ?? ACPHarnessBridge.agentKind(for: session.agentId)
+        let transcript = session.transcript
+        return AgentBadgePopoverModel(
+            agentName: agent.displayName,
+            agentLogoAsset: agent.logoAssetName,
+            title: session.title,
+            status: status,
+            // An idle activity may be stamped when the session was restored, not when its turn ended.
+            since: status == .idle ? (rowUpdatedAt ?? activity?.updatedAt) : activity?.updatedAt,
+            body: AgentBadgePopoverModel.body(
+                status: status,
+                permissionTitle: transcript.pendingPermission?.params.toolCall.title,
+                plan: AgentSidebarRollupBuilder.planProgress(for: transcript.currentPlan),
+                // Running and permission bodies never show the reply; skip the transcript walk.
+                reply: status == .running || status == .permission
+                    ? nil
+                    : ACPSessionTranscriptReader.lastAgentReplyStart(transcript.messages)
+            ),
+            model: AgentSidebarRollupBuilder.modelDisplay(
+                currentModel: session.currentModel,
+                availableModels: session.availableModels
+            ),
+            contextPercent: AgentBadgePopoverModel.contextPercent(session.contextUsage)
+        )
+    }
+
+    private static func popoverStatus(for state: ActivityState) -> AgentBadgePopoverModel.Status {
+        switch state {
+        case .busy: .running
+        case .awaitingInput: .awaitingInput
+        case .permissionRequest: .permission
+        case .limited: .limited
+        case .failed: .failed
+        case .idle: .idle
+        }
+    }
     /// Settle window before a harness awaiting/permission transition reaches
     /// the attention store, so flapping states never flash the sidebar badge.
     @ObservationIgnored

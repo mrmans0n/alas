@@ -184,6 +184,8 @@ struct WorktreeRowView: View {
     var onOpenGGLanding: (() -> Void)? = nil
     let harnessSummary: HarnessService.WorktreeHarnessSummary?
     var harnessBadges: [HarnessService.WorktreeBadgeSession] = []
+    /// The hover card of a badge, by session id; built only when it opens.
+    var badgePopoverModel: (String) -> AgentBadgePopoverModel? = { _ in nil }
     let ggMenuModel: GGWorktreeMenuModel
     let onTap: () -> Void
     let onOpenTerminal: () -> Void
@@ -422,7 +424,7 @@ struct WorktreeRowView: View {
         .accessibilityLabel(accessibilityLabel(status: status, worktreeStatus: worktreeStatus, showsExplanation: explanationEvidence != nil))
         // The tiles are not mounted at rest, so each session stays reachable.
         .accessibilityActions {
-            ForEach(harnessSummary?.sessions ?? []) { session in
+            ForEach(harnessBadges) { session in
                 Button("Open \(session.agent.displayName) session") { onActivateHarness(session.id) }
             }
         }
@@ -1041,7 +1043,8 @@ struct WorktreeRowView: View {
             ForEach(badges.prefix(visibleSessionCount)) { session in
                 HarnessSessionBadge(
                     session: session,
-                    onActivate: { onActivateHarness(session.id) }
+                    onActivate: { onActivateHarness(session.id) },
+                    popoverModel: { badgePopoverModel(session.id) }
                 )
             }
             if badges.count > visibleSessionCount {

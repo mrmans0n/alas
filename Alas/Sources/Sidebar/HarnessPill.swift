@@ -70,6 +70,8 @@ struct HarnessSessionBadge: View {
 
     let session: HarnessService.WorktreeBadgeSession
     let onActivate: () -> Void
+    /// The hover card's content, built only when it opens.
+    var popoverModel: @MainActor () -> AgentBadgePopoverModel? = { nil }
 
     @Environment(\.theme) private var theme
 
@@ -84,8 +86,9 @@ struct HarnessSessionBadge: View {
                 .modifier(OptionalBadgeChrome(surface: session.state.map(HarnessSessionBadgeSurface.init(state:))))
         }
         .buttonStyle(.plain)
-        .help(tooltip)
-        .accessibilityLabel(tooltip)
+        .accessibilityLabel(accessibilityLabel)
+        // Replaces the tooltip.
+        .agentBadgePopover(popoverModel)
         // Dropped on an agent composer, attaches the session as context.
         .draggable(Self.dragURL(sessionId: session.id))
     }
@@ -95,7 +98,7 @@ struct HarnessSessionBadge: View {
         URL(string: ACPSessionReference.uri(sessionId: sessionId))!
     }
 
-    private var tooltip: String {
+    private var accessibilityLabel: String {
         "\(session.agent.displayName) · \(session.state?.statusNote ?? "idle")"
     }
 }

@@ -69,6 +69,8 @@ struct RepoGroupView: View {
     var onOpenGGLanding: (() -> Void)? = nil
     let harnessSummary: (String) -> HarnessService.WorktreeHarnessSummary?
     var harnessBadges: (String) -> [HarnessService.WorktreeBadgeSession] = { _ in [] }
+    /// Session id, then worktree id.
+    var badgePopoverModel: (String, String) -> AgentBadgePopoverModel? = { _, _ in nil }
     let ggMenuModel: (Worktree) -> GGWorktreeMenuModel
     let onSelect: (Worktree) -> Void
     let onNewWorktree: () -> Void
@@ -279,6 +281,7 @@ struct RepoGroupView: View {
             onOpenGGLanding: onOpenGGLanding,
             harnessSummary: harnessSummary(wt.id),
             harnessBadges: harnessBadges(wt.id),
+            badgePopoverModel: { sessionId in badgePopoverModel(sessionId, wt.id) },
             ggMenuModel: ggMenuModel(wt),
             onTap: { onSelect(wt) },
             onOpenTerminal: { onOpenTerminal(wt) },
