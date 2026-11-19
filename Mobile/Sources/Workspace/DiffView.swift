@@ -72,13 +72,16 @@ private struct DiffContent: View {
             }
             // Content smaller than the viewport sits top-left, not centred.
             .defaultScrollAnchor(.topLeading, for: .alignment)
-            // Tokenized off the main actor; the diff shows plain until then.
-            .task(id: path) {
+            // Tokenized off the main actor; the diff shows plain until then. Keyed by the hunks, so
+            // a reply refreshed after a reconnect never wears the previous text's spans.
+            .task(id: reply.hunks) {
+                spans = []
                 let lines = reply.hunks.flatMap(\.lines).prefix(DiffHunksView.expandedLineLimit).map(\.text)
                 let path = path
-                spans = await Task.detached(priority: .userInitiated) {
+                let found = await Task.detached(priority: .userInitiated) {
                     DiffHunksView.spans(forLines: lines, path: path)
                 }.value
+                if !Task.isCancelled { spans = found }
             }
         }
     }
