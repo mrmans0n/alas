@@ -19,13 +19,19 @@ struct RemoteServerIntegrationTests {
     }
 
     private func startServer(pairing: RemotePairingService,
-                             provider: FakeRemoteApp = FakeRemoteApp()) async throws -> (RemoteServer, UInt16) {
+                             provider: FakeRemoteApp = FakeRemoteApp(),
+                             loopbackOnly: Bool = false,
+                             signer: (any RemoteIdentitySigning)? = nil) async throws -> (RemoteServer, UInt16) {
         let assets = RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory()))
-        let server = RemoteServer(pairing: pairing, assets: assets, host: provider.host)
+        let server = RemoteServer(
+            pairing: pairing, assets: assets, host: provider.host,
+            identity: { RemoteServerIdentity(serverId: signer == nil ? "" : "test-host", name: "Alas") },
+            signer: signer
+        )
         server.present(provider)
         // The fake's reads, which tests hold back to pin ordering.
         server.configureGateway = { $0.hostCalls = provider.hostCalls }
-        try server.start(port: 0)
+        try server.start(port: 0, loopbackOnly: loopbackOnly)
         try await eventually("the server binds a port") { server.port != nil }
         return (server, try #require(server.port))
     }
@@ -48,6 +54,194 @@ struct RemoteServerIntegrationTests {
         @unknown default: throw TimeoutError.timedOut
         }
         return try JSONDecoder().decode(RemoteServerMessage.self, from: payload)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func deviceRequestsKeepWireOrderWhileSessionWorkIsBlocked() async throws {
+        let source = try DeviceMediaSource()
+        defer { source.cleanUp() }
+        source.provider.pauseFileDiff = true
+        defer { source.provider.resumeFileDiff() }
+        let signer = RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
+        let (server, port) = try await startServer(
+            pairing: source.pairing, provider: source.provider, loopbackOnly: true, signer: signer
+        )
+        defer { server.stop() }
+        let url = try #require(URL(string: "ws://127.0.0.1:\(port)/ws"))
+        let control = URLSession.shared.webSocketTask(with: url, protocols: [source.token])
+        control.resume()
+        defer { control.cancel(with: .goingAway, reason: nil) }
+        let received = collect(control)
+        let encoder = JSONEncoder()
+        try await control.send(.data(encoder.encode(RemoteClientMessage.fileDiff(sessionId: "s", path: "held", stage: nil))))
+        try await eventually("the file diff is suspended") { source.provider.fileDiffRequests.count == 1 }
+
+        let challenge = RemoteIdentityCrypto.randomChallenge()
+        let attachment = UUID()
+        let messages: [RemoteClientMessage] = [
+            .helloAck(protocolVersion: RemoteProtocolVersion.current, challenge: challenge),
+            .device(.list), .device(.attach(deviceID: source.deviceID, attachmentID: attachment)),
+        ]
+        for message in messages { try await control.send(.data(encoder.encode(message))) }
+        try await eventually("device requests finish before the file diff is resumed") { received.all.count >= 4 }
+        guard case .hello = received.all[0],
+              case .identityProof(let signedChallenge, _, _) = received.all[1],
+              case .device(.list(let devices)) = received.all[2],
+              case .device(.attached(let id, _)) = received.all[3] else {
+            Issue.record("Expected hello, identity proof, device list and attachment ticket in order")
+            return
+        }
+        #expect(signedChallenge == challenge)
+        #expect(devices.map(\.id) == [source.deviceID])
+        #expect(id == attachment)
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func deviceMediaIsBinaryAndClosesWithItsParent(revokePairing: Bool) async throws {
+        let source = try DeviceMediaSource()
+        defer { source.cleanUp() }
+        let (server, port) = try await startServer(pairing: source.pairing, provider: source.provider, loopbackOnly: true)
+        defer { server.stop() }
+        let (control, ticket) = try await openDeviceControl(source: source, port: port)
+        defer { control.cancel(with: .goingAway, reason: nil) }
+        let url = try #require(URL(string: "ws://127.0.0.1:\(port)/ws/device-media"))
+        let media = URLSession.shared.webSocketTask(with: url, protocols: [ticket])
+        media.resume()
+        defer { media.cancel(with: .goingAway, reason: nil) }
+
+        try await eventually("the media socket subscribes to capture") { source.receiver != nil }
+        let packets: [PeerDeviceVideoPacket] = [
+            .format(generation: 1, width: 720, height: 1600),
+            .config(generation: 1, bytes: Data([1, 2])),
+            .frame(generation: 1, pts: 500, keyFrame: true, bytes: Data([3, 4])),
+        ]
+        for packet in packets { source.receiver?(packet) }
+        for packet in packets {
+            guard case .data(let bytes) = try await media.receive() else {
+                Issue.record("Expected a binary media message, not a session frame")
+                return
+            }
+            #expect(PeerDeviceVideoPacket(binary: bytes) == packet)
+        }
+        try await expectMediaUpgradeDenied(port: port, ticket: ticket)
+
+        var closed = false
+        let monitor = Task { @MainActor in
+            do { _ = try await media.receive() }
+            catch { closed = true }
+        }
+        defer { monitor.cancel() }
+        if revokePairing {
+            source.pairing.revoke(deviceId: source.pairingID)
+            server.disconnectDevice(source.pairingID)
+        } else {
+            control.cancel(with: .goingAway, reason: nil)
+        }
+        try await eventually("the media socket closes with the parent") { closed }
+        #expect(source.receiver == nil)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func deviceMediaRechecksServingPolicyAndDoesNotTrustForwardedHTTPS() async throws {
+        let source = try DeviceMediaSource()
+        defer { source.cleanUp() }
+        let (server, port) = try await startServer(pairing: source.pairing, provider: source.provider, loopbackOnly: true)
+        defer { server.stop() }
+        let (control, ticket) = try await openDeviceControl(source: source, port: port)
+        defer { control.cancel(with: .goingAway, reason: nil) }
+        // Leave the outstanding ticket in place to exercise authorization at
+        // redemption itself, rather than solely testing refresh invalidation.
+        source.serving = false
+        try await expectMediaUpgradeDenied(port: port, ticket: ticket, forwardedHTTPS: true)
+        #expect(source.receiver == nil)
+
+        server.refreshPeerDevicePolicy()
+        let message = try await receiveServerMessage(control)
+        guard case .hello(_, _, _, _, _, let capabilities, _) = message else {
+            Issue.record("Expected a policy hello refresh")
+            return
+        }
+        #expect(!capabilities.contains(PeerDeviceCapability.v1))
+    }
+
+    private func openDeviceControl(source: DeviceMediaSource, port: UInt16) async throws -> (URLSessionWebSocketTask, String) {
+        let url = try #require(URL(string: "ws://127.0.0.1:\(port)/ws"))
+        let control = URLSession.shared.webSocketTask(with: url, protocols: [source.token])
+        control.resume()
+        do {
+            let first = try await receiveServerMessage(control)
+            guard case .hello(_, _, _, _, _, let capabilities, _) = first else { throw DeviceMediaTestError.notAHello }
+            try #require(capabilities.contains(PeerDeviceCapability.v1))
+            let attachment = UUID()
+            let request = RemoteClientMessage.device(.attach(deviceID: source.deviceID, attachmentID: attachment))
+            try await control.send(.data(JSONEncoder().encode(request)))
+            let response = try await receiveServerMessage(control)
+            guard case .device(.attached(let id, let ticket)) = response, id == attachment else {
+                throw DeviceMediaTestError.notATicket
+            }
+            return (control, ticket)
+        } catch {
+            control.cancel(with: .goingAway, reason: nil)
+            throw error
+        }
+    }
+
+    private enum DeviceMediaTestError: Error { case notAHello, notATicket }
+
+    private func expectMediaUpgradeDenied(port: UInt16, ticket: String, forwardedHTTPS: Bool = false) async throws {
+        let conn = loopbackConnection(port: port)
+        let queue = DispatchQueue(label: "io.alas.tests.remote.device-media-denial")
+        try await start(conn, on: queue)
+        defer { conn.cancel() }
+        let request = [
+            "GET /ws/device-media HTTP/1.1",
+            "Host: 127.0.0.1",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+            "Sec-WebSocket-Protocol: \(ticket)",
+        ] + (forwardedHTTPS ? ["X-Forwarded-Proto: https"] : [])
+        try await send(request.joined(separator: "\r\n") + "\r\n\r\n", on: conn)
+        let response = try await receiveHTTPResponse(from: conn, on: queue)
+        #expect(String(decoding: response, as: UTF8.self).hasPrefix("HTTP/1.1 401 Unauthorized"))
+    }
+
+    @MainActor
+    private final class DeviceMediaSource {
+        let provider = FakeRemoteApp()
+        let pairing: RemotePairingService
+        let directory: URL
+        let pairingID: String
+        let token: String
+        let deviceID: PeerDeviceID
+        var serving = true
+        var receiver: (@MainActor (PeerDeviceVideoPacket) -> Void)?
+
+        init() throws {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let grants = try PeerDeviceGrants(file: folder.appendingPathComponent("grants.json"))
+            let pairing = RemotePairingService(store: InMemoryDeviceStore())
+            let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Phone", kind: .phone)
+            let pairingID = try #require(pairing.devices.first?.id)
+            self.directory = folder
+            self.pairing = pairing
+            self.pairingID = pairingID
+            self.token = token
+            self.deviceID = try grants.setAccess(.view, serial: "test-android", name: "Android", pairingID: pairingID)
+            provider.peerDeviceHost = PeerDeviceHost(grants: grants, environment: .init(
+                eligible: { [weak self] in self?.serving == true },
+                availability: { _ in .ready }, driver: { _ in .available },
+                subscribe: { [weak self] _, packet, _ in self?.receiver = packet; return UUID() },
+                unsubscribe: { [weak self] _, _ in self?.receiver = nil },
+                acquire: { _, _ in false }, freezeInput: { _, _ in }, release: { _, _ in }, input: { _, _, _, _ in }
+            ))
+        }
+
+        func cleanUp() {
+            try? FileManager.default.removeItem(at: directory)
+        }
     }
 
     @Test func teardownCancelsQueuedPredecessorAndSkipsSuccessor() async {

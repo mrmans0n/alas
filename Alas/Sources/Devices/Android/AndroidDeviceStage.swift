@@ -13,6 +13,8 @@ struct AndroidDeviceStage: View {
     let agentName: (String) -> String
     let now: Date
     let flowRecorder: DeviceFlowRecorder
+    let remoteDriverName: String?
+    let onReclaimRemote: () -> Void
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     @State private var streamError: String?
@@ -22,9 +24,10 @@ struct AndroidDeviceStage: View {
 
     var body: some View {
         let driver = control.driver(udid: device.serial, at: now)
-        let allowsInput = VMDriver.allowsViewInput(driver)
+        let remoteInputReserved = control.remoteInputOwner(udid: device.serial) != nil
+        let allowsInput = !remoteInputReserved && VMDriver.allowsViewInput(driver)
         DeviceStageFrame(shape: shape, landscape: false, dropTargeted: dropTargeted) {
-            screen(driver: driver, allowsInput: allowsInput)
+            screen(driver: driver, remoteInputReserved: remoteInputReserved, allowsInput: allowsInput)
         } gutter: {
             DeviceGutter(enabled: streamError == nil && allowsInput) {
                 button("arrow.uturn.backward", "Back", "back")
@@ -46,12 +49,12 @@ struct AndroidDeviceStage: View {
         }
     }
 
-    private func screen(driver: VMDriver, allowsInput: Bool) -> some View {
+    private func screen(driver: VMDriver, remoteInputReserved: Bool, allowsInput: Bool) -> some View {
         ZStack(alignment: .top) {
             DeviceScreenView(
                 udid: device.serial, client: client, onStopped: { streamError = $0 },
-                allowsInput: allowsInput, onBlockedClick: pulsePill,
-                onDropApp: { apk in Task { await pane.installAndLaunch(apk, on: device) } },
+                allowsInput: allowsInput, remoteInputGate: control, onBlockedClick: pulsePill,
+                onDropApp: install,
                 onDropTargeted: { dropTargeted = $0 },
                 canDrop: { $0.pathExtension.lowercased() == "apk" },
                 onPaste: paste, onCopy: copy,
@@ -69,7 +72,22 @@ struct AndroidDeviceStage: View {
                         streamGeneration += 1
                     }
                 )
-            } else if driver != .idle {
+            }
+            if remoteInputReserved {
+                DeviceStagePill {
+                    Text(remoteDriverName.map { "\($0) is driving" } ?? "Switching device control…")
+                        .foregroundStyle(theme.color("fg"))
+                    Button("Reclaim") {
+                        control.reclaimRemoteInput(udid: device.serial)
+                        onReclaimRemote()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(theme.color("accent"))
+                }
+                .scaleEffect(pulse ? 1.06 : 1)
+                .animation(.easeOut(duration: 0.2), value: pulse)
+                .padding(.top, scale.space[2])
+            } else if streamError == nil, driver != .idle {
                 DeviceDriverPill(
                     driver: driver, waiting: control.waitingSessions(udid: device.serial).first, agentName: agentName,
                     flow: control.flowRuns[device.serial], pulse: pulse, onTakeOver: { control.takeOver(udid: device.serial) },
@@ -98,16 +116,26 @@ struct AndroidDeviceStage: View {
 
     private func button(_ icon: String, _ help: String, _ name: String) -> some View {
         DeviceGutterButton(icon: icon, help: help) {
+            guard control.allowsLocalInput(udid: device.serial, at: now) else { return }
             client.button(udid: device.serial, name: name)
             if let key = ["home": DeviceFlow.Key.home, "back": .back][name] { flowRecorder.pressed(device.serial, key) }
         }
     }
 
     private func rotate(left: Bool) {
-        Task { await pane.rotate(device, left: left) }
+        Task {
+            _ = await control.whileUserHoldsInput(udid: device.serial) { await pane.rotate(device, left: left) }
+        }
+    }
+
+    private func install(_ apk: URL) {
+        Task {
+            _ = await control.whileUserHoldsInput(udid: device.serial) { await pane.installAndLaunch(apk, on: device) }
+        }
     }
 
     private func paste() {
+        guard control.allowsLocalInput(udid: device.serial, at: now) else { return }
         guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
             return pane.show("The clipboard has no text to paste.", serial: device.serial)
         }
@@ -117,12 +145,14 @@ struct AndroidDeviceStage: View {
 
     private func copy() {
         Task {
-            guard let text = await client.copy(udid: device.serial) else {
-                return pane.show("Nothing was copied. Select some text first.", serial: device.serial)
+            _ = await control.whileUserHoldsInput(udid: device.serial) {
+                guard let text = await client.copy(udid: device.serial) else {
+                    return pane.show("Nothing was copied. Select some text first.", serial: device.serial)
+                }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                pane.show("Copied", serial: device.serial)
             }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
-            pane.show("Copied", serial: device.serial)
         }
     }
 }

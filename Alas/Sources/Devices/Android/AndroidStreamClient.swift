@@ -12,6 +12,16 @@ final class AndroidStreamClient: DeviceScreenSource, DeviceInput {
         let onStop: @MainActor (String) -> Void
     }
 
+    private struct EncodedScreen {
+        let onPacket: @MainActor (PeerDeviceVideoPacket) -> Void
+        let onStop: @MainActor (String) -> Void
+    }
+
+    private struct Retiring {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+
     /// Each streamed device's current video size, upright; it changes when the device rotates.
     private(set) var videoSizes: [String: CGSize] = [:]
 
@@ -19,7 +29,8 @@ final class AndroidStreamClient: DeviceScreenSource, DeviceInput {
     @ObservationIgnored private let serverJar: URL?
     @ObservationIgnored private var sessions: [String: AndroidScreenSession] = [:]
     @ObservationIgnored private var screens: [String: [UUID: Screen]] = [:]
-    @ObservationIgnored private var subscriptions = StreamSubscriptions()
+    @ObservationIgnored private var encodedScreens: [String: [UUID: EncodedScreen]] = [:]
+    @ObservationIgnored private var retiring: [String: Retiring] = [:]
     @ObservationIgnored private var lastFrames: [String: DeviceFrame] = [:]
     @ObservationIgnored private var metaStates: [String: AndroidMetaState] = [:]
     /// How many times each held key has repeated, by device.
@@ -39,22 +50,57 @@ final class AndroidStreamClient: DeviceScreenSource, DeviceInput {
     ) -> UUID {
         let token = UUID()
         screens[udid, default: [:]][token] = Screen(onFrame: onFrame, onStop: onStop)
-        // A stream that stopped starts again for a new screen (Retry), however
-        // many screens still watch it.
-        if subscriptions.add(udid) == .start || sessions[udid] == nil { start(udid) }
+        if let session = sessions[udid] {
+            session.setLocalVideo(true)
+            if let frame = lastFrames[udid] { onFrame(frame) }
+        } else {
+            start(udid)
+        }
         return token
     }
 
     func unsubscribe(udid: String, token: UUID) {
-        screens[udid]?[token] = nil
-        if screens[udid]?.isEmpty == true { screens[udid] = nil }
-        if subscriptions.remove(udid) == .stop {
-            sessions.removeValue(forKey: udid)?.stop()
+        guard screens[udid]?.removeValue(forKey: token) != nil else { return }
+        if screens[udid]?.isEmpty == true {
+            screens[udid] = nil
             lastFrames[udid] = nil
-            videoSizes[udid] = nil
-            metaStates[udid] = nil
-            keyRepeats[udid] = nil
+            sessions[udid]?.setLocalVideo(false)
+            stopIfUnwatched(udid)
         }
+    }
+
+    func subscribeEncoded(
+        serial: String, onPacket: @escaping @MainActor (PeerDeviceVideoPacket) -> Void,
+        onStop: @escaping @MainActor (String) -> Void
+    ) -> UUID {
+        let token = UUID()
+        encodedScreens[serial, default: [:]][token] = EncodedScreen(onPacket: onPacket, onStop: onStop)
+        if let session = sessions[serial] {
+            session.replay(onPacket)
+        } else {
+            start(serial)
+        }
+        return token
+    }
+
+    func unsubscribeEncoded(serial: String, token: UUID) {
+        guard encodedScreens[serial]?.removeValue(forKey: token) != nil else { return }
+        if encodedScreens[serial]?.isEmpty == true {
+            encodedScreens[serial] = nil
+            stopIfUnwatched(serial)
+        }
+    }
+
+    func remoteInput(serial: String, formatGeneration: UInt64, event: PeerDeviceInput) {
+        sessions[serial]?.remoteInput(formatGeneration: formatGeneration, event: event)
+    }
+
+    func freezeRemoteInput(serial: String) {
+        sessions[serial]?.freezeRemoteInput()
+    }
+
+    func releaseRemoteInput(serial: String) async {
+        await sessions[serial]?.releaseRemoteInput()
     }
 
     func touch(udid: String, phase: String, point: DeviceScreenPoint) {
@@ -89,9 +135,13 @@ final class AndroidStreamClient: DeviceScreenSource, DeviceInput {
 
     /// Ends every stream and waits for its adb forward to go, for quitting.
     func stopAll() async {
-        let running = Array(sessions.values)
-        sessions = [:]
-        for session in running { await session.stopAndWait() }
+        let running = sessions
+        sessions.removeAll()
+        for (serial, session) in running {
+            clearCaptureState(serial)
+            retire(session, serial: serial)
+        }
+        for cleanup in Array(retiring.values) { await cleanup.task.value }
     }
 
     var takesScroll: Bool { true }
@@ -148,27 +198,77 @@ final class AndroidStreamClient: DeviceScreenSource, DeviceInput {
 
     private func start(_ serial: String) {
         guard let control = control(), let serverJar, FileManager.default.fileExists(atPath: serverJar.path) else {
-            return stopped(serial, reason: "The Android screen server is missing from Alas.")
+            let reason = "The Android screen server is missing from Alas."
+            for screen in screens[serial]?.values ?? [:].values { screen.onStop(reason) }
+            Task { [weak self] in
+                guard let self, self.sessions[serial] == nil else { return }
+                self.notifyEncodedStopped(serial, reason: reason)
+            }
+            return
         }
         let session = AndroidScreenSession(serial: serial, control: control, serverJar: serverJar)
-        session.onFrame = { [weak self] frame in self?.deliver(serial, frame) }
-        session.onSize = { [weak self] size in self?.videoSizes[serial] = size }
-        session.onStop = { [weak self] reason in self?.stopped(serial, reason: reason) }
+        session.onFrame = { [weak self, weak session] frame in
+            guard let self, let session, self.sessions[serial] === session else { return }
+            self.deliver(serial, frame)
+        }
+        session.onPacket = { [weak self, weak session] packet in
+            guard let self, let session, self.sessions[serial] === session else { return }
+            if case .format(_, let width, let height) = packet {
+                self.lastFrames[serial] = nil
+                self.videoSizes[serial] = CGSize(width: Int(width), height: Int(height))
+            }
+            for screen in self.encodedScreens[serial]?.values ?? [:].values {
+                screen.onPacket(packet)
+            }
+        }
+        session.onStop = { [weak self, weak session] reason in
+            guard let self, let session, self.sessions[serial] === session else { return }
+            self.sessions[serial] = nil
+            self.clearCaptureState(serial)
+            self.retire(session, serial: serial)
+            self.notifyStopped(serial, reason: reason)
+        }
         sessions[serial] = session
-        Task { await session.start() }
+        session.setLocalVideo(screens[serial] != nil)
+        session.start(after: retiring[serial]?.task)
     }
 
     private func deliver(_ serial: String, _ frame: DeviceFrame) {
         lastFrames[serial] = frame
-        for screen in screens[serial]?.values.map({ $0 }) ?? [] { screen.onFrame(frame) }
+        for screen in screens[serial]?.values ?? [:].values { screen.onFrame(frame) }
     }
 
-    private func stopped(_ serial: String, reason: String) {
-        sessions[serial] = nil
-        // The last frame and size were the stopped stream's: a new one must deliver its own
-        // before anyone treats the device as ready for input.
+    private func stopIfUnwatched(_ serial: String) {
+        guard screens[serial] == nil, encodedScreens[serial] == nil else { return }
+        if let session = sessions.removeValue(forKey: serial) { retire(session, serial: serial) }
+        clearCaptureState(serial)
+    }
+
+    private func retire(_ session: AndroidScreenSession, serial: String) {
+        session.stop()
+        let id = UUID()
+        let task = Task { [weak self] in
+            await session.stopAndWait()
+            if self?.retiring[serial]?.id == id { self?.retiring[serial] = nil }
+        }
+        retiring[serial] = Retiring(id: id, task: task)
+    }
+
+    private func clearCaptureState(_ serial: String) {
         lastFrames[serial] = nil
         videoSizes[serial] = nil
-        for screen in screens[serial]?.values.map({ $0 }) ?? [] { screen.onStop(reason) }
+        metaStates[serial] = nil
+        keyRepeats[serial] = nil
+    }
+
+    private func notifyStopped(_ serial: String, reason: String) {
+        for screen in screens[serial]?.values ?? [:].values { screen.onStop(reason) }
+        notifyEncodedStopped(serial, reason: "The Android screen stopped.")
+    }
+
+    private func notifyEncodedStopped(_ serial: String, reason: String) {
+        for screen in encodedScreens[serial]?.values ?? [:].values {
+            screen.onStop(reason)
+        }
     }
 }

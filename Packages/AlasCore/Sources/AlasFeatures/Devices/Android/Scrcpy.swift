@@ -2,6 +2,7 @@ import Foundation
 
 public enum ScrcpyError: Error, Equatable, Sendable {
     case unsupportedCodec(UInt32)
+    case invalidVideoPayloadSize(Int)
     case unknownDeviceMessage(UInt8)
 }
 
@@ -10,7 +11,7 @@ public enum ScrcpyVideoEvent: Equatable, Sendable {
     case session(width: Int, height: Int)
     /// The codec configuration: H.264's SPS and PPS, Annex B.
     case config(Data)
-    case frame(Data, keyFrame: Bool)
+    case frame(Data, pts: UInt64, keyFrame: Bool)
 }
 
 /// scrcpy's video socket after the dummy byte and device name: a codec id,
@@ -39,6 +40,7 @@ public struct ScrcpyVideoParser: Sendable {
                 continue
             }
             let size = Int(Self.u32(buffer, 8))
+            guard 1...8 * 1024 * 1024 ~= size else { throw ScrcpyError.invalidVideoPayloadSize(size) }
             guard buffer.count >= 12 + size else { break }
             let flags = Self.u64(buffer, 0)
             let payload = buffer.subdata(in: buffer.startIndex + 12..<buffer.startIndex + 12 + size)
@@ -46,7 +48,7 @@ public struct ScrcpyVideoParser: Sendable {
             if flags & (1 << 62) != 0 {
                 events.append(.config(payload))
             } else {
-                events.append(.frame(payload, keyFrame: flags & (1 << 61) != 0))
+                events.append(.frame(payload, pts: flags & ((1 << 61) - 1), keyFrame: flags & (1 << 61) != 0))
             }
         }
         return events
@@ -64,7 +66,7 @@ public struct ScrcpyVideoParser: Sendable {
 /// Messages to scrcpy's control socket.
 public enum ScrcpyControl {
     public enum KeyAction: UInt8, Sendable { case down = 0, up = 1 }
-    public enum TouchAction: UInt8, Sendable { case down = 0, up = 1, move = 2 }
+    public enum TouchAction: UInt8, Sendable { case down = 0, up = 1, move = 2, cancel = 3 }
 
     /// scrcpy's pointer id for a finger that isn't the mouse: touches act like the touchscreen.
     public static let fingerPointerID: UInt64 = .max - 1
@@ -98,6 +100,12 @@ public enum ScrcpyControl {
         data.append(be: actionButton)
         data.append(be: buttons)
         return data
+    }
+
+    /// scrcpy forwards CANCEL to Android, but requires UP to retire the finger.
+    public static func cancelTouch(x: Int32, y: Int32, width: UInt16, height: UInt16) -> Data {
+        touch(.cancel, x: x, y: y, width: width, height: height, pressure: 0)
+            + touch(.up, x: x, y: y, width: width, height: height, pressure: 0)
     }
 
     /// `horizontal` and `vertical` are scroll steps, clamped to ±16.

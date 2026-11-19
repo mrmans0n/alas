@@ -18,6 +18,8 @@ struct AndroidActions: View {
     @State private var showsSettings = false
 
     var body: some View {
+        let remoteInputReserved = control.remoteInputOwner(udid: device.serial) != nil
+        let allowsInput = !remoteInputReserved && VMDriver.allowsViewInput(control.driver(udid: device.serial))
         HStack(spacing: 2) {
             if let notice {
                 Text(notice)
@@ -31,16 +33,18 @@ struct AndroidActions: View {
                     }
             }
             ToolbarBtn(icon: "doc.text.magnifyingglass", tooltip: "Logs", action: onOpenLogs)
-            ToolbarBtn(icon: "slider.horizontal.3", tooltip: "Device settings") { showsSettings = true }
-                .disabled(!VMDriver.allowsViewInput(control.driver(udid: device.serial)))
-                .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
-                    if let backend = control.backend(for: .android) {
-                        DeviceSettingsPopover(udid: device.serial, backend: backend, control: control)
-                    }
+            ToolbarBtn(icon: "slider.horizontal.3", tooltip: "Device settings") {
+                if control.allowsLocalInput(udid: device.serial) { showsSettings = true }
+            }
+            .disabled(!allowsInput)
+            .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
+                if !remoteInputReserved, let backend = control.backend(for: .android) {
+                    DeviceSettingsPopover(udid: device.serial, backend: backend, control: control)
                 }
+            }
             DeviceFlowButtons(
                 udid: device.serial, backend: control.backend(for: .android), control: control, recorder: flowRecorder,
-                worktree: worktree, enabled: VMDriver.allowsViewInput(control.driver(udid: device.serial))
+                worktree: worktree, enabled: allowsInput
             )
             recordButton
             ToolbarBtn(icon: "camera", tooltip: "Save screenshot to Desktop") { Task { await saveScreenshot() } }
@@ -51,6 +55,9 @@ struct AndroidActions: View {
             }
         }
         .fixedSize()
+        .onChange(of: remoteInputReserved) { _, reserved in
+            if reserved { showsSettings = false }
+        }
     }
 
     @ViewBuilder

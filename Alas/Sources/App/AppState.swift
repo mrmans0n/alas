@@ -939,6 +939,19 @@ final class AppState {
     /// Built on first peer console request; see `AppState+PeerConsoles`.
     /// Observable so a pane drawn before it existed still shows peer control.
     var _peerConsoleHost: PeerConsoleHost?
+    @ObservationIgnored lazy var peerDeviceGrantStore = Result {
+        try PeerDeviceGrants(file: PeerDeviceGrants.defaultURL)
+    }
+    @ObservationIgnored var servedPeerDevices: PeerDeviceHost?
+    @ObservationIgnored var peerDeviceInventoryTask: Task<Void, Never>?
+    @ObservationIgnored var peerDeviceSettingsObservers = 0
+    var peerDeviceInventory: [AndroidDevice] = []
+    var peerDeviceDriverNames: [String: String] = [:]
+    @ObservationIgnored var peerDeviceProxyTask: Task<Void, Never>?
+    @ObservationIgnored var monitoredPeerDeviceProxy: PeerDeviceProxyTarget?
+    var confirmedPeerDeviceProxy: PeerDeviceProxyTarget?
+    var peerDeviceGrantRevision: UInt64 = 0
+    var peerDeviceGrantError: String?
     /// Last queued remote tab action per session id; see `serializedSessionTabAction`.
     /// Stands in for the terminal registry in tests that route CLI commands
     /// from a terminal session without building one.
@@ -961,6 +974,22 @@ final class AppState {
     private(set) var remoteTailscaleError: String?
     @ObservationIgnored private var remoteTailscaleSync: Task<Void, Never>?
     @ObservationIgnored private var remoteTailscaleServeProcess: RemoteTailscaleServeProcess?
+
+    var canServePeerDevices: Bool {
+        guard let target = peerDeviceProxyTarget else { return false }
+        return confirmedPeerDeviceProxy == target
+    }
+
+    var peerDeviceProxyTarget: PeerDeviceProxyTarget? {
+        guard config.remote.enabled, config.remote.tailscaleOnly, config.remote.tailscaleServe,
+              let server = remoteServer, server.loopbackOnly, let port = server.port,
+              let serve = remoteTailscaleServeProcess, serve.port == port, serve.isRunning,
+              remoteTailscaleServe == .serving(port: port),
+              let tailscale = remoteTailscale, tailscale.httpsEnabled,
+              let url = URL(string: "https://\(tailscale.dnsName)/remote-info")
+        else { return nil }
+        return PeerDeviceProxyTarget(processID: ObjectIdentifier(serve), url: url, port: port, serverID: config.remote.serverId)
+    }
     private(set) var remoteConnectedDeviceCountsSnapshot: [String: Int] = [:]
 
     private func makeRemoteInterfaces() -> [RemoteNetworkInterface] {
@@ -1039,6 +1068,9 @@ final class AppState {
             origin: makeRemoteOriginPolicy(interfaces: interfaces)
         )
         syncPairingApprovalState()
+        syncPeerDeviceProxy()
+        remoteServer?.refreshPeerDevicePolicy()
+        syncPeerDeviceInventory()
     }
 
     func remoteConnectedDeviceCounts() -> [String: Int] {
@@ -1164,6 +1196,7 @@ final class AppState {
             remoteServer?.stop()
             remoteServer = nil
             _peerConsoleHost?.shutdown()
+            stopServingPeerDevices()
             remotePort = nil
             remoteAdvertisedAddresses = []
             remoteConnectedDeviceCountsSnapshot = [:]
@@ -2100,6 +2133,7 @@ final class AppState {
             await self?.vmManager.stopAll()
             // simctl would record on after Alas quits; this also saves your recordings.
             await self?.madeDeviceRecorder?.stopAll()
+            await self?.stopServingPeerDevicesForQuit()
             // Takes down the scrcpy servers and their adb forwards.
             await self?.androidStreams.stopAll()
         }

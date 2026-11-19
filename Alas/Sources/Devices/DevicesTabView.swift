@@ -82,7 +82,9 @@ struct DevicesTabView: View {
             if let device = target.device {
                 AndroidDeviceStage(
                     device: device, client: state.androidStreams, pane: state.androidPane, control: state.deviceControl,
-                    agentName: { state.computerUseAgentName($0) }, now: now, flowRecorder: state.deviceFlowRecorder
+                    agentName: { state.computerUseAgentName($0) }, now: now, flowRecorder: state.deviceFlowRecorder,
+                    remoteDriverName: state.peerDeviceDriverNames[device.serial],
+                    onReclaimRemote: { state.servedPeerDevices?.reclaim(serial: device.serial) }
                 )
                     .id(device.serial)
             }
