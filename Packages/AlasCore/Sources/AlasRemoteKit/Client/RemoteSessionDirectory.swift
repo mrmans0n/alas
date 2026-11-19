@@ -126,7 +126,7 @@ public enum RemoteSessionDirectory {
         case .creationDesc, .creationAsc:
             guard items.allSatisfy({ worktree($0).summary?.createdAt != nil }) else { return items }
             return by(descending: sort == .creationDesc) { $0.summary?.createdAt ?? 0 }
-        case .branchAsc: return by { $0.title.localizedLowercase }
+        case .branchAsc: return by { ($0.summary?.branch ?? $0.title).localizedLowercase }
         }
     }
 

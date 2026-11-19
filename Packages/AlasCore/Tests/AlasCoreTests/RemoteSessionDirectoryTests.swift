@@ -119,12 +119,12 @@ import Testing
         (.creationDesc, true, ["a", "b", "c"]),
         (.creationAsc, true, ["c", "b", "a"]),
         (.creationAsc, false, ["b", "c", "a"]),  // a host without createdAt keeps recency
-        (.branchAsc, true, ["a", "b", "c"]),
+        (.branchAsc, true, ["c", "b", "a"]),  // by branch, not directory
     ])
     func sortsWorktreesLikeTheMacSidebar(sort: RemoteWorktreeSort, hasCreatedAt: Bool, expected: [String]) throws {
-        // (worktree, updatedAt, createdAt); "B" pins the case-insensitive name order.
-        let list = [("a", 1, 30.0), ("B", 9, 20.0), ("c", 5, 10.0)].map { name, at, created in
-            var summary = wt("alas", name, path: "/r/\(name)")
+        // (worktree, updatedAt, createdAt, branch); "Y" pins the case-insensitive branch order.
+        let list = [("a", 1, 30.0, "z"), ("B", 9, 20.0, "Y"), ("c", 5, 10.0, "x")].map { name, at, created, branch in
+            var summary = wt("alas", name, branch: branch, path: "/r/\(name)")
             if hasCreatedAt || name != "a" { summary.createdAt = created }
             return session(name.lowercased(), worktreeId: name.lowercased(), at: Int64(at), worktree: summary)
         }
