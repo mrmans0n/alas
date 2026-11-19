@@ -11,20 +11,23 @@ enum ImageStaging {
     /// Loads, transcodes and stages each pick, skipping any it cannot read or that the limits refuse.
     @MainActor
     static func stage(_ items: [PhotosPickerItem], into session: TranscriptSession) async {
-        for item in items {
-            guard let raw = try? await item.loadTransferable(type: Data.self),
-                  let encoded = await encode(raw) else {
-                session.rejection = "That photo couldn't be read."
-                continue
-            }
-            if let refusal = RemoteAttachmentLimits.refusal(adding: encoded.jpeg.count,
-                                                            to: session.draft.images.map(\.data.count)) {
-                session.rejection = refusal
-                continue
-            }
-            session.draft.images.append(StagedImage(id: UUID(), data: encoded.jpeg, mimeType: "image/jpeg",
-                                                    thumbnail: encoded.thumbnail))
+        for item in items { await stage(try? await item.loadTransferable(type: Data.self), into: session) }
+    }
+
+    /// Transcodes and stages one image (a pick or a paste); nil or unreadable data is reported.
+    @MainActor
+    static func stage(_ raw: Data?, into session: TranscriptSession) async {
+        guard let raw, let encoded = await encode(raw) else {
+            session.rejection = "That image couldn't be read."
+            return
         }
+        if let refusal = RemoteAttachmentLimits.refusal(adding: encoded.jpeg.count,
+                                                        to: session.draft.images.map(\.data.count)) {
+            session.rejection = refusal
+            return
+        }
+        session.draft.images.append(StagedImage(id: UUID(), data: encoded.jpeg, mimeType: "image/jpeg",
+                                                thumbnail: encoded.thumbnail))
     }
 
     /// ImageIO decodes straight to the downscaled size, so a 48 MP photo is never held at full

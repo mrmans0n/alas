@@ -33,7 +33,11 @@ struct ComposerBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            if let rejection = session.rejection { banner(rejection) }
+            if let rejection = session.rejection {
+                banner(rejection)
+            } else if let issue = config?.agentIssue {
+                issueBanner(issue)
+            }
             if !session.canDrive, session.hasSnapshot { takeOverPill }
             if let slash {
                 SlashPicker(commands: slash) { command in
@@ -76,14 +80,19 @@ struct ComposerBar: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
-                ComposerTextView(text: $session.draft.text, selection: $selection)
+                ComposerTextView(text: $session.draft.text, selection: $selection,
+                                 onPasteImages: config?.acceptsImages == true ? { images in
+                                     Task { for data in images { await ImageStaging.stage(data, into: session) } }
+                                 } : nil)
             }
             HStack(spacing: 6) {
                 if config?.acceptsImages == true { attachButton }
                 chips
                 QueueBadge(session: session, open: $queueOpen)
                 Spacer(minLength: 0)
-                if let usage = config?.usage, let context = usage.context { UsageRing(usage: usage, context: context) }
+                if let usage = config?.usage, usage.context != nil || !usage.lastTurn.isEmpty || !usage.cumulative.isEmpty {
+                    UsageRing(usage: usage)
+                }
                 actionButton
             }
         }
@@ -214,6 +223,22 @@ struct ComposerBar: View {
         .glassEffect(.regular.interactive(), in: Capsule())
     }
 
+    /// Why the agent can't run, kept up until the host clears it, with Install when the host can fix it.
+    private func issueBanner(_ issue: RemoteAgentIssue) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            Text(issue.message).font(.footnote).frame(maxWidth: .infinity, alignment: .leading)
+            if session.offersAdapterInstall {
+                let installing = session.adapterInstallRequested == issue
+                Button(installing ? "Installing…" : "Install") { session.installAdapter() }
+                    .font(.footnote.weight(.semibold))
+                    .disabled(installing)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
     private func banner(_ message: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
@@ -253,12 +278,14 @@ struct ComposerBar: View {
 struct ComposerTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var selection: NSRange
+    /// Takes pasted images; nil leaves Paste to text only.
+    var onPasteImages: (([Data]) -> Void)?
     private static let maxLines: CGFloat = 6
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = PastingTextView()
         view.delegate = context.coordinator
         view.font = .preferredFont(forTextStyle: .body)
         view.adjustsFontForContentSizeCategory = true
@@ -272,6 +299,7 @@ struct ComposerTextView: UIViewRepresentable {
 
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.parent = self
+        (view as? PastingTextView)?.onPasteImages = onPasteImages
         context.coordinator.updating = true
         defer { context.coordinator.updating = false }
         if view.text != text { view.text = text }
@@ -305,5 +333,26 @@ struct ComposerTextView: UIViewRepresentable {
             guard !updating, parent.selection != view.selectedRange else { return }
             parent.selection = view.selectedRange
         }
+    }
+}
+
+/// A text view whose Paste also takes images, as the Mac composer does.
+private final class PastingTextView: UITextView {
+    var onPasteImages: (([Data]) -> Void)?
+
+    private var pastedImages: [Data] {
+        guard onPasteImages != nil, UIPasteboard.general.hasImages else { return [] }
+        return (UIPasteboard.general.images ?? []).compactMap { $0.pngData() }
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)), onPasteImages != nil, UIPasteboard.general.hasImages { return true }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        let images = pastedImages
+        guard !images.isEmpty else { return super.paste(sender) }
+        onPasteImages?(images)
     }
 }
