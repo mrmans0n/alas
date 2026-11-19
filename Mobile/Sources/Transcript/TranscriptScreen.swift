@@ -95,7 +95,7 @@ struct TranscriptScreen: View {
 
     private func content(_ session: TranscriptSession, _ workspace: SessionWorkspace) -> some View {
         let available = modes(session)
-        return TranscriptContent(session: session, openSubagent: { openedSubagent = $0 })
+        let base = TranscriptContent(session: session, openSubagent: { openedSubagent = $0 })
             // Kept alive under the other tabs so the scroll position survives a switch.
             .opacity(mode == .transcript ? 1 : 0)
             .allowsHitTesting(mode == .transcript)
@@ -148,19 +148,7 @@ struct TranscriptScreen: View {
                         }
                     }
                 } else if mode == .transcript {
-                    HStack(spacing: 12) {
-                        Text("This session has ended.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        if session.supportsSessionTabs {
-                            Button(session.tabAction == .reopen ? "Reopening…" : "Reopen") { session.reopenTab() }
-                                .font(.footnote.weight(.semibold))
-                                .disabled(session.tabAction != nil)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(.bar)
+                    EndedBar(session: session)
                 }
             }
             // Below the request cards, so links in a plan under review route too. A file link opens in the
@@ -242,6 +230,12 @@ struct TranscriptScreen: View {
                 Button("Cancel", role: .cancel) {}
                 Button("Rename") { session.rename(newTitle) }
             }
+        return lifecycleDialogs(base, workspace)
+    }
+
+    /// The title menu's lifecycle prompts, apart so the screen's modifier chain type-checks in time.
+    private func lifecycleDialogs(_ view: some View, _ workspace: SessionWorkspace) -> some View {
+        view
             .alert("Rename Branch", isPresented: $renamingBranch) {
                 TextField("Branch", text: $newBranch).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button("Cancel", role: .cancel) {}
@@ -344,5 +338,26 @@ private struct TranscriptContent: View {
                 }
             }
         }
+    }
+}
+
+/// Under an ended session: says so, with Reopen where the host reopens session tabs.
+private struct EndedBar: View {
+    let session: TranscriptSession
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("This session has ended.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            if session.supportsSessionTabs {
+                Button(session.tabAction == .reopen ? "Reopening…" : "Reopen") { session.reopenTab() }
+                    .font(.footnote.weight(.semibold))
+                    .disabled(session.tabAction != nil)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(.bar)
     }
 }
