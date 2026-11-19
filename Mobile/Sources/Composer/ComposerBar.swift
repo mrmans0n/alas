@@ -68,6 +68,7 @@ struct ComposerBar: View {
         .padding(.bottom, 6)
         .onChange(of: mentionToken?.query) { _, query in searchMentions(query) }
         .onChange(of: RemoteQueueRules.waiting(session.queue).isEmpty) { _, empty in if empty { queueOpen = false } }
+        .onChange(of: session.composerFocusRequest) { selection = NSRange(location: (text as NSString).length, length: 0) }
         .onChange(of: picked) { _, items in
             guard !items.isEmpty else { return }
             picked = []
@@ -86,7 +87,7 @@ struct ComposerBar: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
-                ComposerTextView(text: $session.draft.text, selection: $selection,
+                ComposerTextView(text: $session.draft.text, selection: $selection, focusRequest: session.composerFocusRequest,
                                  onPasteImages: config?.acceptsImages == true ? { images in
                                      Task { for data in images { await ImageStaging.stage(data, into: session) } }
                                  } : nil)
@@ -322,6 +323,8 @@ struct ComposerBar: View {
 struct ComposerTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var selection: NSRange
+    /// A change raises the keyboard on this view.
+    let focusRequest: Int
     /// Takes pasted images; nil leaves Paste to text only.
     var onPasteImages: (([Data]) -> Void)?
     private static let maxLines: CGFloat = 6
@@ -350,6 +353,11 @@ struct ComposerTextView: UIViewRepresentable {
         let length = (view.text as NSString).length
         let wanted = NSRange(location: min(selection.location, length), length: min(selection.length, max(0, length - selection.location)))
         if view.selectedRange != wanted, view.markedTextRange == nil { view.selectedRange = wanted }
+        if context.coordinator.focusRequest != focusRequest {
+            context.coordinator.focusRequest = focusRequest
+            // After this update: taking first responder inside it re-enters SwiftUI's graph, which cycles.
+            DispatchQueue.main.async { [weak view] in view?.becomeFirstResponder() }
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
@@ -364,8 +372,13 @@ struct ComposerTextView: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: ComposerTextView
         var updating = false
+        /// The request last acted on; the one the view appeared with is not a request.
+        var focusRequest: Int
 
-        init(_ parent: ComposerTextView) { self.parent = parent }
+        init(_ parent: ComposerTextView) {
+            self.parent = parent
+            focusRequest = parent.focusRequest
+        }
 
         func textViewDidChange(_ view: UITextView) {
             guard !updating else { return }
