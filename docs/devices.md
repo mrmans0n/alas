@@ -1,11 +1,16 @@
 # Devices
 
-The Devices tab in the right pane shows the devices a worktree can use: the
-Mac's iOS simulators and the worktree's own macOS and Linux VMs. It appears
-when the Mac has Xcode's simulator tools or can run worktree VMs. Pick a
-device with the switcher at the top of the tab. Each worktree remembers its
-own choice until Alas quits. Until you pick one, the tab shows a booted
-simulator, then a running VM, then the first simulator.
+The Devices tab in the right pane stacks the devices a worktree is using: the
+Mac's booted iOS simulators and running Android devices, then the worktree's
+own running macOS and Linux VMs. It appears when the Mac has Xcode's simulator
+tools, the Android SDK, or can run worktree VMs. One running device fills the
+tab; with more, they stack, two screens to a view, and the rest scroll. Each
+device's header collapses it to one line, saves a screenshot, opens it in a
+center tab, and holds the rest of its actions in its **⋯** menu. A device in a
+center tab leaves a line in the stack with **Bring back**; the tab's own
+button, or closing it, puts the device back. **+ Add** in the toolbar boots a
+simulator or AVD, jumps to a running device, or opens a VM's tab, where it
+starts or is set up.
 
 ## Simulators
 
@@ -13,15 +18,15 @@ Simulators need Xcode with at least one iOS simulator runtime. Boot a
 simulator that is shut down, then use it: click to tap, drag to swipe, and
 type while the screen has focus. Shift, Control and Option reach the
 simulator; Command shortcuts stay with Alas. The buttons next to the screen
-press Home, open the app switcher, lock the device, and start Siri. The
-toolbar saves a screenshot to the Desktop and shuts the simulator down.
+press Home, open the app switcher, lock the device, and start Siri. Its
+header saves a screenshot to the Desktop; **⋯** shuts the simulator down.
 
 To run an app you built for the simulator, drop its `.app` onto the screen:
 Alas installs it, replacing an installed copy, and launches it. The screen
 outlines itself while the drag is one it can take; an app built for a device
 is refused.
 
-The settings button in the toolbar opens the simulator's settings while it is
+**Settings…** in a device's **⋯** opens the simulator's settings while it is
 booted and no agent is driving it: appearance, text size and Increase
 Contrast, each showing the value the simulator reports back; privacy
 permissions and a test push notification for one of your installed apps; a
@@ -42,7 +47,7 @@ without a reboot, and on iOS 18.5 and newer the simulator stays slim across
 reboots until you turn it off. Without simslim, Install simslim… installs it
 with Homebrew (`brew install mobai-app/tap/simslim`).
 
-The accessibility button in the toolbar outlines the screen's accessibility
+**Show Accessibility Overlay** in **⋯** outlines the screen's accessibility
 elements over it. Hover one to see its role, label, value and id. Buttons,
 fields and other controls without a label are outlined in the warning color, since
 VoiceOver can only read their type. The outlines update a second after you
@@ -57,13 +62,13 @@ copy something.
 
 The rotate buttons under the hardware buttons turn the device left or right.
 The screen turns with the app, so an app that supports only portrait stays
-upright. The record button in the toolbar records the screen until you click
-it again, then saves the video to the Desktop. The video keeps the device's
+upright. **Record Screen** in **⋯** records the screen until you click the
+lit stop button in the header, then saves the video to the Desktop. The video keeps the device's
 portrait frame, as Simulator.app's recordings do.
 
 ### Logs
 
-The Logs button in the toolbar opens a booted simulator's logs in a center
+**Logs** in **⋯** opens a booted simulator's logs in a center
 tab. By default it shows the app in front: its own lines at Default level and
 above, without Apple's `com.apple.*` subsystems, and it follows whichever app
 comes forward. Pick one of your apps or all processes instead, choose a level
@@ -115,7 +120,7 @@ tools with `platform-tools` and `emulator`. Alas finds it through
 `ANDROID_HOME`, `ANDROID_SDK_ROOT` or `~/Library/Android/sdk`, and installs
 nothing itself.
 
-The device switcher's Android section lists connected phones and running
+**+ Add**'s Android section lists connected phones and running
 emulators, then the AVDs you can boot. Alas boots an AVD without the
 emulator's window; it keeps running after Alas quits, as simulators do. A
 phone shows once it's connected with USB debugging allowed.
@@ -124,13 +129,13 @@ Click to tap, drag to swipe, scroll, and type while the screen has focus.
 The buttons beside the screen are Back, Home, Recents, Power, volume and
 rotation. ⌘V pastes the Mac clipboard's text into the focused field; ⌘C
 copies the device's selection. Drop an `.apk` on the screen to install and
-open it. The toolbar records up to 3 minutes of the screen and saves a
-screenshot, both to the Desktop, and shuts an emulator down.
+open it. Its header saves a screenshot, and **⋯** records up to 3 minutes of
+the screen, both to the Desktop, and shuts an emulator down.
 
-The settings button opens the same settings as on iOS: appearance, text size
+**Settings…** opens the same settings as on iOS: appearance, text size
 (Android's font scale) and high-contrast text; Wi-Fi and mobile data; an
 app's permissions, or clearing its data after a confirmation; a simulated
-location; and a URL to open. The Logs button opens a center tab with the
+location; and a URL to open. **Logs** opens a center tab with the
 logcat of the app in front, a chosen app or every process, followed across
 the app's restarts, with a banner for each Java crash.
 
@@ -154,7 +159,8 @@ open the Devices tab while viewing that peer's worktree.
 A viewer opens without control. Choose **Take over** to tap, swipe, type,
 or use the Android buttons. Only one viewer can drive at once. **Hand back**
 releases control so the agent on the host can continue; it does not retry an
-agent call that already timed out. The local Devices tab can **Reclaim**.
+agent call that already timed out. On the host, use **Reclaim** on the
+Android screen in the Devices rail or its center tab.
 Submitting text uses the Android clipboard to paste into the focused field.
 Alas does not sync clipboard contents to the viewer.
 
@@ -181,16 +187,16 @@ A flow is a script of steps on a device, kept in the worktree as
 Steps name elements by their text or id rather than by where they were, so a
 flow survives layout changes.
 
-The hand button in the toolbar records one on a booted device. Each click
+**Record Flow** in **⋯** records one on a booted device. Each click
 becomes a tap on the element under it, named by its label, else its id, else
 the point; typing becomes text, Delete erases, Return the Enter key, the Home and Back
 buttons their keys, and a drag a swipe, as is a scroll on Android (simulators
 don't take the wheel). A paste is recorded as the
 text it pasted; tabs and newlines in it replay as Tab and Return, as typed
 ones do. A recording starts by launching the
-app in front. Click the button again to name the flow and save it.
+app in front. Click the lit hand button in the header to name the flow and save it.
 
-The play button lists the worktree's flows and runs one; while you hold the
+**Run Flow** in **⋯** lists the worktree's flows and runs one; while you hold the
 device, hand it back first. Each step waits up
 to 5 seconds for its element, and the run stops at the first step that
 fails; a popover then says which step and line failed and why. While a flow
@@ -229,12 +235,14 @@ or later.
 
 ## VMs
 
-A VM's screen opens in a center tab. In the Devices tab, its card says
-whether it is running, paused or stopped, who drives it, and opens it, or
-sets it up when the worktree has none yet. A VM another Alas runs is shown
-but can't be opened here. While you drive a VM, an agent's call to it waits up
-to 50 seconds for you to hand it back, and the status names the agent
-waiting.
+A running VM shows its live screen in the stack, with who drives it, Take over
+and Hand back, as a simulator does. The stack leaves the guest's display size
+alone and scales the screen down. Open it in a tab for a full-size screen and
+the VM's setup, clean points and disk tools; a VM that isn't running opens
+there from **+ Add**, to start or set up. A VM another Alas runs is listed in
+**+ Add** but can't be shown here. While you drive a VM, an agent's call to it
+waits up to 50 seconds for you to hand it back, and the status names the agent
+waiting. Moving a VM back from its tab hands it back.
 
 ## Agents
 

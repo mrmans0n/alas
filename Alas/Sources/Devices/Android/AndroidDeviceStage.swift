@@ -15,6 +15,8 @@ struct AndroidDeviceStage: View {
     let flowRecorder: DeviceFlowRecorder
     let remoteDriverName: String?
     let onReclaimRemote: () -> Void
+    /// The user clicked or typed into the screen.
+    var onUse: () -> Void = {}
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     @State private var streamError: String?
@@ -58,6 +60,7 @@ struct AndroidDeviceStage: View {
                 onDropTargeted: { dropTargeted = $0 },
                 canDrop: { $0.pathExtension.lowercased() == "apk" },
                 onPaste: paste, onCopy: copy,
+                onUserInput: onUse,
                 onGesture: flowRecorder.isRecording(device.serial) ? { flowRecorder.gesture(device.serial, from: $0, to: $1) } : nil,
                 onText: flowRecorder.isRecording(device.serial) ? { flowRecorder.typed(device.serial, $0) } : nil,
                 onScroll: flowRecorder.isRecording(device.serial) ? { flowRecorder.scrolled(device.serial, dx: $0, dy: $1) } : nil

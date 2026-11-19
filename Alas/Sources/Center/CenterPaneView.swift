@@ -747,6 +747,10 @@ struct CenterPaneView: View {
                             }
                         }
                         .id(s.id)
+                    case .device(let s):
+                        DeviceTabView(state: state, worktree: worktree, tab: s)
+                            .id(s.id)
+                            .onAppear { completeStartupRecoveryIfActive(s.id) }
                     case .ggInbox(let s):
                         GGInboxTabView(
                             state: state,

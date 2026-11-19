@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Stack every running simulator, Android device and worktree VM in the Devices tab, and move any of them to a center tab and back.
+
+### 🐛 Fixes
+
+- Keep the first characters visible when opening a file from the Files tab with line numbers enabled.
+
 ## [0.24.3] - 2026-11-19
 
 ### ✨ Features
