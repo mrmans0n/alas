@@ -40,6 +40,24 @@ import Testing
         }
     }
 
+    @Test func sessionDetailRoundTripsAndStaysOffTheWireWhenAbsent() throws {
+        let detail = RemoteSessionDetail(model: "Opus 5.5", contextPercent: 63, planCompleted: 2, planTotal: 5,
+                                         planStep: "Write tests", preview: "Done.", previewKind: .reply)
+        let full = RemoteSessionSummary(id: "s", title: "T", agentId: "claude", status: "idle", canDrive: false, detail: detail)
+        #expect(try JSONDecoder().decode(RemoteSessionSummary.self, from: JSONEncoder().encode(full)) == full)
+
+        let legacy = Data(#"{"id":"s","title":"T","agentId":"claude","status":"idle","canDrive":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(RemoteSessionSummary.self, from: legacy)
+        #expect(decoded.detail == nil)
+        #expect(!String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self).contains("\"detail\""))
+    }
+
+    @Test func anUnknownPreviewKindDropsOnlyTheKind() throws {
+        let json = Data(#"{"id":"s","title":"T","agentId":"claude","status":"idle","canDrive":false,"detail":{"model":"Opus","previewKind":"future","preview":"p"}}"#.utf8)
+        let detail = try #require(JSONDecoder().decode(RemoteSessionSummary.self, from: json).detail)
+        #expect(detail == RemoteSessionDetail(model: "Opus", preview: "p"))
+    }
+
     @Test func phoneShepherdRequestsDecodeOnTheMac() throws {
         let list = try JSONDecoder().decode(HostClientMessage.self, from: RemoteShepherdRequest.list(id: 3).json)
         #expect(list == HostClientMessage(id: 3, request: .listSessions))

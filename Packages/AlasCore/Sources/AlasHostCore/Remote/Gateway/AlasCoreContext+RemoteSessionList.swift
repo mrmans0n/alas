@@ -6,6 +6,7 @@ import AlasFeatures
 import AlasCode
 import AlasAgents
 import AlasACP
+import AlasSessions
 
 extension AlasCoreContext {
     /// Every unarchived session of the loaded managers as a Remote list shows
@@ -38,7 +39,8 @@ extension AlasCoreContext {
                     canDrive: mgr.isWriter(for: row.id),
                     projectId: resolved?.project.id,
                     worktreeId: resolved?.worktree.id,
-                    worktree: worktreeSummary
+                    worktree: worktreeSummary,
+                    detail: mgr.runners[row.id].map { Self.remoteSessionDetail(of: $0.session) }
                 )
                 let identity = Self.remoteSessionListIdentity(owner: owner, row: effectiveRow)
                 if let existing = summariesByIdentity[identity] {
@@ -50,6 +52,38 @@ extension AlasCoreContext {
             }
         }
         return identities.compactMap { summariesByIdentity[$0]?.summary(parents: delegatedSessionParents) }
+    }
+
+    /// Live-session facts a peer's badge popover shows.
+    private static func remoteSessionDetail(of session: ACPSession) -> RemoteSessionDetail {
+        var detail = RemoteSessionDetail(model: session.currentModelDisplayName)
+        if let usage = session.contextUsage, usage.size > 0 {
+            let percent = (Double(usage.used) * 100 / Double(usage.size)).rounded()
+            detail.contextPercent = Int(min(max(percent, 0), 100))
+        }
+        let transcript = session.transcript
+        if let items = transcript.currentPlan, !items.isEmpty {
+            let done = items.filter { $0.status == "completed" }.count
+            detail.planCompleted = done
+            detail.planTotal = items.count
+            // Same step choice as the toolbar's plan pill.
+            if let active = items.first(where: { $0.status == "in_progress" }) {
+                detail.planStep = active.content
+            } else if done == items.count {
+                detail.planStep = "All steps complete"
+            } else {
+                detail.planStep = (items.first(where: { $0.status == "pending" }) ?? items.last)?.content
+            }
+        }
+        if let title = transcript.pendingPermission?.params.toolCall.title, !title.isEmpty {
+            detail.preview = ACPSessionTranscriptReader.replyExcerpt(title)
+            detail.previewKind = detail.preview == nil ? nil : .permission
+        }
+        if detail.preview == nil, let reply = ACPSessionTranscriptReader.lastAgentReplyStart(transcript.messages) {
+            detail.preview = reply
+            detail.previewKind = .reply
+        }
+        return detail
     }
 
     private static func remoteSessionListIdentity(owner: SessionOwnerID, row: ACPSessionRow) -> String {
@@ -71,6 +105,7 @@ private struct RemoteSessionSummaryCandidate {
     let projectId: String?
     let worktreeId: String?
     let worktree: RemoteWorktreeSummary?
+    var detail: RemoteSessionDetail?
 
     init(
         row: ACPSessionRow,
@@ -80,7 +115,8 @@ private struct RemoteSessionSummaryCandidate {
         canDrive: Bool,
         projectId: String?,
         worktreeId: String?,
-        worktree: RemoteWorktreeSummary?
+        worktree: RemoteWorktreeSummary?,
+        detail: RemoteSessionDetail?
     ) {
         self.operationalRow = row
         self.displayRow = row
@@ -91,6 +127,7 @@ private struct RemoteSessionSummaryCandidate {
         self.projectId = projectId
         self.worktreeId = worktreeId
         self.worktree = worktree
+        self.detail = detail
     }
 
     var isActive: Bool { tabIndex != nil }
@@ -108,7 +145,8 @@ private struct RemoteSessionSummaryCandidate {
             worktreeId: worktreeId,
             updatedAt: displayRow.updatedAt,
             worktree: worktree,
-            parentSessionId: parents[operationalRow.id]
+            parentSessionId: parents[operationalRow.id],
+            detail: detail
         )
     }
 
@@ -120,6 +158,7 @@ private struct RemoteSessionSummaryCandidate {
             merged.hasRunner = other.hasRunner
             merged.tabIndex = other.tabIndex
             merged.canDrive = other.canDrive
+            merged.detail = other.detail
         }
         if Self.isBetterDisplayRow(other.displayRow, than: merged.displayRow) {
             merged.displayRow = other.displayRow
