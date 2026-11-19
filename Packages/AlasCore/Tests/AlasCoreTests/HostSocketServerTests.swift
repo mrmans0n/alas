@@ -130,7 +130,7 @@ private final class NoCheckpointsEnvironment: AlasHostEnvironment {
 /// that arrive meanwhile.
 @MainActor
 final class SocketClient {
-    private let fd: Int32
+    private let connection: ClientSocket
     private var nextID = 0
     private var responses: [Int: HostResponse] = [:]
     private(set) var events: [HostEvent] = []
@@ -144,7 +144,8 @@ final class SocketClient {
         guard fd >= 0, HostSocketServer.withAddress(path, { connect(fd, $0, $1) }) == 0 else {
             throw POSIXError(.ECONNREFUSED)
         }
-        self.fd = fd
+        let connection = ClientSocket(fd: fd)
+        self.connection = connection
         Thread.detachNewThread { [weak self] in
             var pending = Data()
             var chunk = [UInt8](repeating: 0, count: 64 * 1024)
@@ -153,6 +154,7 @@ final class SocketClient {
                 if count < 0, errno == EINTR { continue }
                 guard count > 0 else {
                     let end = count == 0 ? "EOF" : "errno \(errno)"
+                    connection.close()
                     Task { @MainActor in self?.readerEnd = end }
                     return
                 }
@@ -170,8 +172,11 @@ final class SocketClient {
         }
     }
 
+    /// Ends the connection. The reader closes the descriptor once it stops
+    /// reading: closed while it still reads, the descriptor's number can go
+    /// to another test's socket, whose lines the reader would then take.
     func close() {
-        Foundation.close(fd)
+        connection.shutDown()
     }
 
     func request(_ request: HostRequest, sourceLocation: SourceLocation = #_sourceLocation) async throws -> HostResponse {
@@ -179,7 +184,7 @@ final class SocketClient {
         let id = nextID
         var line = try JSONEncoder().encode(HostClientMessage(id: id, request: request))
         line.append(UInt8(ascii: "\n"))
-        let written = line.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+        let written = connection.write(line)
         try await reportingState(of: "request \(id), \(written) of \(line.count) bytes written", at: sourceLocation) {
             try await eventually(within: .seconds(30), sourceLocation: sourceLocation) { await self.responses[id] != nil }
         }
@@ -212,6 +217,41 @@ final class SocketClient {
         switch message {
         case .response(let id, let result): responses[id] = result
         case .events(let batch, _): events += batch
+        }
+    }
+}
+
+/// A client's descriptor, used only while it is open: once closed, its
+/// number may already belong to another socket.
+private final class ClientSocket: @unchecked Sendable {
+    private let fd: Int32
+    private let lock = NSLock()
+    private var isOpen = true
+
+    init(fd: Int32) {
+        self.fd = fd
+    }
+
+    func write(_ data: Data) -> Int {
+        lock.withLock {
+            guard isOpen else { return -1 }
+            return data.withUnsafeBytes { Foundation.write(fd, $0.baseAddress, $0.count) }
+        }
+    }
+
+    /// Wakes a blocked read, which then sees the end of the stream.
+    func shutDown() {
+        lock.withLock {
+            guard isOpen else { return }
+            _ = shutdown(fd, Int32(SHUT_RDWR))
+        }
+    }
+
+    func close() {
+        lock.withLock {
+            guard isOpen else { return }
+            isOpen = false
+            Foundation.close(fd)
         }
     }
 }
