@@ -66,6 +66,23 @@ import Testing
             worktree: ref, lineageID: nil, branch: "b", force: true, deleteBranchIfMerged: true, discardUnsavedEdits: false)))
     }
 
+    @Test func phoneReadsAWorktreesPullRequest() throws {
+        let request = RemoteGitRequest.reviewStatus(id: 3, projectID: "p", path: "/r").json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: request)
+            == HostClientMessage(id: 3, request: .reviewStatus(worktree: WorktreeRef(projectID: "p", path: "/r"))))
+        func reply(_ snapshot: ReviewLoopSnapshot?) throws -> OpaqueHostMessage {
+            OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 3, result: .reviewStatus(snapshot: snapshot))))
+        }
+        let found = try reply(ShepherdFixtures.snapshot(ShepherdFixtures.request(checks: [ShepherdFixtures.failing])))
+        let pr = try #require(RemoteGitRequest.pullRequest(replying: 3, in: found) ?? nil)
+        #expect(pr.number == 7 && pr.title == "Fix login" && pr.url.absoluteString == "https://github.com/acme/app/pull/7")
+        #expect(pr.state == "open" && !pr.isDraft && pr.reviewDecision == "approved")
+        #expect(pr.checks.map(\.name) == ["unit-tests"] && pr.checks.map(\.bucket) == ["fail"])
+        #expect(pr.checks.first?.detailURL?.absoluteString == "https://ci.example/unit-tests")
+        #expect(RemoteGitRequest.pullRequest(replying: 3, in: try reply(ShepherdFixtures.snapshot(nil))) == .some(nil))
+        #expect(RemoteGitRequest.pullRequest(replying: 4, in: found) == nil)
+    }
+
     @Test(arguments: [
         (HostError.worktreeDeletion(refusal: .needsForce("Uncommitted changes.")), "Uncommitted changes.", RemoteGitFailure.Overrule.force),
         (.worktreeArchive(refusal: .unsavedEdits), "An editor on the machine has unsaved changes in this worktree.", .discardUnsavedEdits),

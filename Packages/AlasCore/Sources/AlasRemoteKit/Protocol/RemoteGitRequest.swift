@@ -25,6 +25,26 @@ public struct RemoteGitFailure: Error, Equatable, Sendable {
     }
 }
 
+/// A worktree's pull request as `reviewStatus` reports it: the part of `ReviewRequest` the phone shows.
+public struct RemotePullRequest: Decodable, Equatable, Sendable {
+    public struct Check: Decodable, Equatable, Sendable {
+        public let name: String
+        /// `ReviewCheckBucket`: pass, fail, pending, skipping, cancel or unknown.
+        public let bucket: String
+        public let detailURL: URL?
+    }
+
+    public let number: Int
+    public let title: String
+    public let url: URL
+    /// `ReviewRequestState`: open, closed or merged.
+    public let state: String
+    public let isDraft: Bool
+    /// `ReviewDecision`: approved, changesRequested, reviewRequired or unknown.
+    public let reviewDecision: String
+    public let checks: [Check]
+}
+
 /// Git actions as host-protocol messages, for a client that can't link
 /// AlasHostCore and so carries them as `OpaqueHostMessage`. The JSON is
 /// `HostClientMessage` with `HostRequest.mutateWorktree`, and the reply a
@@ -70,6 +90,22 @@ public enum RemoteGitRequest {
                                    "deleteBranchIfMerged": deleteBranchIfMerged, "discardUnsavedEdits": discardUnsavedEdits]
         body["lineageID"] = lineageID
         return envelope(id: id, ["deleteWorktree": body])
+    }
+
+    /// Reads the worktree's branch sync and pull request again (`HostRequest.reviewStatus`).
+    public static func reviewStatus(id: Int, projectID: String, path: String) -> OpaqueHostMessage {
+        envelope(id: id, ["reviewStatus": ["worktree": ["projectID": projectID, "path": path]]])
+    }
+
+    /// The pull request in the `reviewStatus` reply to `id`: `.some(nil)` when the worktree has none
+    /// or the host couldn't read it, nil when `message` answers something else.
+    public static func pullRequest(replying id: Int, in message: OpaqueHostMessage) -> RemotePullRequest?? {
+        guard let object = try? JSONSerialization.jsonObject(with: message.json) as? [String: Any],
+              let response = object["response"] as? [String: Any], response["id"] as? Int == id,
+              let result = response["result"] as? [String: Any] else { return nil }
+        guard let raw = ((result["reviewStatus"] as? [String: Any])?["snapshot"] as? [String: Any])?["reviewRequest"],
+              let data = try? JSONSerialization.data(withJSONObject: raw) else { return .some(nil) }
+        return .some(try? JSONDecoder().decode(RemotePullRequest.self, from: data))
     }
 
     private static func envelope(id: Int, _ request: [String: Any]) -> OpaqueHostMessage {

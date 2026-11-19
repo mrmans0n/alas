@@ -75,6 +75,9 @@ final class SessionWorkspace {
     private(set) var shepherd: RemoteShepherd?
     private(set) var shepherdLoaded = false
     private(set) var shepherdRunning: RemoteShepherdAction?
+    /// The worktree's pull request, once the host reported one.
+    private(set) var pullRequest: RemotePullRequest?
+    @ObservationIgnored private var reviewStatusId: Int?
     @ObservationIgnored private var shepherdListId: Int?
 
     init(hub: HostHub, hostID: UUID, sessionId: String) {
@@ -143,6 +146,15 @@ final class SessionWorkspace {
     func refreshChanges() {
         if case .loaded = changes {} else { changes = .loading }
         send(.listChanges(sessionId: sessionId))
+        refreshPullRequest()
+    }
+
+    /// Asks the host to read the worktree's pull request again; its answer replaces `pullRequest`.
+    private func refreshPullRequest() {
+        guard canUseGit, let target = gitTarget, hub.state(of: hostID) == .online else { return }
+        let id = hub.nextHostRequestId()
+        reviewStatusId = id
+        send(.host(RemoteGitRequest.reviewStatus(id: id, projectID: target.projectID, path: target.worktree.path)))
     }
 
     func openDiff(_ path: String, stage: String?, by owner: UUID) {
@@ -373,6 +385,10 @@ final class SessionWorkspace {
     private func receive(_ message: PhoneServerMessage) {
         switch message {
         case .host(let reply):
+            if let id = reviewStatusId, let found = RemoteGitRequest.pullRequest(replying: id, in: reply) {
+                pullRequest = found
+                return
+            }
             if let id = shepherdListId, let found = RemoteShepherdRequest.shepherd(of: sessionId, replying: id, in: reply) {
                 shepherd = found
                 shepherdLoaded = true
