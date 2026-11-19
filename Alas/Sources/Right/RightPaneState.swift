@@ -248,8 +248,12 @@ final class RightPaneState: GGSplitCommitServicing {
     }
     /// A plugin panel shown instead of `activeTab` while it is set and still offered.
     var activePluginPanel: PluginPanelRef?
-    /// The device this worktree's Devices tab shows; nil picks a default.
-    var devicesSelection: DevicesTarget?
+    /// The device last used in this worktree: where run-script apps go and what the empty rail offers.
+    var devicesLastUsed: DevicesTarget?
+    /// Devices collapsed to their header in this worktree's Devices rail.
+    var devicesCollapsed: Set<DevicesTarget> = []
+    /// A device the rail scrolls to once, then clears.
+    var devicesScrollRequest: DevicesTarget?
     var attentionScrollRequest: AppKitDiffScrollRequest?
     private(set) var attentionRevealedTarget: AttentionJumpTarget?
     private var attentionRevealGeneration = 0

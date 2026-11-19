@@ -4,8 +4,8 @@ import Foundation
 import Observation
 
 /// The simulators on this Mac, shared by every worktree's Devices tab, and
-/// what each looks like. Which device a tab shows is the worktree's own
-/// (`RightPaneState.devicesSelection`).
+/// what each looks like. Which device a worktree last used is its own
+/// (`RightPaneState.devicesLastUsed`).
 @MainActor
 @Observable
 final class DevicePaneModel {
