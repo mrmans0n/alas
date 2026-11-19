@@ -179,10 +179,14 @@ public enum ACPSessionTranscriptReader: Sendable {
     /// The pure collapse and cap behind `lastAgentReplyStart`; nil when empty.
     public static func replyExcerpt(_ text: String, limit: Int = 200) -> String? {
         // Bounded first: a huge reply must not be split whole for a 200-character excerpt.
-        let collapsed = text.prefix(limit * 4).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let bound = limit * 4
+        let cut = !text.dropFirst(bound).isEmpty
+        let collapsed = text.prefix(bound).split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !collapsed.isEmpty else { return nil }
-        guard collapsed.count > limit else { return collapsed }
-        return String(collapsed.prefix(max(limit - 1, 0))) + "…"
+        if collapsed.count > limit || (cut && collapsed.count == limit) {
+            return String(collapsed.prefix(max(limit - 1, 0))) + "…"
+        }
+        return cut ? collapsed + "…" : collapsed
     }
 
     /// The title of the latest row after the last user row that reports a

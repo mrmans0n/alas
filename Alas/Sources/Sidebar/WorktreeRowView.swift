@@ -1099,7 +1099,7 @@ struct WorktreeRowView: View {
         // Keyboard Access reaches, offers each session too.
         if !harnessBadges.isEmpty {
             ForEach(harnessBadges) { session in
-                Button("Open \(session.agent.displayName) session") { onActivateHarness(session.id) }
+                Button("Open \(session.agent.displayName) Session") { onActivateHarness(session.id) }
             }
             Divider()
         }
