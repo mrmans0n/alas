@@ -20,6 +20,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Show live VM and device activity, stack shipping progress, and shepherd state directly on Mac sidebar worktree rows (#2605).
 - Drill into commit files from the iPhone and iPad Changes tab and view syntax-coloured, add/delete-tinted diffs (#2607).
 - Close, reopen, or archive sessions and rename, archive, or delete their worktrees from iPhone and iPad, with capability and stale-lineage safeguards (#2608).
+- See pull request status and checks, and run, restart, or stop worktree scripts from iPhone and iPad (#2609).
 
 ### 🐛 Fixes
 
