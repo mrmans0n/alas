@@ -212,6 +212,21 @@ struct TranscriptScreen: View {
                         }
                     }
                 }
+                if workspace.canRun, !workspace.runScripts.isEmpty {
+                    // ponytail: no run state, since the host only pushes it as events; a run's output
+                    // shows in its console under Terminals.
+                    ToolbarItem(placement: .primaryAction) {
+                        Menu("Run", systemImage: "play") {
+                            ForEach(workspace.runScripts, id: \.key) { script in
+                                Menu(script.name) {
+                                    Button("Run", systemImage: "play") { run(workspace, .start, script) }
+                                    Button("Restart", systemImage: "arrow.clockwise") { run(workspace, .restart, script) }
+                                    Button("Stop", systemImage: "stop", role: .destructive) { run(workspace, .stop, script) }
+                                }
+                            }
+                        }
+                    }
+                }
                 if let worktreeId = session.summary?.worktreeId,
                    registry.hub.supports(PeerConsoleCapability.phoneV1, on: hostID) {
                     ToolbarItem(placement: .primaryAction) {
@@ -280,6 +295,10 @@ struct TranscriptScreen: View {
         let failure: RemoteGitFailure
         let force: Bool
         let discard: Bool
+    }
+
+    private func run(_ workspace: SessionWorkspace, _ action: RemoteRunAction, _ script: RemoteRunScript) {
+        Task { if let error = await workspace.run(action, script) { actionError = error } }
     }
 
     /// Sends the removal; a refusal the user may overrule asks again, any other shows.

@@ -25,6 +25,35 @@ public struct RemoteGitFailure: Error, Equatable, Sendable {
     }
 }
 
+/// A worktree's pull request as `reviewStatus` reports it: the part of `ReviewRequest` the phone shows.
+public struct RemotePullRequest: Decodable, Equatable, Sendable {
+    public struct Check: Decodable, Equatable, Sendable {
+        public let name: String
+        /// `ReviewCheckBucket`: pass, fail, pending, skipping, cancel or unknown.
+        public let bucket: String
+        public let detailURL: URL?
+    }
+
+    public let number: Int
+    public let title: String
+    public let url: URL
+    /// `ReviewRequestState`: open, closed or merged.
+    public let state: String
+    public let isDraft: Bool
+    /// `ReviewDecision`: approved, changesRequested, reviewRequired or unknown.
+    public let reviewDecision: String
+    public let checks: [Check]
+}
+
+/// A worktree's run script, as `listRunScripts` reports it.
+public struct RemoteRunScript: Equatable, Sendable {
+    /// `HostRunScript.key`, which run requests name.
+    public let key: String
+    public let name: String
+}
+
+public enum RemoteRunAction: Sendable { case start, restart, stop }
+
 /// Git actions as host-protocol messages, for a client that can't link
 /// AlasHostCore and so carries them as `OpaqueHostMessage`. The JSON is
 /// `HostClientMessage` with `HostRequest.mutateWorktree`, and the reply a
@@ -72,6 +101,52 @@ public enum RemoteGitRequest {
         return envelope(id: id, ["deleteWorktree": body])
     }
 
+    /// Reads the worktree's branch sync and pull request again (`HostRequest.reviewStatus`).
+    public static func reviewStatus(id: Int, projectID: String, path: String) -> OpaqueHostMessage {
+        envelope(id: id, ["reviewStatus": ["worktree": ["projectID": projectID, "path": path]]])
+    }
+
+    /// The pull request in the `reviewStatus` reply to `id`: `.some(nil)` when the worktree has none
+    /// or the host couldn't read it, nil when `message` answers something else.
+    public static func pullRequest(replying id: Int, in message: OpaqueHostMessage) -> RemotePullRequest?? {
+        guard let object = try? JSONSerialization.jsonObject(with: message.json) as? [String: Any],
+              let response = object["response"] as? [String: Any], response["id"] as? Int == id,
+              let result = response["result"] as? [String: Any] else { return nil }
+        guard let raw = ((result["reviewStatus"] as? [String: Any])?["snapshot"] as? [String: Any])?["reviewRequest"],
+              let data = try? JSONSerialization.data(withJSONObject: raw) else { return .some(nil) }
+        return .some(try? JSONDecoder().decode(RemotePullRequest.self, from: data))
+    }
+
+    /// The worktree's run scripts (`HostRequest.listRunScripts`).
+    public static func listRunScripts(id: Int, projectID: String, path: String) -> OpaqueHostMessage {
+        envelope(id: id, ["listRunScripts": ["worktree": ["projectID": projectID, "path": path]]])
+    }
+
+    /// Starts, restarts or stops a run script (`startRun`, `restartRun`, `stopRun`); answered like a
+    /// git action, a launch the host refused included.
+    public static func run(id: Int, _ action: RemoteRunAction, scriptKey: String, projectID: String, path: String) -> OpaqueHostMessage {
+        let verb = switch action {
+        case .start: "startRun"
+        case .restart: "restartRun"
+        case .stop: "stopRun"
+        }
+        return envelope(id: id, [verb: ["scriptKey": scriptKey, "worktree": ["projectID": projectID, "path": path]]])
+    }
+
+    /// The scripts in the `listRunScripts` reply to `id`: empty when the host refused, nil when
+    /// `message` answers something else.
+    public static func runScripts(replying id: Int, in message: OpaqueHostMessage) -> [RemoteRunScript]? {
+        guard let object = try? JSONSerialization.jsonObject(with: message.json) as? [String: Any],
+              let response = object["response"] as? [String: Any], response["id"] as? Int == id,
+              let result = response["result"] as? [String: Any] else { return nil }
+        let scripts = (result["runScripts"] as? [String: Any])?["scripts"] as? [[String: Any]] ?? []
+        return scripts.compactMap { script in
+            guard let scope = script["scope"] as? String, let file = script["fileName"] as? String,
+                  let name = script["name"] as? String else { return nil }
+            return RemoteRunScript(key: "\(scope):\(file)", name: name)
+        }
+    }
+
     private static func envelope(id: Int, _ request: [String: Any]) -> OpaqueHostMessage {
         let body: [String: Any] = ["version": hostProtocolVersion, "id": id, "request": request]
         return OpaqueHostMessage(json: (try? JSONSerialization.data(withJSONObject: body, options: .sortedKeys)) ?? Data())
@@ -82,6 +157,14 @@ public enum RemoteGitRequest {
         guard let object = try? JSONSerialization.jsonObject(with: message.json) as? [String: Any],
               let response = object["response"] as? [String: Any], response["id"] as? Int == id,
               let result = response["result"] as? [String: Any] else { return nil }
+        // A launch the host refused still answers `runStart`.
+        if let start = (result["runStart"] as? [String: Any])?["start"] as? [String: Any] {
+            if let refused = start["refused"] as? [String: Any] {
+                return .failure(RemoteGitFailure(refused["message"] as? String ?? "The machine didn't start it."))
+            }
+            if start["alreadyStarting"] != nil { return .failure(RemoteGitFailure("It's already starting.")) }
+            if start["projectUnavailable"] != nil { return .failure(RemoteGitFailure("Its project is no longer on the machine.")) }
+        }
         guard let failure = result["failure"] as? [String: Any] else { return .success(()) }
         let error = failure["error"] as? [String: Any] ?? [:]
         let refusal = worktreeRefusal(error)

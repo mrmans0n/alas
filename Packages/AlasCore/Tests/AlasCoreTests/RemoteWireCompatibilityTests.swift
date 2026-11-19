@@ -66,6 +66,48 @@ import Testing
             worktree: ref, lineageID: nil, branch: "b", force: true, deleteBranchIfMerged: true, discardUnsavedEdits: false)))
     }
 
+    @Test func phoneReadsAWorktreesPullRequest() throws {
+        let request = RemoteGitRequest.reviewStatus(id: 3, projectID: "p", path: "/r").json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: request)
+            == HostClientMessage(id: 3, request: .reviewStatus(worktree: WorktreeRef(projectID: "p", path: "/r"))))
+        func reply(_ snapshot: ReviewLoopSnapshot?) throws -> OpaqueHostMessage {
+            OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 3, result: .reviewStatus(snapshot: snapshot))))
+        }
+        let found = try reply(ShepherdFixtures.snapshot(ShepherdFixtures.request(checks: [ShepherdFixtures.failing])))
+        let pr = try #require(RemoteGitRequest.pullRequest(replying: 3, in: found) ?? nil)
+        #expect(pr.number == 7 && pr.title == "Fix login" && pr.url.absoluteString == "https://github.com/acme/app/pull/7")
+        #expect(pr.state == "open" && !pr.isDraft && pr.reviewDecision == "approved")
+        #expect(pr.checks.map(\.name) == ["unit-tests"] && pr.checks.map(\.bucket) == ["fail"])
+        #expect(pr.checks.first?.detailURL?.absoluteString == "https://ci.example/unit-tests")
+        #expect(RemoteGitRequest.pullRequest(replying: 3, in: try reply(ShepherdFixtures.snapshot(nil))) == .some(nil))
+        #expect(RemoteGitRequest.pullRequest(replying: 4, in: found) == nil)
+    }
+
+    @Test func phoneRunsTheMacsScripts() throws {
+        let ref = WorktreeRef(projectID: "p", path: "/r")
+        let decode = { (m: OpaqueHostMessage) in try JSONDecoder().decode(HostClientMessage.self, from: m.json).request }
+        #expect(try decode(RemoteGitRequest.listRunScripts(id: 1, projectID: "p", path: "/r")) == .listRunScripts(worktree: ref))
+        #expect(try decode(RemoteGitRequest.run(id: 1, .start, scriptKey: "repo:a", projectID: "p", path: "/r"))
+            == .startRun(scriptKey: "repo:a", worktree: ref))
+        #expect(try decode(RemoteGitRequest.run(id: 1, .restart, scriptKey: "repo:a", projectID: "p", path: "/r"))
+            == .restartRun(scriptKey: "repo:a", worktree: ref))
+        #expect(try decode(RemoteGitRequest.run(id: 1, .stop, scriptKey: "repo:a", projectID: "p", path: "/r"))
+            == .stopRun(scriptKey: "repo:a", worktree: ref))
+
+        func reply(_ result: HostResponse) throws -> OpaqueHostMessage {
+            OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 2, result: result)))
+        }
+        let script = HostRunScript(scope: .repo, fileName: "dev.sh", name: "Dev", cwd: nil, target: RunExecutionTarget(host: nil, workingDirectory: "/r"))
+        let scripts = try #require(RemoteGitRequest.runScripts(replying: 2, in: try reply(.runScripts(scripts: [script]))))
+        #expect(scripts.map(\.key) == [script.key] && scripts.map(\.name) == ["Dev"])
+        guard case .failure(let refused) = try #require(RemoteGitRequest.reply(
+            to: 2, in: try reply(.runStart(start: .refused(title: "No", message: "Approve the hook first."))))) else {
+            Issue.record("a refused launch read as started")
+            return
+        }
+        #expect(refused.message == "Approve the hook first.")
+    }
+
     @Test(arguments: [
         (HostError.worktreeDeletion(refusal: .needsForce("Uncommitted changes.")), "Uncommitted changes.", RemoteGitFailure.Overrule.force),
         (.worktreeArchive(refusal: .unsavedEdits), "An editor on the machine has unsaved changes in this worktree.", .discardUnsavedEdits),

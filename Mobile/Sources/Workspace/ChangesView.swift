@@ -113,10 +113,12 @@ private struct ChangeList: View {
     @ViewBuilder private var content: some View {
         if !reply.metricsAvailable {
             ContentUnavailableView("Change metrics are unavailable for this worktree.", systemImage: "chart.bar.xaxis")
-        } else if sections.isEmpty {
+        } else if sections.isEmpty, workspace.pullRequest == nil {
+            // With a pull request, the list still shows it, as for a merged branch now level with its base.
             ContentUnavailableView("No changes yet.", systemImage: "checkmark.circle")
         } else {
             List {
+                if let pr = workspace.pullRequest { PullRequestSection(pr: pr) }
                 Text(summary).font(.footnote).foregroundStyle(.secondary).listRowSeparator(.hidden)
                 ForEach(sections) { section in
                     SwiftUI.Section {
@@ -172,6 +174,83 @@ private struct ChangeList: View {
                 }
             }
             .listStyle(.plain)
+        }
+    }
+}
+
+/// The branch's pull request: a tap opens it, and its checks fold out with links to their runs.
+private struct PullRequestSection: View {
+    let pr: RemotePullRequest
+
+    var body: some View {
+        SwiftUI.Section {
+            Link(destination: pr.url) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(pr.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(2)
+                    Text(["#\(pr.number)", status, review].compactMap { $0 }.joined(separator: " · "))
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            if !pr.checks.isEmpty {
+                DisclosureGroup {
+                    ForEach(Array(pr.checks.enumerated()), id: \.offset) { _, check in
+                        let row = Label(check.name, systemImage: Self.symbol(check.bucket))
+                            .font(.footnote).foregroundStyle(Self.tint(check.bucket))
+                        if let url = check.detailURL { Link(destination: url) { row } } else { row }
+                    }
+                } label: {
+                    Label(checksSummary, systemImage: Self.symbol(worstBucket)).font(.footnote).foregroundStyle(Self.tint(worstBucket))
+                }
+            }
+        } header: {
+            Text("Pull Request")
+        }
+    }
+
+    private var status: String {
+        switch pr.state {
+        case "merged": "Merged"
+        case "closed": "Closed"
+        default: pr.isDraft ? "Draft" : "Open"
+        }
+    }
+
+    private var review: String? {
+        switch pr.reviewDecision {
+        case "approved": "Approved"
+        case "changesRequested": "Changes requested"
+        case "reviewRequired": "Review required"
+        default: nil
+        }
+    }
+
+    /// `ReviewCheckBucket.severity`'s order: a failure outranks a pending check, which outranks a pass.
+    private var worstBucket: String {
+        ["fail", "pending", "cancel", "unknown", "pass", "skipping"].first { b in pr.checks.contains { $0.bucket == b } } ?? "unknown"
+    }
+
+    private var checksSummary: String {
+        let count = { (bucket: String) in pr.checks.filter { $0.bucket == bucket }.count }
+        let parts = [("failed", count("fail")), ("pending", count("pending")), ("passed", count("pass"))]
+            .filter { $0.1 > 0 }.map { "\($0.1) \($0.0)" }
+        return parts.isEmpty ? "\(pr.checks.count) checks" : parts.joined(separator: " · ")
+    }
+
+    private static func symbol(_ bucket: String) -> String {
+        switch bucket {
+        case "pass": "checkmark.circle.fill"
+        case "fail": "xmark.circle.fill"
+        case "pending": "clock.fill"
+        default: "minus.circle"
+        }
+    }
+
+    private static func tint(_ bucket: String) -> Color {
+        switch bucket {
+        case "pass": .green
+        case "fail": .red
+        case "pending": .orange
+        default: .secondary
         }
     }
 }

@@ -84,6 +84,12 @@ final class SessionWorkspace {
     private(set) var shepherd: RemoteShepherd?
     private(set) var shepherdLoaded = false
     private(set) var shepherdRunning: RemoteShepherdAction?
+    /// The worktree's pull request, once the host reported one.
+    private(set) var pullRequest: RemotePullRequest?
+    @ObservationIgnored private var reviewStatusId: Int?
+    /// The worktree's run scripts, once listed.
+    private(set) var runScripts: [RemoteRunScript] = []
+    @ObservationIgnored private var runScriptsId: Int?
     @ObservationIgnored private var shepherdListId: Int?
 
     init(hub: HostHub, hostID: UUID, sessionId: String) {
@@ -142,6 +148,7 @@ final class SessionWorkspace {
         if let diff { requestDiff(diff.key) }
         if treeRequested { loadTree() }
         refreshShepherd()
+        refreshRunScripts()
         if let file {
             self.file = (file.path, .loading)
             send(.readFile(sessionId: sessionId, path: file.path))
@@ -153,6 +160,15 @@ final class SessionWorkspace {
     func refreshChanges() {
         if case .loaded = changes {} else { changes = .loading }
         send(.listChanges(sessionId: sessionId))
+        refreshPullRequest()
+    }
+
+    /// Asks the host to read the worktree's pull request again; its answer replaces `pullRequest`.
+    private func refreshPullRequest() {
+        guard canUseGit, let target = gitTarget, hub.state(of: hostID) == .online else { return }
+        let id = hub.nextHostRequestId()
+        reviewStatusId = id
+        send(.host(RemoteGitRequest.reviewStatus(id: id, projectID: target.projectID, path: target.worktree.path)))
     }
 
     func openDiff(_ path: String, stage: String?, sha: String? = nil, by owner: UUID) {
@@ -332,6 +348,26 @@ final class SessionWorkspace {
         }
     }
 
+    // MARK: Runs
+
+    /// A worktree this host lists, on a host that lists its run scripts.
+    var canRun: Bool { gitTarget != nil && hub.supports(HostProtocolCapability.runsScriptsV1, on: hostID) }
+
+    func refreshRunScripts() {
+        guard canRun, let target = gitTarget, hub.state(of: hostID) == .online else { return }
+        let id = hub.nextHostRequestId()
+        runScriptsId = id
+        send(.host(RemoteGitRequest.listRunScripts(id: id, projectID: target.projectID, path: target.worktree.path)))
+    }
+
+    /// Returns the host's refusal, worded for the user, or nil once it took the action.
+    func run(_ action: RemoteRunAction, _ script: RemoteRunScript) async -> String? {
+        guard let target = gitTarget else { return "This worktree can't run scripts from here." }
+        return await hostRequest {
+            RemoteGitRequest.run(id: $0, action, scriptKey: script.key, projectID: target.projectID, path: target.worktree.path)
+        }
+    }
+
     // MARK: Shepherd
 
     /// A session this host runs itself, on a host that lets the phone shepherd it.
@@ -411,6 +447,14 @@ final class SessionWorkspace {
     private func receive(_ message: PhoneServerMessage) {
         switch message {
         case .host(let reply):
+            if let id = runScriptsId, let found = RemoteGitRequest.runScripts(replying: id, in: reply) {
+                runScripts = found
+                return
+            }
+            if let id = reviewStatusId, let found = RemoteGitRequest.pullRequest(replying: id, in: reply) {
+                pullRequest = found
+                return
+            }
             if let id = shepherdListId, let found = RemoteShepherdRequest.shepherd(of: sessionId, replying: id, in: reply) {
                 shepherd = found
                 shepherdLoaded = true

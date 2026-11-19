@@ -44,7 +44,9 @@ commit, push, pull, fetch; shepherd menu; plain unified diff; file tree.
 5. **Hunk actions**: stage / unstage / discard a single hunk.
 6. **PR and run**: PR status and checks with open-in-browser (`reviewStatus`);
    run scripts list with run / stop / rerun and output (`listRunScripts`,
-   `startRun`, `stopRun`, `restartRun`, `runOutput`).
+   `startRun`, `stopRun`, `restartRun`, `runOutput`). Shipped without run
+   state: the host pushes it only as events, which the phone doesn't
+   subscribe to; a run's output is its console under Terminals.
 7. **Smaller list items**: sort choice, connection banner with manual
    reconnect, "delegated from" back link, mention picker scope tabs and empty
    state, `/ship` slash entry, auto-run chip, copy path / branch.
