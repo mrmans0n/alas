@@ -27,7 +27,7 @@ extension RemoteServerMessage {
             peers: identity.peers,
             capabilities: identity.consoleCapabilities + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1, PushRelayCapability.v1,
                                                            HostProtocolCapability.worktreesGitPhoneV1, HostProtocolCapability.shepherdsPhoneV1,
-                                                           PeerToolTerminalCapability.v1]
+                                                           PeerToolTerminalCapability.v1, PeerSubagentCapability.v1]
                 + identity.hostCapabilities,
             hostVersion: identity.hostVersion)
     }
@@ -93,6 +93,12 @@ extension RemoteWireMessage {
         if phase != nil { count += 24 }
         if createdAt != nil { count += 32 }
         if let fold { count += 40 + Self.escapedTransportByteCount(fold.verb) }
+        if let subagent {
+            count += 80 + Self.escapedTransportByteCount(subagent.id) + Self.escapedTransportByteCount(subagent.state)
+            for text in [subagent.name, subagent.task, subagent.lastError].compactMap(\.self) {
+                count += 16 + Self.escapedTransportByteCount(text)
+            }
+        }
         if let images {
             count += 12
             for image in images {

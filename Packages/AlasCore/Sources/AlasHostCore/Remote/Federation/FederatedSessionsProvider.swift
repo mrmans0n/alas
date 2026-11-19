@@ -325,6 +325,12 @@ public final class FederatedSessionsProvider {
                                                   exitCode: nil, signal: nil, retained: false))
                     return true
                 }
+            case .readSubagent(_, let subagentId):
+                // An older peer can't decode it: answer as for a child it does not have.
+                guard links.peerSupports(PeerSubagentCapability.v1, serverId: target.serverId) else {
+                    downstream.send(.subagentTranscript(sessionId: namespaced, subagentId: subagentId, found: false, state: nil, messages: []))
+                    return true
+                }
             case .queueEdit(_, let itemId):
                 queueEditRequesters.append((namespaced, itemId, downstream.id))
                 if queueEditRequesters.count > Self.queueEditRequesterLimit {
@@ -681,7 +687,8 @@ private extension RemoteSessionSummary {
             id: RemoteFederatedSessionID.compose(serverId: peer.serverId, sessionId: id),
             title: title, agentId: agentId, status: status, canDrive: canDrive, isActive: isActive,
             tabIndex: tabIndex, projectId: projectId, worktreeId: worktreeId, updatedAt: updatedAt, worktree: worktree,
-            serverId: peer.serverId, serverName: peer.name)
+            serverId: peer.serverId, serverName: peer.name,
+            parentSessionId: parentSessionId.map { RemoteFederatedSessionID.compose(serverId: peer.serverId, sessionId: $0) })
     }
 
     /// An already-namespaced row with a refreshed owner name.
@@ -689,6 +696,6 @@ private extension RemoteSessionSummary {
         RemoteSessionSummary(
             id: id, title: title, agentId: agentId, status: status, canDrive: canDrive, isActive: isActive,
             tabIndex: tabIndex, projectId: projectId, worktreeId: worktreeId, updatedAt: updatedAt, worktree: worktree,
-            serverId: peer.serverId, serverName: peer.name)
+            serverId: peer.serverId, serverName: peer.name, parentSessionId: parentSessionId)
     }
 }

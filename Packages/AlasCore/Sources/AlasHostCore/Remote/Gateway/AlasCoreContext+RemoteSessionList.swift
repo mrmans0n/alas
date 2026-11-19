@@ -49,7 +49,7 @@ extension AlasCoreContext {
                 }
             }
         }
-        return identities.compactMap { summariesByIdentity[$0]?.summary }
+        return identities.compactMap { summariesByIdentity[$0]?.summary(parents: delegatedSessionParents) }
     }
 
     private static func remoteSessionListIdentity(owner: SessionOwnerID, row: ACPSessionRow) -> String {
@@ -95,7 +95,7 @@ private struct RemoteSessionSummaryCandidate {
 
     var isActive: Bool { tabIndex != nil }
 
-    var summary: RemoteSessionSummary {
+    func summary(parents: [String: String]) -> RemoteSessionSummary {
         RemoteSessionSummary(
             id: operationalRow.id,
             title: displayRow.title,
@@ -107,7 +107,8 @@ private struct RemoteSessionSummaryCandidate {
             projectId: projectId,
             worktreeId: worktreeId,
             updatedAt: displayRow.updatedAt,
-            worktree: worktree
+            worktree: worktree,
+            parentSessionId: parents[operationalRow.id]
         )
     }
 

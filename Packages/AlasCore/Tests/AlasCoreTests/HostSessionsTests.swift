@@ -309,8 +309,9 @@ struct HostSessionsTests {
         #expect(fixture.host.sessions.lastAgentReply("same", owner: .worktree(other.id)) == "theirs")
     }
 
-    /// A delegated session's summary names the session that delegated it.
-    @Test func aDelegatedSessionsSummaryNamesItsParent() throws {
+    /// A delegated session's summary names the session that delegated it,
+    /// in the host's list and in the list peers get.
+    @Test func aDelegatedSessionsSummaryNamesItsParent() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let manager = try fixture.core.sessionManager(for: fixture.worktree)
@@ -322,6 +323,9 @@ struct HostSessionsTests {
         let summaries = fixture.host.sessions.list()
         #expect(summaries.first { $0.id == child.id }?.parentID == parent.id)
         #expect(summaries.first { $0.id == parent.id }?.parentID == nil)
+        let remote = await fixture.core.remoteSessionSummaries(tabIndex: { _, _ in nil })
+        #expect(remote.first { $0.id == child.id }?.parentSessionId == parent.id)
+        #expect(remote.first { $0.id == parent.id }?.parentSessionId == nil)
     }
 
     /// A listed session whose stored transcript cannot be read back, here
@@ -519,6 +523,34 @@ struct HostSessionsTests {
             .toolTerminal(sessionId: id, terminalId: "t1", text: "failed\n", truncated: false, exitCode: 2, signal: nil, retained: true),
             .toolTerminal(sessionId: id, terminalId: "gone", text: "", truncated: false, exitCode: nil, signal: nil, retained: false),
         ])
+    }
+
+    /// A peer reads a subagent's own transcript and state, bounded to a small
+    /// reply, and hears that a subagent the session does not have was not found.
+    @Test(.timeLimit(.minutes(5))) func aPeerReadsASubagentsTranscript() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.host.sessions.create(.worktree(fixture.ref), agentID: "codex", caller: .app).id
+        let live = try #require(fixture.core.sessionManagers.values.compactMap { $0.liveSession(for: id) }.first)
+        live.registerSubagent(.init(subagentSessionId: "child", name: "Explorer"))
+        live.applySubagentUpdate(.agentThoughtChunk(.text(String(repeating: "x", count: 2 << 20))), subagentSessionId: "child")
+        live.applySubagentUpdate(.agentMessageChunk(.text("Looked around")), subagentSessionId: "child")
+        var replies: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(host: fixture.host) { replies.append($0) }
+        defer { gateway.close() }
+
+        await gateway.handle(.readSubagent(sessionId: id, subagentId: "child"))
+        await gateway.handle(.readSubagent(sessionId: id, subagentId: "gone"))
+
+        guard replies.count == 2,
+              case .subagentTranscript(id, "child", true, "running", let messages) = replies[0] else {
+            Issue.record("expected the child's transcript, got \(replies)")
+            return
+        }
+        // A row too large for the child's small budget arrives as a notice.
+        #expect(messages.map(\.kind) == ["systemNotice", "agent"])
+        #expect(messages.last?.text == "Looked around")
+        #expect(replies[1] == .subagentTranscript(sessionId: id, subagentId: "gone", found: false, state: nil, messages: []))
     }
 
     /// An image that only the transcript holds inline reaches the phone with a file it can
