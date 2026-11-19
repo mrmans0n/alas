@@ -88,7 +88,7 @@ struct HarnessSessionBadge: View {
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
         // Replaces the tooltip.
-        .agentBadgePopover(popoverModel)
+        .agentBadgePopover(popoverModel, isPinned: isPinnedForCapture)
         // Dropped on an agent composer, attaches the session as context.
         .draggable(Self.dragURL(sessionId: session.id))
     }
@@ -96,6 +96,14 @@ struct HarnessSessionBadge: View {
     nonisolated static func dragURL(sessionId: String) -> URL {
         // The id is percent-encoded into the host, so the string always parses.
         URL(string: ACPSessionReference.uri(sessionId: sessionId))!
+    }
+
+    private var isPinnedForCapture: Bool {
+        #if DEBUG
+        DesignCaptureAgentBadges.Hover.shared.sessionId == session.id
+        #else
+        false
+        #endif
     }
 
     private var accessibilityLabel: String {

@@ -43,6 +43,8 @@
 # header so the "+" pair control shows; peers-rename opens the peer worktree rename sheet
 # (DesignCaptureSidebar). live-activity scripts the demo rows' VM, device, ship and shepherd
 # activity instead (DesignCaptureLiveActivity).
+# badge-hover holds the selected row's first agent badge hovered, so its real hover card panel opens
+# and is composited like the other popups (DesignCaptureAgentBadges.Hover).
 # workspace-checkout and workspace-checkout-bottom show the workspace checkout details sheet (top, and
 # scrolled to work items and reviews) over a scripted three-repository checkout, and vm-setup, vm-stopped,
 # vm-running and vm-attention show 2x2 galleries of VM tab states built from the tab's chrome

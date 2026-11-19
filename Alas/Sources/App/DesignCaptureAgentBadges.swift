@@ -11,9 +11,20 @@ import SwiftUI
 /// - agent-badge-popovers: running with a plan, waiting on a permission,
 ///   awaiting input, idle with a reply, a terminal session, a bare model; and
 ///   badge strips (active and idle, all idle with "+1").
+/// - The real card, in its panel beside the sidebar, is the sidebar target
+///   badge-hover (`DesignCaptureSidebar`), which pins `Hover.sessionId`.
 @MainActor
 enum DesignCaptureAgentBadges {
     static let targets: Set<String> = ["agent-badge-popovers"]
+
+    /// The badge `ALAS_CAPTURE_SIDEBAR=badge-hover` holds open, so the real
+    /// card panel shows without a pointer (`DesignCaptureSidebar`).
+    @MainActor
+    @Observable
+    final class Hover {
+        static let shared = Hover()
+        var sessionId: String?
+    }
 
     static func open(_ target: String, state: AppState) {
         guard DesignCaptureWorkspace.isCaptureInstance, targets.contains(target) else { return }

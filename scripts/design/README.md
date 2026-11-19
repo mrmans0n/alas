@@ -106,6 +106,8 @@ capture those views (`DesignCaptureLeftovers`). `Sidebar/RepoDot.swift` is not u
 Set `ALAS_CAPTURE_CENTER` to `agent-badge-popovers` to capture a gallery of the sidebar agent badge hover card
 (`DesignCaptureAgentBadges`) for scripted sessions (running with a plan, a permission, awaiting input, idle, a
 terminal pane, a bare one) next to worktree-row badge strips; no session or harness is read.
+Set `ALAS_CAPTURE_SIDEBAR=badge-hover` to hold the selected row's first agent badge hovered, so the real card opens
+in its own panel and is composited onto `window.png` (also written as `window-extra-<n>.png`).
 
 ## How it works
 
