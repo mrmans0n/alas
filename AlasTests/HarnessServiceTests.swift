@@ -1196,6 +1196,7 @@ struct HarnessServiceTests {
         service.setExternalActivity(sessionId: "run", agent: .codex, state: .busy)
         service.setExternalActivity(sessionId: "wait", agent: .claude, state: .awaitingInput)
         service.setExternalActivity(sessionId: "termIdle", agent: .claude, state: .idle)
+        service.recordHarnessDetection(sessionId: "termIdle", kind: .claudeCode)
         let badges = service.badgeSessions(
             forSessionIds: ["acpIdleA", "run", "termIdle", "wait", "acpIdleB", "shell"],
             idleAgents: ["acpIdleA": .claude, "acpIdleB": .codex])
@@ -1207,8 +1208,11 @@ struct HarnessServiceTests {
     @Test func idleOnlySessionsProduceBadgesButNoSummary() {
         let (service, _) = makeService()
         service.setExternalActivity(sessionId: "t", agent: .claude, state: .idle)
-        #expect(service.summary(forSessionIds: ["t", "a"]) == nil)
-        #expect(service.badgeSessions(forSessionIds: ["t", "a"], idleAgents: ["a": .codex]).count == 2)
+        service.recordHarnessDetection(sessionId: "t", kind: .claudeCode)
+        service.setExternalActivity(sessionId: "ghost", agent: .claude, state: .idle)
+        #expect(service.summary(forSessionIds: ["t", "a", "ghost"]) == nil)
+        // "ghost" has idle activity but no live harness process: no badge.
+        #expect(service.badgeSessions(forSessionIds: ["t", "a", "ghost"], idleAgents: ["a": .codex]).map(\.id) == ["t", "a"])
     }
 }
 

@@ -1097,9 +1097,9 @@ struct WorktreeRowView: View {
     private var availableWorktreeContextMenuContent: some View {
         // The session tiles are not mounted at rest, so the menu, which Full
         // Keyboard Access reaches, offers each session too.
-        if let sessions = harnessSummary?.sessions, !sessions.isEmpty {
-            ForEach(sessions) { session in
-                Button("Open \(session.agent.displayName) Session") { onActivateHarness(session.id) }
+        if !harnessBadges.isEmpty {
+            ForEach(harnessBadges) { session in
+                Button("Open \(session.agent.displayName) session") { onActivateHarness(session.id) }
             }
             Divider()
         }

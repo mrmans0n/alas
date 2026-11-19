@@ -618,7 +618,9 @@ public final class HarnessService {
             if let activity = activityBySession[id] {
                 if let state = Self.aggregatedState(for: activity.state) {
                     active.append((WorktreeBadgeSession(id: id, agent: activity.agent, state: state, updatedAt: activity.updatedAt), offset))
-                } else {
+                } else if activeHarnessBySession[id] != nil || idleAgents[id] != nil {
+                    // Idle activity outlives the agent process; only a still-detected harness
+                    // (or a live ACP session) earns an idle badge.
                     idle.append(WorktreeBadgeSession(id: id, agent: activity.agent, state: nil, updatedAt: activity.updatedAt))
                 }
             } else if let agent = idleAgents[id] {
