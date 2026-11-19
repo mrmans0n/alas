@@ -125,17 +125,18 @@ struct TranscriptScreen: View {
             .onChange(of: session.streamingState, initial: true) { workspace.noteStreaming(session.streamingState) }
             .onChange(of: available) { if !available.contains(mode) { mode = .transcript } }
             .safeAreaInset(edge: .bottom) {
-                if mode != .transcript {
-                    EmptyView()
-                } else if !session.hasEnded {
+                if !session.hasEnded {
                     // One container, so the floating glass layers composite together over the stream.
                     GlassEffectContainer {
                         VStack(spacing: 0) {
+                            // On every tab, so a request that arrives while reading a diff isn't missed.
                             RequestCard(session: session).environment(\.cardFloats, true).padding(.horizontal, 12).padding(.bottom, 4)
-                            ComposerBar(session: session, onOpenSettings: { showSettings = true })
+                            if mode == .transcript {
+                                ComposerBar(session: session, onOpenSettings: { showSettings = true })
+                            }
                         }
                     }
-                } else {
+                } else if mode == .transcript {
                     Text("This session has ended.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
