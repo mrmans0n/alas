@@ -68,7 +68,7 @@ struct AgentBadgePopover: View {
     private var chip: some View {
         HStack(spacing: scale.space[1]) {
             Circle()
-                .fill(theme.color(Self.dotColorToken(for: model.status)))
+                .fill(theme.color(model.status.dotColorToken))
                 .frame(width: 6, height: 6) // design-literal: status dot, as the sidebar's HarnessPill
             Text(model.chipText(now: now))
                 .font(scale.captionFont)
@@ -98,7 +98,7 @@ struct AgentBadgePopover: View {
             .fixedSize(horizontal: false, vertical: true)
         case .plan(let completed, let total, let step):
             VStack(alignment: .leading, spacing: scale.space[1]) {
-                Text(Self.planText(completed: completed, total: total, step: step))
+                Text(AgentBadgePopoverModel.planText(completed: completed, total: total, step: step))
                     .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-dim"))
                     .lineLimit(1)
@@ -133,6 +133,7 @@ struct AgentBadgePopover: View {
                 .foregroundStyle(theme.color("fg-muted"))
                 .lineLimit(1)
                 .truncationMode(.tail)
+                .layoutPriority(1)
             Spacer(minLength: 0)
             Text(model.hintText)
                 .font(scale.metaFont)
@@ -140,26 +141,6 @@ struct AgentBadgePopover: View {
                 .lineLimit(1)
                 .fixedSize()
         }
-    }
-
-    /// The step in progress, counting from one: "Plan 3 of 5 · Run tests".
-    static func planText(completed: Int, total: Int, step: String?) -> String {
-        let current = min(completed + 1, total)
-        let base = "Plan \(current) of \(total)"
-        guard let step, !step.isEmpty else { return base }
-        return "\(base) · \(step)"
-    }
-
-    /// The badge tile's own hue, so the chip and the tile always agree.
-    static func dotColorToken(for status: AgentBadgePopoverModel.Status) -> String {
-        let state: HarnessService.AggregatedState? = switch status {
-        case .running: .running
-        case .awaitingInput, .permission: .awaiting
-        case .limited: .limited
-        case .failed: .failed
-        case .idle: nil
-        }
-        return state.map { HarnessSessionBadgeSurface(state: $0).colorToken } ?? "fg-muted"
     }
 }
 
@@ -170,7 +151,13 @@ extension View {
     /// when hover ends, the list scrolls, the view goes away, or on any click,
     /// key press or scroll, and it never takes key focus.
     func agentBadgePopover(_ make: @escaping @MainActor () -> AgentBadgePopoverModel?) -> some View {
-        modifier(AgentBadgePopoverModifier(make: make))
+        modifier(AgentBadgePopoverModifier(make: make, isPinned: false))
+    }
+
+    /// As `agentBadgePopover(_:)`, but `isPinned` holds the card open as if
+    /// hovered, even while the app is inactive. Only design captures pin it.
+    func agentBadgePopover(_ make: @escaping @MainActor () -> AgentBadgePopoverModel?, isPinned: Bool) -> some View {
+        modifier(AgentBadgePopoverModifier(make: make, isPinned: isPinned))
     }
 }
 
@@ -178,6 +165,7 @@ private struct AgentBadgePopoverModifier: ViewModifier {
     static let openDelay: Duration = .milliseconds(350)
 
     let make: @MainActor () -> AgentBadgePopoverModel?
+    let isPinned: Bool
 
     @State private var isHovering = false
     /// Made on first hover, so a badge at rest carries no AppKit view.
@@ -185,30 +173,31 @@ private struct AgentBadgePopoverModifier: ViewModifier {
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
 
+    private var isOpen: Bool { isHovering || isPinned }
+
     func body(content: Content) -> some View {
         content
             .background {
-                if isHovering, let presenter {
+                if isOpen, let presenter {
                     AgentBadgePopoverAnchor(presenter: presenter)
                 }
             }
             // The tracker keeps the last closure it was handed, so this only
-            // touches state; the task below reads the current `make`.
-            .sidebarHover { hovering in
-                if hovering, presenter == nil { presenter = AgentBadgePopoverPresenter() }
-                isHovering = hovering
-            }
-            .task(id: isHovering) {
-                guard isHovering else {
+            // flips state; the task below reads the current `make`.
+            .sidebarHover { isHovering = $0 }
+            .task(id: isOpen) {
+                guard isOpen else {
                     presenter?.close()
                     return
                 }
+                if presenter == nil { presenter = AgentBadgePopoverPresenter() }
                 try? await Task.sleep(for: Self.openDelay)
                 guard !Task.isCancelled, let presenter, let model = make() else { return }
                 presenter.show(
                     AgentBadgePopover(model: model)
                         .environment(\.theme, theme)
-                        .environment(\.designScale, scale)
+                        .environment(\.designScale, scale),
+                    isPinned: isPinned
                 )
             }
             // The tracker forgets a removed row without reporting the exit.
@@ -228,24 +217,34 @@ final class AgentBadgePopoverPresenter {
     weak var anchor: NSView?
     private var panel: NSPanel?
     private var eventMonitor: Any?
+    private var resignObserver: NSObjectProtocol?
 
-    func show(_ content: some View) {
+    isolated deinit {
+        close()
+    }
+
+    /// A pinned card ignores clicks, keys, scrolls and app deactivation.
+    func show(_ content: some View, isPinned: Bool = false) {
         close()
         guard let anchor, let window = anchor.window, window.isVisible else { return }
         let host = NSHostingView(rootView: content)
         host.safeAreaRegions = []
         let size = host.fittingSize
         let anchorRect = window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
-        let visible = window.screen?.visibleFrame ?? window.frame
+        let anchorMid = CGPoint(x: anchorRect.midX, y: anchorRect.midY)
+        let screen = NSScreen.screens.first { $0.frame.contains(anchorMid) } ?? window.screen
+        let visible = screen?.visibleFrame ?? window.frame
         let panel = AgentBadgePopoverPanel(
             contentRect: Self.frame(size: size, anchor: anchorRect, visible: visible)
         )
         host.frame = NSRect(origin: .zero, size: size)
         panel.contentView = host
+        panel.hidesOnDeactivate = !isPinned
         window.addChildWindow(panel, ordered: .above)
         panel.orderFront(nil)
         panel.invalidateShadow()
         self.panel = panel
+        guard !isPinned else { return }
         eventMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .keyDown]
         ) { [weak self] event in
@@ -253,11 +252,18 @@ final class AgentBadgePopoverPresenter {
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.close() } }
             return event
         }
+        resignObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.close() }
+        }
     }
 
     func close() {
         if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
         eventMonitor = nil
+        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+        resignObserver = nil
         guard let panel else { return }
         panel.parent?.removeChildWindow(panel)
         panel.orderOut(nil)

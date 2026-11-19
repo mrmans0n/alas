@@ -4,7 +4,30 @@ import Foundation
 /// What the hover popover on a sidebar agent badge shows, decided apart from
 /// the view so the copy and the per-status body can be tested.
 struct AgentBadgePopoverModel: Equatable {
-    enum Status: Equatable { case running, awaitingInput, permission, limited, failed, idle }
+    enum Status: Equatable {
+        case running, awaitingInput, permission, limited, failed, idle
+
+        /// Running shows the plan and a permission shows the request; the
+        /// rest show the start of the agent's last reply.
+        var showsReply: Bool {
+            switch self {
+            case .running, .permission: false
+            case .awaitingInput, .idle, .failed, .limited: true
+            }
+        }
+
+        /// The badge tile's own hue, so the chip and the tile always agree.
+        var dotColorToken: String {
+            let state: HarnessService.AggregatedState? = switch self {
+            case .running: .running
+            case .awaitingInput, .permission: .awaiting
+            case .limited: .limited
+            case .failed: .failed
+            case .idle: nil
+            }
+            return state.map { HarnessSessionBadgeSurface(state: $0).colorToken } ?? "fg-muted"
+        }
+    }
 
     enum Body: Equatable {
         case none
@@ -41,11 +64,19 @@ struct AgentBadgePopoverModel: Equatable {
         age.map { "\(label) · \($0)" } ?? label
     }
 
+    /// The model and context; the agent's name only when there is no model,
+    /// since the header's logo already names the agent.
     var footerText: String {
-        var parts = [agentName]
-        if let model, !model.isEmpty { parts.append(model) }
-        if let contextPercent { parts.append("\(contextPercent)% context") }
-        return parts.joined(separator: " · ")
+        guard let model, !model.isEmpty else { return agentName }
+        guard let contextPercent else { return model }
+        return "\(model) · \(contextPercent)% context"
+    }
+
+    /// The step in progress, counting from one: "Plan 3 of 5 · Run tests".
+    static func planText(completed: Int, total: Int, step: String?) -> String {
+        let base = "Plan \(min(completed + 1, total)) of \(total)"
+        guard let step, !step.isEmpty else { return base }
+        return "\(base) · \(step)"
     }
 
     var hintText: String {
@@ -61,6 +92,7 @@ struct AgentBadgePopoverModel: Equatable {
         plan: AgentSidebarPlanProgress?,
         reply: String?
     ) -> Body {
+        if status.showsReply { return reply.map { .excerpt($0) } ?? .none }
         switch status {
         case .permission:
             let title = permissionTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -69,7 +101,7 @@ struct AgentBadgePopoverModel: Equatable {
             guard let plan, plan.total > 0 else { return .none }
             return .plan(completed: plan.completed, total: plan.total, step: plan.currentStep)
         case .awaitingInput, .idle, .failed, .limited:
-            return reply.map { .excerpt($0) } ?? .none
+            return .none
         }
     }
 

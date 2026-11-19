@@ -912,10 +912,10 @@ final class AppState {
                 status: status,
                 permissionTitle: transcript.pendingPermission?.params.toolCall.title,
                 plan: AgentSidebarRollupBuilder.planProgress(for: transcript.currentPlan),
-                // Running and permission bodies never show the reply; skip the transcript walk.
-                reply: status == .running || status == .permission
-                    ? nil
-                    : ACPSessionTranscriptReader.lastAgentReplyStart(transcript.messages)
+                // Skips the transcript walk when the body has no reply line.
+                reply: status.showsReply
+                    ? ACPSessionTranscriptReader.lastAgentReplyStart(transcript.messages)
+                    : nil
             ),
             model: AgentSidebarRollupBuilder.modelDisplay(
                 currentModel: session.currentModel,

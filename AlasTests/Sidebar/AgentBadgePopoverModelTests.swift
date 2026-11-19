@@ -61,10 +61,20 @@ struct AgentBadgePopoverModelTests {
         #expect(model(.idle, since: now - 5).chipText(now: now) == "Idle · finished now")
     }
 
-    @Test("footer drops missing parts")
+    @Test("footer names the model, or the agent when there is none")
     func footer() {
-        #expect(model(.idle, modelName: "Opus 5.5", context: 63).footerText == "Claude · Opus 5.5 · 63% context")
+        #expect(model(.idle, modelName: "Opus 5.5", context: 63).footerText == "Opus 5.5 · 63% context")
+        #expect(model(.idle, modelName: "Opus 5.5").footerText == "Opus 5.5")
         #expect(model(.idle).footerText == "Claude")
+    }
+
+    @Test("plan text counts the step in progress", arguments: [
+        (2, 5, "Run tests" as String?, "Plan 3 of 5 · Run tests"),
+        (5, 5, nil, "Plan 5 of 5"),
+        (0, 3, nil, "Plan 1 of 3"),
+    ])
+    func planText(_ completed: Int, _ total: Int, _ step: String?, _ expected: String) {
+        #expect(Model.planText(completed: completed, total: total, step: step) == expected)
     }
 
     @Test("hint asks to answer only for waiting states", arguments: [
