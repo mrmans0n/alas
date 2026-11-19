@@ -52,6 +52,11 @@ commit, push, pull, fetch; shepherd menu; plain unified diff; file tree.
    state, `/ship` slash entry, auto-run chip, copy path / branch. Sort omits
    Manual (a peer never sees the Mac's drag order); the auto-run chip shows
    only while on, and turning it on stays in Session Settings.
+8. **Copy and quote messages**: long-press a user or agent message for Copy,
+   Quote and Select Text, as the Mac's message menu offers. Quote appends to
+   the end of the draft (the phone's caret isn't visible from the transcript);
+   Select Text opens the raw Markdown in a sheet whose edit menu quotes a
+   partial selection, standing in for the Mac's in-row text selection.
 
 ## Parked (need host or protocol work, or low phone value)
 

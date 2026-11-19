@@ -62,6 +62,11 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
     public private(set) var state: State = .idle
     public private(set) var lastOrigin: String?
 
+    /// The exact HTTPS origin of the current socket after a pinned identity
+    /// proves possession. Legacy pairings and plaintext links never expose one.
+    public var verifiedHTTPSOrigin: URL? { state == .online ? secureOrigin : nil }
+    private var secureOrigin: URL?
+
     private let origins: [String]
     /// The peer's token. Travels only as the WebSocket subprotocol; it is
     /// never logged, never part of an error, and never in the URL.
@@ -290,12 +295,20 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
                 return
             }
             socket = candidate
+            if expectedServerId != nil, expectedPublicKey != nil,
+               let expected = Self.httpsOrigin(of: url),
+               let effectiveURL = candidate.currentRequest?.url ?? candidate.response?.url,
+               Self.httpsOrigin(of: effectiveURL) == expected,
+               candidate.response?.url.map({ Self.httpsOrigin(of: $0) == expected }) != false {
+                secureOrigin = expected
+            }
             if origin != lastOrigin {
                 lastOrigin = origin
                 onEvent(.originChanged(origin))
             }
             onEvent(.hello(serverId: serverId, name: name, protocolVersion: version,
                            federationEnabled: federationEnabled, capabilities: capabilities, hostVersion: hostVersion))
+            guard !Task.isCancelled, socket === candidate else { return }
             backoff = config.initialBackoff
             setState(.online)
             await pump(candidate)
@@ -360,7 +373,8 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
 
     private func pump(_ socket: URLSessionWebSocketTask) async {
         while !Task.isCancelled {
-            guard let raw = try? await socket.receive() else { return }
+            guard let raw = try? await socket.receive(),
+                  !Task.isCancelled, self.socket === socket else { return }
             let payload: Data
             switch raw {
             case .data(let d): payload = d
@@ -473,12 +487,25 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
         if let expected, socket !== expected { return }
         socket?.cancel(with: code, reason: nil)
         socket = nil
+        secureOrigin = nil
     }
 
     private func setState(_ new: State) {
         guard state != new else { return }
         state = new
         onEvent(.stateChanged(new))
+    }
+
+    private static func httpsOrigin(of url: URL) -> URL? {
+        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              parts.scheme == "wss" || parts.scheme == "https",
+              let host = parts.host, !host.isEmpty,
+              parts.user == nil, parts.password == nil else { return nil }
+        parts.scheme = "https"
+        parts.path = ""
+        parts.query = nil
+        parts.fragment = nil
+        return parts.url
     }
 
     public static func socketURL(for origin: String) -> URL? {

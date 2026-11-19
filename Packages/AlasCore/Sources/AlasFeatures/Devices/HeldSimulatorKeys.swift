@@ -35,6 +35,13 @@ public struct HeldSimulatorKeys: Sendable {
         return Event(usage: usage, down: true)
     }
 
+    /// Android needs explicit repeats. Only repeat a press sent in this input
+    /// context, not a key the user was already holding when it began.
+    public func repeatedKeyDown(_ keyCode: UInt16) -> Event? {
+        guard keys.contains(keyCode), let usage = HIDKeyboardUsage.usage(forKeyCode: keyCode) else { return nil }
+        return Event(usage: usage, down: true)
+    }
+
     /// The release of a key this sent down, whatever modifiers are held now.
     public mutating func keyUp(_ keyCode: UInt16) -> Event? {
         guard keys.remove(keyCode) != nil, let usage = HIDKeyboardUsage.usage(forKeyCode: keyCode) else { return nil }

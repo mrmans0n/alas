@@ -12,6 +12,7 @@ struct PeersView: View {
 
     @State private var pairRequest: PairRequest?
     @State private var forgetting: PairedHost?
+    @State private var viewingDevices: PairedHost?
 
     var body: some View {
         NavigationStack {
@@ -19,7 +20,13 @@ struct PeersView: View {
                 if !hub.hosts.isEmpty {
                     Section {
                         ForEach(hub.hosts) { host in
-                            PeerRow(host: host, state: hub.state(of: host.id), sessionCount: hub.sessions(of: host.id).count) {
+                            PeerRow(
+                                host: host,
+                                state: hub.state(of: host.id),
+                                sessionCount: hub.sessions(of: host.id).count,
+                                openDevices: hub.state(of: host.id) == .online && hub.supports(PeerDeviceCapability.v1, on: host.id)
+                                    ? { viewingDevices = host } : nil
+                            ) {
                                 pairRequest = PairRequest(origins: host.origins)
                             }
                             .swipeActions {
@@ -63,6 +70,9 @@ struct PeersView: View {
             .sheet(item: $pairRequest) { request in
                 PairHostView(hub: hub, prefilledOrigins: request.origins)
             }
+            .fullScreenCover(item: $viewingDevices) { host in
+                PeerDevicesView(hub: hub, host: host)
+            }
             .confirmationDialog(
                 "Forget \(forgetting?.name ?? "this machine")?",
                 isPresented: Binding { forgetting != nil } set: { if !$0 { forgetting = nil } },
@@ -86,6 +96,7 @@ private struct PeerRow: View {
     let host: PairedHost
     let state: PhoneConnection.State
     let sessionCount: Int
+    let openDevices: (() -> Void)?
     let pairAgain: () -> Void
 
     var body: some View {
@@ -110,6 +121,12 @@ private struct PeerRow: View {
                     }
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                }
+                if let openDevices {
+                    Button("Devices", systemImage: "iphone", action: openDevices)
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Devices on \(host.name)")
+                        .frame(minHeight: 44, alignment: .leading)
                 }
             }
             Spacer(minLength: 0)

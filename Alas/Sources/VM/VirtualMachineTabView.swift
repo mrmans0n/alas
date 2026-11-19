@@ -379,6 +379,10 @@ struct VirtualMachineTabView: View {
                     }
                 }
             }
+            ToolbarBtn(icon: "sidebar.right", tooltip: "Back to the Devices rail", metrics: .vmStatusBar) {
+                state.bringDeviceToRail(.vm(guest), tabID: tab.id, worktreeID: worktreeID)
+            }
+            .vmDisabled(busy)
             ToolbarBtn(icon: "stop.fill", tooltip: "Stop VM", metrics: .vmStatusBar) { stop(recordID) }
                 .vmDisabled(busy)
             overflowMenu(

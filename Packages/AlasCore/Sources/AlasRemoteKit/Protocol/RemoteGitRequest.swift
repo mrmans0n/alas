@@ -9,7 +9,12 @@ public enum RemoteGitChange: Equatable, Sendable {
     case push
     case pull
     case fetch
+    /// The `index`th hunk of `path`'s diff as the phone was shown it: the unstaged diff to stage or
+    /// discard it, the staged one to unstage it.
+    case hunk(path: String, index: Int, header: String, linesHash: String, action: RemoteHunkAction)
 }
+
+public enum RemoteHunkAction: String, Sendable { case stage, unstage, discard }
 
 /// Why the host refused a git action, worded for the user.
 public struct RemoteGitFailure: Error, Equatable, Sendable {
@@ -182,6 +187,9 @@ public enum RemoteGitRequest {
         case .push: ["push": ["forceWithLease": false]]
         case .pull: ["pull": [String: Any]()]
         case .fetch: ["fetch": [String: Any]()]
+        case .hunk(let path, let index, let header, let linesHash, let action):
+            ["hunk": ["path": path, "stage": action == .unstage ? "staged" : "unstaged", "index": index, "header": header,
+                      "linesHash": linesHash, "action": action.rawValue]]
         }
     }
 
@@ -206,7 +214,7 @@ public enum RemoteGitRequest {
         if error["operationInProgress"] != nil { return "Another operation is running in this worktree. Try again when it finishes." }
         if error["notFound"] != nil { return "This worktree is no longer on its machine." }
         if let refusal = (error["session"] as? [String: Any])?["refusal"] as? [String: Any] {
-            if refusal["notWriter"] != nil { return "Another device is driving this session." }
+            if refusal["notWriter"] != nil { return "Take over this session first." }
             if refusal["notFound"] != nil { return "Its machine no longer lists this session." }
             if refusal["promptRejected"] != nil { return "The session didn't take the prompt." }
         }

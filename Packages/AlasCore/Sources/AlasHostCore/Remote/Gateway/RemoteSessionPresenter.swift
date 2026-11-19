@@ -20,6 +20,8 @@ public protocol RemoteSessionPresenter: AnyObject {
     var peerConsoleHost: PeerConsoleHost? { get }
     /// Serves peer run endpoint forwarding; nil when this app does not.
     var peerPortForwardHost: PeerPortForwardHost? { get }
+    /// Serves direct device links; nil on headless or unconfigured hosts.
+    var peerDeviceHost: PeerDeviceHost? { get }
     /// Opens a stored session as a tab in its worktree or checkout without
     /// selecting it. Succeeds without change when the tab is already open.
     func openSessionTab(for id: String) async -> RemoteSessionTabActionResult
@@ -36,4 +38,5 @@ public protocol RemoteSessionPresenter: AnyObject {
 
 @_spi(AppHost) extension RemoteSessionPresenter {
     public var peerPortForwardHost: PeerPortForwardHost? { nil }
+    public var peerDeviceHost: PeerDeviceHost? { nil }
 }

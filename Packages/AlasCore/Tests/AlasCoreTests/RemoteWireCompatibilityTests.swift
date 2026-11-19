@@ -18,6 +18,10 @@ import Testing
         (.push, .push(forceWithLease: false)),
         (.pull, .pull),
         (.fetch, .fetch),
+        (.hunk(path: "a", index: 1, header: "@@ -1 +1 @@", linesHash: "h", action: .unstage),
+         .hunk(path: "a", stage: .staged, index: 1, header: "@@ -1 +1 @@", linesHash: "h", action: .unstage)),
+        (.hunk(path: "a", index: 0, header: "@@", linesHash: "h", action: .discard),
+         .hunk(path: "a", stage: .unstaged, index: 0, header: "@@", linesHash: "h", action: .discard)),
     ] as [(RemoteGitChange, HostWorktreeChange)])
     func phoneGitRequestsDecodeOnTheMac(change: RemoteGitChange, expected: HostWorktreeChange) throws {
         let json = RemoteGitRequest.message(id: 7, projectID: "p", path: "/r", branch: "main", change: change).json
@@ -29,7 +33,7 @@ import Testing
         (HostResponse.done, nil),
         (.failure(error: .failed(message: "Nothing is staged to commit.")), "Nothing is staged to commit."),
         (.failure(error: .operationInProgress), "Another operation is running in this worktree. Try again when it finishes."),
-        (.failure(error: .session(refusal: .notWriter)), "Another device is driving this session."),
+        (.failure(error: .session(refusal: .notWriter)), "Take over this session first."),
     ] as [(HostResponse, String?)])
     func phoneReadsTheMacsGitReply(result: HostResponse, failure: String?) throws {
         let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 7, result: result)))

@@ -47,6 +47,7 @@ public final class RemoteSessionGateway {
     /// connected on its first request.
     private let portForwardID = UUID()
     private var portForwardHost: PeerPortForwardHost?
+    var receivePeerDeviceRequest: ((PeerDeviceRequest) -> Bool)?
     private var sessionListRefresh: Task<Void, Never>?
     private var sessionListGeneration = 0
     private var worktreeListRefresh: Task<Void, Never>?
@@ -167,6 +168,8 @@ public final class RemoteSessionGateway {
             handleConsole(request)
         case .portForward(let request):
             handlePortForward(request)
+        case .device(let request):
+            handlePeerDeviceRequest(request)
         case .listSessions:
             refreshSessionList()
         case .listWorktrees:
@@ -710,6 +713,18 @@ public final class RemoteSessionGateway {
             portForwardHost.receive(request, from: portForwardID)
         } else if case .open(let stream, _) = request {
             send(.portForward(.refused(stream: stream, message: "This host doesn't forward run endpoints.")))
+        }
+    }
+
+    func handlePeerDeviceRequest(_ request: PeerDeviceRequest) {
+        guard !delegationOnly, receivePeerDeviceRequest?(request) != true else { return }
+        switch request {
+        case .list:
+            send(.device(.list([])))
+        case .attach(_, let id), .takeControl(let id):
+            send(.device(.refused(attachmentID: id, reason: "This connection does not serve remote devices.")))
+        default:
+            break
         }
     }
 
