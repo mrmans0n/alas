@@ -35,12 +35,17 @@ struct DevicesRailTests {
         let emulator = AndroidDevice(
             serial: "emulator-5556", state: .ready, model: nil, avdName: "Medium_Phone", release: "16"
         )
+        // Another AVD now runs on the serial the tab's emulator had.
+        let other = AndroidDevice(serial: "emulator-5554", state: .ready, model: nil, avdName: "Pixel_9", release: "16")
         let running = Self.running(
-            ["on"], android: AndroidListing(devices: [emulator], avds: ["Medium_Phone"], bootingAVDs: [], note: nil)
+            ["on"],
+            android: AndroidListing(devices: [other, emulator], avds: ["Medium_Phone", "Pixel_9"], bootingAVDs: [], note: nil)
         )
         #expect(DevicesRail.device(forTab: "on", avdName: nil, in: running)?.id == .simulator("on"))
         #expect(DevicesRail.device(forTab: "emulator-5554", avdName: "Medium_Phone", in: running)?.id
             == .android("emulator-5556"))
+        #expect(DevicesRail.device(forTab: "emulator-5554", avdName: "Pixel_9", in: running)?.id
+            == .android("emulator-5554"))
         #expect(DevicesRail.device(forTab: "gone", avdName: nil, in: running) == nil)
     }
 

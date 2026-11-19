@@ -28,18 +28,20 @@ public enum DevicesRail {
 
     /// The running device a center device tab shows: the one it was opened
     /// for, else, for an emulator that booted again under another serial, the
-    /// one from its AVD.
+    /// one from its AVD. A serial another AVD took since doesn't count.
     public static func device(
         forTab deviceID: String, avdName: String?, in running: [DevicesTabState.Running]
     ) -> DevicesTabState.Running? {
-        if let same = running.first(where: { $0.id == .simulator(deviceID) || $0.id == .android(deviceID) }) {
+        func avd(of device: DevicesTabState.Running) -> String? {
+            guard case .android(let target, _) = device.screen else { return nil }
+            return target.avdName
+        }
+        if let same = running.first(where: { $0.id == .simulator(deviceID) || $0.id == .android(deviceID) }),
+           avdName == nil || avd(of: same) == avdName {
             return same
         }
         guard let avdName else { return nil }
-        return running.first { device in
-            guard case .android(let target, _) = device.screen else { return false }
-            return target.avdName == avdName
-        }
+        return running.first { avd(of: $0) == avdName }
     }
 }
 

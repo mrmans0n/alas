@@ -133,9 +133,11 @@ extension AppState {
         return androidPane.devices?.first { $0.serial == id }?.avdName
     }
 
+    /// An emulator's tab follows its AVD, not a serial another AVD may have taken since.
     private static func tab(_ tab: Tab, shows target: DevicesTarget, avdName: String?) -> Bool {
         switch tab {
-        case .device(let state): state.target == target || (avdName != nil && state.avdName == avdName)
+        case .device(let state):
+            if let tabAVD = state.avdName { tabAVD == avdName } else { state.target == target }
         case .virtualMachine(let state): target == .vm(state.guest)
         default: false
         }

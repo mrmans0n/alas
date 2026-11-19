@@ -40,13 +40,17 @@ struct DevicesRailList<Stage: View, Actions: View>: View {
                     }
                     .padding(Self.padding)
                 }
-                .onChange(of: scrollRequest, initial: true) { _, target in
-                    guard let target else { return }
-                    withAnimation { proxy.scrollTo(target, anchor: .top) }
-                    scrollRequest = nil
-                }
+                // A device an agent just opened may not be listed yet: the request waits for it.
+                .onChange(of: scrollRequest, initial: true) { _, _ in scrollToRequest(proxy) }
+                .onChange(of: entries.map(\.id)) { _, _ in scrollToRequest(proxy) }
             }
         }
+    }
+
+    private func scrollToRequest(_ proxy: ScrollViewProxy) {
+        guard let target = scrollRequest, entries.contains(where: { $0.id == target }) else { return }
+        withAnimation { proxy.scrollTo(target, anchor: .top) }
+        scrollRequest = nil
     }
 
     @ViewBuilder
