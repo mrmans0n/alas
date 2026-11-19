@@ -20,7 +20,7 @@ struct VMEntryScreen: View {
             VMDisplaySurface(
                 view: state.tabs.vmView(tabID: tabID), virtualMachine: state.vmManager.running(worktreeID, guest: guest)?.vm,
                 allowsInput: VMDriver.allowsViewInput(driver), capturesSystemKeys: driver == .user,
-                reconfiguresDisplay: false,
+                reconfiguresDisplay: false, takesKeyboardOnShow: false,
                 onBlockedClick: pulsePill,
                 onUserInput: { [state, recordID, onUse] in
                     state.noteVMUserInput(recordID: recordID)
