@@ -904,7 +904,7 @@ final class AppState {
         return AgentBadgePopoverModel(
             agentName: agent.displayName,
             agentLogoAsset: agent.logoAssetName,
-            title: session.title,
+            title: session.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? tabTitle : session.title,
             status: status,
             // An idle activity may be stamped when the session was restored, not when its turn ended.
             since: status == .idle ? (rowUpdatedAt ?? activity?.updatedAt) : activity?.updatedAt,

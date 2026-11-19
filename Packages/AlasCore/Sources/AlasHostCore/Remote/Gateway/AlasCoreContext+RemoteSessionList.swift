@@ -68,18 +68,21 @@ extension AlasCoreContext {
             detail.planTotal = items.count
             // Same step choice as the toolbar's plan pill.
             if let active = items.first(where: { $0.status == "in_progress" }) {
-                detail.planStep = active.content
+                detail.planStep = ACPSessionTranscriptReader.replyExcerpt(active.content, limit: 200)
             } else if done == items.count {
                 detail.planStep = "All steps complete"
             } else {
-                detail.planStep = (items.first(where: { $0.status == "pending" }) ?? items.last)?.content
+                detail.planStep = (items.first(where: { $0.status == "pending" }) ?? items.last)
+                    .flatMap { ACPSessionTranscriptReader.replyExcerpt($0.content, limit: 200) }
             }
         }
         if let title = transcript.pendingPermission?.params.toolCall.title, !title.isEmpty {
             detail.preview = ACPSessionTranscriptReader.replyExcerpt(title)
             detail.previewKind = detail.preview == nil ? nil : .permission
         }
-        if detail.preview == nil, let reply = ACPSessionTranscriptReader.lastAgentReplyStart(transcript.messages) {
+        // A running or permission-gated card never shows a reply, so skip the transcript walk.
+        let showsReply = transcript.streamingState != .sending && transcript.streamingState != .streaming
+        if detail.preview == nil, showsReply, let reply = ACPSessionTranscriptReader.lastAgentReplyStart(transcript.messages) {
             detail.preview = reply
             detail.previewKind = .reply
         }

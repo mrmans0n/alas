@@ -178,7 +178,8 @@ public enum ACPSessionTranscriptReader: Sendable {
 
     /// The pure collapse and cap behind `lastAgentReplyStart`; nil when empty.
     public static func replyExcerpt(_ text: String, limit: Int = 200) -> String? {
-        let collapsed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        // Bounded first: a huge reply must not be split whole for a 200-character excerpt.
+        let collapsed = text.prefix(limit * 4).split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !collapsed.isEmpty else { return nil }
         guard collapsed.count > limit else { return collapsed }
         return String(collapsed.prefix(max(limit - 1, 0))) + "…"
