@@ -99,10 +99,14 @@ struct SubagentScreen: View {
 
     private var transcript: SubagentTranscript? { session.subagentTranscripts[subagent.id] }
 
-    /// The reply's state, else the parent row's as it last came.
+    /// The parent row's state as it last came.
+    private var parentState: String? {
+        session.items.lazy.compactMap(\.message.subagent).first { $0.id == subagent.id }?.state
+    }
+
+    /// The reply's state, else the parent row's.
     private var state: String {
-        transcript?.state ?? session.items.lazy.compactMap(\.message.subagent).first { $0.id == subagent.id }?.state
-            ?? subagent.state
+        transcript?.state ?? parentState ?? subagent.state
     }
 
     private var isLive: Bool { transcript?.found != false && !SubagentStatus.isTerminal(state) }
@@ -124,7 +128,8 @@ struct SubagentScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             // Restarts when the child finishes, for one last read of its final rows, and stops in the
             // background. A read that could not go out (host offline) is retried until a reply lands.
-            .task(id: [isLive, scenePhase == .active]) {
+            // The parent row's state restarts it too, so a child that resumes is read again.
+            .task(id: [String(isLive), String(scenePhase == .active), parentState ?? ""]) {
                 guard scenePhase == .active else { return }
                 repeat {
                     session.readSubagent(subagent.id)
