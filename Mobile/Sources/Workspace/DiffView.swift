@@ -5,12 +5,18 @@ import SwiftUI
 /// One file's diff, pushed from the Changes list.
 struct DiffView: View {
     let workspace: SessionWorkspace
+    @State private var discarding: (index: Int, hunk: RemoteDiffHunk)?
+    @State private var error: String?
 
     var body: some View {
         Group {
             switch workspace.diff?.1 {
             case .loaded(let reply):
-                DiffContent(reply: reply, path: workspace.diff?.key.path ?? "")
+                DiffContent(reply: reply, path: workspace.diff?.key.path ?? "",
+                            actions: workspace.canChangeHunks ? hunkActions(workspace.diff?.key.stage) : [],
+                            busy: workspace.gitRunning != nil) { action, index, hunk in
+                    if action == .discard { discarding = (index, hunk) } else { change(action, index, hunk) }
+                }
             case .failed(let message):
                 ContentUnavailableView(message, systemImage: "exclamationmark.triangle")
             default:
@@ -21,25 +27,53 @@ struct DiffView: View {
         .navigationSubtitle(workspace.diff.map { $0.key.sha.map { String($0.prefix(7)) } ?? $0.key.stage?.capitalized ?? "" } ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
+        .confirmationDialog("Discard this hunk?", isPresented: Binding { discarding != nil } set: { if !$0 { discarding = nil } },
+                            titleVisibility: .visible, presenting: discarding) { held in
+            Button("Discard", role: .destructive) { change(.discard, held.index, held.hunk) }
+        } message: { _ in
+            Text("Its changes are lost.")
+        }
+        .alert("Couldn't do that", isPresented: Binding { error != nil } set: { if !$0 { error = nil } }) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(error ?? "")
+        }
         // Backstop for a pop that skips the destination binding (a stack reset to the root).
         .onDisappear { workspace.closeDiff() }
+    }
+
+    /// As the Mac: stage or discard from the unstaged diff, unstage from the staged one.
+    private func hunkActions(_ stage: String?) -> [RemoteHunkAction] {
+        switch stage {
+        case "unstaged": [.stage, .discard]
+        case "staged": [.unstage]
+        default: []
+        }
+    }
+
+    private func change(_ action: RemoteHunkAction, _ index: Int, _ hunk: RemoteDiffHunk) {
+        Task { error = await workspace.changeHunk(action, index: index, hunk) }
     }
 }
 
 private struct DiffContent: View {
     let reply: DiffReply
     let path: String
+    /// What each hunk's menu offers; empty for none.
+    let actions: [RemoteHunkAction]
+    let busy: Bool
+    let act: (RemoteHunkAction, Int, RemoteDiffHunk) -> Void
     /// Each line's syntax spans, counted across hunks; empty until tokenized, or without a grammar.
     @State private var spans: [[HighlightSpan]] = []
     @Environment(\.colorScheme) private var colorScheme
 
     private enum Block: Identifiable {
-        case header(id: Int, String)
+        case header(id: Int, index: Int, RemoteDiffHunk)
         case lines(id: Int, AttributedString)
 
         var id: Int {
             switch self {
-            case .header(let id, _), .lines(let id, _): id
+            case .header(let id, _, _), .lines(let id, _): id
             }
         }
     }
@@ -56,8 +90,12 @@ private struct DiffContent: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(blocks) { block in
                         switch block {
-                        case .header(_, let text):
-                            Text(text).foregroundStyle(.secondary).padding(.vertical, 6).padding(.horizontal, 8)
+                        case .header(_, let index, let hunk):
+                            HStack(spacing: 8) {
+                                if !actions.isEmpty { menu(index, hunk) }
+                                Text(hunk.header).foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 6).padding(.horizontal, 8)
                         case .lines(_, let text):
                             Text(text).fixedSize(horizontal: true, vertical: false)
                         }
@@ -86,11 +124,27 @@ private struct DiffContent: View {
         }
     }
 
+    private func menu(_ index: Int, _ hunk: RemoteDiffHunk) -> some View {
+        Menu {
+            ForEach(actions, id: \.self) { action in
+                switch action {
+                case .stage: Button("Stage Hunk", systemImage: "plus.circle") { act(.stage, index, hunk) }
+                case .unstage: Button("Unstage Hunk", systemImage: "minus.circle") { act(.unstage, index, hunk) }
+                case .discard: Button("Discard Hunk…", systemImage: "trash", role: .destructive) { act(.discard, index, hunk) }
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .disabled(busy)
+        .accessibilityLabel("Hunk actions")
+    }
+
     private static func blocks(_ hunks: [RemoteDiffHunk], spans: [[HighlightSpan]], tokens: ThemeTokens) -> [Block] {
         var out: [Block] = []
         var index = 0
-        for hunk in hunks {
-            out.append(.header(id: out.count, hunk.header))
+        for (hunkIndex, hunk) in hunks.enumerated() {
+            out.append(.header(id: out.count, index: hunkIndex, hunk))
             for start in stride(from: 0, to: hunk.lines.count, by: chunkLines) {
                 var text = AttributedString()
                 for (i, line) in hunk.lines[start ..< min(start + chunkLines, hunk.lines.count)].enumerated() {

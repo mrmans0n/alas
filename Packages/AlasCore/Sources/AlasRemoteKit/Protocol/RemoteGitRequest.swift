@@ -9,7 +9,12 @@ public enum RemoteGitChange: Equatable, Sendable {
     case push
     case pull
     case fetch
+    /// The `index`th hunk of `path`'s diff as the phone was shown it: the unstaged diff to stage or
+    /// discard it, the staged one to unstage it.
+    case hunk(path: String, index: Int, header: String, linesHash: String, action: RemoteHunkAction)
 }
+
+public enum RemoteHunkAction: String, Sendable { case stage, unstage, discard }
 
 /// Why the host refused a git action, worded for the user.
 public struct RemoteGitFailure: Error, Equatable, Sendable {
@@ -182,6 +187,9 @@ public enum RemoteGitRequest {
         case .push: ["push": ["forceWithLease": false]]
         case .pull: ["pull": [String: Any]()]
         case .fetch: ["fetch": [String: Any]()]
+        case .hunk(let path, let index, let header, let linesHash, let action):
+            ["hunk": ["path": path, "stage": action == .unstage ? "staged" : "unstaged", "index": index, "header": header,
+                      "linesHash": linesHash, "action": action.rawValue]]
         }
     }
 
