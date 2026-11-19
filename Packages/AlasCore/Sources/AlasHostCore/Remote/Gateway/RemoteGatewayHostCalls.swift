@@ -33,6 +33,9 @@ import AlasSessions
     /// A tool call's full output, which a loaded transcript keeps only for
     /// its newest messages.
     public var fullToolCallContent: @MainActor (_ sessionID: String, _ toolCallID: String) async -> String?
+    /// Writes an oversized inline tool image into the session's attachments folder, returning its
+    /// absolute path for the phone to fetch, or nil when it could not be written.
+    public var spillToolImage: @MainActor (_ sessionID: String, _ data: Data) async -> String?
     /// The tail of a tool call's terminal, or nil when the host has no such terminal.
     public var toolTerminal: @MainActor (_ sessionID: String, _ terminalID: String) -> ACPTerminalOutputResult?
     /// A live session's subagent, or nil when the session has no such child.
@@ -58,6 +61,7 @@ import AlasSessions
             mentions.isEmpty ? [] : nil
         },
         fullToolCallContent: @escaping @MainActor (_ sessionID: String, _ toolCallID: String) async -> String? = { _, _ in nil },
+        spillToolImage: @escaping @MainActor (_ sessionID: String, _ data: Data) async -> String? = { _, _ in nil },
         toolTerminal: @escaping @MainActor (_ sessionID: String, _ terminalID: String) -> ACPTerminalOutputResult? = { _, _ in nil },
         subagentRun: @escaping @MainActor (_ sessionID: String, _ subagentID: String) -> ACPSubagentRun? = { _, _ in nil }
     ) {
@@ -72,6 +76,7 @@ import AlasSessions
         self.mentionCandidates = mentionCandidates
         self.mentionAttachments = mentionAttachments
         self.fullToolCallContent = fullToolCallContent
+        self.spillToolImage = spillToolImage
         self.toolTerminal = toolTerminal
         self.subagentRun = subagentRun
     }
@@ -110,6 +115,11 @@ import AlasSessions
             },
             fullToolCallContent: { [weak host] sessionID, toolCallID in
                 await host?.sessions.fullToolCallContent(sessionID, toolCallID: toolCallID)
+            },
+            spillToolImage: { [weak host] sessionID, data in
+                guard let worktreeId = host?.sessions.worktreeId(of: sessionID) else { return nil }
+                let directory = Paths.acpAttachmentsDir(forWorktreeId: worktreeId)
+                return await Task.detached { TranscriptImageFile.spill(data, into: directory) }.value
             },
             toolTerminal: { [weak host] sessionID, terminalID in
                 host?.sessions.toolTerminalTail(sessionID, terminalID: terminalID)
