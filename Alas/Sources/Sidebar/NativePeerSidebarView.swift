@@ -853,18 +853,6 @@ private struct NativePeerAgentBadge: View {
     }
 }
 
-private struct OptionalBadgeChrome: ViewModifier {
-    let surface: HarnessSessionBadgeSurface?
-
-    func body(content: Content) -> some View {
-        if let surface {
-            content.modifier(HarnessSessionBadgeChrome(surface: surface))
-        } else {
-            content
-        }
-    }
-}
-
 /// E1's `.need`: an orange dot and the number of sessions waiting on you.
 private struct NativePeerAttentionCount: View {
     let count: Int

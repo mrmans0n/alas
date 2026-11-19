@@ -68,7 +68,7 @@ struct HarnessSessionBadge: View {
     static let logoSize: CGFloat = 10
     static let cornerRadius: CGFloat = 4
 
-    let session: HarnessService.WorktreeHarnessSession
+    let session: HarnessService.WorktreeBadgeSession
     let onActivate: () -> Void
 
     @Environment(\.theme) private var theme
@@ -81,7 +81,7 @@ struct HarnessSessionBadge: View {
                 .scaledToFit()
                 .frame(width: Self.logoSize, height: Self.logoSize)
                 .frame(width: Self.diameter, height: Self.diameter)
-                .modifier(HarnessSessionBadgeChrome(surface: .init(state: session.state)))
+                .modifier(OptionalBadgeChrome(surface: session.state.map(HarnessSessionBadgeSurface.init(state:))))
         }
         .buttonStyle(.plain)
         .help(tooltip)
@@ -96,12 +96,12 @@ struct HarnessSessionBadge: View {
     }
 
     private var tooltip: String {
-        "\(session.agent.displayName) · \(session.state.statusNote)"
+        "\(session.agent.displayName) · \(session.state?.statusNote ?? "idle")"
     }
 }
 
 struct HarnessSessionOverflowBadge: View {
-    let sessions: [HarnessService.WorktreeHarnessSession]
+    let sessions: [HarnessService.WorktreeBadgeSession]
     let onActivate: (String) -> Void
 
     @Environment(\.theme) private var theme
@@ -118,7 +118,7 @@ struct HarnessSessionOverflowBadge: View {
                         Image(nsImage: AgentLogoView.menuImage(for: session.agent, size: 14))
                     }
                 }
-                .badge(session.state.statusNote.capitalized)
+                .badge(session.state?.statusNote.capitalized ?? "Idle")
             }
         } label: {
             Text("+\(sessions.count)")
@@ -131,13 +131,13 @@ struct HarnessSessionOverflowBadge: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .frame(width: HarnessSessionBadge.diameter, height: HarnessSessionBadge.diameter)
-        .modifier(HarnessSessionBadgeChrome(surface: .init(sessions: sessions)))
+        .modifier(OptionalBadgeChrome(surface: HarnessSessionBadgeSurface(badges: sessions)))
         .help(accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
     }
 
     private var accessibilityLabel: String {
-        "\(sessions.count) more active session\(sessions.count == 1 ? "" : "s")"
+        "\(sessions.count) more agent session\(sessions.count == 1 ? "" : "s")"
     }
 }
 
@@ -165,6 +165,16 @@ enum HarnessSessionBadgeSurface: Equatable {
         case .limited: "warn"
         case .failed: "del"
         }
+    }
+
+    /// Nil when every badge is idle: idle sessions draw a bare logo, no tile.
+    /// Otherwise the active ones alone decide the surface.
+    init?(badges: [HarnessService.WorktreeBadgeSession]) {
+        let active = badges.compactMap { badge in
+            badge.state.map { HarnessService.WorktreeHarnessSession(id: badge.id, state: $0, agent: badge.agent) }
+        }
+        guard !active.isEmpty else { return nil }
+        self.init(sessions: active)
     }
 
     init(sessions: [HarnessService.WorktreeHarnessSession]) {
@@ -220,5 +230,18 @@ struct HarnessSessionBadgeChrome: ViewModifier {
     nonisolated static func surfaceColor(from raw: String?) -> OKLCH? {
         guard let raw, let base = try? OKLCH.parse(raw) else { return nil }
         return OKLCH(l: surfaceLightness, c: base.c, h: base.h, a: 1)
+    }
+}
+
+/// Applies the tile only when there is a surface; idle badges stay a bare logo.
+struct OptionalBadgeChrome: ViewModifier {
+    let surface: HarnessSessionBadgeSurface?
+
+    func body(content: Content) -> some View {
+        if let surface {
+            content.modifier(HarnessSessionBadgeChrome(surface: surface))
+        } else {
+            content
+        }
     }
 }

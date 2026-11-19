@@ -814,14 +814,35 @@ final class AppState {
     /// The agents running in a worktree's terminal panes and chat tabs,
     /// rolled up as the sidebar row and the Changes tab show them.
     func harnessSummary(forWorktree worktreeId: String) -> HarnessService.WorktreeHarnessSummary? {
-        let ids = tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
+        harness.summary(forSessionIds: harnessSessionIds(forWorktree: worktreeId))
+    }
+
+    /// Every agent session in the worktree's open tabs: terminal panes and chat tabs.
+    private func harnessSessionIds(forWorktree worktreeId: String) -> [String] {
+        tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
             switch tab {
             case .terminal(let s): return s.root.leaves().map(\.sessionId)
             case .acpSession(let s): return [s.sessionId]
             default: return []
             }
         }
-        return harness.summary(forSessionIds: ids)
+    }
+
+    /// The sessions open in a worktree as sidebar badges: active ones first,
+    /// then idle chat tabs whose agent is known.
+    func harnessBadges(forWorktree worktreeId: String) -> [HarnessService.WorktreeBadgeSession] {
+        let manager = acpManager(forWorktreeId: worktreeId)
+        var idleAgents: [String: AgentKind] = [:]
+        for tab in tabs.tabs(forWorktree: worktreeId) {
+            guard case .acpSession(let s) = tab else { continue }
+            let agentId = manager?.liveSession(for: s.sessionId)?.agentId
+                ?? manager?.sessionRows.first { $0.id == s.sessionId }?.agentId
+            if let agentId { idleAgents[s.sessionId] = ACPHarnessBridge.agentKind(for: agentId) }
+        }
+        return harness.badgeSessions(
+            forSessionIds: harnessSessionIds(forWorktree: worktreeId),
+            idleAgents: idleAgents
+        )
     }
     /// Settle window before a harness awaiting/permission transition reaches
     /// the attention store, so flapping states never flash the sidebar badge.
