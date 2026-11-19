@@ -1864,6 +1864,9 @@ public final class ACPSessionManager: ChangeTracking {
     }
     /// Invalidates takeover work suspended while mirroring the final writer snapshot.
     private var takeoverAttemptIDs: [ACPSession.ID: UUID] = [:]
+    /// The queue a takeover restored from the store, until its final mirror refresh: a prompt
+    /// queued after it may not have reached the store when that refresh reads it.
+    private var takeoverRestoredQueueIDs: [ACPSession.ID: Set<UUID>] = [:]
     /// Identifies the latest connection generation after its attach task has
     /// returned. Long-lived callbacks use this in addition to session ID so
     /// an obsolete broker/runner cannot publish into its replacement.
@@ -5990,12 +5993,16 @@ extension ACPSessionManager {
             return false
         }
         session.restoreQueue(queue, markLegacySendingUncertain: true)
+        takeoverRestoredQueueIDs[sessionId] = Set(queue.map(\.id))
         // Block immediate sends while the final mirror snapshot catches the
         // cached transcript up to the store before writer attach.
         session.agentState = .spawning
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.refreshMirror(sessionId: sessionId)
+            if self.takeoverAttemptIDs[sessionId] == takeoverAttemptID {
+                self.takeoverRestoredQueueIDs.removeValue(forKey: sessionId)
+            }
 #if DEBUG
             await self.beforeTakeoverAttachForTesting?(sessionId)
 #endif
@@ -6302,8 +6309,16 @@ extension ACPSessionManager {
         // Always sync the queue — it can change (drain/clear) with no new
         // transcript rows, so this must run before any early-return below.
         session.deliveredQueuedPromptIDs = result.deliveredQueuedPromptIDs
+        // A prompt submitted during a takeover's final refresh may not have reached the store
+        // yet; the store's copy would drop it. Only those: a cached item the store lacks may have
+        // been removed by the previous writer.
+        let unpersisted = takeoverRestoredQueueIDs[sessionId].map { restored in
+            session.queue.filter { item in
+                !restored.contains(item.id) && !result.queue.contains { $0.id == item.id }
+            }
+        } ?? []
         session.restoreQueue(
-            result.queue,
+            result.queue + unpersisted,
             markLegacySendingUncertain: true,
             persistedUsageLimit: result.row.usageLimit
         )

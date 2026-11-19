@@ -306,6 +306,7 @@ final class TranscriptSession {
             }
         }
         forgetTransientState()
+        state.expectNewTranscript()
         subscription = hub.subscribe(sessionId, on: hostID)
         hostWasOnline = hub.state(of: hostID) == .online
         watchGeneration += 1
@@ -734,6 +735,7 @@ final class TranscriptSession {
 
     private func resubscribe() {
         state.resetResubscribeRequest()
+        state.expectNewTranscript()
         // A page request or image read sent before a reconnect has no reply coming, and
         // rows whose messages are unchanged won't ask again, so resend the unanswered reads.
         fetchingOlder = false

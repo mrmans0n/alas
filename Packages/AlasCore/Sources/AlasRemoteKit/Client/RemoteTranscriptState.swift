@@ -58,6 +58,13 @@ public struct RemoteTranscriptState<ServerHost: Codable & Equatable & Sendable, 
         clearPendingRequests()
     }
 
+    /// Takes the next snapshot whatever its epoch, for a new subscription: a reopened session or a
+    /// restarted host starts a new transcript, whose epoch counts from 0 again.
+    public mutating func expectNewTranscript() {
+        epoch = nil
+        revision = nil
+    }
+
     @discardableResult
     public mutating func apply(_ message: RemoteServerMessageOf<ServerHost, ClientHost>) -> Bool {
         guard message.transcriptSessionId == sessionId else { return false }
