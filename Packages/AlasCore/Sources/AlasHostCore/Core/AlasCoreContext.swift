@@ -130,6 +130,9 @@ public final class AlasCoreContext {
     /// kept until `pr_status` or a turn reports it.
     @ObservationIgnored var stackShipJobs: [String: StackShipJob] = [:]
     @ObservationIgnored var stackShipFailures: [String: StackShipFailure] = [:]
+    /// What the two above say, by worktree id, for views to observe: a
+    /// running ship wins over an earlier failure.
+    public internal(set) var stackShipActivity: [String: StackShipActivity] = [:]
     /// Each agent `pr_status` read still running, and the last one read.
     @ObservationIgnored var prStatusReads: [PRStatusReadKey: Task<AlasCLIResponse, Never>] = [:]
     @ObservationIgnored var prStatusCache: [PRStatusReadKey: CachedPRStatus] = [:]

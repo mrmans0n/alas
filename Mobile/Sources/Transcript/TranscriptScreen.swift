@@ -115,9 +115,15 @@ struct TranscriptScreen: View {
             }
             // Destinations for views pushed from the tabs live here, on a view that stays mounted.
             .navigationDestination(isPresented: Binding(
-                get: { workspace.diff != nil && workspace.pushedBy == screenID },
+                get: { workspace.diff != nil && workspace.diff?.key.sha == nil && workspace.pushedBy == screenID },
                 set: { if !$0 { workspace.closeDiff() } })) {
                 DiffView(workspace: workspace)
+            }
+            // A commit's own diffs push from its file list.
+            .navigationDestination(isPresented: Binding(
+                get: { workspace.commit != nil && workspace.pushedBy == screenID },
+                set: { if !$0 { workspace.closeCommit() } })) {
+                CommitFilesView(workspace: workspace)
             }
             .navigationDestination(isPresented: Binding(
                 get: { workspace.file != nil && workspace.pushedBy == screenID },

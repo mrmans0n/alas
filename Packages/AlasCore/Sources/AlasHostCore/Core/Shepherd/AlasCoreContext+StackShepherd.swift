@@ -51,6 +51,7 @@ extension AlasCoreContext {
         stackShipFailures[worktreeID] = nil
         let job = StackShipJob(sessionID: sessionID, startedAt: Date())
         stackShipJobs[worktreeID] = job
+        syncShipActivity(worktreeID)
         let task = Task { @MainActor in
             let response = await self.serializedPublish(worktreeID: worktreeID) {
                 let result = try await self.publishShepherdedStack(
@@ -59,11 +60,15 @@ extension AlasCoreContext {
                         guard let self, var current = self.stackShipJobs[worktreeID], current.id == job.id else { return }
                         change(&current.progress)
                         self.stackShipJobs[worktreeID] = current
+                        self.syncShipActivity(worktreeID)
                     }
                 )
                 return ReviewCommentWireDTO.jsonLine(result)
             }
-            if self.stackShipJobs[worktreeID]?.id == job.id { self.stackShipJobs[worktreeID] = nil }
+            if self.stackShipJobs[worktreeID]?.id == job.id {
+                self.stackShipJobs[worktreeID] = nil
+                self.syncShipActivity(worktreeID)
+            }
             return response
         }
         if let response = await Self.response(of: task, within: replyWithin) { return response }
@@ -105,7 +110,10 @@ extension AlasCoreContext {
         case .text(let lines): (nil, lines.joined(separator: "\n"))
         case .ok: (nil, "{}")
         }
-        if let failure { stackShipFailures[worktreeID] = StackShipFailure(sessionID: sessionID, message: failure) }
+        if let failure {
+            stackShipFailures[worktreeID] = StackShipFailure(sessionID: sessionID, message: failure)
+            syncShipActivity(worktreeID)
+        }
         guard let effects = stackShepherd.effects else { return }
         let prompt = StackShepherdPromptBuilder.shipOutcomePrompt(
             stackName: effects.worktreeContext(worktreeID)?.stackName, result: result, failed: failure != nil
@@ -113,7 +121,21 @@ extension AlasCoreContext {
         let delivery = await effects.deliverPrompt(sessionID, worktreeID, prompt) { true }
         if delivery == .delivered, failure != nil, stackShipFailures[worktreeID]?.message == failure {
             stackShipFailures[worktreeID] = nil
+            syncShipActivity(worktreeID)
         }
+    }
+
+    /// Mirrors the ship dictionaries into the observed `stackShipActivity`,
+    /// assigning only on a change so repeated events do not wake observers.
+    private func syncShipActivity(_ worktreeID: String) {
+        let activity: StackShipActivity? = if let job = stackShipJobs[worktreeID] {
+            .running(sessionID: job.sessionID, progress: job.progress)
+        } else if let failure = stackShipFailures[worktreeID] {
+            .failed(sessionID: failure.sessionID, message: failure.message)
+        } else {
+            nil
+        }
+        if stackShipActivity[worktreeID] != activity { stackShipActivity[worktreeID] = activity }
     }
 
     /// `pr_status` while the worktree's agent `stack_ship` still runs, or
@@ -127,6 +149,7 @@ extension AlasCoreContext {
         }
         guard let failure = stackShipFailures[worktreeID], failure.sessionID == sessionID else { return nil }
         stackShipFailures[worktreeID] = nil
+        syncShipActivity(worktreeID)
         return .error("The last stack_ship did not finish: \(failure.message)")
     }
 
@@ -539,6 +562,12 @@ struct StackShipJob {
     let sessionID: String
     let startedAt: Date
     var progress = StackShipProgress(phase: .checking)
+}
+
+/// What a worktree's agent `stack_ship` is doing, as views observe it.
+public enum StackShipActivity: Equatable, Sendable {
+    case running(sessionID: String, progress: StackShipProgress)
+    case failed(sessionID: String, message: String)
 }
 
 struct StackShipFailure {

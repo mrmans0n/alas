@@ -1391,6 +1391,9 @@ struct StackShepherdTests {
         let reply = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
         #expect(Self.text(reply).contains(#""status":"in_progress""#))
         try await eventually { await probe.isSyncing }
+        #expect(core.stackShipActivity["wt-1"] == .running(
+            sessionID: "session-1", progress: StackShipProgress(phase: .linting, position: 2, totalEntries: 3)
+        ))
         let listedBeforeStatus = probe.listed
 
         let status = await core.prStatus(sessionID: "session-1", worktreeID: "wt-1")
@@ -1405,16 +1408,25 @@ struct StackShepherdTests {
         // The fake gg opens no request, so the publish fails after the sync.
         #expect(probe.turns.count == 1)
         #expect(probe.turns[0].contains("did not finish") && probe.turns[0].contains("has no pull request"))
+        let activityBeforeStatus = core.stackShipActivity["wt-1"]
         let after = core.stackShipStatus(sessionID: "session-1", worktreeID: "wt-1")
         if turnDelivery == .delivered {
             #expect(after == nil)
+            // The delivered failure is cleared after the turn's delivery returns.
+            try await eventually { await MainActor.run { core.stackShipActivity["wt-1"] == nil } }
         } else {
+            guard case .failed(let activitySession, let activityMessage) = activityBeforeStatus else {
+                Issue.record("expected failed activity, got \(String(describing: activityBeforeStatus))")
+                return
+            }
+            #expect(activitySession == "session-1" && activityMessage.contains("has no pull request"))
             guard case .error(let message) = after else {
                 Issue.record("expected the undelivered failure, got \(String(describing: after))")
                 return
             }
             #expect(message.contains("has no pull request"))
             #expect(core.stackShipStatus(sessionID: "session-1", worktreeID: "wt-1") == nil)
+            #expect(core.stackShipActivity["wt-1"] == nil)
         }
     }
 
