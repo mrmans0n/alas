@@ -953,7 +953,7 @@ extension DeviceAgentControlTests {
         let (agentHeld, holdAgent) = AsyncStream<Void>.makeStream()
         let (cleanupStarted, startCleanup) = AsyncStream<Void>.makeStream()
         let (cleanupCanEnd, finishCleanup) = AsyncStream<Void>.makeStream()
-        let control = bothPlatforms(android) { duration in
+        let control = bothPlatforms(android, sleep: { duration in
             if duration == .milliseconds(16) {
                 startSwipe.finish()
                 for await _ in swipeCanEnd {}
@@ -961,7 +961,7 @@ extension DeviceAgentControlTests {
                 holdAgent.finish()
                 await Self.untilCancelled(duration)
             }
-        }
+        })
         let localInputToken = control.registerLocalInputStop(udid: udid) { reserve.finish() }
         defer { control.unregisterLocalInputStop(udid: udid, token: localInputToken) }
         let first = Task {
@@ -1017,12 +1017,12 @@ extension DeviceAgentControlTests {
         let udid = "emulator-5554"
         let owner = UUID()
         let (agentHeld, holdAgent) = AsyncStream<Void>.makeStream()
-        let control = bothPlatforms(android) { duration in
+        let control = bothPlatforms(android, sleep: { duration in
             if duration == .seconds(50) {
                 holdAgent.finish()
                 await Self.untilCancelled(duration)
             }
-        }
+        })
         #expect(await control.acquireRemoteInput(udid: udid, owner: owner))
         let next = Task {
             await control.perform(.button(udid: udid, name: .home, includeScreenshot: false, diff: false), sessionID: "next")
