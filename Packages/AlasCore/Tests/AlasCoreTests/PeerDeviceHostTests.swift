@@ -202,6 +202,7 @@ private final class DeviceHostFixture {
     let directory: URL
     let grants: PeerDeviceGrants
     let deviceID: PeerDeviceID
+    private let videoTime = ContinuousClock.now
     var now: Duration = .zero
     var closedMedia = 0
     var captureStarts = 0
@@ -244,7 +245,7 @@ private final class DeviceHostFixture {
                 releases += 1
                 releaseFinished = true
             }, input: { [weak self] _, _, _, input in self?.input.append(input) }
-        ), now: { [weak self] in self?.now ?? .zero }, waitForExpiry: { [weak self] delay in
+        ), now: { [weak self] in self?.now ?? .zero }, videoNow: { [videoTime] in videoTime }, waitForExpiry: { [weak self] delay in
             guard let self else { return }
             if interceptExpiry {
                 await withCheckedContinuation { expiryWaiter = $0 }

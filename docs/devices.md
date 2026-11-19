@@ -161,6 +161,7 @@ or use the Android buttons. Only one viewer can drive at once. **Hand back**
 releases control so the agent on the host can continue; it does not retry an
 agent call that already timed out. On the host, use **Reclaim** on the
 Android screen in the Devices rail or its center tab.
+On a Mac viewer, holding a key such as Backspace repeats it on Android.
 Submitting text uses the Android clipboard to paste into the focused field.
 Alas does not sync clipboard contents to the viewer.
 

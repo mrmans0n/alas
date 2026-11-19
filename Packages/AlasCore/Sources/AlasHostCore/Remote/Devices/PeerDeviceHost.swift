@@ -90,10 +90,14 @@ public final class PeerDeviceHost {
     @MainActor
     private final class Capture {
         let id = UUID()
-        let fanout = PeerDeviceVideoFanout()
+        let fanout: PeerDeviceVideoFanout
         var viewers = 0
         var token: UUID?
         var formatGeneration: UInt64?
+
+        init(videoNow: @escaping () -> ContinuousClock.Instant) {
+            fanout = PeerDeviceVideoFanout(now: videoNow)
+        }
     }
 
     private final class Lease {
@@ -121,6 +125,7 @@ public final class PeerDeviceHost {
     private let grants: PeerDeviceGrants
     private let environment: Environment
     private let now: @MainActor () -> Duration
+    private let videoNow: () -> ContinuousClock.Instant
     private let waitForExpiry: @MainActor (Duration) async throws -> Void
     private let tickets = PeerDeviceTickets()
     private var links: [UUID: Link] = [:]
@@ -139,10 +144,12 @@ public final class PeerDeviceHost {
     }
 
     init(grants: PeerDeviceGrants, environment: Environment, now: @escaping @MainActor () -> Duration,
+         videoNow: @escaping () -> ContinuousClock.Instant = { .now },
          waitForExpiry: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.grants = grants
         self.environment = environment
         self.now = now
+        self.videoNow = videoNow
         self.waitForExpiry = waitForExpiry
     }
 
@@ -297,7 +304,7 @@ public final class PeerDeviceHost {
         attachment.streaming = true
         let serial = attachment.serial
         let first = captures[serial] == nil
-        let capture = captures[serial] ?? Capture()
+        let capture = captures[serial] ?? Capture(videoNow: videoNow)
         captures[serial] = capture
         capture.viewers += 1
         capture.fanout.add(id: session.id, write: media.write, close: { [weak self] in

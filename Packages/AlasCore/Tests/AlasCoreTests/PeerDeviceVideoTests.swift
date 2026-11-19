@@ -31,7 +31,8 @@ struct PeerDeviceVideoTests {
     }
 
     @Test @MainActor func rotationDropsOldBacklogForOnlyTheSlowViewer() async throws {
-        let fanout = PeerDeviceVideoFanout()
+        let instant = ContinuousClock.now
+        let fanout = PeerDeviceVideoFanout(now: { instant })
         let fast = Sink(fanout)
         let slow = Sink(fanout)
         let first = [Self.format(1), Self.config(1), Self.key(1), Self.delta(1)]
@@ -106,7 +107,8 @@ struct PeerDeviceVideoTests {
         )
         var source = PeerDeviceVideoBootstrap()
         for packet in [format, config, Self.key(1), oversized] { source.update(packet) }
-        let fanout = PeerDeviceVideoFanout()
+        let instant = ContinuousClock.now
+        let fanout = PeerDeviceVideoFanout(now: { instant })
         let viewer = Sink(fanout)
         source.replay { fanout.publish($0) }
         try await viewer.drain()

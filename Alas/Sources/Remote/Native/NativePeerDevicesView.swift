@@ -252,7 +252,10 @@ private final class PeerDeviceScreenView: NSView {
             super.keyDown(with: event)
             return
         }
-        if let key = keys.keyDown(event.keyCode, command: false) { sendKey(key) }
+        let key = event.isARepeat
+            ? keys.repeatedKeyDown(event.keyCode)
+            : keys.keyDown(event.keyCode, command: false)
+        if let key { sendKey(key) }
     }
 
     override func keyUp(with event: NSEvent) {
