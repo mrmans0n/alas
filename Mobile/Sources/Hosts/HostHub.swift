@@ -155,8 +155,9 @@ final class HostHub {
         listedLive.remove(id)
         capabilities[id] = nil
         sessionLists[id] = nil
-        listeners[id] = nil
-        deviceListeners[id] = nil
+        // Released after the access ends, as in `addListener`.
+        let handlers = (listeners.removeValue(forKey: id), deviceListeners.removeValue(forKey: id))
+        withExtendedLifetime(handlers) {}
         subscriptions[id] = nil
         store.save(hosts)
         if pushes { unregisterPending() } else { store.deleteToken(for: id) }
@@ -240,7 +241,10 @@ final class HostHub {
         let key = UUID()
         listeners[id, default: [:]][key] = handler
         return ListenerToken { [weak self] in
-            self?.listeners[id]?[key] = nil
+            // Released only once the access to `listeners` has ended: the handler can hold the last
+            // reference to something owning another token, whose deinit edits `listeners` too.
+            let handler = self?.listeners[id]?.removeValue(forKey: key)
+            withExtendedLifetime(handler) {}
         }
     }
 
@@ -253,7 +257,9 @@ final class HostHub {
         let key = UUID()
         deviceListeners[id, default: [:]][key] = handler
         return ListenerToken { [weak self] in
-            self?.deviceListeners[id]?[key] = nil
+            // Released after the access ends, as in `addListener`.
+            let handler = self?.deviceListeners[id]?.removeValue(forKey: key)
+            withExtendedLifetime(handler) {}
         }
     }
 
