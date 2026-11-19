@@ -25,12 +25,13 @@ struct DeviceEntryActions: View {
     let onScreenshot: () async -> String
     /// Nil where Alas can't shut it down: a USB phone.
     let onShutDown: (() -> Void)?
-    /// A short message over the bottom of the screen.
-    let onNotice: (String) -> Void
     /// Names the agent session recording the device.
     var agentName: (String) -> String = { _ in "An agent" }
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
+    /// "Saved to Desktop", or why it wasn't, for a moment after a click. In
+    /// the header, so it shows on a collapsed device too.
+    @State private var notice: String?
     @State private var showsSettings = false
     /// A flow recording waiting for its name.
     @State private var recordedFlow: DeviceFlow?
@@ -57,6 +58,17 @@ struct DeviceEntryActions: View {
 
     var body: some View {
         HStack(spacing: 2) {
+            if let notice {
+                Text(notice)
+                    .font(scale.caption.font(weight: .regular))
+                    .foregroundStyle(theme.color("fg-dim"))
+                    .lineLimit(1)
+                    .transition(.opacity)
+                    .task(id: notice) {
+                        try? await Task.sleep(for: .seconds(2))
+                        withAnimation { self.notice = nil }
+                    }
+            }
             switch recorder.owner(udid: udid) {
             case .user?:
                 ToolbarBtn(icon: "stop.circle.fill", tooltip: "Stop recording", isActive: true) {
@@ -198,6 +210,10 @@ struct DeviceEntryActions: View {
             .padding(scale.space[4])
     }
 
+    private func onNotice(_ text: String) {
+        withAnimation { notice = text }
+    }
+
     private func startRecording() {
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-recording-\(UUID().uuidString).\(platform == .ios ? "mov" : "mp4")")
@@ -263,9 +279,11 @@ struct DeviceEntryLiveActions: View {
                 onOpenLogs: {
                     state.openDeviceLogs(worktreeID: worktree.id, udid: simulator.udid, name: simulator.name, platform: .ios)
                 },
-                onScreenshot: { Self.saveScreenshot(state.simulatorStreams.lastFrame(udid: simulator.udid), name: simulator.name) },
+                onScreenshot: {
+                    let frame = await Self.latestFrame(simulator.udid, client: state.simulatorStreams)
+                    return Self.saveScreenshot(frame, name: simulator.name)
+                },
                 onShutDown: { Task { await state.devicePane.shutDown(simulator) } },
-                onNotice: { state.devicePane.show($0, udid: simulator.udid) },
                 agentName: { state.computerUseAgentName($0) }
             )
         case .android(let target, let stage):
@@ -285,7 +303,6 @@ struct DeviceEntryLiveActions: View {
                             await state.androidPane.shutDown(android)
                         }
                     } : nil,
-                    onNotice: { state.androidPane.show($0, serial: android.serial) },
                     agentName: { state.computerUseAgentName($0) }
                 )
             }
@@ -295,6 +312,19 @@ struct DeviceEntryLiveActions: View {
                 Task { await state.vmManager.stopVM(worktreeID: worktree.id, guest: guest) }
             }
         }
+    }
+
+    /// The simulator's latest frame. A collapsed or scrolled-away screen has
+    /// no stream, so one runs just long enough for a frame.
+    static func latestFrame(_ udid: String, client: SimulatorStreamClient) async -> DeviceFrame? {
+        if let frame = client.lastFrame(udid: udid) { return frame }
+        let token = client.subscribe(udid: udid, onFrame: { _ in }, onStop: { _ in })
+        defer { client.unsubscribe(udid: udid, token: token) }
+        for _ in 0..<60 {
+            try? await Task.sleep(for: .milliseconds(50))
+            if let frame = client.lastFrame(udid: udid) { return frame }
+        }
+        return nil
     }
 
     static func saveScreenshot(_ frame: DeviceFrame?, name: String) -> String {

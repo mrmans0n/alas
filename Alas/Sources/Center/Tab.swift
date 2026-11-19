@@ -370,7 +370,8 @@ struct DeviceTabState: Codable, Equatable, Identifiable {
         self.platform = platform
         self.deviceName = deviceName
         self.avdName = avdName
-        id = "device:\(deviceID)"
+        // An emulator's serial is reused by whichever AVD boots next, so its tab is its AVD's.
+        id = avdName.map { "device:avd:\($0)" } ?? "device:\(deviceID)"
     }
 }
 

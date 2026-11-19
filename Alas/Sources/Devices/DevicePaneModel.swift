@@ -115,7 +115,7 @@ final class DevicePaneModel {
         }
     }
 
-    func show(_ notice: String, udid: String) {
+    private func show(_ notice: String, udid: String) {
         notices[udid] = notice
         noticeTasks[udid]?.cancel()
         noticeTasks[udid] = Task { [weak self] in

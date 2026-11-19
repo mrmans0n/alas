@@ -256,7 +256,7 @@ enum DesignCaptureDevices {
                 kind: .simulator(simulator), ready: stage == .booted, control: control, recorder: fakeRecorder(),
                 flowRecorder: DeviceFlowRecorder(), worktree: FileManager.default.temporaryDirectory,
                 accessibilityOverlay: false, onToggleAccessibilityOverlay: {}, onOpenLogs: {},
-                onScreenshot: { "" }, onShutDown: {}, onNotice: { _ in }
+                onScreenshot: { "" }, onShutDown: {}
             )
         case .vm(_, let status):
             VMEntryActions(canStop: status == .running) {}
