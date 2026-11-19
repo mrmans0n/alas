@@ -83,6 +83,31 @@ import Testing
         #expect(RemoteGitRequest.pullRequest(replying: 4, in: found) == nil)
     }
 
+    @Test func phoneRunsTheMacsScripts() throws {
+        let ref = WorktreeRef(projectID: "p", path: "/r")
+        let decode = { (m: OpaqueHostMessage) in try JSONDecoder().decode(HostClientMessage.self, from: m.json).request }
+        #expect(try decode(RemoteGitRequest.listRunScripts(id: 1, projectID: "p", path: "/r")) == .listRunScripts(worktree: ref))
+        #expect(try decode(RemoteGitRequest.run(id: 1, .start, scriptKey: "repo:a", projectID: "p", path: "/r"))
+            == .startRun(scriptKey: "repo:a", worktree: ref))
+        #expect(try decode(RemoteGitRequest.run(id: 1, .restart, scriptKey: "repo:a", projectID: "p", path: "/r"))
+            == .restartRun(scriptKey: "repo:a", worktree: ref))
+        #expect(try decode(RemoteGitRequest.run(id: 1, .stop, scriptKey: "repo:a", projectID: "p", path: "/r"))
+            == .stopRun(scriptKey: "repo:a", worktree: ref))
+
+        func reply(_ result: HostResponse) throws -> OpaqueHostMessage {
+            OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 2, result: result)))
+        }
+        let script = HostRunScript(scope: .repo, fileName: "dev.sh", name: "Dev", cwd: nil, target: RunExecutionTarget(host: nil, workingDirectory: "/r"))
+        let scripts = try #require(RemoteGitRequest.runScripts(replying: 2, in: try reply(.runScripts(scripts: [script]))))
+        #expect(scripts.map(\.key) == [script.key] && scripts.map(\.name) == ["Dev"])
+        guard case .failure(let refused) = try #require(RemoteGitRequest.reply(
+            to: 2, in: try reply(.runStart(start: .refused(title: "No", message: "Approve the hook first."))))) else {
+            Issue.record("a refused launch read as started")
+            return
+        }
+        #expect(refused.message == "Approve the hook first.")
+    }
+
     @Test(arguments: [
         (HostError.worktreeDeletion(refusal: .needsForce("Uncommitted changes.")), "Uncommitted changes.", RemoteGitFailure.Overrule.force),
         (.worktreeArchive(refusal: .unsavedEdits), "An editor on the machine has unsaved changes in this worktree.", .discardUnsavedEdits),
