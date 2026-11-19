@@ -113,7 +113,8 @@ private struct ChangeList: View {
     @ViewBuilder private var content: some View {
         if !reply.metricsAvailable {
             ContentUnavailableView("Change metrics are unavailable for this worktree.", systemImage: "chart.bar.xaxis")
-        } else if sections.isEmpty {
+        } else if sections.isEmpty, workspace.pullRequest == nil {
+            // With a pull request, the list still shows it, as for a merged branch now level with its base.
             ContentUnavailableView("No changes yet.", systemImage: "checkmark.circle")
         } else {
             List {
