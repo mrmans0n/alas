@@ -34,9 +34,13 @@ final class AndroidPaneModel {
         guard let control else { return }
         do {
             let known = Dictionary((devices ?? []).map { ($0.serial, $0) }, uniquingKeysWith: { first, _ in first })
-            devices = try await control.devices(known: known)
-            avds = (try? await control.avds()) ?? avds
-            listError = nil
+            // Assigned only on a change: the poll runs every 3 seconds and the
+            // sidebar observes this list.
+            let fresh = try await control.devices(known: known)
+            if fresh != devices { devices = fresh }
+            let freshAVDs = (try? await control.avds()) ?? avds
+            if freshAVDs != avds { avds = freshAVDs }
+            if listError != nil { listError = nil }
         } catch {
             listError = error.localizedDescription
         }

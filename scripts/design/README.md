@@ -35,6 +35,11 @@ worktree with more tabs than its row badges; the local projects collapse so the 
 `peers-hover` hovers the section header to show the "+" pair control, and `peers-rename` opens the
 peer worktree rename sheet.
 
+Set `ALAS_CAPTURE_SIDEBAR` to `live-activity` to capture the demo project's rows with scripted
+live activity (`DesignCaptureLiveActivity`): VM, simulator and emulator glyphs, a stack ship
+linting 2/4 on the selected row, a failed ship, PR shepherds (watching, agent fixing, needs you)
+and a 4-PR stack shepherd. Only the rows' resolved values are scripted; no VM, device or agent runs.
+
 Set `ALAS_CAPTURE_CENTER` to `workspace-checkout` (or `workspace-checkout-bottom`, scrolled to the
 work items and review roll-ups) to capture the workspace checkout details sheet over a scripted
 three-repository checkout (one ready, one with a failed setup, one with a missing worktree, a stop

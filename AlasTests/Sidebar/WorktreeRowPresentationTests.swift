@@ -1,3 +1,4 @@
+import AlasCore
 import Foundation
 import SwiftUI
 import Testing
@@ -66,7 +67,9 @@ struct WorktreeRowPresentationTests {
     @Test func accessibilityLabelSaysEveryFieldARowCanHave() {
         let content = WorktreeRowAccessibilityContent(
             name: "feat/invoice-export",
+            ship: "Shipping stack · linting",
             statusNote: "1 file",
+            shepherd: "Shepherding #7, agent fixing",
             added: 48,
             deleted: 6,
             workspaceCheckout: "Workspace Release",
@@ -97,7 +100,9 @@ struct WorktreeRowPresentationTests {
     @Test func accessibilityLabelSkipsWhatARowDoesNotHave() {
         let label = WorktreeRowPresentation.accessibilityLabel(WorktreeRowAccessibilityContent(
             name: "main",
+            ship: nil,
             statusNote: nil,
+            shepherd: nil,
             added: 0,
             deleted: 0,
             workspaceCheckout: nil,
@@ -130,5 +135,181 @@ struct WorktreeRowPresentationTests {
             reachability: reachability
         )
         #expect(badge == expected)
+    }
+
+    // MARK: - Live activity
+
+    typealias Glyph = WorktreeRowPresentation.ResourceGlyph
+
+    private static let savedAt = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private static func vmGlyph(_ guest: VMGuestOS, _ state: WorktreeRowPresentation.ResourceState, count: Int, _ tooltip: String) -> Glyph {
+        Glyph(kind: .vm(guest), state: state, count: count, tooltip: tooltip, deviceID: nil)
+    }
+
+    @Test(arguments: [
+        ([.macOS: .running], [Self.vmGlyph(.macOS, .on, count: 1, "macOS VM running")]),
+        ([.macOS: .running, .linux: .starting],
+         [Self.vmGlyph(.linux, .starting, count: 2, "macOS VM running, Linux VM starting")]),
+        ([.macOS: .pausing], [Self.vmGlyph(.macOS, .starting, count: 1, "macOS VM pausing")]),
+        ([.linux: .paused(savedAt: Self.savedAt)], [Self.vmGlyph(.linux, .paused, count: 1, "Linux VM paused")]),
+        ([.macOS: .stopped, .linux: .notCreated], []),
+        ([.macOS: .runningElsewhere(label: "other")], []),
+    ] as [([VMGuestOS: VMDeviceStatus], [Glyph])])
+    func vmsCollapseToOneGlyphInTheStrongestState(vms: [VMGuestOS: VMDeviceStatus], expected: [Glyph]) {
+        #expect(WorktreeRowPresentation.resourceGlyphs(vms: vms, devices: []) == expected)
+    }
+
+    @Test func devicesShowOneGlyphPerPlatformAndSkipShutDownOnes() {
+        typealias Device = WorktreeRowPresentation.OwnedDevice
+        let glyphs = WorktreeRowPresentation.resourceGlyphs(vms: [:], devices: [
+            Device(id: "A", name: "iPhone 17 Pro", isAndroid: false, isEmulator: false, state: .on),
+            Device(id: "B", name: "iPad", isAndroid: false, isEmulator: false, state: nil),
+            Device(id: "C", name: "Pixel 9", isAndroid: true, isEmulator: true, state: .starting),
+            Device(id: "D", name: "Pixel 8", isAndroid: true, isEmulator: false, state: .on),
+        ])
+        #expect(glyphs == [
+            Glyph(kind: .iosSimulator, state: .on, count: 1, tooltip: "iPhone 17 Pro booted", deviceID: "A"),
+            Glyph(kind: .androidEmulator, state: .starting, count: 2,
+                  tooltip: "Pixel 9 (emulator) booting, Pixel 8 booted", deviceID: "C"),
+        ])
+        let shutDown = [Device(id: "B", name: "iPad", isAndroid: false, isEmulator: false, state: nil)]
+        #expect(WorktreeRowPresentation.resourceGlyphs(vms: [:], devices: shutDown).isEmpty)
+    }
+
+    @Test(arguments: [
+        (StackShipActivity.running(sessionID: "s", progress: StackShipProgress(phase: .linting, position: 2, totalEntries: 4)),
+         "Shipping stack · linting", 2 as Int?, 4 as Int?),
+        (.running(sessionID: "s", progress: StackShipProgress(phase: .checking, position: 1, totalEntries: 4)),
+         "Shipping stack · checking", nil, nil),
+    ])
+    func runningShipShowsPhaseAndBarOnlyWhileLintingOrPushing(
+        activity: StackShipActivity, title: String, position: Int?, total: Int?
+    ) {
+        let line = WorktreeRowPresentation.shipLine(activity)
+        #expect(line?.title == title)
+        #expect(line?.position == position)
+        #expect(line?.total == total)
+        #expect(line?.isFailure == false)
+        #expect(line?.sessionID == "s")
+    }
+
+    /// The title is the first line, cut at 60 characters; the tooltip keeps the whole message.
+    @Test(arguments: [
+        ("gg sync failed\nmore", "Ship failed: gg sync failed"),
+        ("  \n", "Ship failed"),
+        (String(repeating: "x", count: 80), "Ship failed: " + String(repeating: "x", count: 60) + "…"),
+    ])
+    func failedShipTitlesTheFirstLineAndKeepsTheMessageInTheTooltip(message: String, title: String) {
+        let line = WorktreeRowPresentation.shipLine(.failed(sessionID: "s", message: message))
+        #expect(line?.title == title)
+        #expect(line?.tooltip == message)
+        #expect(line?.isFailure == true)
+    }
+
+    private static let remote = CodeHostRemote(
+        kind: .github, host: "github.com", owner: "acme", repository: "app",
+        remoteName: "origin", webURL: URL(string: "https://github.com/acme/app")!
+    )
+
+    private static func prRecord(_ phase: ShepherdPhase, number: Int = 7) -> ShepherdRecord {
+        var record = ShepherdRecord(
+            id: ShepherdRecordID(worktreeID: "wt", providerKind: .github, host: remote.host,
+                                 repositorySlug: remote.repositorySlug, requestNumber: number),
+            sessionID: "pr-session", remote: remote, branch: "b", baseBranch: "main",
+            autoFix: true, autoMerge: false, now: savedAt
+        )
+        record.phase = phase
+        return record
+    }
+
+    private static func stackRecord(_ phases: [ShepherdPhase]) -> StackShepherdRecord {
+        let entries = phases.enumerated().map { index, phase in
+            StackShepherdEntry(entryID: "e\(index)", position: index + 1, title: "t",
+                               shepherd: prRecord(phase, number: 10 + index))
+        }
+        return StackShepherdRecord(
+            id: StackShepherdRecordID(worktreeID: "wt", stackName: "s"), sessionID: "stack-session",
+            remote: remote, base: "main", autoFix: true, entries: entries, now: savedAt
+        )
+    }
+
+    @Test(arguments: [
+        (ShepherdPhase.watching, nil as String?, false),
+        (.fixing(dispatchedAt: Self.savedAt), "agent fixing", false),
+        (.merging, "merging", false),
+        (.queued, "in merge queue", false),
+        (.escalated(.attemptsExhausted), "needs you", true),
+        (.paused, "needs you", true),
+    ])
+    func prShepherdMapsItsBadgeToANote(phase: ShepherdPhase, note: String?, isLoud: Bool) {
+        let result = WorktreeRowPresentation.shepherdNote(pr: Self.prRecord(phase), stack: nil)
+        #expect(result?.number == "#7")
+        #expect(result?.note == note)
+        #expect(result?.isLoud == isLoud)
+        #expect(result?.sessionID == "pr-session")
+        #expect(result?.replacesStackChip == false)
+    }
+
+    @Test(arguments: [
+        (Self.prRecord(.merged), nil),
+        (Self.prRecord(.closed), nil),
+        (nil, Self.stackRecord([.merged, .merged])),
+    ] as [(ShepherdRecord?, StackShepherdRecord?)])
+    func finishedShepherdsSayNothing(pr: ShepherdRecord?, stack: StackShepherdRecord?) {
+        #expect(WorktreeRowPresentation.shepherdNote(pr: pr, stack: stack) == nil)
+    }
+
+    @Test(arguments: [
+        ([ShepherdPhase.merged, .watching, .watching, .watching], "4 PRs", "1 merged" as String?, false),
+        ([.watching], "1 PR", nil, false),
+        ([.watching, .fixing(dispatchedAt: Self.savedAt)], "2 PRs", "agent fixing", false),
+        ([.watching, .escalated(.noProgress)], "2 PRs", "need you", true),
+        ([.watching, .paused], "2 PRs", "need you", true),
+    ])
+    func stackShepherdCountsItsPRsAndStandsInForTheStackChip(
+        phases: [ShepherdPhase], number: String, note: String?, isLoud: Bool
+    ) {
+        let result = WorktreeRowPresentation.shepherdNote(pr: nil, stack: Self.stackRecord(phases))
+        #expect(result?.number == number)
+        #expect(result?.note == note)
+        #expect(result?.isLoud == isLoud)
+        #expect(result?.replacesStackChip == true)
+        #expect(result?.sessionID == "stack-session")
+    }
+
+    /// The note reads the shepherd's last gate, so it says what its controls say.
+    @Test func passingMergeGateReadsReadyToMerge() {
+        let pr = WorktreeRowPresentation.shepherdNote(
+            pr: Self.prRecord(.watching), stack: nil, seen: .init(prGatePasses: true)
+        )
+        let stack = WorktreeRowPresentation.shepherdNote(
+            pr: nil, stack: Self.stackRecord([.watching, .watching]), seen: .init(stackGatePasses: true)
+        )
+        #expect(pr?.note == "ready to merge")
+        #expect(stack?.note == "ready to merge")
+    }
+
+    @Test func stackShepherdBeatsAPRShepherd() {
+        let result = WorktreeRowPresentation.shepherdNote(
+            pr: Self.prRecord(.watching), stack: Self.stackRecord([.watching, .watching])
+        )
+        #expect(result?.sessionID == "stack-session")
+    }
+
+    /// A linked record's row runs on another machine, so nothing local shows on it.
+    @Test func rowOnAnotherMachineShowsNoLiveActivity() {
+        let ship = StackShipActivity.running(
+            sessionID: "s", progress: StackShipProgress(phase: .pushing, position: 1, totalEntries: 2)
+        )
+        let activity = { (hasMachineBadge: Bool) in
+            WorktreeRowPresentation.liveActivity(
+                hasMachineBadge: hasMachineBadge, vms: [.macOS: .running], devices: [],
+                ship: ship, pr: Self.prRecord(.watching), stack: nil
+            )
+        }
+        #expect(activity(true) == .none)
+        #expect(activity(false).ship != nil)
+        #expect(activity(false).glyphs.map(\.kind) == [.vm(.macOS)])
     }
 }

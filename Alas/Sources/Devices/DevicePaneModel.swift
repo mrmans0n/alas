@@ -131,10 +131,13 @@ final class DevicePaneModel {
     func refresh() async {
         do {
             let before = Set((devices ?? []).filter { $0.state == .booted }.map(\.udid))
-            devices = try await SimulatorControl.devices()
-            let booted = Set((devices ?? []).filter { $0.state == .booted }.map(\.udid))
+            // Assigned only on a change: the poll runs every 3 seconds and the
+            // sidebar observes this list.
+            let fresh = try await SimulatorControl.devices()
+            if fresh != devices { devices = fresh }
+            let booted = Set(fresh.filter { $0.state == .booted }.map(\.udid))
             before.subtracting(booted).forEach(onShutDown)
-            listError = nil
+            if listError != nil { listError = nil }
         } catch {
             listError = error.localizedDescription
         }
