@@ -607,6 +607,8 @@ enum DesignCaptureBridge {
                 MainActor.assumeIsolated { if let state { DesignCaptureSidebar.open(target, state: state) } }
             } else if DesignCaptureWorkspace.targets.contains(target) {
                 MainActor.assumeIsolated { if let state { DesignCaptureWorkspace.open(target, state: state) } }
+            } else if DesignCaptureAgentBadges.targets.contains(target) {
+                MainActor.assumeIsolated { if let state { DesignCaptureAgentBadges.open(target, state: state) } }
             } else if DesignCaptureVM.targets.contains(target) {
                 MainActor.assumeIsolated { if let state { DesignCaptureVM.open(target, state: state) } }
             } else if DesignCaptureDevices.targets.contains(target) {

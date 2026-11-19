@@ -748,6 +748,7 @@
 		5E5600E6451068BCBF732ABD /* ACPChipStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 239125BB939233233D405EB8 /* ACPChipStateTests.swift */; };
 		5EA1AA5C8D9DE003BACE8291 /* AlasGhostty.Surface.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7E76CA315A7B08E09A80AA8 /* AlasGhostty.Surface.swift */; };
 		5F7E14A0D7E1D3F036806B73 /* MergeOperationStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D8D902B9FF4F44E5C2C7F03 /* MergeOperationStateTests.swift */; };
+		5FD6E9FD3C145A574D0C908B /* DesignCaptureAgentBadges.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C746B0BF5158D1527EB91C5 /* DesignCaptureAgentBadges.swift */; };
 		603D2F40A0368A139822CE80 /* ACPLaunchCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B29505F108227C8F43822585 /* ACPLaunchCatalogTests.swift */; };
 		604583AA3E3CE525933DA2AA /* EditorBufferExternalEditableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DEE18D06DCB7DE3C8C8D91A /* EditorBufferExternalEditableTests.swift */; };
 		6094D26DB816FAD6FD9BE7F9 /* DiffReviewSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD3B3FF5D7B8F892ED1972A8 /* DiffReviewSurface.swift */; };
@@ -2534,6 +2535,7 @@
 		3C06990EACEFA71B084E1EAE /* RepoMCPTrustBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoMCPTrustBanner.swift; sourceTree = "<group>"; };
 		3C11E5A14C49BFACFCA91DBA /* AndroidBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidBackend.swift; sourceTree = "<group>"; };
 		3C1D134CB4D4CEDED993FB10 /* InAppNotificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InAppNotificationTests.swift; sourceTree = "<group>"; };
+		3C746B0BF5158D1527EB91C5 /* DesignCaptureAgentBadges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignCaptureAgentBadges.swift; sourceTree = "<group>"; };
 		3C860C82F92CF8B7CC58FF4D /* BlockedNudgeBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedNudgeBanner.swift; sourceTree = "<group>"; };
 		3C9032BA9542C617A09EF848 /* HoverWindowControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverWindowControllerTests.swift; sourceTree = "<group>"; };
 		3CE948F94DB2759E66CD4DEF /* ProjectPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectPicker.swift; sourceTree = "<group>"; };
@@ -7204,6 +7206,7 @@
 				E327960BBFE5331FAA5AC507 /* AppState+WorktreeCleanupReminders.swift */,
 				57DEA304B6038D986A372150 /* BundledFontRegistrar.swift */,
 				417CDD7CCA0D0A86E9EE281F /* CenterSelectionState.swift */,
+				3C746B0BF5158D1527EB91C5 /* DesignCaptureAgentBadges.swift */,
 				5E2962ECDE23ED56E609C0FC /* DesignCaptureAttention.swift */,
 				9EEC3FAC9460568D825F8DF1 /* DesignCaptureCode.swift */,
 				8BBC29E1C801289268BA6A1E /* DesignCaptureDemoPeer.swift */,
@@ -8075,6 +8078,7 @@
 				884F7EB87029E537B923191E /* DefinitionPicker.swift in Sources */,
 				ACD22D2C262833B77006E8BE /* DeleteFailedWorktreeView.swift in Sources */,
 				512A41C0AB75B8D35424EBCD /* DeletingWorktreeView.swift in Sources */,
+				5FD6E9FD3C145A574D0C908B /* DesignCaptureAgentBadges.swift in Sources */,
 				F337A6B7FDB895D87FCAD809 /* DesignCaptureAttention.swift in Sources */,
 				48D793FBEF8A9D1ABDABE2F4 /* DesignCaptureCode.swift in Sources */,
 				997EBD6A47ACA408CD0FD6C8 /* DesignCaptureDemoPeer.swift in Sources */,
