@@ -45,6 +45,7 @@ struct SidebarView: View {
                 choice: state.config.sidebarMaterial,
                 backgroundOpacity: override.backgroundOpacity
             )
+            DeviceStatusKeeper(state: state)
             VStack(spacing: 0) {
                 SidebarAttentionHeader(
                     state: state,
@@ -471,14 +472,37 @@ struct SidebarView: View {
                 vms[guest] = sidebarVMStatus(worktreeID: wt.id, guest: guest)
             }
         }
+        let pr = state.reviewShepherd.record(forWorktree: wt.id)
+        let stack = state.stackShepherd.activeRecord(forWorktree: wt.id)
         return WorktreeRowPresentation.liveActivity(
             hasMachineBadge: false,
             vms: vms,
             devices: ownedDevices(worktreeID: wt.id),
             ship: state.core.stackShipActivity[wt.id],
-            pr: state.reviewShepherd.record(forWorktree: wt.id),
-            stack: state.stackShepherd.activeRecord(forWorktree: wt.id)
+            pr: pr,
+            stack: stack,
+            seen: shepherdObservations(pr: pr, stack: stack)
         )
+    }
+
+    /// What the shepherds last saw, read the way `HostSessionShepherd` reads
+    /// it. Only a row with a shepherd reads these, so the rest never redraw
+    /// on a shepherd's poll.
+    private func shepherdObservations(
+        pr: ShepherdRecord?,
+        stack: StackShepherdRecord?
+    ) -> WorktreeRowPresentation.ShepherdObservations {
+        var seen = WorktreeRowPresentation.ShepherdObservations()
+        if let stack, !stack.isFinished {
+            seen.stackRequests = state.stackShepherd.requests[stack.id] ?? [:]
+            seen.stackGatePasses = state.stackShepherd.gatePasses[stack.id] ?? false
+        } else if let pr {
+            // A snapshot of another request on the branch doesn't describe this record.
+            seen.prRequest = state.reviewShepherd.snapshots[pr.id]?.reviewRequest
+                .flatMap { ShepherdRecordID(worktreeID: pr.id.worktreeID, request: $0) == pr.id ? $0 : nil }
+            seen.prGatePasses = state.reviewShepherd.gatePasses[pr.id] ?? false
+        }
+        return seen
     }
 
     /// A device glyph's click: selects the row's worktree, makes sure it has a

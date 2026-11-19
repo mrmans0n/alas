@@ -5,7 +5,7 @@ extension AppState {
     /// Runs a `device_*` tool call from an agent session in `worktreeID`.
     func performDeviceCommand(_ command: DeviceCommand, sessionID: String, worktreeID: String?) async -> AlasCLIResponse {
         guard config.deviceAgentsEnabled else { return .error(DeviceAgentControl.disabled) }
-        if let udid = command.udid, let worktreeID { deviceUseTracker.noteUse(deviceID: udid, worktreeID: worktreeID) }
+        if let udid = command.udid, let worktreeID { noteDeviceUse(udid, worktreeID: worktreeID) }
         let response = await deviceControl.perform(command, sessionID: sessionID)
         if case .open(let udid) = command, case .text = response {
             showDevice(udid, in: worktreeID)
@@ -17,7 +17,7 @@ extension AppState {
     func showDevice(_ udid: String, in worktreeID: String?) {
         Task { await devicePane.refresh() }
         guard let worktreeID, let pane = rightPaneStore.activeState(worktreeId: worktreeID) else { return }
-        deviceUseTracker.noteUse(deviceID: udid, worktreeID: worktreeID)
+        noteDeviceUse(udid, worktreeID: worktreeID)
         pane.devicesSelection = AgentDevice.isSimulatorID(udid) ? .simulator(udid) : .android(udid)
         pane.activeTab = .device
         if !config.rightPaneVisible {

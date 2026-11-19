@@ -278,6 +278,18 @@ struct WorktreeRowPresentationTests {
         #expect(result?.sessionID == "stack-session")
     }
 
+    /// The note reads the shepherd's last gate, so it says what its controls say.
+    @Test func passingMergeGateReadsReadyToMerge() {
+        let pr = WorktreeRowPresentation.shepherdNote(
+            pr: Self.prRecord(.watching), stack: nil, seen: .init(prGatePasses: true)
+        )
+        let stack = WorktreeRowPresentation.shepherdNote(
+            pr: nil, stack: Self.stackRecord([.watching, .watching]), seen: .init(stackGatePasses: true)
+        )
+        #expect(pr?.note == "ready to merge")
+        #expect(stack?.note == "ready to merge")
+    }
+
     @Test func stackShepherdBeatsAPRShepherd() {
         let result = WorktreeRowPresentation.shepherdNote(
             pr: Self.prRecord(.watching), stack: Self.stackRecord([.watching, .watching])

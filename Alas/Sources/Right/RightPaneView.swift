@@ -314,7 +314,7 @@ struct RightPaneView: View {
                 rps.devicesSelection = $0
                 switch $0 {
                 case .simulator(let id), .android(let id):
-                    state.deviceUseTracker.noteUse(deviceID: id, worktreeID: worktree.id)
+                    state.noteDeviceUse(id, worktreeID: worktree.id)
                 default:
                     break
                 }

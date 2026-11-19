@@ -242,11 +242,27 @@ extension WorktreeRowPresentation {
         let replacesStackChip: Bool
     }
 
+    /// What the shepherds last saw, so a note reads the same as their
+    /// controls: ready to merge, or needing you over a failing check with
+    /// auto-fix off. The defaults are a shepherd that has seen nothing yet.
+    struct ShepherdObservations {
+        var prRequest: ReviewRequest? = nil
+        var prGatePasses = false
+        var stackRequests: [Int: ReviewRequest] = [:]
+        var stackGatePasses = false
+    }
+
     /// A stack shepherd wins over a single PR's. Finished and idle shepherds
     /// say nothing.
-    nonisolated static func shepherdNote(pr: ShepherdRecord?, stack: StackShepherdRecord?) -> ShepherdNote? {
+    nonisolated static func shepherdNote(
+        pr: ShepherdRecord?,
+        stack: StackShepherdRecord?,
+        seen: ShepherdObservations = ShepherdObservations()
+    ) -> ShepherdNote? {
         if let stack, !stack.isFinished {
-            let presentation = ShepherdPresentation.make(stack: stack, requests: [:], gatePasses: false)
+            let presentation = ShepherdPresentation.make(
+                stack: stack, requests: seen.stackRequests, gatePasses: seen.stackGatePasses
+            )
             let merged = stack.entries.filter { $0.shepherd.phase == .merged }.count
             guard let (note, isLoud) = shepherdWording(presentation.badge, loud: "need you") else { return nil }
             let count = stack.entries.count
@@ -259,7 +275,9 @@ extension WorktreeRowPresentation {
             )
         }
         guard let pr else { return nil }
-        let presentation = ShepherdPresentation.make(record: pr, request: nil, mergeGatePasses: false)
+        let presentation = ShepherdPresentation.make(
+            record: pr, request: seen.prRequest, mergeGatePasses: seen.prGatePasses
+        )
         guard let (note, isLoud) = shepherdWording(presentation.badge, loud: "needs you") else { return nil }
         return ShepherdNote(
             number: presentation.number ?? "", note: note, isLoud: isLoud,
@@ -301,13 +319,14 @@ extension WorktreeRowPresentation {
         devices: [OwnedDevice],
         ship: StackShipActivity?,
         pr: ShepherdRecord?,
-        stack: StackShepherdRecord?
+        stack: StackShepherdRecord?,
+        seen: ShepherdObservations = ShepherdObservations()
     ) -> LiveActivity {
         guard !hasMachineBadge else { return .none }
         return LiveActivity(
             glyphs: resourceGlyphs(vms: vms, devices: devices),
             ship: shipLine(ship),
-            shepherd: shepherdNote(pr: pr, stack: stack)
+            shepherd: shepherdNote(pr: pr, stack: stack, seen: seen)
         )
     }
 }
