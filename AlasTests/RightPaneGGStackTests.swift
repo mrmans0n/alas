@@ -1783,6 +1783,9 @@ struct RightPaneGGStackTests {
         app.startProjectGitWatcher(for: project)
         let changedRef = activeHeadChanges ? "refs/heads/feature" : "refs/remotes/origin/upper-entry"
         watcher.processEvents([gitDir.standardizedFileURL.appendingPathComponent(changedRef).path])
+        // A gate reevaluation, like the one after the startup gg probe, lands
+        // while the HEAD check is still reading git; it must not drop the check.
+        app.rightPaneStore.reevaluateGGGates()
         await runner.waitUntilCall(2)
         #expect(preparationIsVisible() == !activeHeadChanges)
         #expect(state.currentHeadSHA == liveHeadSHA)
