@@ -33,7 +33,7 @@ import Testing
         (HostResponse.done, nil),
         (.failure(error: .failed(message: "Nothing is staged to commit.")), "Nothing is staged to commit."),
         (.failure(error: .operationInProgress), "Another operation is running in this worktree. Try again when it finishes."),
-        (.failure(error: .session(refusal: .notWriter)), "Another device is driving this session."),
+        (.failure(error: .session(refusal: .notWriter)), "Take over this session first."),
     ] as [(HostResponse, String?)])
     func phoneReadsTheMacsGitReply(result: HostResponse, failure: String?) throws {
         let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 7, result: result)))

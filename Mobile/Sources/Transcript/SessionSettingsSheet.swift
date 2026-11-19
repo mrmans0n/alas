@@ -73,7 +73,7 @@ struct SessionSettingsSheet: View {
                                 }
                             }
                             if let d = option.description, !d.isEmpty {
-                                Text(d).font(.caption).foregroundStyle(.secondary)
+                                Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                             }
                         }
                         .tag(option.id)

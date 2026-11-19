@@ -23,6 +23,8 @@ struct TranscriptScreen: View {
     @State private var renamedBranch = ""
     @State private var confirmingArchive = false
     @State private var actionError: String?
+    /// What a slow worktree or session action is doing, shown until the host answers.
+    @State private var progress: String?
     /// The worktree a Delete awaits confirmation for, as it was when the user asked.
     @State private var deleting: SessionWorkspace.RemovalTarget?
     /// A worktree removal the host refused in a way the user may overrule.
@@ -245,6 +247,14 @@ struct TranscriptScreen: View {
                     }
                 }
             }
+            .overlay {
+                if let busy = progress ?? (session.tabAction == .close ? "Closing session…" : nil) {
+                    ProgressView(busy)
+                        .padding(20)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+            }
+            .disabled(progress != nil)
             .sheet(isPresented: $showSettings) { SessionSettingsSheet(session: session) }
             .alert("Couldn't do that", isPresented: Binding { session.tabActionError != nil } set: { if !$0 { session.tabActionError = nil } }) {
                 Button("OK", role: .cancel) {}
@@ -274,6 +284,8 @@ struct TranscriptScreen: View {
             .confirmationDialog("Archive this session?", isPresented: $confirmingArchive, titleVisibility: .visible) {
                 Button("Archive", role: .destructive) {
                     Task {
+                        progress = "Archiving session…"
+                        defer { progress = nil }
                         if let error = await workspace.archiveSession() { actionError = error } else { dismiss() }
                     }
                 }
@@ -325,6 +337,8 @@ struct TranscriptScreen: View {
     private func removeWorktree(_ workspace: SessionWorkspace, _ removal: SessionWorkspace.WorktreeRemoval,
                                 of target: SessionWorkspace.RemovalTarget, force: Bool = false, discard: Bool = false) {
         Task {
+            progress = removal == .delete ? "Deleting worktree…" : "Archiving worktree…"
+            defer { progress = nil }
             guard let failure = await workspace.removeWorktree(removal, of: target, force: force, discard: discard) else { return dismiss() }
             if failure.overrule != nil {
                 overruling = Overruling(removal: removal, target: target, failure: failure, force: force, discard: discard)
