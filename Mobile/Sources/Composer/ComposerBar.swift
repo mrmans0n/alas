@@ -259,7 +259,7 @@ struct ComposerBar: View {
 
     private var takeOverPill: some View {
         Button { session.takeOver() } label: {
-            Label("Another device is driving. Take over", systemImage: "hand.raised")
+            Label("Take over to drive this session", systemImage: "hand.raised")
                 .font(.footnote.weight(.medium))
                 .padding(.horizontal, 14).padding(.vertical, 8)
         }
