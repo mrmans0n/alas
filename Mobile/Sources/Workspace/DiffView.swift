@@ -17,7 +17,7 @@ struct DiffView: View {
             }
         }
         .navigationTitle(workspace.diff?.key.path.split(separator: "/").last.map(String.init) ?? "Diff")
-        .navigationSubtitle(workspace.diff?.key.stage?.capitalized ?? "")
+        .navigationSubtitle(workspace.diff.map { $0.key.sha.map { String($0.prefix(7)) } ?? $0.key.stage?.capitalized ?? "" } ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
         // Backstop for a pop that skips the destination binding (a stack reset to the root).
