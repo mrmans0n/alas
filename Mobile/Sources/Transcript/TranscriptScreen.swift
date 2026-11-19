@@ -17,6 +17,11 @@ struct TranscriptScreen: View {
     @State private var showSettings = false
     @State private var renaming = false
     @State private var newTitle = ""
+    @State private var renamingBranch = false
+    @State private var newBranch = ""
+    @State private var confirmingArchive = false
+    @State private var actionError: String?
+    @Environment(\.dismiss) private var dismiss
     /// The worktree whose terminals are pushed from this screen.
     @State private var terminalsWorktree: String?
     /// The subagent whose transcript is pushed from this screen; it reads through this screen's session.
@@ -170,10 +175,19 @@ struct TranscriptScreen: View {
                         renaming = true
                     }
                     Button("Session Settings", systemImage: "slider.horizontal.3") { showSettings = true }
+                    if let branch = workspace.renamableBranch {
+                        Button("Rename Branch…", systemImage: "arrow.triangle.branch") {
+                            newBranch = branch
+                            renamingBranch = true
+                        }
+                    }
                     if session.supportsSessionTabs {
                         Button("Close Session", systemImage: "xmark.circle") { session.closeTab() }
                             .disabled(session.tabAction != nil)
                     }
+                }
+                if workspace.canArchive {
+                    Button("Archive Session", systemImage: "archivebox", role: .destructive) { confirmingArchive = true }
                 }
             }
             .toolbar {
@@ -207,6 +221,29 @@ struct TranscriptScreen: View {
                 TextField("Title", text: $newTitle)
                 Button("Cancel", role: .cancel) {}
                 Button("Rename") { session.rename(newTitle) }
+            }
+            .alert("Rename Branch", isPresented: $renamingBranch) {
+                TextField("Branch", text: $newBranch).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("Cancel", role: .cancel) {}
+                Button("Rename") {
+                    let branch = newBranch.trimmingCharacters(in: .whitespaces)
+                    guard !branch.isEmpty, branch != workspace.renamableBranch else { return }
+                    Task { actionError = await workspace.renameBranch(to: branch) }
+                }
+            }
+            .confirmationDialog("Archive this session?", isPresented: $confirmingArchive, titleVisibility: .visible) {
+                Button("Archive", role: .destructive) {
+                    Task {
+                        if let error = await workspace.archiveSession() { actionError = error } else { dismiss() }
+                    }
+                }
+            } message: {
+                Text("The session stops and leaves the session list.")
+            }
+            .alert("Couldn't do that", isPresented: Binding { actionError != nil } set: { if !$0 { actionError = nil } }) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(actionError ?? "")
             }
     }
 

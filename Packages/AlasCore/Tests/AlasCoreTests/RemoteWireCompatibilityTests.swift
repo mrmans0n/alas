@@ -48,6 +48,15 @@ import Testing
             == HostClientMessage(id: 4, request: .shepherdSession(sessionID: "s", action: .enableAutoMerge)))
     }
 
+    @Test func phoneLifecycleRequestsDecodeOnTheMac() throws {
+        let archive = RemoteGitRequest.archiveSession(id: 5, sessionID: "s").json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: archive)
+            == HostClientMessage(id: 5, request: .archiveSession(sessionID: "s")))
+        let rename = RemoteGitRequest.renameBranch(id: 6, projectID: "p", path: "/r", from: "a", to: "b").json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: rename) == HostClientMessage(
+            id: 6, request: .renameBranch(worktree: WorktreeRef(projectID: "p", path: "/r"), from: "a", to: "b")))
+    }
+
     @Test func phoneReadsASessionsShepherdFromTheMacsList() throws {
         func summary(_ id: String, _ shepherd: HostSessionShepherd?) -> HostSessionSummary {
             var summary = HostSessionSummary(owner: .worktree("w"), id: id, agentId: "codex", title: "t", remoteSessionId: nil,

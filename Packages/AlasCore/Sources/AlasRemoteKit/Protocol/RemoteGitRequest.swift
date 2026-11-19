@@ -28,16 +28,27 @@ public enum RemoteGitRequest {
 
     public static func message(id: Int, projectID: String, path: String, branch: String,
                                change: RemoteGitChange) -> OpaqueHostMessage {
-        let body: [String: Any] = [
-            "version": hostProtocolVersion,
-            "id": id,
-            "request": ["mutateWorktree": [
-                "worktree": ["projectID": projectID, "path": path],
-                "branch": branch,
-                "change": encode(change),
-            ]],
-        ]
         // Only strings, numbers, arrays and dictionaries: serialization cannot fail.
+        envelope(id: id, ["mutateWorktree": [
+            "worktree": ["projectID": projectID, "path": path],
+            "branch": branch,
+            "change": encode(change),
+        ]])
+    }
+
+    /// Archives session `sessionID` (`HostRequest.archiveSession`); answered like a git action.
+    public static func archiveSession(id: Int, sessionID: String) -> OpaqueHostMessage {
+        envelope(id: id, ["archiveSession": ["sessionID": sessionID]])
+    }
+
+    /// Renames the worktree's branch `from`, as the phone last saw it, to `to`
+    /// (`HostRequest.renameBranch`); answered like a git action.
+    public static func renameBranch(id: Int, projectID: String, path: String, from: String, to: String) -> OpaqueHostMessage {
+        envelope(id: id, ["renameBranch": ["worktree": ["projectID": projectID, "path": path], "from": from, "to": to]])
+    }
+
+    private static func envelope(id: Int, _ request: [String: Any]) -> OpaqueHostMessage {
+        let body: [String: Any] = ["version": hostProtocolVersion, "id": id, "request": request]
         return OpaqueHostMessage(json: (try? JSONSerialization.data(withJSONObject: body, options: .sortedKeys)) ?? Data())
     }
 

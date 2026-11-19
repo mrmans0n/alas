@@ -238,6 +238,34 @@ final class SessionWorkspace {
         }
     }
 
+    // MARK: Lifecycle
+
+    /// The branch the session's worktree is on, when the host lets the phone rename it.
+    var renamableBranch: String? {
+        hub.supports(HostProtocolCapability.worktreesRenameBranchV1, on: hostID) ? gitTarget?.worktree.branch : nil
+    }
+
+    /// Renames the worktree's branch, then refreshes the changes. Returns the host's refusal, or nil.
+    func renameBranch(to branch: String) async -> String? {
+        guard let target = gitTarget else { return "This worktree can't be changed from here." }
+        defer { refreshChanges() }
+        return await hostRequest {
+            RemoteGitRequest.renameBranch(id: $0, projectID: target.projectID, path: target.worktree.path,
+                                          from: target.worktree.branch, to: branch)
+        }
+    }
+
+    /// A session this host runs itself; one a gateway relays lives on another Mac.
+    var canArchive: Bool {
+        hub.sessions(of: hostID).first { $0.id == sessionId }?.serverId == nil
+            && hub.supports(HostProtocolCapability.sessionsV1, on: hostID)
+    }
+
+    /// Returns the host's refusal, worded for the user, or nil once the session is archived.
+    func archiveSession() async -> String? {
+        await hostRequest { RemoteGitRequest.archiveSession(id: $0, sessionID: self.sessionId) }
+    }
+
     // MARK: Shepherd
 
     /// A session this host runs itself, on a host that lets the phone shepherd it.
