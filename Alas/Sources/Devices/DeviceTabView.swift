@@ -44,8 +44,12 @@ struct DeviceTabView: View {
     @ViewBuilder
     private func notRunning(_ devices: DevicesTabState) -> some View {
         let rows = devices.simulatorRows + devices.androidRows
-        let row = rows.first { $0.target == tab.target }
-            ?? tab.avdName.flatMap { avd in rows.first { $0.target == .android(AndroidListing.avdID(avd)) } }
+        // An emulator's tab is its AVD's: its old serial may be another AVD's by now.
+        let row = if let avd = tab.avdName {
+            rows.first { $0.target == .android(AndroidListing.avdID(avd)) }
+        } else {
+            rows.first { $0.target == tab.target }
+        }
         let symbol = tab.platform == .ios ? "iphone" : "candybarphone"
         if let row, row.canBoot {
             let error = state.bootError(row.target)
