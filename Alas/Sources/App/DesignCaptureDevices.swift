@@ -259,7 +259,7 @@ enum DesignCaptureDevices {
                 onScreenshot: { "" }, onShutDown: {}, onNotice: { _ in }
             )
         case .vm(_, let status):
-            VMEntryActions(running: status == .running) {}
+            VMEntryActions(canStop: status == .running) {}
         case .android:
             EmptyView()
         }

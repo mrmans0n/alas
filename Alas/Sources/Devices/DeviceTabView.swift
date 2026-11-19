@@ -28,6 +28,7 @@ struct DeviceTabView: View {
                     DeviceEntryLiveActions(state: state, worktree: worktree, device: device)
                 }
                 .padding(.horizontal, 8) // design-literal: matches the rail's padding
+                .simultaneousGesture(TapGesture().onEnded { state.useDevice(device.id, worktreeID: worktree.id) })
                 Divider()
                 DeviceEntryStage(
                     state: state, worktree: worktree, screen: device.screen, now: now,

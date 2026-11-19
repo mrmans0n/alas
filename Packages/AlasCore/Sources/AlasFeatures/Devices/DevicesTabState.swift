@@ -224,7 +224,8 @@ public struct DevicesTabState: Equatable, Sendable {
             case .notCreated, .stopped, .paused, .runningElsewhere: return nil
             }
         }
-        let running = runningSimulators.sorted(by: byName) + runningAndroid.sorted(by: byName) + runningVMs
+        let running = runningSimulators.sorted(by: byName) + runningAndroid.sorted(by: byName)
+            + runningVMs.sorted(by: byName)
 
         let offerable = simulatorRows.filter(\.canBoot) + androidRows.filter(\.canBoot) + vmRows
         let suggested = offerable.first { $0.target == lastUsed } ?? offerable.first

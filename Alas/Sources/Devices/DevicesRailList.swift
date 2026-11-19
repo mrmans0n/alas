@@ -77,6 +77,8 @@ struct DevicesRailList<Stage: View, Actions: View>: View {
                     .onScrollVisibilityChange(threshold: 0.01) { shown in
                         if shown { offscreen.remove(device.id) } else { offscreen.insert(device.id) }
                     }
+                    // Collapsed or moved to a tab while out of view: it comes back drawn.
+                    .onDisappear { offscreen.remove(device.id) }
                 }
             }
         }

@@ -49,10 +49,13 @@ extension AppState {
     }
 
     /// Shows `target` and makes it last used: its center tab when it has one,
-    /// else the worktree's Devices rail, expanded and scrolled to.
+    /// else the worktree's Devices rail, expanded and scrolled to. An AVD that
+    /// has booted is shown as its emulator.
     func revealDevice(_ target: DevicesTarget, worktreeID: String) {
+        let target = runningDevice(for: target)
         useDevice(target, worktreeID: worktreeID)
-        if let tab = tabs.tabs(forWorktree: worktreeID).first(where: { Self.tab($0, shows: target) }) {
+        let avdName = avdName(of: target)
+        if let tab = tabs.tabs(forWorktree: worktreeID).first(where: { Self.tab($0, shows: target, avdName: avdName) }) {
             activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
             return
         }
@@ -116,9 +119,23 @@ extension AppState {
         }
     }
 
-    private static func tab(_ tab: Tab, shows target: DevicesTarget) -> Bool {
+    /// An AVD's emulator by serial once it runs; any other target as it is.
+    private func runningDevice(for target: DevicesTarget) -> DevicesTarget {
+        guard case .android(let id) = target, id.hasPrefix("avd:") else { return target }
+        let name = String(id.dropFirst(4))
+        return androidPane.devices?.first { $0.avdName == name }.map { .android($0.serial) } ?? target
+    }
+
+    /// The AVD an Android target runs or names.
+    private func avdName(of target: DevicesTarget) -> String? {
+        guard case .android(let id) = target else { return nil }
+        if id.hasPrefix("avd:") { return String(id.dropFirst(4)) }
+        return androidPane.devices?.first { $0.serial == id }?.avdName
+    }
+
+    private static func tab(_ tab: Tab, shows target: DevicesTarget, avdName: String?) -> Bool {
         switch tab {
-        case .device(let state): state.target == target
+        case .device(let state): state.target == target || (avdName != nil && state.avdName == avdName)
         case .virtualMachine(let state): target == .vm(state.guest)
         default: false
         }

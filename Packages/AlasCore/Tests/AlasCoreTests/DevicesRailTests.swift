@@ -50,6 +50,7 @@ struct DevicesRailTests {
         let expanded: Int
         var collapsed = 0
         var inCenter = 0
+        var width: Double = 300
         var aspect: Double?
         var chrome = DevicesRailLayout.Chrome(horizontal: 76, vertical: 32)
         let height: Double
@@ -60,13 +61,15 @@ struct DevicesRailTests {
         LayoutCase(name: "one device fills the rail", visibleHeight: 800, expanded: 1, aspect: 2.17, height: 764),
         LayoutCase(name: "rows above it leave the rest", visibleHeight: 800, expanded: 1, collapsed: 1, inCenter: 1,
                    aspect: 2.17, height: 692),
-        LayoutCase(name: "two phones share it", visibleHeight: 800, expanded: 2, aspect: 2.17, height: 364),
-        LayoutCase(name: "a third expanded scrolls", visibleHeight: 800, expanded: 3, aspect: 2.17, height: 364),
+        LayoutCase(name: "two phones share it", visibleHeight: 800, expanded: 2, aspect: 2.17, height: 360),
+        LayoutCase(name: "a third expanded scrolls", visibleHeight: 800, expanded: 3, aspect: 2.17, height: 360),
         LayoutCase(name: "a collapsed row takes its height", visibleHeight: 800, expanded: 2, collapsed: 1,
-                   aspect: 2.17, height: 346),
-        LayoutCase(name: "a VM fits the width", visibleHeight: 800, expanded: 2, aspect: 0.625,
-                   chrome: .init(horizontal: 24, vertical: 24), height: 197),
-        LayoutCase(name: "no frame yet fills the stage", visibleHeight: 800, expanded: 2, height: 364),
+                   aspect: 2.17, height: 342),
+        LayoutCase(name: "a VM fits the width", visibleHeight: 800, expanded: 2, width: 420, aspect: 0.625,
+                   chrome: .init(horizontal: 24, vertical: 24), height: 272),
+        LayoutCase(name: "a narrow fit keeps the minimum", visibleHeight: 800, expanded: 2, aspect: 0.625,
+                   chrome: .init(horizontal: 24, vertical: 24), height: 200),
+        LayoutCase(name: "no frame yet fills the stage", visibleHeight: 800, expanded: 2, height: 360),
         LayoutCase(name: "a short pane keeps screens usable", visibleHeight: 400, expanded: 2, aspect: 2.17, height: 200),
     ])
     func stagesSplitTheRailTwoAtATime(_ c: LayoutCase) {
@@ -74,6 +77,6 @@ struct DevicesRailTests {
             visibleHeight: c.visibleHeight,
             entries: Self.entries(expanded: c.expanded, collapsed: c.collapsed, inCenter: c.inCenter)
         )
-        #expect(layout.height(width: 300, aspect: c.aspect, chrome: c.chrome) == c.height)
+        #expect(layout.height(width: c.width, aspect: c.aspect, chrome: c.chrome) == c.height)
     }
 }

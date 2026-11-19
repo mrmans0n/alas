@@ -187,7 +187,7 @@ struct DevicesTabStateTests {
         #expect(state.running.map(\.id) == [
             .simulator("off"), .simulator("on"), .simulator("zeta"),
             .android("emulator-5554"), .android("R5CT"), .android("avd:Tablet"),
-            .vm(.macOS), .vm(.linux),
+            .vm(.linux), .vm(.macOS),
         ])
         #expect(state.running.first?.screen == .simulator(Self.off, .booting))
         #expect(state.running[4].screen == .android(

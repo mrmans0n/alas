@@ -27,6 +27,8 @@ struct DeviceEntryActions: View {
     let onShutDown: (() -> Void)?
     /// A short message over the bottom of the screen.
     let onNotice: (String) -> Void
+    /// Names the agent session recording the device.
+    var agentName: (String) -> String = { _ in "An agent" }
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     @State private var showsSettings = false
@@ -55,10 +57,16 @@ struct DeviceEntryActions: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            if case .user? = recorder.owner(udid: udid) {
+            switch recorder.owner(udid: udid) {
+            case .user?:
                 ToolbarBtn(icon: "stop.circle.fill", tooltip: "Stop recording", isActive: true) {
                     Task { await stopRecording() }
                 }
+            case .agent(let sessionID)?:
+                ToolbarBtn(icon: "record.circle", tooltip: "\(agentName(sessionID)) is recording", isActive: true) {}
+                    .disabled(true)
+            case nil:
+                EmptyView()
             }
             if flowRecorder.isRecording(udid) {
                 ToolbarBtn(icon: "hand.tap", tooltip: "Stop recording flow", isActive: true, action: stopFlowRecording)
@@ -107,8 +115,8 @@ struct DeviceEntryActions: View {
                 .disabled(!ready)
         case .user:
             Button("Stop Recording") { Task { await stopRecording() } }
-        case .agent:
-            Button("An Agent Is Recording") {}
+        case .agent(let sessionID):
+            Button("\(agentName(sessionID)) Is Recording") {}
                 .disabled(true)
         }
     }
@@ -257,7 +265,8 @@ struct DeviceEntryLiveActions: View {
                 },
                 onScreenshot: { Self.saveScreenshot(state.simulatorStreams.lastFrame(udid: simulator.udid), name: simulator.name) },
                 onShutDown: { Task { await state.devicePane.shutDown(simulator) } },
-                onNotice: { state.devicePane.show($0, udid: simulator.udid) }
+                onNotice: { state.devicePane.show($0, udid: simulator.udid) },
+                agentName: { state.computerUseAgentName($0) }
             )
         case .android(let target, let stage):
             if let android = target.device {
@@ -276,11 +285,13 @@ struct DeviceEntryLiveActions: View {
                             await state.androidPane.shutDown(android)
                         }
                     } : nil,
-                    onNotice: { state.androidPane.show($0, serial: android.serial) }
+                    onNotice: { state.androidPane.show($0, serial: android.serial) },
+                    agentName: { state.computerUseAgentName($0) }
                 )
             }
         case .vm(let guest, let status):
-            VMEntryActions(running: status == .running) {
+            // A VM still booting can be stopped too, as its tab allows.
+            VMEntryActions(canStop: status == .running || status == .starting) {
                 Task { await state.vmManager.stopVM(worktreeID: worktree.id, guest: guest) }
             }
         }
@@ -310,13 +321,13 @@ struct DeviceEntryLiveActions: View {
 
 /// A VM's actions in its Devices header: Stop, in a menu.
 struct VMEntryActions: View {
-    let running: Bool
+    let canStop: Bool
     let onStop: () -> Void
 
     var body: some View {
         ToolbarMenuButton(iconName: "ellipsis", help: "More") {
             Button("Stop VM", action: onStop)
-                .disabled(!running)
+                .disabled(!canStop)
         }
         .fixedSize()
     }

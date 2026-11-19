@@ -48,6 +48,8 @@ public enum DevicesRail {
 public struct DevicesRailLayout: Equatable, Sendable {
     /// A header, collapsed device or placeholder, with the gap under it.
     public static let rowHeight: Double = 36
+    /// The gap between a header and its stage, and between entries.
+    public static let gap: Double = 8
     public static let minimumStageHeight: Double = 200
 
     /// The space a stage adds around its screen.
@@ -66,19 +68,23 @@ public struct DevicesRailLayout: Equatable, Sendable {
     /// Two or more stages: each shrinks to its screen's fitted height.
     public let fitsScreens: Bool
 
-    /// `visibleHeight` is the scroll view's, less its padding.
+    /// `visibleHeight` is the scroll view's, less its padding. An expanded
+    /// entry is a header, a gap and its stage; entries have a gap between them.
     public init(visibleHeight: Double, entries: [DevicesRail.Entry]) {
         let expanded = entries.filter { $0.placement == .expanded }.count
         let shown = Double(min(max(expanded, 1), 2))
-        let rows = Double(entries.count - expanded) + shown
-        stageHeight = max(Self.minimumStageHeight, ((visibleHeight - rows * Self.rowHeight) / shown).rounded(.down))
+        let compact = Double(entries.count - expanded)
+        let fixed = compact * Self.rowHeight + shown * (Self.rowHeight + Self.gap) - Self.gap
+        stageHeight = max(Self.minimumStageHeight, ((visibleHeight - fixed) / shown).rounded(.down))
         fitsScreens = expanded > 1
     }
 
     /// The stage's height for a screen of `aspect` (height over width, as
     /// shown) in a rail `width` wide; the whole stage height without one.
+    /// Never under `minimumStageHeight`.
     public func height(width: Double, aspect: Double?, chrome: Chrome) -> Double {
         guard fitsScreens, let aspect, aspect > 0 else { return stageHeight }
-        return min(stageHeight, ((width - chrome.horizontal) * aspect + chrome.vertical).rounded(.up))
+        let fitted = ((width - chrome.horizontal) * aspect + chrome.vertical).rounded(.up)
+        return max(Self.minimumStageHeight, min(stageHeight, fitted))
     }
 }
