@@ -70,8 +70,8 @@ struct WorktreeRow: View {
     /// "Delegated by <parent>" for a delegated session, or "Delegated" when its parent is not listed.
     static func delegationCaption(_ session: RemoteSessionSummary, in host: RemoteSessionCatalog.Host?) -> String? {
         guard let parentId = session.parentSessionId else { return nil }
-        let parent = host?.sections.lazy.flatMap(\.worktrees).flatMap { $0.activeSessions + $0.closedSessions }
-            .first { $0.id == parentId }
+        let worktrees: [RemoteWorktreeEntry] = host?.sections.flatMap(\.worktrees) ?? []
+        let parent = worktrees.lazy.flatMap { $0.activeSessions + $0.closedSessions }.first { $0.id == parentId }
         guard let title = parent?.title, !title.isEmpty else { return "Delegated" }
         return "Delegated by \(title)"
     }
@@ -142,6 +142,9 @@ struct WorktreeRow: View {
                         }
                     }
                 }
+            }
+            if let summary = entry.summary {
+                Section { CopyWorktreeButtons(summary: summary) }
             }
         }
     }
@@ -220,5 +223,19 @@ struct WorktreeRow: View {
         if entry.needsAttention { return .orange }
         if entry.isRunning { return .blue }
         return Color.secondary.opacity(entry.isDirty ? 0.8 : 0.35)
+    }
+}
+
+/// The Mac worktree row's Copy Path and Copy Branch Name; a folder project has no branch.
+struct CopyWorktreeButtons: View {
+    let summary: RemoteWorktreeSummary
+
+    var body: some View {
+        if !summary.path.isEmpty {
+            Button("Copy Path", systemImage: "doc.on.doc") { UIPasteboard.general.string = summary.path }
+        }
+        if !summary.branch.isEmpty {
+            Button("Copy Branch Name", systemImage: "arrow.triangle.branch") { UIPasteboard.general.string = summary.branch }
+        }
     }
 }

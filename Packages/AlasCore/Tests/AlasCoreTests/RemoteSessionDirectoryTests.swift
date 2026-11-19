@@ -113,6 +113,25 @@ import Testing
         #expect(RemoteSessionDirectory.attentionFirst(worktrees).map(\.id) == ["waiting", "running", "idleNew", "idleOld"])
     }
 
+    @Test(arguments: [
+        (RemoteWorktreeSort.lastUpdateDesc, true, ["b", "c", "a"]),
+        (.lastUpdateAsc, true, ["a", "c", "b"]),
+        (.creationDesc, true, ["a", "b", "c"]),
+        (.creationAsc, true, ["c", "b", "a"]),
+        (.creationAsc, false, ["b", "c", "a"]),  // a host without createdAt keeps recency
+        (.branchAsc, true, ["c", "b", "a"]),  // by branch, not directory
+    ])
+    func sortsWorktreesLikeTheMacSidebar(sort: RemoteWorktreeSort, hasCreatedAt: Bool, expected: [String]) throws {
+        // (worktree, updatedAt, createdAt, branch); "Y" pins the case-insensitive branch order.
+        let list = [("a", 1, 30.0, "z"), ("B", 9, 20.0, "Y"), ("c", 5, 10.0, "x")].map { name, at, created, branch in
+            var summary = wt("alas", name, branch: branch, path: "/r/\(name)")
+            if hasCreatedAt || name != "a" { summary.createdAt = created }
+            return session(name.lowercased(), worktreeId: name.lowercased(), at: Int64(at), worktree: summary)
+        }
+        let worktrees = try #require(sections(list).first?.worktrees)
+        #expect(RemoteSessionDirectory.sorted(worktrees, by: sort).map(\.id) == expected)
+    }
+
     @Test func closedSessionsNeverCountAsRunning() {
         let s = sections([session("a", status: "streaming", active: false)])
         #expect(RemoteSessionDirectory.filter(s, by: .running, query: "").isEmpty)

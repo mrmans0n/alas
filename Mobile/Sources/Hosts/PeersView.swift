@@ -146,6 +146,36 @@ private struct PeerRow: View {
     }
 }
 
+/// Says which paired machines are offline, with a manual redial in place of
+/// waiting out the backoff. Only `.offline`: an idle or connecting link is
+/// already on its way, and the other states need pairing, not a retry.
+struct ConnectionBanner: View {
+    let hub: HostHub
+    /// Just this machine, as on a session's screen; every one when nil.
+    var hostID: UUID?
+
+    var body: some View {
+        let down = hub.hosts.filter { (hostID == nil || $0.id == hostID) && hub.state(of: $0.id) == .offline }
+        if let first = down.first {
+            HStack(spacing: 8) {
+                Image(systemName: "wifi.slash").foregroundStyle(.secondary)
+                Text(down.count == 1 ? "\(first.name) is offline" : "\(down.count) machines are offline")
+                    .font(.footnote)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Button("Reconnect") { hub.connectAll() }
+                    .font(.footnote.weight(.semibold))
+                    .buttonStyle(.borderless)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .glassEffect(.regular, in: .capsule)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 4)
+        }
+    }
+}
+
 extension PhoneConnection.State {
     /// How a host's connection reads in a status line.
     var label: String {

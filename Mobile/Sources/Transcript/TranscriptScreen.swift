@@ -32,8 +32,8 @@ struct TranscriptScreen: View {
     @State private var terminalsWorktree: String?
     /// The subagent whose transcript is pushed from this screen; it reads through this screen's session.
     @State private var openedSubagent: RemoteWireMessage.Subagent?
-    /// The delegated session pushed from this screen.
-    @State private var delegatedChild: String?
+    /// The delegated child, or the delegating parent, pushed from this screen.
+    @State private var delegated: String?
 
     var body: some View {
         Group {
@@ -54,8 +54,8 @@ struct TranscriptScreen: View {
                 SubagentScreen(session: session, subagent: openedSubagent)
             }
         }
-        .navigationDestination(item: $delegatedChild) { childId in
-            TranscriptScreen(hostID: hostID, sessionId: childId)
+        .navigationDestination(item: $delegated) { id in
+            TranscriptScreen(hostID: hostID, sessionId: id)
         }
         .onAppear {
             visible = true
@@ -69,7 +69,7 @@ struct TranscriptScreen: View {
             // its state first (DiffView's own onDisappear), and so a screen that came straight
             // back keeps what it holds.
             Task { @MainActor in
-                if visible || terminalsWorktree != nil || openedSubagent != nil || delegatedChild != nil || workspace?.hasPushedChild(screenID) == true { return }
+                if visible || terminalsWorktree != nil || openedSubagent != nil || delegated != nil || workspace?.hasPushedChild(screenID) == true { return }
                 held = nil
                 workspaceToken = nil
             }
@@ -108,13 +108,16 @@ struct TranscriptScreen: View {
                 }
             }
             .safeAreaInset(edge: .top) {
-                Picker("View", selection: $mode) {
-                    ForEach(available, id: \.self) { Text(label($0, session, workspace)) }
+                VStack(spacing: 0) {
+                    Picker("View", selection: $mode) {
+                        ForEach(available, id: \.self) { Text(label($0, session, workspace)) }
+                    }
+                    .pickerStyle(.segmented)
+                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 4)
+                    ConnectionBanner(hub: registry.hub, hostID: hostID)
                 }
-                .pickerStyle(.segmented)
-                .glassEffect(.regular.interactive(), in: .capsule)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 4)
             }
             // Destinations for views pushed from the tabs live here, on a view that stays mounted.
             .navigationDestination(isPresented: Binding(
@@ -143,7 +146,8 @@ struct TranscriptScreen: View {
                             // On every tab, so a request that arrives while reading a diff isn't missed.
                             RequestCard(session: session).environment(\.cardFloats, true).padding(.horizontal, 12).padding(.bottom, 4)
                             if mode == .transcript {
-                                ComposerBar(session: session, onOpenSettings: { showSettings = true })
+                                ComposerBar(session: session, onOpenSettings: { showSettings = true },
+                                            onShip: session.canDrive && workspace.canShepherd ? { ship(workspace) } : nil)
                             }
                         }
                     }
@@ -188,6 +192,13 @@ struct TranscriptScreen: View {
                             .disabled(session.tabAction != nil)
                     }
                 }
+                if let parentId = session.summary?.parentSessionId,
+                   let parent = registry.hub.sessions(of: hostID).first(where: { $0.id == parentId }) {
+                    Button("Delegated by \(parent.title)", systemImage: "arrow.turn.left.up") { delegated = parent.id }
+                }
+                if let worktree = session.summary?.worktree {
+                    CopyWorktreeButtons(summary: worktree)
+                }
                 if workspace.canArchive {
                     Button("Archive Session", systemImage: "archivebox", role: .destructive) { confirmingArchive = true }
                 }
@@ -207,7 +218,7 @@ struct TranscriptScreen: View {
                     ToolbarItem(placement: .primaryAction) {
                         Menu("Delegated Sessions", systemImage: "arrow.triangle.branch") {
                             ForEach(children, id: \.id) { child in
-                                Button(child.title) { delegatedChild = child.id }
+                                Button(child.title) { delegated = child.id }
                             }
                         }
                     }
@@ -295,6 +306,15 @@ struct TranscriptScreen: View {
         let failure: RemoteGitFailure
         let force: Bool
         let discard: Bool
+    }
+
+    /// `/ship` from the composer: the Ship menu's action, refused while the session already shepherds a PR.
+    private func ship(_ workspace: SessionWorkspace) -> String? {
+        if let shepherd = workspace.shepherd {
+            return shepherd.number.map { "This session already shepherds \($0)." } ?? "This session already shepherds a pull request."
+        }
+        Task { if let error = await workspace.shepherd(.ship) { actionError = error } }
+        return nil
     }
 
     private func run(_ workspace: SessionWorkspace, _ action: RemoteRunAction, _ script: RemoteRunScript) {
