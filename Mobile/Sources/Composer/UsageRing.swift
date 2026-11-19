@@ -4,11 +4,13 @@ import SwiftUI
 /// Context-window fill as a small ring; tapping opens the numbers.
 struct UsageRing: View {
     let usage: RemoteUsage
-    let context: RemoteContextWindow
     @State private var showing = false
 
+    /// Nil when the agent reports token totals but no context window: the button still opens them, as on the Mac.
+    private var context: RemoteContextWindow? { usage.context }
     private var fraction: Double {
-        context.size > 0 ? min(1, Double(context.used) / Double(context.size)) : 0
+        guard let context, context.size > 0 else { return 0 }
+        return min(1, Double(context.used) / Double(context.size))
     }
 
     private var color: Color {
@@ -17,21 +19,27 @@ struct UsageRing: View {
 
     var body: some View {
         Button { showing = true } label: {
-            ZStack {
-                Circle().stroke(.quaternary, lineWidth: 3)
-                Circle().trim(from: 0, to: fraction)
-                    .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
+            Group {
+                if context != nil {
+                    ZStack {
+                        Circle().stroke(.quaternary, lineWidth: 3)
+                        Circle().trim(from: 0, to: fraction)
+                            .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    }
+                } else {
+                    Image(systemName: "chart.bar.doc.horizontal").foregroundStyle(.secondary)
+                }
             }
             .frame(width: 20, height: 20)
             .frame(width: 32, height: 32)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Context used")
-        .accessibilityValue("\(Int(fraction * 100)) percent")
+        .accessibilityLabel(context != nil ? "Context used" : "Token usage")
+        .accessibilityValue(context != nil ? "\(Int(fraction * 100)) percent" : "")
         .sheet(isPresented: $showing) {
-            UsageSheet(usage: usage, context: context, fraction: fraction)
+            UsageSheet(usage: usage, fraction: fraction)
                 .presentationDetents([.medium])
         }
     }
@@ -39,16 +47,17 @@ struct UsageRing: View {
 
 private struct UsageSheet: View {
     let usage: RemoteUsage
-    let context: RemoteContextWindow
     let fraction: Double
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Context") {
-                    LabeledContent("Used", value: "\(format(context.used)) of \(format(context.size)) (\(Int(fraction * 100))%)")
-                    if let cost = context.costAmount {
-                        LabeledContent("Cost", value: cost.formatted(.currency(code: context.costCurrency ?? "USD")))
+                if let context = usage.context {
+                    Section("Context") {
+                        LabeledContent("Used", value: "\(format(context.used)) of \(format(context.size)) (\(Int(fraction * 100))%)")
+                        if let cost = context.costAmount {
+                            LabeledContent("Cost", value: cost.formatted(.currency(code: context.costCurrency ?? "USD")))
+                        }
                     }
                 }
                 rows("Last turn", usage.lastTurn)
