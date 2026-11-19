@@ -843,25 +843,13 @@ private struct NativePeerAgentBadge: View {
             .modifier(OptionalBadgeChrome(surface: surface))
         }
         .buttonStyle(.plain)
-        .help(tooltip)
+        .agentBadgePopover { AgentBadgePopoverModel(peer: session) }
         .accessibilityLabel(tooltip)
     }
 
     private var tooltip: String {
         let name = agent?.displayName ?? session.agentId
         return "\(name) · \(session.title) · \(NativePeerSessionRowPresentation(row: session).detail)"
-    }
-}
-
-private struct OptionalBadgeChrome: ViewModifier {
-    let surface: HarnessSessionBadgeSurface?
-
-    func body(content: Content) -> some View {
-        if let surface {
-            content.modifier(HarnessSessionBadgeChrome(surface: surface))
-        } else {
-            content
-        }
     }
 }
 

@@ -103,6 +103,12 @@ the agent toolbar, "Using the VM") or `space-pager` (two demo spaces added, so t
 `ALAS_CAPTURE_DIALOG` to `run-script-help`, `new-run-script` or `repo-hook-approval` (a demo hook; nothing runs) to
 capture those views (`DesignCaptureLeftovers`). `Sidebar/RepoDot.swift` is not used anywhere, so it has no capture.
 
+Set `ALAS_CAPTURE_CENTER` to `agent-badge-popovers` to capture a gallery of the sidebar agent badge hover card
+(`DesignCaptureAgentBadges`) for scripted sessions (running with a plan, a permission, awaiting input, idle, a
+terminal pane, a bare one) next to worktree-row badge strips; no session or harness is read.
+Set `ALAS_CAPTURE_SIDEBAR=badge-hover` to hold the selected row's first agent badge hovered, so the real card opens
+in its own panel and is composited onto `window.png` (also written as `window-extra-<n>.png`).
+
 ## How it works
 
 - `make-demo-profile.sh` builds `fixture/` (the invented `lantern` repo with 14
