@@ -5,12 +5,16 @@ import SwiftUI
 /// root reply re-lists every expanded directory, so files the agent changed show up.
 struct FilesView: View {
     let workspace: SessionWorkspace
+    let session: TranscriptSession
     let owner: UUID
+    @State private var query = ""
 
     var body: some View {
         let rows = workspace.tree.rows()
         Group {
-            if rows.isEmpty {
+            if !query.isEmpty {
+                results
+            } else if rows.isEmpty {
                 if let error = workspace.treeError {
                     ContentUnavailableView {
                         Label(error, systemImage: "exclamationmark.triangle")
@@ -46,7 +50,40 @@ struct FilesView: View {
                 .listStyle(.plain)
             }
         }
+        .searchable(text: $query, prompt: "Search files")
+        // The host's file search, as the composer's @ picker uses, after 120 ms of quiet.
+        .task(id: query) {
+            guard !query.isEmpty, query.count <= RemoteAttachmentLimits.maxMentionQueryLength else { return }
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            session.searchMentions(query)
+        }
         .task { workspace.loadTree() }
+    }
+
+    @ViewBuilder
+    private var results: some View {
+        let files = session.mentionCandidates.filter { $0.kind == RemoteMention.file }
+        if files.isEmpty {
+            if session.mentionCandidatesQuery == query {
+                ContentUnavailableView.search(text: query)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else {
+            List(files, id: \.value) { file in
+                Button { workspace.openFile(file.value, by: owner) } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(file.name).lineLimit(1).truncationMode(.middle)
+                        Text(file.value).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                    }
+                }
+                .foregroundStyle(.primary)
+            }
+            .listStyle(.plain)
+            // The previous answer stays up, dimmed, until this query's arrives.
+            .opacity(session.mentionCandidatesQuery == query ? 1 : 0.5)
+        }
     }
 }
 

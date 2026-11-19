@@ -106,7 +106,7 @@ struct TranscriptScreen: View {
                 switch mode {
                 case .transcript: EmptyView()
                 case .changes: ChangesView(workspace: workspace, owner: screenID).background(Color(.systemBackground))
-                case .files: FilesView(workspace: workspace, owner: screenID).background(Color(.systemBackground))
+                case .files: FilesView(workspace: workspace, session: session, owner: screenID).background(Color(.systemBackground))
                 }
             }
             .safeAreaInset(edge: .top) {
@@ -136,7 +136,7 @@ struct TranscriptScreen: View {
             .navigationDestination(isPresented: Binding(
                 get: { workspace.file != nil && workspace.pushedBy == screenID },
                 set: { if !$0 { workspace.closeFile() } })) {
-                FileViewer(workspace: workspace)
+                FileViewer(workspace: workspace, session: session)
             }
             .onChange(of: session.streamingState, initial: true) { workspace.noteStreaming(session.streamingState) }
             .onChange(of: available) { if !available.contains(mode) { mode = .transcript } }

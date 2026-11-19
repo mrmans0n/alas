@@ -1,56 +1,101 @@
+import AlasHighlight
 import AlasRemoteKit
 import SwiftUI
 
-/// One file's text with line numbers, pushed from the Files tab.
+/// One file pushed from the Files tab: an image as itself, markdown rendered or as source, any
+/// other text with line numbers and syntax colour.
 struct FileViewer: View {
     let workspace: SessionWorkspace
+    let session: TranscriptSession
+    @State private var showSource = false
+
+    private var path: String { workspace.file?.path ?? "" }
 
     var body: some View {
         Group {
-            switch workspace.file?.1 {
-            case .loaded(let reply):
-                FileContent(reply: reply)
-            case .failed(let message):
-                ContentUnavailableView(message, systemImage: "exclamationmark.triangle")
-            default:
-                ProgressView("Loading…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            if FileKind(path: path) == .image {
+                // Read as an image of the worktree, as the transcript reads one, not as text.
+                ScrollView {
+                    TranscriptImage(id: "file:\(path)", source: path, label: name, session: session).padding()
+                }
+            } else {
+                switch workspace.file?.1 {
+                case .loaded(let reply):
+                    if FileKind(path: path) == .markdown, !showSource {
+                        ScrollView {
+                            AgentMarkdown(id: "file:\(path)", text: reply.text, session: session)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding()
+                        }
+                    } else {
+                        FileContent(reply: reply, path: path)
+                    }
+                case .failed(let message):
+                    ContentUnavailableView(message, systemImage: "exclamationmark.triangle")
+                default:
+                    ProgressView("Loading…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
-        .navigationTitle(workspace.file?.path.split(separator: "/").last.map(String.init) ?? "File")
+        .navigationTitle(name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if FileKind(path: path) == .markdown {
+                ToolbarItem(placement: .primaryAction) {
+                    Picker("View", selection: $showSource) {
+                        Text("Preview").tag(false)
+                        Text("Source").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                }
+            }
+        }
         .background(Color(.systemBackground))
         // Backstop for a pop that skips the destination binding (a stack reset to the root).
-        .onDisappear { workspace.closeFile() }
+        .onDisappear {
+            MarkdownBlockCache.shared.remove(ids: ["file:\(path)"])
+            workspace.closeFile()
+        }
+    }
+
+    private var name: String { path.split(separator: "/").last.map(String.init) ?? "File" }
+}
+
+/// How the viewer shows a file, by its extension.
+enum FileKind: Equatable {
+    case image, markdown, text
+
+    init(path: String) {
+        switch (path as NSString).pathExtension.lowercased() {
+        case "png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp", "tif", "tiff", "ico": self = .image
+        case "md", "markdown", "mdown", "mkd": self = .markdown
+        default: self = .text
+        }
     }
 }
 
 private struct FileContent: View {
     let reply: FileReply
-    private let chunks: [AttributedString]
+    let path: String
+    private let lines: [String]
     private let linesTruncated: Bool
+    /// Each line's syntax spans; empty until tokenized, or without a grammar.
+    @State private var spans: [[HighlightSpan]] = []
+    @Environment(\.colorScheme) private var colorScheme
 
     /// Same as the web client's cap on rendered rows.
     private static let maxLines = 5000
 
-    init(reply: FileReply) {
+    init(reply: FileReply, path: String) {
         self.reply = reply
+        self.path = path
         let all = reply.text.split(separator: "\n", omittingEmptySubsequences: false)
         linesTruncated = all.count > Self.maxLines
-        let lines = all.prefix(Self.maxLines)
-        let width = String(lines.count).count
-        chunks = stride(from: 0, to: lines.count, by: MarkdownBlock.codeChunkLines).map { start in
-            var text = AttributedString()
-            for i in start ..< min(start + MarkdownBlock.codeChunkLines, lines.count) {
-                let number = String(i + 1)
-                var gutter = AttributedString((i == start ? "" : "\n") + String(repeating: " ", count: width - number.count) + number + "  ")
-                gutter.foregroundColor = .secondary
-                text += gutter + AttributedString(String(lines[lines.startIndex + i]))
-            }
-            return text
-        }
+        lines = all.prefix(Self.maxLines).map(String.init)
     }
 
     var body: some View {
+        let chunks = Self.chunks(lines, spans: spans, tokens: spans.isEmpty ? nil : ThemeTokens.forScheme(colorScheme))
         ScrollView([.vertical, .horizontal]) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(chunks.indices, id: \.self) { Text(chunks[$0]).fixedSize(horizontal: true, vertical: false) }
@@ -67,5 +112,32 @@ private struct FileContent: View {
         }
         // Content smaller than the viewport sits top-left, not centred.
         .defaultScrollAnchor(.topLeading, for: .alignment)
+        // Tokenized off the main actor; the file shows plain until then. Keyed by the text, so a
+        // reread file never wears the previous text's spans.
+        .task(id: reply.text) {
+            spans = []
+            let lines = Array(lines.prefix(DiffHunksView.expandedLineLimit))
+            let path = path
+            let found = await Task.detached(priority: .userInitiated) {
+                DiffHunksView.spans(forLines: lines, path: path)
+            }.value
+            if !Task.isCancelled { spans = found }
+        }
+    }
+
+    /// Line-numbered text in `MarkdownBlock.codeChunkLines` pieces, coloured where `spans` reaches.
+    private static func chunks(_ lines: [String], spans: [[HighlightSpan]], tokens: ThemeTokens?) -> [AttributedString] {
+        let width = String(lines.count).count
+        return stride(from: 0, to: lines.count, by: MarkdownBlock.codeChunkLines).map { start in
+            var text = AttributedString()
+            for i in start ..< min(start + MarkdownBlock.codeChunkLines, lines.count) {
+                let number = String(i + 1)
+                var gutter = AttributedString((i == start ? "" : "\n") + String(repeating: " ", count: width - number.count) + number + "  ")
+                gutter.foregroundColor = .secondary
+                let body = if let tokens, i < spans.count { tokens.attributed(lines[i], spans: spans[i]) } else { AttributedString(lines[i]) }
+                text += gutter + body
+            }
+            return text
+        }
     }
 }
