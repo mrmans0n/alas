@@ -105,4 +105,19 @@ struct RemoteWorkspaceRulesTests {
     func transcriptLinkRoutes(link: String, expected: RemoteTranscriptLink) throws {
         #expect(RemoteTranscriptLink.route(try #require(URL(string: link)), worktreeRoot: "/wt/a") == expected)
     }
+
+    /// A previewed document's image, taken from the document's folder.
+    @Test(arguments: [
+        ("images/a.png", "docs/README.md", "docs/images/a.png"),
+        ("../logo.png", "docs/guide/README.md", "docs/logo.png"),
+        // Out of the worktree: left for the host to refuse.
+        ("../../../x.png", "docs/README.md", "../../x.png"),
+        ("images/my%20diagram.png", "docs/README.md", "docs/images/my diagram.png"),
+        ("a.png", "README.md", "a.png"),
+        ("/abs/a.png", "docs/README.md", "/abs/a.png"),
+        ("https://x.y/a.png", "docs/README.md", "https://x.y/a.png"),
+    ])
+    func documentImageSources(source: String, file: String, expected: String) {
+        #expect(RemoteTranscriptLink.imageSource(source, besideFile: file) == expected)
+    }
 }

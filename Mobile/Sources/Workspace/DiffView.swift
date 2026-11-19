@@ -93,7 +93,7 @@ private struct DiffContent: View {
                         case .header(_, let index, let hunk):
                             HStack(spacing: 8) {
                                 if !actions.isEmpty { menu(index, hunk) }
-                                Text(hunk.header).foregroundStyle(.secondary)
+                                Text(hunk.header).foregroundStyle(.secondary).fixedSize(horizontal: true, vertical: false)
                             }
                             .padding(.vertical, 6).padding(.horizontal, 8)
                         case .lines(_, let text):
@@ -135,6 +135,9 @@ private struct DiffContent: View {
             }
         } label: {
             Image(systemName: "ellipsis.circle")
+                // A finger-sized target around the small glyph.
+                .frame(width: 44, height: 32)
+                .contentShape(Rectangle())
         }
         .disabled(busy)
         .accessibilityLabel("Hunk actions")

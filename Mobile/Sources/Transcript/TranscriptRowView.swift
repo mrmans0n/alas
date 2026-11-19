@@ -213,6 +213,8 @@ struct AgentMarkdown: View {
     let id: String
     let text: String
     var session: TranscriptSession?
+    /// Maps an image source before it loads: a file preview resolves it beside the file.
+    var resolve: (String) -> String = { $0 }
 
     var body: some View {
         let blocks = MarkdownBlockCache.shared.blocks(id: id, text: text)
@@ -242,7 +244,7 @@ struct AgentMarkdown: View {
                         .padding(.leading, 10)
                         .overlay(alignment: .leading) { Rectangle().fill(.tertiary).frame(width: 3) }
                 case .image(let source, let alt):
-                    TranscriptImage(id: "\(id):block:\(index)", source: source, label: alt.isEmpty ? "Image" : alt,
+                    TranscriptImage(id: "\(id):block:\(index)", source: resolve(source), label: alt.isEmpty ? "Image" : alt,
                                     session: session)
                 case .table(let header, let rows):
                     let table = MarkdownTable(header: header, rows: rows)

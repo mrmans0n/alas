@@ -616,6 +616,14 @@ final class TranscriptSession {
 
     private static let hostKeyPrefix = "host:"
 
+    /// Drops a worktree image read from the host, so the next display reads it again.
+    func forgetHostImage(_ path: String) {
+        let key = Self.hostKeyPrefix + path
+        displayImages.removeObject(forKey: key as NSString)
+        displayLoads[key] = nil
+        displayGeneration += 1
+    }
+
     private func inlineImage(
         _ string: String, key place: String, resolve: @escaping @Sendable (String) -> RemoteTranscriptImageSource
     ) -> ImageLoad {
