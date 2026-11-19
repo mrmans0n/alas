@@ -21,7 +21,7 @@ struct DevicesSwitcher: View {
         } label: {
             HStack(spacing: 6) {
                 Circle()
-                    .fill(theme.color(Self.colorToken(selected?.tone ?? .idle)))
+                    .fill(theme.color(DeviceStyle.colorToken(selected?.tone ?? .idle)))
                     .frame(width: 8, height: 8)
                 Text(selected?.title ?? "Devices")
                     .font(scale.meta.font(weight: .semibold))
@@ -66,23 +66,6 @@ struct DevicesSwitcher: View {
             )
             .environment(\.theme, theme)
             .environment(\.designScale, scale)
-        }
-    }
-
-    static func colorToken(_ tone: DevicesTabState.Tone) -> String {
-        switch tone {
-        case .live: "add"
-        case .busy: "warn"
-        case .idle: "fg-faint"
-        }
-    }
-
-    static func glyph(_ platform: DevicesPlatform) -> String {
-        switch platform {
-        case .ios: "iphone"
-        case .android: "candybarphone"
-        case .vm(.macOS): "macwindow"
-        case .vm(.linux): "terminal"
         }
     }
 }
@@ -250,9 +233,9 @@ struct DevicesSwitcherPanel: View {
             Button { onSelect(row.target) } label: {
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(theme.color(DevicesSwitcher.colorToken(row.tone)))
+                        .fill(theme.color(DeviceStyle.colorToken(row.tone)))
                         .frame(width: 8, height: 8)
-                    Image(systemName: DevicesSwitcher.glyph(row.platform))
+                    Image(systemName: DeviceStyle.glyph(row.platform))
                         .font(scale.glyphFont)
                         .foregroundStyle(theme.color("fg-muted"))
                         .frame(width: 14)

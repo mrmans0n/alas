@@ -20,6 +20,9 @@ struct VMDisplaySurface: NSViewRepresentable {
     let virtualMachine: VZVirtualMachine?
     var allowsInput = true
     var capturesSystemKeys = false
+    /// Resize the guest's display to the view. Off in the Devices rail, whose
+    /// narrow view would shrink the guest's desktop; the screen scales instead.
+    var reconfiguresDisplay = true
     var onBlockedClick: () -> Void = {}
     var onUserInput: (() -> Void)?
 
@@ -78,6 +81,9 @@ struct VMDisplaySurface: NSViewRepresentable {
         guard view.superview === container else { return }
         if view.capturesSystemKeys != capturesSystemKeys {
             view.capturesSystemKeys = capturesSystemKeys
+        }
+        if view.automaticallyReconfiguresDisplay != reconfiguresDisplay {
+            view.automaticallyReconfiguresDisplay = reconfiguresDisplay
         }
         if shield.superview !== container {
             shield.translatesAutoresizingMaskIntoConstraints = false

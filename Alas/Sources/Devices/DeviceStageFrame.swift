@@ -174,7 +174,7 @@ struct DeviceDriverPill: View {
         let status = HStack(spacing: 6) {
             switch driver {
             case .agent(let sessionID, _, _):
-                Circle().fill(theme.color(DevicesSwitcher.colorToken(.busy))).frame(width: 6, height: 6)
+                Circle().fill(theme.color(DeviceStyle.colorToken(.busy))).frame(width: 6, height: 6)
                 Text(flow.map { "Running \($0.name) · step \($0.step) of \($0.total)" } ?? "\(agentName(sessionID)) is driving")
                     .foregroundStyle(theme.color("fg"))
                     .fixedSize()
