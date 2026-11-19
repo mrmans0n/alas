@@ -98,6 +98,34 @@ public struct DevicesTabState: Equatable, Sendable {
         case android(AndroidTarget, AndroidStage)
     }
 
+    /// What a running device's entry in the Devices rail shows.
+    public enum Screen: Equatable, Sendable {
+        /// Booted or booting.
+        case simulator(SimulatorDevice, SimulatorStage)
+        /// Connected (ready, booting, unauthorized or offline), or an AVD booting.
+        case android(AndroidTarget, AndroidStage)
+        /// Running, starting or pausing.
+        case vm(VMGuestOS, VMDeviceStatus)
+    }
+
+    /// A device that is up or coming up, as the Devices rail stacks it.
+    public struct Running: Equatable, Sendable, Identifiable {
+        public let row: Row
+        public let screen: Screen
+        public var id: DevicesTarget { row.target }
+    }
+
+    /// What the rail shows when nothing runs.
+    public enum Empty: Equatable, Sendable {
+        case loading
+        /// simctl failed, and there are no Android devices or VMs to list.
+        case unavailable(String)
+        /// No simulators, Android devices or VMs at all.
+        case noSimulators
+        /// Devices exist, but none runs; `suggested` is the one to offer.
+        case nothingRunning(suggested: Row?)
+    }
+
     public let selected: DevicesTarget?
     public let simulatorRows: [Row]
     /// Shown in the switcher's Simulators section when it has no rows.
@@ -107,6 +135,10 @@ public struct DevicesTabState: Equatable, Sendable {
     public let androidNote: String?
     public let vmRows: [Row]
     public let stage: Stage
+    /// iOS simulators, then Android devices, then VMs; by name within each.
+    public let running: [Running]
+    /// Nil while something runs.
+    public let empty: Empty?
 
     /// The row for `selected`, as the switcher's chip shows it.
     public var selectedRow: Row? {
@@ -202,9 +234,44 @@ public struct DevicesTabState: Equatable, Sendable {
         } else {
             nil
         }
+        func byName(_ lhs: Running, _ rhs: Running) -> Bool {
+            let byTitle = lhs.row.title.localizedStandardCompare(rhs.row.title)
+            if byTitle != .orderedSame { return byTitle == .orderedAscending }
+            return "\(lhs.row.detail) \(lhs.id)" < "\(rhs.row.detail) \(rhs.id)"
+        }
+        let runningSimulators = zip(listed ?? [], simulatorRows).compactMap { device, row -> Running? in
+            let stage = simulatorStage(device)
+            return stage == .shutDown ? nil : Running(row: row, screen: .simulator(device, stage))
+        }
+        let runningAndroid = zip(androidEntries, androidRows).compactMap { entry, row -> Running? in
+            entry.stage == .shutDown ? nil : Running(row: row, screen: .android(entry.target, entry.stage))
+        }
+        let runningVMs = vmRows.compactMap { row -> Running? in
+            guard case .vm(let guest) = row.target, let status = vms[guest] else { return nil }
+            switch status {
+            case .running, .starting, .pausing: return Running(row: row, screen: .vm(guest, status))
+            case .notCreated, .stopped, .paused, .runningElsewhere: return nil
+            }
+        }
+        let running = runningSimulators.sorted(by: byName) + runningAndroid.sorted(by: byName) + runningVMs
+
+        let offerable = simulatorRows.filter(\.canBoot) + androidRows.filter(\.canBoot) + vmRows
+        let suggested = offerable.first { $0.target == selection } ?? offerable.first
+        let empty: Empty? = if !running.isEmpty {
+            nil
+        } else if listed == nil {
+            .loading
+        } else if let listError, androidRows.isEmpty, vmRows.isEmpty {
+            .unavailable(listError)
+        } else if simulatorRows.isEmpty, androidRows.isEmpty, vmRows.isEmpty {
+            .noSimulators
+        } else {
+            .nothingRunning(suggested: suggested)
+        }
         return DevicesTabState(
             selected: chosen, simulatorRows: simulatorRows, simulatorsNote: note,
-            androidRows: androidRows, androidNote: android?.note, vmRows: vmRows, stage: stage
+            androidRows: androidRows, androidNote: android?.note, vmRows: vmRows, stage: stage,
+            running: running, empty: empty
         )
     }
 

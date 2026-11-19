@@ -257,4 +257,57 @@ struct DevicesTabStateTests {
         #expect(listing.sections.map(\.note) == ["No iOS simulators", note])
         #expect(state.switcherListing(query: "x", showsOlderRuntimes: false).sections.isEmpty)
     }
+
+    /// Booting and connected devices count; a USB phone waiting for approval stays, where its Retry is.
+    @Test func runningDevicesStackSimulatorsThenAndroidThenVMsEachByName() {
+        let zeta = SimulatorDevice(udid: "zeta", name: "iPhone Zeta", runtimeName: "iOS 26.5", state: .booted)
+        let state = DevicesTabState.resolve(
+            simulators: [zeta, Self.off, Self.on, Self.mid], listError: nil,
+            vms: [.macOS: .running, .linux: .starting], selection: nil, bootingUDIDs: ["off"], agentDriving: [],
+            android: AndroidListing(
+                devices: [Self.phone, Self.emulator], avds: ["Medium_Phone", "Pixel_9", "Tablet"],
+                bootingAVDs: ["Tablet"], note: nil
+            )
+        )
+        #expect(state.running.map(\.id) == [
+            .simulator("off"), .simulator("on"), .simulator("zeta"),
+            .android("emulator-5554"), .android("R5CT"), .android("avd:Tablet"),
+            .vm(.macOS), .vm(.linux),
+        ])
+        #expect(state.running.first?.screen == .simulator(Self.off, .booting))
+        #expect(state.running[4].screen == .android(
+            AndroidTarget(id: "R5CT", title: "R5CT", device: Self.phone, avdName: nil), .unauthorized
+        ))
+        #expect(state.empty == nil)
+    }
+
+    @Test(arguments: [
+        (VMDeviceStatus.running, true), (.starting, true), (.pausing, true),
+        (.stopped, false), (.notCreated, false), (.paused(savedAt: .distantPast), false),
+        (.runningElsewhere(label: "Alas Dev"), false),
+    ] as [(VMDeviceStatus, Bool)])
+    func onlyAVMRunningHereJoinsTheStack(status: VMDeviceStatus, stacked: Bool) {
+        let state = resolve(vms: [.macOS: status], android: nil)
+        #expect(state.running.map(\.id) == (stacked ? [.vm(.macOS)] : []))
+    }
+
+    @Test func withNothingRunningTheRailSaysWhyOrOffersADevice() {
+        #expect(resolve(simulators: nil, android: nil).empty == .loading)
+        let noXcode = DevicesTabState.resolve(
+            simulators: nil, listError: "no simctl", vms: [:], selection: nil, bootingUDIDs: [], agentDriving: []
+        )
+        #expect(noXcode.empty == .unavailable("no simctl"))
+        #expect(resolve(simulators: [], android: nil).empty == .noSimulators)
+        let simulator = resolve(simulators: [Self.off], vms: Self.stoppedVMs, android: nil)
+        #expect(simulator.empty == .nothingRunning(suggested: simulator.simulatorRows.first))
+        let vmOnly = DevicesTabState.resolve(
+            simulators: nil, listError: "no simctl", vms: Self.stoppedVMs, selection: nil, bootingUDIDs: [], agentDriving: []
+        )
+        #expect(vmOnly.empty == .nothingRunning(suggested: vmOnly.vmRows.first))
+    }
+
+    @Test func theLastUsedDeviceIsOfferedFirst() {
+        let state = resolve(simulators: [Self.off, Self.mid], selection: .simulator("mid"), android: nil)
+        #expect(state.empty == .nothingRunning(suggested: state.simulatorRows.last))
+    }
 }
