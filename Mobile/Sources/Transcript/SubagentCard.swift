@@ -109,6 +109,14 @@ struct SubagentScreen: View {
         transcript?.state ?? parentState ?? subagent.state
     }
 
+    /// The terminals of the child's expanded tool calls; the parent's terminal polling sees only its own rows.
+    private var expandedTerminals: [String] {
+        (transcript?.items ?? []).filter { expanded.contains($0.id) }.flatMap { item -> [String] in
+            if case .toolCall(let call) = item.row { return call.terminalIds }
+            return []
+        }
+    }
+
     private var isLive: Bool { transcript?.found != false && !SubagentStatus.isTerminal(state) }
 
     var body: some View {
@@ -134,9 +142,14 @@ struct SubagentScreen: View {
                 guard scenePhase == .active else { return }
                 repeat {
                     session.readSubagent(subagent.id)
+                    expandedTerminals.forEach(session.readTerminal)
                     guard isLive || transcript == nil else { return }
                     try? await Task.sleep(for: .seconds(2))
                 } while !Task.isCancelled
+            }
+            .onChange(of: expanded) { old, new in
+                guard new.count > old.count else { return }
+                expandedTerminals.forEach(session.readTerminal)
             }
     }
 }

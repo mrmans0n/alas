@@ -904,7 +904,7 @@ final class TranscriptSession {
         isOpen && hub.state(of: hostID) == .online && hub.supports(PeerToolTerminalCapability.v1, on: hostID)
     }
 
-    private func readTerminal(_ terminalId: String) {
+    func readTerminal(_ terminalId: String) {
         guard canReadTerminals else { return }
         hub.send(.readToolTerminal(sessionId: sessionId, terminalId: terminalId), to: hostID)
     }
