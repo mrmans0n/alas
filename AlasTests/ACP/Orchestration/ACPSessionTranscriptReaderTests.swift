@@ -173,3 +173,25 @@ struct ACPSessionTranscriptReaderTests {
         #expect(matches.last?.snippet == "PARSER ok")
     }
 }
+
+struct ACPSessionTranscriptReplyExcerptTests {
+    @Test("whitespace runs collapse to single spaces")
+    func replyExcerptCollapsesWhitespace() {
+        #expect(ACPSessionTranscriptReader.replyExcerpt("Done.\n\n  The tab   now\tcolours…", limit: 200)
+            == "Done. The tab now colours…")
+    }
+
+    @Test("a long reply is capped at the limit with a trailing ellipsis")
+    func replyExcerptCapsLength() throws {
+        let source = String(repeating: "abcdefghij", count: 30)
+        let excerpt = try #require(ACPSessionTranscriptReader.replyExcerpt(source, limit: 200))
+        #expect(excerpt.count == 200)
+        #expect(excerpt.last == "…")
+        #expect(excerpt.dropLast() == source.prefix(199))
+    }
+
+    @Test("blank text has no excerpt")
+    func replyExcerptNilWhenBlank() {
+        #expect(ACPSessionTranscriptReader.replyExcerpt("  \n ") == nil)
+    }
+}

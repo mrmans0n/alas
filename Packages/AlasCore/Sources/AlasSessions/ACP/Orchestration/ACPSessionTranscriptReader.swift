@@ -164,6 +164,26 @@ public enum ACPSessionTranscriptReader: Sendable {
         return nil
     }
 
+    /// Start of the latest agent message, whitespace runs collapsed to one
+    /// space, capped at `limit` characters with a trailing "…".
+    @MainActor
+    public static func lastAgentReplyStart(_ messages: [ACPMessage], limit: Int = 200) -> String? {
+        for message in messages.reversed() {
+            if let text = agentText(message), let excerpt = replyExcerpt(text, limit: limit) {
+                return excerpt
+            }
+        }
+        return nil
+    }
+
+    /// The pure collapse and cap behind `lastAgentReplyStart`; nil when empty.
+    public static func replyExcerpt(_ text: String, limit: Int = 200) -> String? {
+        let collapsed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !collapsed.isEmpty else { return nil }
+        guard collapsed.count > limit else { return collapsed }
+        return String(collapsed.prefix(max(limit - 1, 0))) + "…"
+    }
+
     /// The title of the latest row after the last user row that reports a
     /// turn failure: a stored transcript's record that its last turn failed.
     /// A background error never set `endedTurn`, so it does not count, and a
