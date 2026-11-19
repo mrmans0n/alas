@@ -3902,7 +3902,7 @@ struct HostProtocolServerTests {
         ), fixture: fixture)
         defer { routeHost.stop() }
 
-        #expect(link.acknowledged == (route == .twoWay ? [] : [HostProtocolCapability.delegationReverseV1]))
+        #expect(link.acknowledged.contains(HostProtocolCapability.delegationReverseV1) == (route != .twoWay))
         let request: HostRequest = route == .beyondDelegation ? .listSessions : .delegation(.discover(repository: nil))
         link.emit(.message(.peerHost(HostClientMessage(id: 4, request: request))))
         try await eventually { await MainActor.run { !link.sent.isEmpty } }

@@ -233,7 +233,10 @@ struct RemoteServerIntegrationTests {
             provider.peerDeviceHost = PeerDeviceHost(grants: grants, environment: .init(
                 eligible: { [weak self] in self?.serving == true },
                 availability: { _ in .ready }, driver: { _ in .available },
-                subscribe: { [weak self] _, packet, _ in self?.receiver = packet; return UUID() },
+                subscribe: { [weak self] _, packet, _ in
+                    self?.receiver = packet
+                    return UUID()
+                },
                 unsubscribe: { [weak self] _, _ in self?.receiver = nil },
                 acquire: { _, _ in false }, freezeInput: { _, _ in }, release: { _, _ in }, input: { _, _, _, _ in }
             ))

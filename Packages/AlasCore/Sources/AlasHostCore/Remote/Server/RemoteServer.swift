@@ -202,9 +202,15 @@ public final class RemoteServer {
         self.listener = listener
         setService(advertisement)
         listener.start(queue: queue, onState: onState) { [weak self, weak listener] stream in
-            guard let listener else { stream.cancel(); return }
+            guard let listener else {
+                stream.cancel()
+                return
+            }
             Task { @MainActor in
-                guard let self, self.listener === listener else { stream.cancel(); return }
+                guard let self, self.listener === listener else {
+                    stream.cancel()
+                    return
+                }
                 self.accept(stream)
             }
         }
