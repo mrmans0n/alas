@@ -269,6 +269,21 @@ final class SessionWorkspace {
             || hub.supports(HostProtocolCapability.worktreesGitV1, on: hostID))
     }
 
+    /// Whether the open working-tree diff's hunks can be staged, unstaged or discarded one by one.
+    var canChangeHunks: Bool {
+        guard let key = diff?.key, key.sha == nil, key.stage != nil, gitTarget != nil else { return false }
+        return hub.supports(HostProtocolCapability.worktreesHunksPhoneV1, on: hostID)
+            || hub.supports(HostProtocolCapability.worktreesHunksV1, on: hostID) && hub.supports(HostProtocolCapability.worktreesGitV1, on: hostID)
+    }
+
+    /// Applies `action` to `hunk`, the `index`th of the open diff, then reads that diff again.
+    /// Returns the host's refusal, or nil.
+    func changeHunk(_ action: RemoteHunkAction, index: Int, _ hunk: RemoteDiffHunk) async -> String? {
+        guard let key = diff?.key, key.sha == nil else { return "This diff can't be changed from here." }
+        defer { if diff?.key == key { requestDiff(key) } }
+        return await git(.hunk(path: key.path, index: index, header: hunk.header, linesHash: hunk.linesHash, action: action))
+    }
+
     /// Runs `change` on the session's worktree and refreshes the change list. Returns the host's
     /// refusal, worded for the user, or nil once it succeeded.
     func git(_ change: RemoteGitChange) async -> String? {
