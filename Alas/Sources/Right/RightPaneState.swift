@@ -376,6 +376,10 @@ final class RightPaneState: GGSplitCommitServicing {
     /// Gate reevaluations must join a changed-HEAD local recovery, not race it.
     @ObservationIgnored var ggLocalSnapshotRecoveryTask: Task<Bool?, Never>? = nil
     @ObservationIgnored var ggExplicitStackRefreshID: UUID? = nil
+    /// A ref notification asked to check the live HEAD and no reevaluation
+    /// has finished that check yet. A reevaluation that supersedes it does
+    /// the check itself instead of reloading GG against a stale commit key.
+    @ObservationIgnored var ggHeadVerificationPending = false
     @ObservationIgnored var ggStackRefreshDeferredUntilMutationEnds = false
     @ObservationIgnored var ggStackRefreshDeferralGeneration: UInt = 0
     /// A refresh result may still arrive after its task was cancelled. Only

@@ -130,37 +130,53 @@ private final class NoCheckpointsEnvironment: AlasHostEnvironment {
 /// that arrive meanwhile.
 @MainActor
 final class SocketClient {
-    private let fd: Int32
+    private let connection: ClientSocket
     private var nextID = 0
     private var responses: [Int: HostResponse] = [:]
     private(set) var events: [HostEvent] = []
+    /// What a wait that times out reports: lines that did not decode, and
+    /// why the reader stopped, if it has.
+    private var undecodableLines = 0
+    private var readerEnd: String?
 
     init(path: String) throws {
         let fd = socket(AF_UNIX, streamSocketType, 0)
         guard fd >= 0, HostSocketServer.withAddress(path, { connect(fd, $0, $1) }) == 0 else {
             throw POSIXError(.ECONNREFUSED)
         }
-        self.fd = fd
+        let connection = ClientSocket(fd: fd)
+        self.connection = connection
         Thread.detachNewThread { [weak self] in
             var pending = Data()
             var chunk = [UInt8](repeating: 0, count: 64 * 1024)
             while true {
                 let count = read(fd, &chunk, chunk.count)
                 if count < 0, errno == EINTR { continue }
-                guard count > 0 else { return }
+                guard count > 0 else {
+                    let end = count == 0 ? "EOF" : "errno \(errno)"
+                    connection.close()
+                    Task { @MainActor in self?.readerEnd = end }
+                    return
+                }
                 pending.append(contentsOf: chunk[0 ..< count])
                 while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
                     let line = Data(pending[pending.startIndex ..< newline])
                     pending.removeSubrange(pending.startIndex ... newline)
-                    guard let message = try? JSONDecoder().decode(HostServerMessage.self, from: line) else { continue }
+                    guard let message = try? JSONDecoder().decode(HostServerMessage.self, from: line) else {
+                        Task { @MainActor in self?.undecodableLines += 1 }
+                        continue
+                    }
                     Task { @MainActor in self?.deliver(message) }
                 }
             }
         }
     }
 
+    /// Ends the connection. The reader closes the descriptor once it stops
+    /// reading: closed while it still reads, the descriptor's number can go
+    /// to another test's socket, whose lines the reader would then take.
     func close() {
-        Foundation.close(fd)
+        connection.shutDown()
     }
 
     func request(_ request: HostRequest, sourceLocation: SourceLocation = #_sourceLocation) async throws -> HostResponse {
@@ -168,19 +184,74 @@ final class SocketClient {
         let id = nextID
         var line = try JSONEncoder().encode(HostClientMessage(id: id, request: request))
         line.append(UInt8(ascii: "\n"))
-        _ = line.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-        try await eventually(within: .seconds(30), sourceLocation: sourceLocation) { await self.responses[id] != nil }
+        let written = connection.write(line)
+        try await reportingState(of: "request \(id), \(written) of \(line.count) bytes written", at: sourceLocation) {
+            try await eventually(within: .seconds(30), sourceLocation: sourceLocation) { await self.responses[id] != nil }
+        }
         return try #require(responses[id])
     }
 
     func waitForEvent(sourceLocation: SourceLocation = #_sourceLocation, _ matches: @escaping @Sendable (HostEvent) -> Bool) async throws {
-        try await eventually(within: .seconds(30), sourceLocation: sourceLocation) { await self.events.contains(where: matches) }
+        try await reportingState(of: "an event", at: sourceLocation) {
+            try await eventually(within: .seconds(30), sourceLocation: sourceLocation) { await self.events.contains(where: matches) }
+        }
+    }
+
+    /// Runs a wait and, when it times out, records what the client had seen.
+    private func reportingState(
+        of awaited: String, at sourceLocation: SourceLocation, _ wait: () async throws -> Void
+    ) async throws {
+        do {
+            try await wait()
+        } catch {
+            let reader = readerEnd.map { "ended with \($0)" } ?? "running"
+            Issue.record(
+                "Waiting for \(awaited): \(responses.count) responses, \(events.count) events, \(undecodableLines) undecodable lines, reader \(reader)",
+                sourceLocation: sourceLocation
+            )
+            throw error
+        }
     }
 
     private func deliver(_ message: HostServerMessage) {
         switch message {
         case .response(let id, let result): responses[id] = result
         case .events(let batch, _): events += batch
+        }
+    }
+}
+
+/// A client's descriptor, used only while it is open: once closed, its
+/// number may already belong to another socket.
+private final class ClientSocket: @unchecked Sendable {
+    private let fd: Int32
+    private let lock = NSLock()
+    private var isOpen = true
+
+    init(fd: Int32) {
+        self.fd = fd
+    }
+
+    func write(_ data: Data) -> Int {
+        lock.withLock {
+            guard isOpen else { return -1 }
+            return data.withUnsafeBytes { Foundation.write(fd, $0.baseAddress, $0.count) }
+        }
+    }
+
+    /// Wakes a blocked read, which then sees the end of the stream.
+    func shutDown() {
+        lock.withLock {
+            guard isOpen else { return }
+            _ = shutdown(fd, Int32(SHUT_RDWR))
+        }
+    }
+
+    func close() {
+        lock.withLock {
+            guard isOpen else { return }
+            isOpen = false
+            Foundation.close(fd)
         }
     }
 }

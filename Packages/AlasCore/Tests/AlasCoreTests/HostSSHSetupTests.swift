@@ -163,9 +163,18 @@ struct HostSSHSetupTests {
             """),
         ]
         for (name, body) in tools {
-            let tool = bin.appendingPathComponent(name)
-            try body.write(to: tool, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+            // A short-lived `install` writes the executable. Written from this
+            // process, its descriptor can leak into another test's concurrent
+            // fork, and Linux refuses to exec it while that child holds it
+            // (ETXTBSY, exit 126).
+            let source = directory.appendingPathComponent("\(name).txt")
+            try body.write(to: source, atomically: true, encoding: .utf8)
+            let install = Process()
+            install.executableURL = URL(fileURLWithPath: "/usr/bin/install")
+            install.arguments = ["-m", "755", source.path, bin.appendingPathComponent(name).path]
+            try install.run()
+            install.waitUntilExit()
+            try #require(install.terminationStatus == 0)
         }
 
         let shell = Process()

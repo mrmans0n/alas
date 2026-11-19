@@ -528,7 +528,8 @@ fn close_rejects_stale_generation_without_removing_broker() {
 /// call — to model two different helper processes each reaching the same
 /// live supervisor.
 ///
-/// Both raw connections are accepted before either sends its request, so
+/// Both raw connections are accepted before either sends its request (a
+/// probe on a third connection proves it), so
 /// the race under test is `broker_close`'s own `state.closing` guard, not
 /// an unrelated one against the accept loop (which stops taking *new*
 /// connections within ~50ms of the first close, per `serve_broker_ipc`'s
@@ -554,6 +555,24 @@ fn second_close_of_a_still_valid_generation_is_rejected_while_the_first_is_in_fl
 
     let mut first = UnixStream::connect(&socket).expect("first closer connects");
     let mut second = UnixStream::connect(&socket).expect("second closer connects");
+
+    // `connect` returns once the kernel has queued the connection, not once
+    // the supervisor has accepted it. Left in the backlog, the second closer
+    // is dropped with the listener when the first close ends the accept loop,
+    // and reads EOF or EPIPE instead of a reply. The backlog is accepted in
+    // order, so an answer on a later connection proves both closers were
+    // accepted. A `raw/` request without raw context is refused straight away
+    // and skips the request order, so it cannot wait behind the closers'
+    // reserved places.
+    let mut probe = UnixStream::connect(&socket).expect("probe connects");
+    writeln!(probe, r#"{{"method":"raw/respondExact","params":{{}}}}"#).expect("probe request");
+    probe.flush().expect("flush probe request");
+    let mut probe_reply = String::new();
+    BufReader::new(&probe)
+        .read_line(&mut probe_reply)
+        .expect("probe reply");
+    let probe_value: Value = serde_json::from_str(probe_reply.trim()).expect("probe reply JSON");
+    assert_eq!(probe_value["ok"], false, "probe: {probe_value}");
 
     writeln!(first, "{close_request}").expect("first close request");
     first.flush().expect("flush first close request");

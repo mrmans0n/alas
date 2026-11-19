@@ -269,7 +269,11 @@ struct AlasHostExecutableTests {
             // The link names this machine's interfaces; loopback alone is
             // reachable wherever the test runs.
             #expect(link.origins.contains { !RunEndpointPolicy.isLoopback(URL(string: $0)!) }, "\(link.origins)")
-            let outcome = await RemotePeerPairer.live.pair(
+            // The live transport, with a deadline only for hangs: on a loaded
+            // runner the host can take longer to answer than the 4 s a real
+            // peer gets, and the pairer then reports it unreachable.
+            let pairer = RemotePeerPairer(fetch: RemotePeerPairer.live.fetch, timeout: 300)
+            let outcome = await pairer.pair(
                 origins: [String(line.dropFirst("remote ".count))], code: link.code, deviceName: "Laptop", advertisement: mac
             )
             // Stopped before the next start, which needs the data directory.

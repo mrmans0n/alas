@@ -338,7 +338,9 @@ extension RightPaneState {
     /// cached commit key may not yet reflect the ref notification.
     @MainActor
     @discardableResult
-    func reevaluateGGGate(verifyingHead: Bool = false) -> Task<Void, Never> {
+    func reevaluateGGGate(verifyingHead requestedHeadVerification: Bool = false) -> Task<Void, Never> {
+        let verifyingHead = requestedHeadVerification || ggHeadVerificationPending
+        ggHeadVerificationPending = verifyingHead
         let remoteMetadata = ggStack
         ggStackRefreshGeneration &+= 1
         let refreshGeneration = ggStackRefreshGeneration
@@ -368,6 +370,7 @@ extension RightPaneState {
                 async let liveHeadSHA = try? self.git.resolveRevision(at: self.worktree.path, ref: "HEAD")
                 let (branch, headSHA) = await (liveBranch, liveHeadSHA)
                 guard !Task.isCancelled, self.ggStackRefreshGeneration == refreshGeneration else { return }
+                self.ggHeadVerificationPending = false
                 if !self.hasLoadedSnapshot || cachedHeadSHA.isEmpty || branch != cachedBranch || headSHA != cachedHeadSHA {
                     self.markSnapshotUnknown()
                     // Invalidation cancels this GG task. A fresh task must

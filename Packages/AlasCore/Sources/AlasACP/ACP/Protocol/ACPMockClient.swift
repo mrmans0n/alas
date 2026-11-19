@@ -11,8 +11,9 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
     public let providesDurableOperationKeyDeduplication: Bool
 
     private let sentLock = NSLock()
-    private var recordedRequests: [ACPRequest] = []
-    public var sent: [ACPRequest] { sentLock.withLock { recordedRequests } }
+    /// Each with an identity, so a refused handoff takes back its own entry.
+    private var recordedRequests: [(id: UUID, request: ACPRequest)] = []
+    public var sent: [ACPRequest] { sentLock.withLock { recordedRequests.map(\.request) } }
     private var scripts: [String: (ACPRequest) throws -> Data] = [:]
     private var asyncScripts: [String: (ACPRequest) async throws -> Data] = [:]
     private var responseScripts: [String: (ACPRequest) async throws -> ACPResponse] = [:]
@@ -99,12 +100,38 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
         _ request: ACPRequest,
         onRequestHandoff: @Sendable () -> Void
     ) async throws -> ACPResponse {
+        try await handOff(request, onRequestHandoff: onRequestHandoff)
+    }
+
+    public func send(
+        _ request: ACPRequest,
+        beforeRequestHandoff: @Sendable (ACPBrokerGeneration?) async throws -> Void,
+        onRequestHandoff: @Sendable () throws -> Void
+    ) async throws -> ACPResponse {
+        try await beforeRequestHandoff(brokerGenerationForTesting)
+        return try await handOff(request, onRequestHandoff: onRequestHandoff)
+    }
+
+    /// Records the request before announcing its handoff, as a transport has
+    /// queued it by then. The announcement can release a caller on another
+    /// thread whose own request must be recorded after this one. A refused
+    /// handoff takes the request back: it never reached the agent.
+    private func handOff(
+        _ request: ACPRequest,
+        onRequestHandoff: () throws -> Void
+    ) async throws -> ACPResponse {
         if rejectsRequestsAfterShutdown, shutdownCount > 0 {
             requestsAfterShutdownCount += 1
             throw ACPClientError.notRunning
         }
-        sentLock.withLock { recordedRequests.append(request) }
-        onRequestHandoff()
+        let entry = UUID()
+        sentLock.withLock { recordedRequests.append((entry, request)) }
+        do {
+            try onRequestHandoff()
+        } catch {
+            sentLock.withLock { recordedRequests.removeAll { $0.id == entry } }
+            throw error
+        }
         if let script = responseScripts[request.method] {
             return try await script(request)
         }
@@ -117,21 +144,11 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
         return ACPResponse(body: try script(request))
     }
 
-    public func send(
-        _ request: ACPRequest,
-        beforeRequestHandoff: @Sendable (ACPBrokerGeneration?) async throws -> Void,
-        onRequestHandoff: @Sendable () throws -> Void
-    ) async throws -> ACPResponse {
-        try await beforeRequestHandoff(brokerGenerationForTesting)
-        try onRequestHandoff()
-        return try await send(request)
-    }
-
     /// Mock notifications just record the call. Tests can inspect
     /// `sent` (which holds both requests and notifications in arrival
     /// order) without needing to script a reply.
     public func notify(_ request: ACPRequest) async throws {
-        sentLock.withLock { recordedRequests.append(request) }
+        sentLock.withLock { recordedRequests.append((UUID(), request)) }
         if let script = notificationAsyncScripts[request.method] {
             try await script(request)
         }
