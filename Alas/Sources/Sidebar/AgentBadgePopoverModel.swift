@@ -110,3 +110,35 @@ struct AgentBadgePopoverModel: Equatable {
         return Int((contextRatio(used: usage.used, size: usage.size) * 100).rounded())
     }
 }
+
+extension AgentBadgePopoverModel {
+    /// The card for a session on a peer Mac, from the summary the host sent.
+    init(peer session: RemoteSessionSummary) {
+        let status: Status = switch session.status {
+        case "streaming": .running
+        case "awaitingPermission": .permission
+        case "awaitingInput": .awaitingInput
+        default: .idle
+        }
+        let detail = session.detail
+        let plan: AgentSidebarPlanProgress? = detail.flatMap { detail in
+            guard let total = detail.planTotal, total > 0 else { return nil }
+            return AgentSidebarPlanProgress(
+                completed: detail.planCompleted ?? 0, total: total, currentStep: detail.planStep)
+        }
+        let agent = AgentKind(rawValue: session.agentId)
+        self.init(
+            agentName: agent?.displayName ?? session.agentId,
+            agentLogoAsset: agent?.logoAssetName,
+            title: session.title,
+            status: status,
+            since: session.updatedAt > 0 ? Date(timeIntervalSince1970: TimeInterval(session.updatedAt)) : nil,
+            body: Self.body(
+                status: status,
+                permissionTitle: detail?.previewKind == .permission ? detail?.preview : nil,
+                plan: plan,
+                reply: detail?.previewKind == .reply ? detail?.preview : nil),
+            model: detail?.model,
+            contextPercent: detail?.contextPercent)
+    }
+}

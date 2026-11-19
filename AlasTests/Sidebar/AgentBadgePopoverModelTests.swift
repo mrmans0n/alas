@@ -1,4 +1,5 @@
 import AlasACP
+import AlasRemoteKit
 import Foundation
 import Testing
 @testable import Alas
@@ -90,5 +91,24 @@ struct AgentBadgePopoverModelTests {
         #expect(Model.contextPercent(ACPUsageInfo(used: 63, size: 100, cost: nil)) == 63)
         #expect(Model.contextPercent(ACPUsageInfo(used: 63, size: 0, cost: nil)) == nil)
         #expect(Model.contextPercent(nil) == nil)
+    }
+
+    @Test("a peer session in a permission state shows its request and model")
+    func peerPermission() {
+        let summary = RemoteSessionSummary(
+            id: "p", title: "t", agentId: "codex", status: "awaitingPermission", canDrive: false,
+            detail: .init(model: "gpt-5.3", contextPercent: 41, preview: "Run swift test", previewKind: .permission))
+        let peer = Model(peer: summary)
+        #expect(peer.status == .permission)
+        #expect(peer.body == .request("Run swift test"))
+        #expect(peer.footerText == "gpt-5.3 · 41% context")
+    }
+
+    @Test("a peer session without detail has no body and shows the agent name")
+    func peerWithoutDetail() {
+        let summary = RemoteSessionSummary(id: "p", title: "t", agentId: "codex", status: "idle", canDrive: false)
+        let peer = Model(peer: summary)
+        #expect(peer.body == .none)
+        #expect(peer.footerText == peer.agentName)
     }
 }

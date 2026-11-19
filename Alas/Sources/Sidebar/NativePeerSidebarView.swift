@@ -843,7 +843,7 @@ private struct NativePeerAgentBadge: View {
             .modifier(OptionalBadgeChrome(surface: surface))
         }
         .buttonStyle(.plain)
-        .help(tooltip)
+        .agentBadgePopover { AgentBadgePopoverModel(peer: session) }
         .accessibilityLabel(tooltip)
     }
 
