@@ -51,6 +51,23 @@ struct NativePeerTranscriptTests {
         #expect(!transcript.canDrive)
     }
 
+    @Test func newSubscriptionTakesALowerEpochSnapshot() {
+        var transcript = NativePeerTranscript(sessionId: "B:s")
+        transcript.apply(.transcriptSnapshot(sessionId: "B:s", streamingState: "idle", canDrive: true,
+                                              messages: [row("old", index: 0, text: "old")],
+                                              firstIndex: 0, totalCount: 1, epoch: 5, revision: 0))
+        // A reopened session's transcript counts from 0 again, without the lease.
+        let reopened: RemoteServerMessageOf<HostServerMessage, HostClientMessage> = .transcriptSnapshot(
+            sessionId: "B:s", streamingState: "idle", canDrive: false,
+            messages: [row("new", index: 0, text: "new")], firstIndex: 0, totalCount: 1, epoch: 0, revision: 0)
+        transcript.apply(reopened)
+        #expect(transcript.canDrive)
+        transcript.expectNewTranscript()
+        transcript.apply(reopened)
+        #expect(transcript.messages.map(\.stableId) == ["new"])
+        #expect(!transcript.canDrive)
+    }
+
     @Test(arguments: [false, true])
     func olderPagesPreserveNewerStableRows(hidden: Bool) {
         var transcript = NativePeerTranscript(sessionId: "B:s")
