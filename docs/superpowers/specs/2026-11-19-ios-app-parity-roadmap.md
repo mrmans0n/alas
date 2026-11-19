@@ -32,8 +32,9 @@ commit, push, pull, fetch; shepherd menu; plain unified diff; file tree.
    - Paste images from the clipboard into the composer.
 2. **Commit drill-down**: tap a commit for its files, tap a file for its diff
    (`listCommitFiles`, `commitFileDiff`; host already serves them).
-3. **Diff reading**: syntax colour and word-level highlights in the phone diff,
-   reusing the transcript highlighter; image diffs via `fileBytes`.
+3. **Diff reading**: syntax colour in the phone diff, reusing the transcript
+   highlighter (shipped with slice 2). The Mac diff has no word-level
+   highlights, so neither does the phone. Image diffs via `fileBytes` remain.
 4. **Session and worktree lifecycle**: close / reopen sessions
    (`closeSessionTab`, `openSessionTab`), archive session, archive / delete /
    rename-branch worktrees over the host channel (`worktreesLifecycleV1`),
