@@ -19,10 +19,11 @@ public enum RemoteWorktreeSummaryBuilder: Sendable {
         isFolder: Bool = false,
         metrics: RemoteWorktreeSummaryMetrics
     ) -> RemoteWorktreeSummary {
+        var summary: RemoteWorktreeSummary
         switch metrics {
         case .available(let comparisonRef, let commitCount, let changes):
             let uniquePaths = Set(changes.map(\.path))
-            return RemoteWorktreeSummary(
+            summary = RemoteWorktreeSummary(
                 projectName: projectName,
                 worktreeName: worktree.name,
                 branch: worktree.branch,
@@ -40,7 +41,7 @@ public enum RemoteWorktreeSummaryBuilder: Sendable {
                 isFolder: isFolder ? true : nil
             )
         case .unavailable:
-            return RemoteWorktreeSummary(
+            summary = RemoteWorktreeSummary(
                 projectName: projectName,
                 worktreeName: worktree.name,
                 branch: worktree.branch,
@@ -58,5 +59,7 @@ public enum RemoteWorktreeSummaryBuilder: Sendable {
                 isFolder: isFolder ? true : nil
             )
         }
+        summary.lineageID = worktree.lineageID
+        return summary
     }
 }

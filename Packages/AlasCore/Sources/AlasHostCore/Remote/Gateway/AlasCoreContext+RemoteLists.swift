@@ -170,6 +170,7 @@ extension AlasCoreContext {
         )
         listed.linkedProjectId = primaryId
         listed.repositoryKey = summary.repositoryKey
+        listed.lineageID = summary.lineageID
         return listed
     }
 

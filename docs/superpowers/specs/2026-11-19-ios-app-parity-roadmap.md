@@ -37,7 +37,9 @@ commit, push, pull, fetch; shepherd menu; plain unified diff; file tree.
 4. **Session and worktree lifecycle**: close / reopen sessions
    (`closeSessionTab`, `openSessionTab`), archive session, archive / delete /
    rename-branch worktrees over the host channel (`worktreesLifecycleV1`),
-   with the destructive confirmation the Mac uses.
+   with the destructive confirmation the Mac uses. Worktree actions sit in the
+   session's title menu, where the phone already talks to the host channel;
+   `RemoteWorktreeSummary.lineageID` lets the host refuse a replaced checkout.
 5. **Hunk actions**: stage / unstage / discard a single hunk.
 6. **PR and run**: PR status and checks with open-in-browser (`reviewStatus`);
    run scripts list with run / stop / rerun and output (`listRunScripts`,

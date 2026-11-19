@@ -21,6 +21,9 @@ struct TranscriptScreen: View {
     @State private var newBranch = ""
     @State private var confirmingArchive = false
     @State private var actionError: String?
+    @State private var confirmingDelete = false
+    /// A worktree removal the host refused in a way the user may overrule.
+    @State private var overruling: Overruling?
     @Environment(\.dismiss) private var dismiss
     /// The worktree whose terminals are pushed from this screen.
     @State private var terminalsWorktree: String?
@@ -190,6 +193,12 @@ struct TranscriptScreen: View {
                 if workspace.canArchive {
                     Button("Archive Session", systemImage: "archivebox", role: .destructive) { confirmingArchive = true }
                 }
+                if workspace.canRemoveWorktree {
+                    Section {
+                        Button("Archive Worktree", systemImage: "archivebox") { removeWorktree(workspace, .archive) }
+                        Button("Delete Worktree…", systemImage: "trash", role: .destructive) { confirmingDelete = true }
+                    }
+                }
             }
             .toolbar {
                 if !session.hasEnded, workspace.canShepherd, workspace.shepherdLoaded {
@@ -241,11 +250,43 @@ struct TranscriptScreen: View {
             } message: {
                 Text("The session stops and leaves the session list.")
             }
+            .confirmationDialog("Delete this worktree?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+                Button("Delete", role: .destructive) { removeWorktree(workspace, .delete) }
+            } message: {
+                Text("Its folder is removed from the machine. The branch is deleted too once it's merged.")
+            }
+            .confirmationDialog(overruling?.failure.message ?? "", isPresented: Binding { overruling != nil } set: { if !$0 { overruling = nil } },
+                                titleVisibility: .visible, presenting: overruling) { held in
+                Button(held.failure.overrule == .force ? "Delete Anyway" : "Discard Changes", role: .destructive) {
+                    removeWorktree(workspace, held.removal, force: held.force || held.failure.overrule == .force,
+                                   discard: held.discard || held.failure.overrule == .discardUnsavedEdits)
+                }
+            }
             .alert("Couldn't do that", isPresented: Binding { actionError != nil } set: { if !$0 { actionError = nil } }) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(actionError ?? "")
             }
+    }
+
+    private struct Overruling {
+        let removal: SessionWorkspace.WorktreeRemoval
+        let failure: RemoteGitFailure
+        let force: Bool
+        let discard: Bool
+    }
+
+    /// Sends the removal; a refusal the user may overrule asks again, any other shows.
+    private func removeWorktree(_ workspace: SessionWorkspace, _ removal: SessionWorkspace.WorktreeRemoval,
+                                force: Bool = false, discard: Bool = false) {
+        Task {
+            guard let failure = await workspace.removeWorktree(removal, force: force, discard: discard) else { return dismiss() }
+            if failure.overrule != nil {
+                overruling = Overruling(removal: removal, failure: failure, force: force, discard: discard)
+            } else {
+                actionError = failure.message
+            }
+        }
     }
 
     /// Changes carries the web's tab badge: the loaded count, else the worktree summary's.
