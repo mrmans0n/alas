@@ -315,6 +315,8 @@ final class TranscriptSession {
     func close() {
         guard subscription != nil else { return }
         subscription = nil
+        // An answer that never came (the link dropped) must not hold the buttons.
+        tabAction = nil
         // The host refuses a prompt over the connection, subscribed or not: keep listening
         // until every sent draft has an outcome, so a refusal still lands in the draft.
         if unsettled.isEmpty { listener = nil }
@@ -350,6 +352,25 @@ final class TranscriptSession {
     func stop() { hub.send(.stop(sessionId: sessionId), to: hostID) }
 
     func takeOver() { hub.send(.takeOver(sessionId: sessionId), to: hostID) }
+
+    /// The host closes and reopens its session tabs for this phone, as for a Mac peer.
+    var supportsSessionTabs: Bool { hub.supports(PeerSessionTabsCapability.v1, on: hostID) }
+    /// A close or reopen waiting for the host's answer.
+    private(set) var tabAction: TabAction?
+    /// The host's refusal of the last close or reopen.
+    var tabActionError: String?
+
+    enum TabAction { case close, reopen }
+
+    func closeTab() { requestTab(.close) }
+    func reopenTab() { requestTab(.reopen) }
+
+    private func requestTab(_ action: TabAction) {
+        guard tabAction == nil, supportsSessionTabs, hub.state(of: hostID) == .online else { return }
+        tabAction = action
+        tabActionError = nil
+        hub.send(action == .close ? .closeSessionTab(sessionId: sessionId) : .openSessionTab(sessionId: sessionId), to: hostID)
+    }
 
     /// The issue an Install was sent for; the button waits until the host replaces it.
     private(set) var adapterInstallRequested: RemoteAgentIssue?
@@ -650,6 +671,8 @@ final class TranscriptSession {
         holdTask?.cancel()
         holdTask = nil
         isStopping = false
+        // A close or reopen sent on the old link has no answer coming; let the user ask again.
+        tabAction = nil
         mentionCandidates = []
         mentionCandidatesQuery = nil
         // A final read whose reply never came, or came before the exit, is asked again.
@@ -731,6 +754,17 @@ final class TranscriptSession {
             guard case .promptRejected(let id, _) = message, id == sessionId else { return }
         }
         switch message {
+        case .sessionTabActionSucceeded(let id) where id == sessionId:
+            let reopened = tabAction == .reopen
+            tabAction = nil
+            // The host dropped the closed session's subscription; a new one brings its snapshot.
+            if reopened {
+                close()
+                open()
+            }
+        case .sessionTabActionFailed(let id, let message) where id == sessionId:
+            tabAction = nil
+            tabActionError = message
         case .transcriptImage(let id, let path, let data) where id == sessionId:
             if requestedImages.contains(path), images[path] == nil {
                 Task { [weak self] in

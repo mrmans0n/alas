@@ -132,6 +132,17 @@ struct WorktreeRow: View {
                     }
                 }
             }
+            // Closed sessions open read-only, with Reopen, as the Mac's session history does.
+            if !entry.closedSessions.isEmpty {
+                Menu("Closed Sessions", systemImage: "clock.arrow.circlepath") {
+                    ForEach(entry.closedSessions, id: \.id) { session in
+                        Button { open(session) } label: {
+                            Text(session.title)
+                            Text(RepoDisplay.relativeTime(session.updatedAt))
+                        }
+                    }
+                }
+            }
         }
     }
 

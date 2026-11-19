@@ -48,6 +48,38 @@ import Testing
             == HostClientMessage(id: 4, request: .shepherdSession(sessionID: "s", action: .enableAutoMerge)))
     }
 
+    @Test func phoneLifecycleRequestsDecodeOnTheMac() throws {
+        let archive = RemoteGitRequest.archiveSession(id: 5, sessionID: "s").json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: archive)
+            == HostClientMessage(id: 5, request: .archiveSession(sessionID: "s")))
+        let rename = RemoteGitRequest.renameBranch(id: 6, projectID: "p", path: "/r", from: "a", to: "b").json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: rename) == HostClientMessage(
+            id: 6, request: .renameBranch(worktree: WorktreeRef(projectID: "p", path: "/r"), from: "a", to: "b")))
+        let ref = WorktreeRef(projectID: "p", path: "/r")
+        let archiveWorktree = RemoteGitRequest.archiveWorktree(id: 7, projectID: "p", path: "/r", lineageID: "l", branch: "b",
+                                                               discardUnsavedEdits: true).json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: archiveWorktree) == HostClientMessage(
+            id: 7, request: .archiveWorktree(worktree: ref, lineageID: "l", branch: "b", discardUnsavedEdits: true)))
+        let delete = RemoteGitRequest.deleteWorktree(id: 8, projectID: "p", path: "/r", lineageID: nil, branch: "b",
+                                                     force: true, deleteBranchIfMerged: true, discardUnsavedEdits: false).json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: delete) == HostClientMessage(id: 8, request: .deleteWorktree(
+            worktree: ref, lineageID: nil, branch: "b", force: true, deleteBranchIfMerged: true, discardUnsavedEdits: false)))
+    }
+
+    @Test(arguments: [
+        (HostError.worktreeDeletion(refusal: .needsForce("Uncommitted changes.")), "Uncommitted changes.", RemoteGitFailure.Overrule.force),
+        (.worktreeArchive(refusal: .unsavedEdits), "An editor on the machine has unsaved changes in this worktree.", .discardUnsavedEdits),
+        (.worktreeDeletion(refusal: .mainWorktree), "The main checkout can't be archived or deleted.", nil),
+    ] as [(HostError, String, RemoteGitFailure.Overrule?)])
+    func phoneReadsTheMacsWorktreeRefusal(error: HostError, message: String, overrule: RemoteGitFailure.Overrule?) throws {
+        let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 7, result: .failure(error: error))))
+        guard case .failure(let failure) = try #require(RemoteGitRequest.reply(to: 7, in: reply)) else {
+            Issue.record("succeeded")
+            return
+        }
+        #expect(failure == RemoteGitFailure(message, overrule: overrule))
+    }
+
     @Test func phoneReadsASessionsShepherdFromTheMacsList() throws {
         func summary(_ id: String, _ shepherd: HostSessionShepherd?) -> HostSessionSummary {
             var summary = HostSessionSummary(owner: .worktree("w"), id: id, agentId: "codex", title: "t", remoteSessionId: nil,

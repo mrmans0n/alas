@@ -17,6 +17,17 @@ struct TranscriptScreen: View {
     @State private var showSettings = false
     @State private var renaming = false
     @State private var newTitle = ""
+    @State private var renamingBranch = false
+    @State private var newBranch = ""
+    /// The branch the Rename Branch dialog opened on.
+    @State private var renamedBranch = ""
+    @State private var confirmingArchive = false
+    @State private var actionError: String?
+    /// The worktree a Delete awaits confirmation for, as it was when the user asked.
+    @State private var deleting: SessionWorkspace.RemovalTarget?
+    /// A worktree removal the host refused in a way the user may overrule.
+    @State private var overruling: Overruling?
+    @Environment(\.dismiss) private var dismiss
     /// The worktree whose terminals are pushed from this screen.
     @State private var terminalsWorktree: String?
     /// The subagent whose transcript is pushed from this screen; it reads through this screen's session.
@@ -84,7 +95,7 @@ struct TranscriptScreen: View {
 
     private func content(_ session: TranscriptSession, _ workspace: SessionWorkspace) -> some View {
         let available = modes(session)
-        return TranscriptContent(session: session, openSubagent: { openedSubagent = $0 })
+        let base = TranscriptContent(session: session, openSubagent: { openedSubagent = $0 })
             // Kept alive under the other tabs so the scroll position survives a switch.
             .opacity(mode == .transcript ? 1 : 0)
             .allowsHitTesting(mode == .transcript)
@@ -137,12 +148,7 @@ struct TranscriptScreen: View {
                         }
                     }
                 } else if mode == .transcript {
-                    Text("This session has ended.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(.bar)
+                    EndedBar(session: session)
                 }
             }
             // Below the request cards, so links in a plan under review route too. A file link opens in the
@@ -170,6 +176,26 @@ struct TranscriptScreen: View {
                         renaming = true
                     }
                     Button("Session Settings", systemImage: "slider.horizontal.3") { showSettings = true }
+                    if let branch = workspace.renamableBranch {
+                        Button("Rename Branch…", systemImage: "arrow.triangle.branch") {
+                            newBranch = branch
+                            renamedBranch = branch
+                            renamingBranch = true
+                        }
+                    }
+                    if session.supportsSessionTabs {
+                        Button("Close Session", systemImage: "xmark.circle") { session.closeTab() }
+                            .disabled(session.tabAction != nil)
+                    }
+                }
+                if workspace.canArchive {
+                    Button("Archive Session", systemImage: "archivebox", role: .destructive) { confirmingArchive = true }
+                }
+                if let target = workspace.removalTarget {
+                    Section {
+                        Button("Archive Worktree", systemImage: "archivebox") { removeWorktree(workspace, .archive, of: target) }
+                        Button("Delete Worktree…", systemImage: "trash", role: .destructive) { deleting = target }
+                    }
                 }
             }
             .toolbar {
@@ -194,11 +220,79 @@ struct TranscriptScreen: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SessionSettingsSheet(session: session) }
+            .alert("Couldn't do that", isPresented: Binding { session.tabActionError != nil } set: { if !$0 { session.tabActionError = nil } }) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(session.tabActionError ?? "")
+            }
             .alert("Rename Session", isPresented: $renaming) {
                 TextField("Title", text: $newTitle)
                 Button("Cancel", role: .cancel) {}
                 Button("Rename") { session.rename(newTitle) }
             }
+        return lifecycleDialogs(base, workspace)
+    }
+
+    /// The title menu's lifecycle prompts, apart so the screen's modifier chain type-checks in time.
+    private func lifecycleDialogs(_ view: some View, _ workspace: SessionWorkspace) -> some View {
+        view
+            .alert("Rename Branch", isPresented: $renamingBranch) {
+                TextField("Branch", text: $newBranch).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("Cancel", role: .cancel) {}
+                Button("Rename") {
+                    let branch = newBranch.trimmingCharacters(in: .whitespaces)
+                    guard !branch.isEmpty, branch != renamedBranch else { return }
+                    Task { actionError = await workspace.renameBranch(from: renamedBranch, to: branch) }
+                }
+            }
+            .confirmationDialog("Archive this session?", isPresented: $confirmingArchive, titleVisibility: .visible) {
+                Button("Archive", role: .destructive) {
+                    Task {
+                        if let error = await workspace.archiveSession() { actionError = error } else { dismiss() }
+                    }
+                }
+            } message: {
+                Text("The session stops and leaves the session list.")
+            }
+            .confirmationDialog("Delete this worktree?", isPresented: Binding { deleting != nil } set: { if !$0 { deleting = nil } },
+                                titleVisibility: .visible, presenting: deleting) { target in
+                Button("Delete", role: .destructive) { removeWorktree(workspace, .delete, of: target) }
+            } message: { _ in
+                Text("Its folder is removed from the machine. The branch is deleted too once it's merged.")
+            }
+            .confirmationDialog(overruling?.failure.message ?? "", isPresented: Binding { overruling != nil } set: { if !$0 { overruling = nil } },
+                                titleVisibility: .visible, presenting: overruling) { held in
+                Button(held.failure.overrule == .force ? "Delete Anyway" : "Discard Changes", role: .destructive) {
+                    removeWorktree(workspace, held.removal, of: held.target, force: held.force || held.failure.overrule == .force,
+                                   discard: held.discard || held.failure.overrule == .discardUnsavedEdits)
+                }
+            }
+            .alert("Couldn't do that", isPresented: Binding { actionError != nil } set: { if !$0 { actionError = nil } }) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(actionError ?? "")
+            }
+    }
+
+    private struct Overruling {
+        let removal: SessionWorkspace.WorktreeRemoval
+        let target: SessionWorkspace.RemovalTarget
+        let failure: RemoteGitFailure
+        let force: Bool
+        let discard: Bool
+    }
+
+    /// Sends the removal; a refusal the user may overrule asks again, any other shows.
+    private func removeWorktree(_ workspace: SessionWorkspace, _ removal: SessionWorkspace.WorktreeRemoval,
+                                of target: SessionWorkspace.RemovalTarget, force: Bool = false, discard: Bool = false) {
+        Task {
+            guard let failure = await workspace.removeWorktree(removal, of: target, force: force, discard: discard) else { return dismiss() }
+            if failure.overrule != nil {
+                overruling = Overruling(removal: removal, target: target, failure: failure, force: force, discard: discard)
+            } else {
+                actionError = failure.message
+            }
+        }
     }
 
     /// Changes carries the web's tab badge: the loaded count, else the worktree summary's.
@@ -244,5 +338,26 @@ private struct TranscriptContent: View {
                 }
             }
         }
+    }
+}
+
+/// Under an ended session: says so, with Reopen where the host reopens session tabs.
+private struct EndedBar: View {
+    let session: TranscriptSession
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("This session has ended.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            if session.supportsSessionTabs {
+                Button(session.tabAction == .reopen ? "Reopening…" : "Reopen") { session.reopenTab() }
+                    .font(.footnote.weight(.semibold))
+                    .disabled(session.tabAction != nil)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(.bar)
     }
 }

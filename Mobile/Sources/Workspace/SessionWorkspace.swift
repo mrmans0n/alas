@@ -268,6 +268,70 @@ final class SessionWorkspace {
         }
     }
 
+    // MARK: Lifecycle
+
+    /// The branch the session's worktree is on, when the host lets the phone rename it.
+    var renamableBranch: String? {
+        hub.supports(HostProtocolCapability.worktreesRenameBranchV1, on: hostID) ? gitTarget?.worktree.branch : nil
+    }
+
+    /// Renames the worktree's branch `from`, the one the user saw, so the host refuses a checkout
+    /// switched since; then refreshes the changes. Returns the host's refusal, or nil.
+    func renameBranch(from: String, to branch: String) async -> String? {
+        guard let target = gitTarget else { return "This worktree can't be changed from here." }
+        defer { refreshChanges() }
+        return await hostRequest {
+            RemoteGitRequest.renameBranch(id: $0, projectID: target.projectID, path: target.worktree.path,
+                                          from: from, to: branch)
+        }
+    }
+
+    /// A session this host runs itself; one a gateway relays lives on another Mac.
+    var canArchive: Bool {
+        hub.sessions(of: hostID).first { $0.id == sessionId }?.serverId == nil
+            && hub.supports(HostProtocolCapability.sessionsV1, on: hostID)
+    }
+
+    /// Returns the host's refusal, worded for the user, or nil once the session is archived.
+    func archiveSession() async -> String? {
+        await hostRequest { RemoteGitRequest.archiveSession(id: $0, sessionID: self.sessionId) }
+    }
+
+    enum WorktreeRemoval { case archive, delete }
+
+    /// The worktree as the user saw it when they asked, which every retry names again.
+    struct RemovalTarget {
+        let projectID: String
+        let worktree: RemoteWorktreeSummary
+    }
+
+    /// The session's worktree, when removable: not the main checkout or a folder, and one the host
+    /// can tell apart from a replacement.
+    var removalTarget: RemovalTarget? {
+        guard let target = gitTarget, target.worktree.isMain != true, target.worktree.isFolder != true,
+              target.worktree.lineageID != nil, hub.supports(HostProtocolCapability.worktreesLifecycleV1, on: hostID)
+        else { return nil }
+        return RemovalTarget(projectID: target.projectID, worktree: target.worktree)
+    }
+
+    /// Archives or deletes `target`; a delete also deletes its branch once merged. Returns the
+    /// host's refusal, which the user may overrule by asking again with `force` or `discard`.
+    func removeWorktree(_ removal: WorktreeRemoval, of target: RemovalTarget, force: Bool, discard: Bool) async -> RemoteGitFailure? {
+        let worktree = target.worktree
+        // The host stops the worktree's sessions and terminals first, which can take minutes.
+        return await hostFailure(timeout: .seconds(600)) { id in
+            switch removal {
+            case .archive:
+                RemoteGitRequest.archiveWorktree(id: id, projectID: target.projectID, path: worktree.path,
+                                                 lineageID: worktree.lineageID, branch: worktree.branch, discardUnsavedEdits: discard)
+            case .delete:
+                RemoteGitRequest.deleteWorktree(id: id, projectID: target.projectID, path: worktree.path, lineageID: worktree.lineageID,
+                                                branch: worktree.branch, force: force, deleteBranchIfMerged: true,
+                                                discardUnsavedEdits: discard)
+            }
+        }
+    }
+
     // MARK: Shepherd
 
     /// A session this host runs itself, on a host that lets the phone shepherd it.
@@ -312,10 +376,15 @@ final class SessionWorkspace {
     /// Sends the request `make` builds and waits for the host's answer, even if the screen that
     /// asked has gone. Returns the refusal, worded for the user, or nil once it succeeded.
     private func hostRequest(_ make: (Int) -> OpaqueHostMessage) async -> String? {
+        await hostFailure(make)?.message
+    }
+
+    /// `hostRequest`, keeping whether the user may overrule the refusal.
+    private func hostFailure(timeout: Duration = .seconds(120), _ make: (Int) -> OpaqueHostMessage) async -> RemoteGitFailure? {
         // A send while the link is down goes nowhere, and the reply would never come.
         guard hub.state(of: hostID) == .online else {
             let name = hub.hosts.first { $0.id == hostID }?.name ?? "the machine"
-            return "Not connected to \(name). Try again once it's back online."
+            return RemoteGitFailure("Not connected to \(name). Try again once it's back online.")
         }
         let id = hub.nextHostRequestId()
         let hold = activate()
@@ -323,11 +392,11 @@ final class SessionWorkspace {
         send(.host(make(id)))
         // ponytail: a fixed wait; a push to a slow remote that outlasts it reads as lost.
         Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(120))
+            try? await Task.sleep(for: timeout)
             self?.finishHostRequest(id, .failure(RemoteGitFailure("The machine didn't answer. Check the session there.")))
         }
         let result = await withCheckedContinuation { hostWaiters[id] = $0 }
-        if case .failure(let failure) = result { return failure.message }
+        if case .failure(let failure) = result { return failure }
         return nil
     }
 
