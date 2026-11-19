@@ -8,6 +8,8 @@ struct TranscriptRowView: View {
     var image: (String) -> UIImage? = { _ in nil }
     /// Visual aids render live only with a session to answer through.
     var session: TranscriptSession?
+    /// False for a read-only transcript: visual aids show as captions and subagents do not open.
+    var interactive = true
     let toggle: () -> Void
     /// A group header's "Show earlier".
     var showAll: () -> Void = {}
@@ -15,6 +17,8 @@ struct TranscriptRowView: View {
     /// transcript keeps them with its expanded rows, so the cell re-measures and survives reuse.
     var showsAll: (String) -> Bool = { _ in false }
     var showAllPart: (String) -> Void = { _ in }
+    /// Pushes a subagent's transcript; offered only when the session's host serves it.
+    var openSubagent: (RemoteWireMessage.Subagent) -> Void = { _ in }
 
     var body: some View {
         content
@@ -68,7 +72,10 @@ struct TranscriptRowView: View {
                 .lineLimit(isExpanded ? nil : 2)
                 .onTapGesture(perform: toggle)
         case .toolCall(let call):
-            if let display = item.toolCall {
+            if let subagent = item.message.subagent {
+                SubagentCard(subagent: subagent, duration: item.toolCall?.duration,
+                             open: interactive && session?.supportsSubagents == true ? { openSubagent(subagent) } : nil)
+            } else if let display = item.toolCall {
                 ToolCallCard(item: item, call: call, display: display, isExpanded: isExpanded, toggle: toggle,
                              session: session, showsAll: { showsAll("section:\($0)") },
                              showAll: { showAllPart("section:\($0)") })
@@ -86,7 +93,7 @@ struct TranscriptRowView: View {
         case .planDocument(let doc):
             if let display = doc.display { planDocument(display) }
         case .visualAid(let aid):
-            if let session {
+            if let session, interactive {
                 // Keyed by visual, so a reused cell never hands one visual's page or state to another.
                 VisualAidCard(aid: aid, session: session).id(aid.id)
             } else {

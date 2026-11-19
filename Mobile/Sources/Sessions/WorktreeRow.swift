@@ -67,11 +67,22 @@ struct RepoTile: View {
 /// prefix faint, then what needs you (or what runs), the session it opens and
 /// its line counts. A tap opens that session; the others are a long press away.
 struct WorktreeRow: View {
+    /// "Delegated by <parent>" for a delegated session, or "Delegated" when its parent is not listed.
+    static func delegationCaption(_ session: RemoteSessionSummary, in host: RemoteSessionCatalog.Host?) -> String? {
+        guard let parentId = session.parentSessionId else { return nil }
+        let parent = host?.sections.lazy.flatMap(\.worktrees).flatMap { $0.activeSessions + $0.closedSessions }
+            .first { $0.id == parentId }
+        guard let title = parent?.title, !title.isEmpty else { return "Delegated" }
+        return "Delegated by \(title)"
+    }
+
     let entry: RemoteWorktreeEntry
     /// The machine holding it, named when its list mixes machines.
     var machine: String? = nil
     /// The worktree holds the session shown beside the list (iPad).
     var isSelected = false
+    /// A session's caption, such as who delegated it.
+    var caption: (RemoteSessionSummary) -> String? = { _ in nil }
     let open: (RemoteSessionSummary) -> Void
 
     var body: some View {
@@ -100,6 +111,9 @@ struct WorktreeRow: View {
                         }
                     }
                     detailLine(lead)
+                    if let caption = lead.flatMap(caption) {
+                        Text(caption).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
             }
             .padding(.vertical, 2)
@@ -112,7 +126,10 @@ struct WorktreeRow: View {
         .contextMenu {
             if entry.activeSessions.count > 1 {
                 ForEach(entry.activeSessions, id: \.id) { session in
-                    Button(session.title) { open(session) }
+                    Button { open(session) } label: {
+                        Text(session.title)
+                        if let caption = caption(session) { Text(caption) }
+                    }
                 }
             }
         }

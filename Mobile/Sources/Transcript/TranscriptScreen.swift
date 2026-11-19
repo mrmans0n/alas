@@ -19,6 +19,10 @@ struct TranscriptScreen: View {
     @State private var newTitle = ""
     /// The worktree whose terminals are pushed from this screen.
     @State private var terminalsWorktree: String?
+    /// The subagent whose transcript is pushed from this screen; it reads through this screen's session.
+    @State private var openedSubagent: RemoteWireMessage.Subagent?
+    /// The delegated session pushed from this screen.
+    @State private var delegatedChild: String?
 
     var body: some View {
         Group {
@@ -33,6 +37,15 @@ struct TranscriptScreen: View {
         .navigationDestination(item: $terminalsWorktree) { worktreeId in
             TerminalsList(hub: registry.hub, hostID: hostID, worktreeId: worktreeId)
         }
+        .navigationDestination(isPresented: Binding(
+            get: { openedSubagent != nil }, set: { if !$0 { openedSubagent = nil } })) {
+            if let openedSubagent, let session = held?.session {
+                SubagentScreen(session: session, subagent: openedSubagent)
+            }
+        }
+        .navigationDestination(item: $delegatedChild) { childId in
+            TranscriptScreen(hostID: hostID, sessionId: childId)
+        }
         .onAppear {
             visible = true
             acquire()
@@ -45,7 +58,7 @@ struct TranscriptScreen: View {
             // its state first (DiffView's own onDisappear), and so a screen that came straight
             // back keeps what it holds.
             Task { @MainActor in
-                if visible || terminalsWorktree != nil || workspace?.hasPushedChild(screenID) == true { return }
+                if visible || terminalsWorktree != nil || openedSubagent != nil || delegatedChild != nil || workspace?.hasPushedChild(screenID) == true { return }
                 held = nil
                 workspaceToken = nil
             }
@@ -71,7 +84,7 @@ struct TranscriptScreen: View {
 
     private func content(_ session: TranscriptSession, _ workspace: SessionWorkspace) -> some View {
         let available = modes(session)
-        return TranscriptContent(session: session)
+        return TranscriptContent(session: session, openSubagent: { openedSubagent = $0 })
             // Kept alive under the other tabs so the scroll position survives a switch.
             .opacity(mode == .transcript ? 1 : 0)
             .allowsHitTesting(mode == .transcript)
@@ -156,6 +169,16 @@ struct TranscriptScreen: View {
                 if !session.hasEnded, workspace.canShepherd, workspace.shepherdLoaded {
                     ToolbarItem(placement: .primaryAction) { ShepherdMenu(workspace: workspace) }
                 }
+                let children = registry.hub.sessions(of: hostID).filter { $0.parentSessionId == sessionId }
+                if !children.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        Menu("Delegated Sessions", systemImage: "arrow.triangle.branch") {
+                            ForEach(children, id: \.id) { child in
+                                Button(child.title) { delegatedChild = child.id }
+                            }
+                        }
+                    }
+                }
                 if let worktreeId = session.summary?.worktreeId,
                    registry.hub.supports(PeerConsoleCapability.phoneV1, on: hostID) {
                     ToolbarItem(placement: .primaryAction) {
@@ -195,12 +218,13 @@ struct TranscriptScreen: View {
 /// Its own view so a streamed delta re-evaluates only the scroller, not the screen around it.
 private struct TranscriptContent: View {
     @Bindable var session: TranscriptSession
+    let openSubagent: (RemoteWireMessage.Subagent) -> Void
 
     var body: some View {
         TranscriptCollectionView(
             items: session.items, expanded: $session.expanded, canLoadOlder: session.canLoadOlder,
             loadOlder: session.loadOlder, image: session.image(for:), session: session,
-            sendCount: session.sendCount)
+            sendCount: session.sendCount, openSubagent: openSubagent)
         .overlay {
             if session.items.isEmpty, !session.hasEnded {
                 if session.hasSnapshot {
