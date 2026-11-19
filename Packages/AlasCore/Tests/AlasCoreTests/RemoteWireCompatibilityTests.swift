@@ -115,7 +115,10 @@ import Testing
     ] as [(HostError, String, RemoteGitFailure.Overrule?)])
     func phoneReadsTheMacsWorktreeRefusal(error: HostError, message: String, overrule: RemoteGitFailure.Overrule?) throws {
         let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 7, result: .failure(error: error))))
-        guard case .failure(let failure) = try #require(RemoteGitRequest.reply(to: 7, in: reply)) else { Issue.record("succeeded"); return }
+        guard case .failure(let failure) = try #require(RemoteGitRequest.reply(to: 7, in: reply)) else {
+            Issue.record("succeeded")
+            return
+        }
         #expect(failure == RemoteGitFailure(message, overrule: overrule))
     }
 

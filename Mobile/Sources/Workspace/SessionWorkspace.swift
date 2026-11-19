@@ -9,6 +9,13 @@ enum Load<T> {
 struct DiffKey: Hashable {
     let path: String
     let stage: String?
+    /// The commit whose change to `path` this is; nil for the working tree.
+    var sha: String? = nil
+}
+
+struct CommitFilesReply {
+    let files: [RemoteChangedFile]
+    let truncated: Bool
 }
 
 struct ChangeListReply {
@@ -45,6 +52,8 @@ struct FileReply {
 final class SessionWorkspace {
     private(set) var changes: Load<ChangeListReply> = .idle
     private(set) var diff: (key: DiffKey, Load<DiffReply>)?
+    /// The commit whose files are open, pushed from the Commits section.
+    private(set) var commit: (commit: RemoteCommit, Load<CommitFilesReply>)?
     private(set) var tree = RemoteFileTree()
     private(set) var file: (path: String, Load<FileReply>)?
     /// The screen that pushed the open diff or file. The session can be open in several tabs at once;
@@ -90,7 +99,7 @@ final class SessionWorkspace {
     }
 
     /// True while a view `owner` pushed (a diff or a file) is open.
-    func hasPushedChild(_ owner: UUID) -> Bool { pushedBy == owner && (diff != nil || file != nil) }
+    func hasPushedChild(_ owner: UUID) -> Bool { pushedBy == owner && (diff != nil || file != nil || commit != nil) }
 
     // MARK: Lifecycle
 
@@ -135,7 +144,8 @@ final class SessionWorkspace {
     /// Asks again for whatever is open; the host forgot everything it was asked while away.
     private func replay() {
         if case .idle = changes {} else { refreshChanges() }
-        if let diff { send(.fileDiff(sessionId: sessionId, path: diff.key.path, stage: diff.key.stage)) }
+        if let commit { send(.listCommitFiles(sessionId: sessionId, sha: commit.commit.revision)) }
+        if let diff { requestDiff(diff.key) }
         if treeRequested { loadTree() }
         refreshShepherd()
         refreshRunScripts()
@@ -161,10 +171,30 @@ final class SessionWorkspace {
         send(.host(RemoteGitRequest.reviewStatus(id: id, projectID: target.projectID, path: target.worktree.path)))
     }
 
-    func openDiff(_ path: String, stage: String?, by owner: UUID) {
+    func openDiff(_ path: String, stage: String?, sha: String? = nil, by owner: UUID) {
         pushedBy = owner
-        diff = (DiffKey(path: path, stage: stage), .loading)
-        send(.fileDiff(sessionId: sessionId, path: path, stage: stage))
+        let key = DiffKey(path: path, stage: stage, sha: sha)
+        diff = (key, .loading)
+        requestDiff(key)
+    }
+
+    private func requestDiff(_ key: DiffKey) {
+        if let sha = key.sha {
+            send(.commitFileDiff(sessionId: sessionId, sha: sha, path: key.path))
+        } else {
+            send(.fileDiff(sessionId: sessionId, path: key.path, stage: key.stage))
+        }
+    }
+
+    func openCommit(_ commit: RemoteCommit, by owner: UUID) {
+        pushedBy = owner
+        self.commit = (commit, .loading)
+        send(.listCommitFiles(sessionId: sessionId, sha: commit.revision))
+    }
+
+    func closeCommit() {
+        commit = nil
+        if diff?.key.sha != nil { closeDiff() }
     }
 
     func closeDiff() {
@@ -261,13 +291,14 @@ final class SessionWorkspace {
         hub.supports(HostProtocolCapability.worktreesRenameBranchV1, on: hostID) ? gitTarget?.worktree.branch : nil
     }
 
-    /// Renames the worktree's branch, then refreshes the changes. Returns the host's refusal, or nil.
-    func renameBranch(to branch: String) async -> String? {
+    /// Renames the worktree's branch `from`, the one the user saw, so the host refuses a checkout
+    /// switched since; then refreshes the changes. Returns the host's refusal, or nil.
+    func renameBranch(from: String, to branch: String) async -> String? {
         guard let target = gitTarget else { return "This worktree can't be changed from here." }
         defer { refreshChanges() }
         return await hostRequest {
             RemoteGitRequest.renameBranch(id: $0, projectID: target.projectID, path: target.worktree.path,
-                                          from: target.worktree.branch, to: branch)
+                                          from: from, to: branch)
         }
     }
 
@@ -284,17 +315,24 @@ final class SessionWorkspace {
 
     enum WorktreeRemoval { case archive, delete }
 
-    /// Not the main checkout or a folder, and one the host can tell apart from a replacement.
-    var canRemoveWorktree: Bool {
-        guard let worktree = gitTarget?.worktree, worktree.isMain != true, worktree.isFolder != true,
-              worktree.lineageID != nil else { return false }
-        return hub.supports(HostProtocolCapability.worktreesLifecycleV1, on: hostID)
+    /// The worktree as the user saw it when they asked, which every retry names again.
+    struct RemovalTarget {
+        let projectID: String
+        let worktree: RemoteWorktreeSummary
     }
 
-    /// Archives or deletes the session's worktree; a delete also deletes its branch once merged.
-    /// Returns the host's refusal, which the user may overrule by asking again with `force` or `discard`.
-    func removeWorktree(_ removal: WorktreeRemoval, force: Bool, discard: Bool) async -> RemoteGitFailure? {
-        guard let target = gitTarget else { return RemoteGitFailure("This worktree can't be changed from here.") }
+    /// The session's worktree, when removable: not the main checkout or a folder, and one the host
+    /// can tell apart from a replacement.
+    var removalTarget: RemovalTarget? {
+        guard let target = gitTarget, target.worktree.isMain != true, target.worktree.isFolder != true,
+              target.worktree.lineageID != nil, hub.supports(HostProtocolCapability.worktreesLifecycleV1, on: hostID)
+        else { return nil }
+        return RemovalTarget(projectID: target.projectID, worktree: target.worktree)
+    }
+
+    /// Archives or deletes `target`; a delete also deletes its branch once merged. Returns the
+    /// host's refusal, which the user may overrule by asking again with `force` or `discard`.
+    func removeWorktree(_ removal: WorktreeRemoval, of target: RemovalTarget, force: Bool, discard: Bool) async -> RemoteGitFailure? {
         let worktree = target.worktree
         // The host stops the worktree's sessions and terminals first, which can take minutes.
         return await hostFailure(timeout: .seconds(600)) { id in
@@ -438,6 +476,20 @@ final class SessionWorkspace {
         case .fileDiffFailed(let id, let path, let stage, let reason, let message) where id == sessionId:
             guard diff?.key == DiffKey(path: path, stage: stage) else { return }
             diff = (DiffKey(path: path, stage: stage), .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)))
+        case .commitFiles(let id, let sha, let files, let truncated) where id == sessionId:
+            guard let open = commit?.commit, open.revision == sha else { return }
+            commit = (open, .loaded(CommitFilesReply(files: files, truncated: truncated)))
+        case .commitFilesFailed(let id, let sha, let reason, let message) where id == sessionId:
+            guard let open = commit?.commit, open.revision == sha else { return }
+            commit = (open, .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)))
+        case .commitDiffResult(let id, let sha, let path, let hunks, let truncated, let note) where id == sessionId:
+            let key = DiffKey(path: path, stage: nil, sha: sha)
+            guard diff?.key == key else { return }
+            diff = (key, .loaded(DiffReply(hunks: hunks, truncated: truncated, metadataNote: note)))
+        case .commitDiffFailed(let id, let sha, let path, let reason, let message) where id == sessionId:
+            let key = DiffKey(path: path, stage: nil, sha: sha)
+            guard diff?.key == key else { return }
+            diff = (key, .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)))
         case .fileTree(let id, let path, let nodes, let truncated) where id == sessionId:
             tree.apply(path: path, nodes: nodes)
             treeError = nil

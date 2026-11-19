@@ -256,6 +256,14 @@ public final class StackShepherd {
         return record.isFinished && record.id.stackName != currentStackName ? nil : record
     }
 
+    /// The unfinished record of a worktree; with several, the one whose stack
+    /// name sorts last, so the pick is stable.
+    public func activeRecord(forWorktree worktreeID: String) -> StackShepherdRecord? {
+        records.values
+            .filter { $0.id.worktreeID == worktreeID && !$0.isFinished }
+            .max { $0.id.stackName < $1.id.stackName }
+    }
+
     /// The live record for `stackName` in the worktree, whoever owns it. A
     /// worktree can hold records for several stacks; the one it is on now is
     /// the only one a takeover from this worktree can act on.

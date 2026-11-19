@@ -145,7 +145,10 @@ private struct ChangeList: View {
                                 }
                             }
                         }
-                        ForEach(section.commits, id: \.revision) { CommitRow(commit: $0) }
+                        ForEach(section.commits, id: \.revision) { commit in
+                            Button { workspace.openCommit(commit, by: owner) } label: { CommitRow(commit: commit) }
+                                .buttonStyle(.plain)
+                        }
                     } header: {
                         HStack {
                             Text(section.title)
@@ -336,6 +339,59 @@ private struct CommitRow: View {
             }
             .font(.caption).foregroundStyle(.secondary)
         }
+        .contentShape(Rectangle())
+    }
+}
+
+/// One commit's files, pushed from the Commits section; a file opens what the commit changed in it.
+struct CommitFilesView: View {
+    let workspace: SessionWorkspace
+
+    var body: some View {
+        Group {
+            switch workspace.commit?.1 {
+            case .loaded(let reply) where reply.files.isEmpty:
+                ContentUnavailableView("No file changes in this commit.", systemImage: "doc.text")
+            case .loaded(let reply):
+                List {
+                    if let commit = workspace.commit?.commit {
+                        Text(commit.subject).font(.subheadline).listRowSeparator(.hidden)
+                    }
+                    ForEach(RemoteChangesRules.grouped(reply.files), id: \.directory) { group in
+                        if !group.directory.isEmpty {
+                            Label(group.directory, systemImage: "folder")
+                                .font(.footnote).foregroundStyle(.secondary).listRowSeparator(.hidden)
+                        }
+                        ForEach(group.files, id: \.path) { file in
+                            Button { open(file.path) } label: { FileRow(file: file, nested: !group.directory.isEmpty) }
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    if reply.truncated {
+                        Text("File list truncated — too many changed files to show.").font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .listStyle(.plain)
+            case .failed(let message):
+                ContentUnavailableView(message, systemImage: "exclamationmark.triangle")
+            default:
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .navigationTitle(workspace.commit?.commit.shortSha ?? "Commit")
+        .navigationSubtitle(workspace.commit?.commit.author ?? "")
+        .navigationBarTitleDisplayMode(.inline)
+        .background(Color(.systemBackground))
+        .navigationDestination(isPresented: Binding(
+            get: { workspace.diff?.key.sha != nil },
+            set: { if !$0 { workspace.closeDiff() } })) {
+            DiffView(workspace: workspace)
+        }
+    }
+
+    private func open(_ path: String) {
+        guard let commit = workspace.commit?.commit, let owner = workspace.pushedBy else { return }
+        workspace.openDiff(path, stage: nil, sha: commit.revision, by: owner)
     }
 }
 

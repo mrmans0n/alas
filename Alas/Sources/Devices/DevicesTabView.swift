@@ -72,6 +72,7 @@ struct DevicesTabView: View {
                 detail: error ?? device.runtimeName, detailTone: error == nil ? "fg-dim" : "warn",
                 action: .init(title: "Boot", icon: "power") {
                     rps.devicesSelection = .simulator(device.udid)
+                    state.noteDeviceUse(device.udid, worktreeID: worktree.id)
                     Task { await model.boot(device) }
                 }
             )
@@ -94,6 +95,7 @@ struct DevicesTabView: View {
                 detail: error ?? "Android emulator", detailTone: error == nil ? "fg-dim" : "warn",
                 action: .init(title: "Boot", icon: "power") {
                     rps.devicesSelection = .android(target.id)
+                    state.noteDeviceUse(target.id, worktreeID: worktree.id)
                     if let avd = target.avdName { Task { await state.androidPane.boot(avd: avd) } }
                 }
             )
