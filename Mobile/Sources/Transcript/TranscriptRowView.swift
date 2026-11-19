@@ -19,6 +19,8 @@ struct TranscriptRowView: View {
     var showAllPart: (String) -> Void = { _ in }
     /// Pushes a subagent's transcript; offered only when the session's host serves it.
     var openSubagent: (RemoteWireMessage.Subagent) -> Void = { _ in }
+    /// Opens a message's text to select part of it; `quote` offers Quote on the selection.
+    var selectText: (_ text: String, _ quote: ((String) -> Void)?) -> Void = { _, _ in }
 
     var body: some View {
         content
@@ -59,12 +61,17 @@ struct TranscriptRowView: View {
                         }
                     }
                 }
-                if !text.isEmpty { bubble(text) }
+                if !text.isEmpty {
+                    bubble(text)
+                        .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 18))
+                        .contextMenu { messageMenu(text) }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 48)
         case .agent(let text):
             AgentMarkdown(id: item.id, text: text, session: session)
+                .contextMenu { messageMenu(text) }
         case .thought(let text):
             Text(text)
                 .font(.callout.italic())
@@ -107,6 +114,24 @@ struct TranscriptRowView: View {
             FailureIncidentCard(incident: incident)
         case .systemNotice(let text):
             notice(text)
+        }
+    }
+
+    /// The session a quote lands in: a live transcript, which has a composer under it.
+    private var quoting: TranscriptSession? {
+        guard interactive, let session, !session.hasEnded else { return nil }
+        return session
+    }
+
+    /// A message's long-press menu, ordered as the Mac's peer transcript orders its own.
+    @ViewBuilder
+    private func messageMenu(_ text: String) -> some View {
+        Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+        if let quoting, ACPMessageQuote.canQuote(text) {
+            Button("Quote", systemImage: "text.quote") { quoting.quote(text) }
+        }
+        Button("Select Text", systemImage: "selection.pin.in.out") {
+            selectText(text, quoting.map { session in { session.quote($0) } })
         }
     }
 
