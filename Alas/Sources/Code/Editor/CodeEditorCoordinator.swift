@@ -615,8 +615,10 @@ final class CodeEditorCoordinator {
         guard revealLine == nil || revealCharacter == nil,
               let textView else { return }
         guard let viewState = buffer.viewStates[tabId] else {
-            if resetScrollWhenMissing {
-                scroll(textView, to: .zero)
+            if resetScrollWhenMissing, let scrollView = textView.enclosingScrollView {
+                // Zero is an explicit scroll position, not the leading edge when the gutter is visible.
+                let leadingX = (scrollView.contentView as? CodeEditorLeadingClipView)?.leadingBoundsOriginX ?? 0
+                scroll(scrollView, to: NSPoint(x: leadingX, y: 0))
             }
             return
         }
@@ -646,12 +648,13 @@ final class CodeEditorCoordinator {
             return NSValue(range: NSRange(location: location, length: length))
         }
         textView.setSourceSelectedRanges(ranges)
-        scroll(textView, to: viewState.scrollOrigin)
+        if let scrollView = textView.enclosingScrollView {
+            scroll(scrollView, to: viewState.scrollOrigin)
+        }
         textView.displayAdapter?.restoreScrollAnchor(viewState.sourceScrollAnchor)
     }
 
-    private func scroll(_ textView: CodeTextView, to origin: NSPoint) {
-        guard let scrollView = textView.enclosingScrollView else { return }
+    private func scroll(_ scrollView: NSScrollView, to origin: NSPoint) {
         scrollView.contentView.scroll(to: origin)
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
