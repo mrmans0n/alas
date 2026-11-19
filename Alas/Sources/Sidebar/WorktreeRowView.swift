@@ -590,10 +590,16 @@ struct WorktreeRowView: View {
         showsExplanation: Bool
     ) -> some View {
         // Everything a row knows stays on screen: it is what a scan of the
-        // list reads. Only a sidebar too narrow for all of it drops the time.
+        // list reads. Only a sidebar too narrow for all of it drops the time,
+        // then shortens a shepherd note, then gives its PR the stack count's room.
         ViewThatFits(in: .horizontal) {
             subtitleContents(status: status, worktreeStatus: worktreeStatus, showsTime: true, showsExplanation: showsExplanation)
             subtitleContents(status: status, worktreeStatus: worktreeStatus, showsTime: false, showsExplanation: showsExplanation)
+            if liveActivity.shepherd != nil {
+                subtitleContents(status: status, worktreeStatus: worktreeStatus, showsTime: false, showsExplanation: showsExplanation, shepherdFit: .short)
+                subtitleContents(status: status, worktreeStatus: worktreeStatus, showsTime: false, showsExplanation: showsExplanation, shepherdFit: .withoutStack)
+                subtitleContents(status: status, worktreeStatus: worktreeStatus, showsTime: false, showsExplanation: showsExplanation, shepherdFit: .minimal)
+            }
         }
         .font(scale.metaFont)
         .foregroundColor(rowColor("fg-dim"))
@@ -696,7 +702,8 @@ struct WorktreeRowView: View {
         status: StatusPresentation?,
         worktreeStatus: WorktreeDirtyState,
         showsTime: Bool,
-        showsExplanation: Bool
+        showsExplanation: Bool,
+        shepherdFit: ShepherdFit = .full
     ) -> some View {
         let noteLeads = WorktreeRowPresentation.isStatusLoud(
             harnessState: harnessSummary?.state,
@@ -710,15 +717,15 @@ struct WorktreeRowView: View {
                 statusNote(status, leads: true)
             }
             if let shepherd, shepherd.isLoud {
-                shepherdNoteView(shepherd)
+                shepherdNoteView(shepherd, fit: shepherdFit)
             }
             PluginDecorationBadges(items: pluginDecorations, run: onRunPluginDecoration)
-            if shepherd?.replacesStackChip != true {
+            if shepherd?.replacesStackChip != true, shepherd == nil || shepherdFit < .withoutStack {
                 stackSummaryView
             }
             workspaceCheckoutButton
-            if let shepherd, !shepherd.isLoud {
-                shepherdNoteView(shepherd)
+            if let shepherd, !shepherd.isLoud, shepherdFit != .minimal {
+                shepherdNoteView(shepherd, fit: shepherdFit)
             }
             if let status {
                 if !noteLeads { statusNote(status, leads: false) }
@@ -911,30 +918,10 @@ struct WorktreeRowView: View {
     private func shipLine(_ ship: WorktreeRowPresentation.ShipLine) -> some View {
         let color = rowColor(ship.isFailure ? "caution" : "accent")
         return Button { onActivateHarness(ship.sessionID) } label: {
-            HStack(spacing: 5) {
-                if !ship.isFailure {
-                    Spinner(lineWidth: 1.2, duration: 0.7, color: color)
-                        .frame(width: 9, height: 9)
-                        .accessibilityHidden(true)
-                }
-                Text(ship.title)
-                    .fontWeight(ship.isFailure ? .semibold : nil)
-                    .foregroundColor(color)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                if let total = ship.total {
-                    ShipProgressBar(
-                        position: ship.position, total: total,
-                        done: rowColor("accent"), rest: rowColor("fg-faint")
-                    )
-                    .accessibilityHidden(true)
-                    if let position = ship.position {
-                        Text("\(position)/\(total)")
-                            .monospacedDigit()
-                            .foregroundColor(rowColor("fg-faint"))
-                            .fixedSize()
-                    }
-                }
+            // The phase is the news; the bar repeats the count, so it goes first.
+            ViewThatFits(in: .horizontal) {
+                shipLineContents(ship, color: color, showsBar: true)
+                shipLineContents(ship, color: color, showsBar: false)
             }
             .contentShape(Rectangle())
         }
@@ -949,16 +936,56 @@ struct WorktreeRowView: View {
         .padding(.leading, textInset)
     }
 
-    private func shepherdNoteView(_ note: WorktreeRowPresentation.ShepherdNote) -> some View {
+    private func shipLineContents(_ ship: WorktreeRowPresentation.ShipLine, color: Color, showsBar: Bool) -> some View {
+        HStack(spacing: 5) {
+            if !ship.isFailure {
+                Spinner(lineWidth: 1.2, duration: 0.7, color: color)
+                    .frame(width: 9, height: 9)
+                    .accessibilityHidden(true)
+            }
+            Text(ship.title)
+                .fontWeight(ship.isFailure ? .semibold : nil)
+                .foregroundColor(color)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if let total = ship.total {
+                if showsBar {
+                    ShipProgressBar(
+                        position: ship.position, total: total,
+                        done: rowColor("accent"), rest: rowColor("fg-faint")
+                    )
+                    .accessibilityHidden(true)
+                }
+                if let position = ship.position {
+                    Text("\(position)/\(total)")
+                        .monospacedDigit()
+                        .foregroundColor(rowColor("fg-faint"))
+                        .fixedSize()
+                }
+            }
+        }
+    }
+
+    /// How much a crowded line 2 keeps around a shepherd note, in the order
+    /// it gives things up: a quiet note's words, the stack count (with a
+    /// loud note's number), then a quiet note itself. A loud note keeps its
+    /// words ("needs you"). The tooltip always carries all of it.
+    enum ShepherdFit: Comparable { case full, short, withoutStack, minimal }
+
+    private func shepherdNoteView(_ note: WorktreeRowPresentation.ShepherdNote, fit: ShepherdFit = .full) -> some View {
         let lead = rowColor(note.isLoud ? "caution" : "accent")
+        let showsNumber = fit < .withoutStack || !note.isLoud || note.note == nil
+        let showsWords = fit == .full || note.isLoud
         return Button { onActivateHarness(note.sessionID) } label: {
             HStack(spacing: 3) {
                 Icon(name: "arrow.triangle.pull", size: 9, color: lead)
                     .accessibilityHidden(true)
-                Text(note.number)
-                    .monospacedDigit()
-                    .foregroundColor(lead)
-                if let text = note.note {
+                if showsNumber {
+                    Text(note.number)
+                        .monospacedDigit()
+                        .foregroundColor(lead)
+                }
+                if showsWords, let text = note.note {
                     Text(text)
                         .foregroundColor(note.isLoud ? lead : rowColor("fg-faint"))
                 }
@@ -993,6 +1020,8 @@ struct WorktreeRowView: View {
                     .monospacedDigit()
                     .foregroundColor(theme.color("fg-faint"))
             }
+            // A squeezed count wraps one character per line and grows the row.
+            .fixedSize()
             .help(stackAccessibilityText ?? "")
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(stackAccessibilityText ?? "")
