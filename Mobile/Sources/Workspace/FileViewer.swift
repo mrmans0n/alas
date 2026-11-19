@@ -8,6 +8,8 @@ struct FileViewer: View {
     let workspace: SessionWorkspace
     let session: TranscriptSession
     @State private var showSource = false
+    /// False once the viewer leaves the stack; a full-screen image over it leaves it true.
+    @Environment(\.isPresented) private var isPresented
 
     private var path: String { workspace.file?.path ?? "" }
 
@@ -23,9 +25,24 @@ struct FileViewer: View {
                 case .loaded(let reply):
                     if FileKind(path: path) == .markdown, !showSource {
                         ScrollView {
-                            AgentMarkdown(id: "file:\(path)", text: reply.text, session: session)
+                            AgentMarkdown(id: "file:\(path)", text: reply.text, session: session,
+                                          resolve: { FileKind.worktreePath($0, besideFile: path) })
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding()
+                                // A file link opens in this viewer, a relative one taken from this file's folder.
+                                .environment(\.openURL, OpenURLAction { url in
+                                    let relative = url.scheme == nil && url.host == nil && !url.path.hasPrefix("/")
+                                    let target = relative ? URL(fileURLWithPath: FileKind.worktreePath(url.path, besideFile: path),
+                                                                relativeTo: session.worktreeRoot.map { URL(fileURLWithPath: $0 + "/") })
+                                        : url
+                                    switch RemoteTranscriptLink.route(target.absoluteURL, worktreeRoot: session.worktreeRoot) {
+                                    case .file(let file):
+                                        if let owner = workspace.pushedBy { workspace.openFile(file, by: owner) }
+                                        return .handled
+                                    case .system: return .systemAction
+                                    case .discard: return .discarded
+                                    }
+                                })
                         }
                     } else {
                         FileContent(reply: reply, path: path)
@@ -53,6 +70,7 @@ struct FileViewer: View {
         .background(Color(.systemBackground))
         // Backstop for a pop that skips the destination binding (a stack reset to the root).
         .onDisappear {
+            guard !isPresented else { return }
             MarkdownBlockCache.shared.remove(ids: ["file:\(path)"])
             workspace.closeFile()
         }
@@ -71,6 +89,15 @@ enum FileKind: Equatable {
         case "md", "markdown", "mdown", "mkd": self = .markdown
         default: self = .text
         }
+    }
+
+    /// `ref`, from a document at worktree path `file`, as a worktree path: a relative reference is
+    /// taken from the document's folder, `..` included; an absolute one or a URL is left alone.
+    static func worktreePath(_ ref: String, besideFile file: String) -> String {
+        guard !ref.hasPrefix("/"), URL(string: ref)?.scheme == nil else { return ref }
+        let folder = (file as NSString).deletingLastPathComponent
+        let joined = URL(fileURLWithPath: "/" + (folder as NSString).appendingPathComponent(ref)).standardized.path
+        return String(joined.dropFirst())
     }
 }
 

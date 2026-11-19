@@ -63,7 +63,8 @@ struct FilesView: View {
 
     @ViewBuilder
     private var results: some View {
-        let files = session.mentionCandidates.filter { $0.kind == RemoteMention.file }
+        // A directory comes back as a file mention ending in a slash; only files open here.
+        let files = session.mentionCandidates.filter { $0.kind == RemoteMention.file && !$0.value.hasSuffix("/") }
         if files.isEmpty {
             if session.mentionCandidatesQuery == query {
                 ContentUnavailableView.search(text: query)
