@@ -6,14 +6,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.3] - 2026-11-19
+
+### ✨ Features
+
+- Render full plan documents and open transcript file links in the iPhone and iPad file viewer (#2588).
+- Show answered questions, outcomes, and failure incidents as Mac-style cards in iPhone and iPad transcripts (#2589, #2594).
+- Show a running command's live terminal output in its iPhone and iPad tool card (#2596, #2599).
+- Keep the chosen Mac and branch-naming rules when creating a mobile worktree, then open its transcript immediately while setup finishes (#2600).
+- Preserve oversized tool-generated images as fetchable attachments so they appear in iPhone and iPad transcripts (#2602).
+- Show subagent cards on iPhone and iPad, open live child transcripts, and identify delegated sessions by their parent (#2603, #2604).
+- Keep agent issues visible above the mobile composer, install missing managed adapters, show quota-only usage, keep requests visible on every tab, and attach pasted images (#2606).
+- Show live VM and device activity, stack shipping progress, and shepherd state directly on Mac sidebar worktree rows (#2605).
+- Drill into commit files from the iPhone and iPad Changes tab and view syntax-coloured, add/delete-tinted diffs (#2607).
+- Close, reopen, or archive sessions and rename, archive, or delete their worktrees from iPhone and iPad, with capability and stale-lineage safeguards (#2608).
+
 ### 🐛 Fixes
 
-- Keep a commit's GG-ID when Edit Commit… saves a message where git-gud wrote GG-ID and GG-Parent as separate paragraphs.
-- Treat an empty Android device clipboard as empty text instead of a connection failure.
+- Give folder and detached worktrees a name on iPhone and iPad when no branch is reported (#2590).
+- Treat an empty Android device clipboard as empty text instead of a connection failure (#2591).
+- Keep a commit's GG-ID when Edit Commit… saves a message where git-gud wrote GG-ID and GG-Parent as separate paragraphs (#2593).
+- Prevent transcript rows from crashing after their controller is released on iPhone and iPad (#2598).
 
 ### 🏗️ Internal
 
-- Upload a nightly iOS build to TestFlight for internal testers when the iOS app's inputs change on main.
+- Update the Erlang and C# tree-sitter grammars (#2592, #2595).
+- Upload nightly iOS builds to TestFlight for internal testers when mobile inputs change (#2597).
+- Generate release-specific TestFlight notes from immutable tagged content.
+- Repair timing-sensitive CI tests across Rust, Swift, Linux, and host integration suites (#2601).
 
 ## [0.24.2] - 2026-11-18
 
