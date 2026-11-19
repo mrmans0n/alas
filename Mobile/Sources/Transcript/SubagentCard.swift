@@ -112,7 +112,8 @@ struct SubagentScreen: View {
     private var isLive: Bool { transcript?.found != false && !SubagentStatus.isTerminal(state) }
 
     var body: some View {
-        TranscriptCollectionView(items: transcript?.items ?? [], expanded: $expanded, canLoadOlder: false, loadOlder: {})
+        TranscriptCollectionView(items: transcript?.items ?? [], expanded: $expanded, canLoadOlder: false, loadOlder: {},
+                                 session: session, interactive: false)
             .overlay {
                 if let transcript, !transcript.found {
                     Text("Subagent transcript not available.").font(.footnote).foregroundStyle(.secondary)

@@ -16,11 +16,13 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
     var sendCount = 0
     var onFirstLayout: () -> Void = {}
     var openSubagent: (RemoteWireMessage.Subagent) -> Void = { _ in }
+    /// False for a read-only transcript, such as a subagent's: its rows offer no answers or navigation.
+    var interactive = true
 
     init(items: [TranscriptItem], expanded: Binding<Set<String>>, canLoadOlder: Bool,
          loadOlder: @escaping () -> Void, image: @escaping (String) -> UIImage? = { _ in nil },
          session: TranscriptSession? = nil, sendCount: Int = 0, onFirstLayout: @escaping () -> Void = {},
-         openSubagent: @escaping (RemoteWireMessage.Subagent) -> Void = { _ in })
+         openSubagent: @escaping (RemoteWireMessage.Subagent) -> Void = { _ in }, interactive: Bool = true)
     {
         self.items = items
         _expanded = expanded
@@ -31,6 +33,7 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
         self.sendCount = sendCount
         self.onFirstLayout = onFirstLayout
         self.openSubagent = openSubagent
+        self.interactive = interactive
     }
 
     func makeUIViewController(context: Context) -> TranscriptCollectionController {
@@ -46,7 +49,7 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
     private func input(_ context: Context) -> TranscriptCollectionController.Input {
         .init(items: items, expanded: $expanded, canLoadOlder: canLoadOlder, loadOlder: loadOlder,
               image: image, session: session, sendCount: sendCount, onFirstLayout: onFirstLayout,
-              openSubagent: openSubagent, openURL: context.environment.openURL)
+              openSubagent: openSubagent, interactive: interactive, openURL: context.environment.openURL)
     }
 }
 
@@ -61,6 +64,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         var sendCount: Int
         var onFirstLayout: () -> Void
         var openSubagent: (RemoteWireMessage.Subagent) -> Void
+        var interactive: Bool
         var openURL: OpenURLAction
     }
 
@@ -106,7 +110,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
             guard let self, let item = itemsByID[id] else { return }
             cell.contentConfiguration = UIHostingConfiguration {
                 TranscriptRowView(item: item, isExpanded: shownExpanded.contains(id), image: input.image,
-                                  session: input.session, toggle: { [weak self] in
+                                  session: input.session, interactive: input.interactive, toggle: { [weak self] in
                                       guard let self else { return }
                                       if case .groupHeader(let group, _, _, _) = item.kind {
                                           act(onGroup: id) { $0.toggle(group) }

@@ -8,6 +8,8 @@ struct TranscriptRowView: View {
     var image: (String) -> UIImage? = { _ in nil }
     /// Visual aids render live only with a session to answer through.
     var session: TranscriptSession?
+    /// False for a read-only transcript: visual aids show as captions and subagents do not open.
+    var interactive = true
     let toggle: () -> Void
     /// A group header's "Show earlier".
     var showAll: () -> Void = {}
@@ -72,7 +74,7 @@ struct TranscriptRowView: View {
         case .toolCall(let call):
             if let subagent = item.message.subagent {
                 SubagentCard(subagent: subagent, duration: item.toolCall?.duration,
-                             open: session?.supportsSubagents == true ? { openSubagent(subagent) } : nil)
+                             open: interactive && session?.supportsSubagents == true ? { openSubagent(subagent) } : nil)
             } else if let display = item.toolCall {
                 ToolCallCard(item: item, call: call, display: display, isExpanded: isExpanded, toggle: toggle,
                              session: session, showsAll: { showsAll("section:\($0)") },
@@ -91,7 +93,7 @@ struct TranscriptRowView: View {
         case .planDocument(let doc):
             if let display = doc.display { planDocument(display) }
         case .visualAid(let aid):
-            if let session {
+            if let session, interactive {
                 // Keyed by visual, so a reused cell never hands one visual's page or state to another.
                 VisualAidCard(aid: aid, session: session).id(aid.id)
             } else {

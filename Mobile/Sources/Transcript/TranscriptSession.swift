@@ -49,8 +49,9 @@ struct TranscriptItem: Identifiable, Equatable {
     /// Shown inside an expanded group.
     var isGroupMember = false
 
-    init(message: RemoteWireMessage, worktreeRoot: String? = nil) {
-        id = message.stableId
+    /// `id` defaults to the message's; a child transcript's rows prefix theirs, as its ids repeat the parent's.
+    init(message: RemoteWireMessage, worktreeRoot: String? = nil, id: String? = nil) {
+        self.id = id ?? message.stableId
         kind = .message
         let row = RemoteTranscriptRow(message: message)
         self.row = row
@@ -739,9 +740,11 @@ final class TranscriptSession {
             // Rows whose message is unchanged keep their item, so a poll does not re-highlight them.
             let old = Dictionary((subagentTranscripts[subagentId]?.items ?? []).map { ($0.id, $0) },
                                  uniquingKeysWith: { _, newer in newer })
+            // Prefixed: image and markdown caches are keyed by row id, and the child's ids repeat the parent's.
             let items = messages.filter { $0.isHidden != true }.map { message in
-                old[message.stableId].flatMap { $0.message == message ? $0 : nil }
-                    ?? TranscriptItem(message: message, worktreeRoot: worktreeRoot)
+                let itemId = "\(subagentId)/\(message.stableId)"
+                return old[itemId].flatMap { $0.message == message ? $0 : nil }
+                    ?? TranscriptItem(message: message, worktreeRoot: worktreeRoot, id: itemId)
             }
             subagentTranscripts[subagentId] = SubagentTranscript(found: found, state: state, items: items)
             return
