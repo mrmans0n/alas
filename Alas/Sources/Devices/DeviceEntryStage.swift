@@ -80,6 +80,8 @@ struct DeviceEntryStage: View {
                 AndroidDeviceStage(
                     device: device, client: state.androidStreams, pane: state.androidPane, control: state.deviceControl,
                     agentName: { state.computerUseAgentName($0) }, now: now, flowRecorder: state.deviceFlowRecorder,
+                    remoteDriverName: state.peerDeviceDriverNames[device.serial],
+                    onReclaimRemote: { state.servedPeerDevices?.reclaim(serial: device.serial) },
                     onUse: onUse
                 )
                 .id(device.serial)

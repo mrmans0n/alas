@@ -142,6 +142,45 @@ the app's restarts, with a banner for each Java crash.
 The screen streams with scrcpy's server, which Alas bundles and copies to
 the device each time it shows the screen.
 
+### Watch or drive a USB Android device from another machine
+
+On the Mac connected to Android, turn on **Settings › Remote › Enable remote
+control**, **Serve over HTTPS**, and **Tailscale only**. Both clients need a
+route to that Mac on the tailnet. Pair the native Alas app directly with the
+owning Mac using its HTTPS address; a different paired host cannot relay a
+device stream.
+
+Under **Settings › Remote › Device sharing**, grant **View** or **View and
+Control** to each paired Mac or iPhone that should see the selected Android
+device. The grant is saved on the host. Pairing alone grants no device
+access. On iPhone, open **Peers › Devices** for the host. On another Mac,
+open the Devices tab while viewing that peer's worktree.
+
+A viewer opens without control. Choose **Take over** to tap, swipe, type,
+or use the Android buttons. Only one viewer can drive at once. **Hand back**
+releases control so the agent on the host can continue; it does not retry an
+agent call that already timed out. On the host, use **Reclaim** on the
+Android screen in the Devices rail or its center tab.
+On a Mac viewer, holding a key such as Backspace repeats it on Android.
+Submitting text uses the Android clipboard to paste into the focused field.
+Alas does not sync clipboard contents to the viewer.
+
+Opening a view does not stop the agent. Losing the connection or sending the
+phone app to the background releases control. When the view reconnects,
+choose **Take over** again. **Stop Sharing** clears the device's grants and
+closes its viewers without stopping local use.
+
+Keep the host Mac logged in, awake, and running Alas. **Keep awake on power**
+does not prevent explicit sleep or lid-close sleep. Android must stay
+USB-connected and authorized for debugging. If the Mac is unreachable, Alas
+cannot tell whether it is asleep or disconnected. If USB debugging needs
+approval again, someone must approve it on Android. Do not rely on remote
+access to recover after a power loss or reboot without first checking your
+device's USB and lock-screen behavior.
+
+Remote viewing and control currently cover physical USB Android devices,
+not Android emulators, iOS simulators, VMs, or the browser client.
+
 ## Flows
 
 A flow is a script of steps on a device, kept in the worktree as

@@ -943,6 +943,105 @@ extension DeviceAgentControlTests {
         )
     }
 
+    @Test func remoteTakeoverDrainsEarlierInputAndKeepsNewInputHeldThroughCleanup() async {
+        let android = FakeBackend()
+        let udid = "emulator-5554"
+        let owner = UUID()
+        let (swipeStarted, startSwipe) = AsyncStream<Void>.makeStream()
+        let (swipeCanEnd, finishSwipe) = AsyncStream<Void>.makeStream()
+        let (reserved, reserve) = AsyncStream<Void>.makeStream()
+        let (agentHeld, holdAgent) = AsyncStream<Void>.makeStream()
+        let (cleanupStarted, startCleanup) = AsyncStream<Void>.makeStream()
+        let (cleanupCanEnd, finishCleanup) = AsyncStream<Void>.makeStream()
+        let control = bothPlatforms(android, sleep: { duration in
+            if duration == .milliseconds(16) {
+                startSwipe.finish()
+                for await _ in swipeCanEnd {}
+            } else if duration == .seconds(50) {
+                holdAgent.finish()
+                await Self.untilCancelled(duration)
+            }
+        })
+        let localInputToken = control.registerLocalInputStop(udid: udid) { reserve.finish() }
+        defer { control.unregisterLocalInputStop(udid: udid, token: localInputToken) }
+        let first = Task {
+            await control.perform(
+                .swipe(udid: udid, gesture: .direction(.up), durationMs: 16, includeScreenshot: false, diff: false),
+                sessionID: "first"
+            )
+        }
+        for await _ in swipeStarted {}
+        #expect(android.fakeInput.touches.map(\.phase) == ["begin"])
+
+        let takeover = Task { await control.acquireRemoteInput(udid: udid, owner: owner) }
+        for await _ in reserved {}
+        #expect(!control.acceptsRemoteInput(udid: udid, owner: owner))
+        #expect(!control.allowsLocalInput(udid: udid))
+        #expect(!(await control.whileUserHoldsInput(udid: udid) { Issue.record("Local mutation ran during takeover") }))
+        #expect(android.fakeInput.touches.map(\.phase) == ["begin"])
+
+        let next = Task {
+            await control.perform(.button(udid: udid, name: .home, includeScreenshot: false, diff: false), sessionID: "next")
+        }
+        for await _ in agentHeld {}
+        #expect(control.waitingSessions(udid: udid) == ["next"])
+
+        finishSwipe.finish()
+        #expect(error(await first.value) == DeviceAgentControl.userDriving)
+        #expect(await takeover.value)
+        #expect(control.acceptsRemoteInput(udid: udid, owner: owner))
+        #expect(android.fakeInput.touches.map(\.phase) == ["begin", "end"])
+        #expect(control.waitingSessions(udid: udid) == ["next"])
+
+        let releasing = Task {
+            await control.releaseRemoteInput(udid: udid, owner: owner) {
+                startCleanup.finish()
+                for await _ in cleanupCanEnd {}
+                _ = android.press(udid, .back)
+            }
+        }
+        for await _ in cleanupStarted {}
+        #expect(!control.acceptsRemoteInput(udid: udid, owner: owner))
+        #expect(!control.allowsLocalInput(udid: udid))
+        #expect(control.waitingSessions(udid: udid) == ["next"])
+        #expect(android.pressed.isEmpty)
+
+        finishCleanup.finish()
+        await releasing.value
+        #expect(await next.value == .ok)
+        #expect(android.pressed == ["back", "home"])
+    }
+
+    @Test func reclaimKeepsWaitingAgentInputHeldUntilTheLocalUserHandsBack() async {
+        let android = FakeBackend()
+        let udid = "emulator-5554"
+        let owner = UUID()
+        let (agentHeld, holdAgent) = AsyncStream<Void>.makeStream()
+        let control = bothPlatforms(android, sleep: { duration in
+            if duration == .seconds(50) {
+                holdAgent.finish()
+                await Self.untilCancelled(duration)
+            }
+        })
+        #expect(await control.acquireRemoteInput(udid: udid, owner: owner))
+        let next = Task {
+            await control.perform(.button(udid: udid, name: .home, includeScreenshot: false, diff: false), sessionID: "next")
+        }
+        for await _ in agentHeld {}
+
+        control.reclaimRemoteInput(udid: udid)
+        await control.releaseRemoteInput(udid: udid, owner: owner) {}
+        #expect(control.allowsLocalInput(udid: udid))
+        #expect(control.driver(udid: udid) == .user)
+        #expect(control.waitingSessions(udid: udid) == ["next"])
+        #expect(android.pressed.isEmpty)
+        #expect(!(await control.acquireRemoteInput(udid: udid, owner: UUID())))
+
+        control.handBack(udid: udid)
+        #expect(await next.value == .ok)
+        #expect(android.pressed == ["home"])
+    }
+
     @Test func theListHoldsBothPlatforms() async {
         let response = await bothPlatforms(FakeBackend()).perform(.list, sessionID: "s")
         guard case .text(let parts) = response else {

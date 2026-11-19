@@ -51,8 +51,9 @@ struct DeviceEntryActions: View {
         if case .simulator = kind { .ios } else { .android }
     }
 
-    /// It has a screen, and no agent drives it.
-    private var canChange: Bool { ready && VMDriver.allowsViewInput(control.driver(udid: udid)) }
+    private var remoteInputReserved: Bool { control.remoteInputOwner(udid: udid) != nil }
+
+    private var canChange: Bool { ready && control.allowsLocalInput(udid: udid) }
 
     private var flowFolder: URL { DeviceFlowFiles.folder(in: worktree) }
 
@@ -94,11 +95,16 @@ struct DeviceEntryActions: View {
                 .background { Color.clear.popover(isPresented: showingFlowResult, arrowEdge: .bottom) { flowResultText } }
         }
         .fixedSize()
+        .onChange(of: remoteInputReserved) { _, reserved in
+            if reserved { showsSettings = false }
+        }
     }
 
     @ViewBuilder
     private var menu: some View {
-        Button("Settings…") { showsSettings = true }
+        Button("Settings…") {
+            if canChange { showsSettings = true }
+        }
             .disabled(!canChange)
         Button("Logs", action: onOpenLogs)
             .disabled(!ready)
@@ -140,7 +146,7 @@ struct DeviceEntryActions: View {
             Button("Stop Recording Flow…", action: stopFlowRecording)
         } else {
             Button("Record Flow") {
-                guard let backend = control.backend(for: platform) else { return }
+                guard canChange, let backend = control.backend(for: platform) else { return }
                 Task { await flowRecorder.start(udid: udid, backend: backend) }
             }
             .disabled(!canChange)
@@ -161,7 +167,7 @@ struct DeviceEntryActions: View {
 
     @ViewBuilder
     private var settings: some View {
-        if let backend = control.backend(for: platform) {
+        if !remoteInputReserved, let backend = control.backend(for: platform) {
             DeviceSettingsPopover(udid: udid, backend: backend, control: control)
         }
     }
@@ -253,6 +259,7 @@ struct DeviceEntryActions: View {
 
     /// Runs as the "flow" session, so the screen shows its progress and Take over stops it.
     private func runFlow(_ file: URL) {
+        guard canChange else { return }
         Task {
             let response = await control.perform(
                 .runFlow(udid: udid, path: file.path), sessionID: DeviceAgentControl.userFlowSession
