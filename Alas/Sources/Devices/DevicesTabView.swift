@@ -13,7 +13,7 @@ struct DevicesTabView: View {
     var body: some View {
         // Each second, for "n s ago", saved-state ages and the agent's driving window.
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            stage(state.devicesTabState(worktree: worktree, selection: rps.devicesSelection).stage, now: context.date)
+            stage(state.devicesTabState(worktree: worktree, selection: rps.devicesLastUsed).stage, now: context.date)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
@@ -71,7 +71,7 @@ struct DevicesTabView: View {
                 symbol: "iphone", title: "\(device.name) is shut down",
                 detail: error ?? device.runtimeName, detailTone: error == nil ? "fg-dim" : "warn",
                 action: .init(title: "Boot", icon: "power") {
-                    rps.devicesSelection = .simulator(device.udid)
+                    rps.devicesLastUsed = .simulator(device.udid)
                     state.noteDeviceUse(device.udid, worktreeID: worktree.id)
                     Task { await model.boot(device) }
                 }
@@ -94,7 +94,7 @@ struct DevicesTabView: View {
                 symbol: "candybarphone", title: "\(target.title) is shut down",
                 detail: error ?? "Android emulator", detailTone: error == nil ? "fg-dim" : "warn",
                 action: .init(title: "Boot", icon: "power") {
-                    rps.devicesSelection = .android(target.id)
+                    rps.devicesLastUsed = .android(target.id)
                     state.noteDeviceUse(target.id, worktreeID: worktree.id)
                     if let avd = target.avdName { Task { await state.androidPane.boot(avd: avd) } }
                 }

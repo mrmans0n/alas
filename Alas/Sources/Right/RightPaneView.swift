@@ -309,9 +309,9 @@ struct RightPaneView: View {
 
     private func devicesSwitcher(rps: RightPaneState) -> some View {
         DevicesSwitcher(
-            state: state.devicesTabState(worktree: worktree, selection: rps.devicesSelection),
+            state: state.devicesTabState(worktree: worktree, selection: rps.devicesLastUsed),
             onSelect: {
-                rps.devicesSelection = $0
+                rps.devicesLastUsed = $0
                 switch $0 {
                 case .simulator(let id), .android(let id):
                     state.noteDeviceUse(id, worktreeID: worktree.id)
@@ -334,7 +334,7 @@ struct RightPaneView: View {
     }
 
     private func devicesActions(rps: RightPaneState) -> AnyView? {
-        let tabState = state.devicesTabState(worktree: worktree, selection: rps.devicesSelection)
+        let tabState = state.devicesTabState(worktree: worktree, selection: rps.devicesLastUsed)
         if case .android(let target, .ready) = tabState.stage, let device = target.device {
             return AnyView(AndroidActions(
                 device: device, pane: state.androidPane, control: state.deviceControl, recorder: state.deviceRecorder,
@@ -348,7 +348,7 @@ struct RightPaneView: View {
                     await state.deviceRecorder.simulatorStopped(udid: device.serial)
                     await state.androidPane.shutDown(device)
                     // Back to the AVD's row, to boot it again.
-                    rps.devicesSelection = target.avdName.map { .android(AndroidListing.avdID($0)) }
+                    rps.devicesLastUsed = target.avdName.map { .android(AndroidListing.avdID($0)) }
                 }
             })
         }

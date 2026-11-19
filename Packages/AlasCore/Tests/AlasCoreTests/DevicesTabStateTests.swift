@@ -194,13 +194,13 @@ struct DevicesTabStateTests {
         (.vm(.macOS), "on"),
         (nil, "on"),
     ] as [(DevicesTarget?, String)])
-    func aRunScriptsAppGoesToTheSelectedSimulatorElseABootedOne(selection: DevicesTarget?, udid: String) {
-        #expect(SimulatorTarget.choose(selection: selection, simulators: [Self.off, Self.on])?.udid == udid)
+    func aRunScriptsAppGoesToTheLastUsedSimulatorElseABootedOne(lastUsed: DevicesTarget?, udid: String) {
+        #expect(SimulatorTarget.choose(lastUsed: lastUsed, simulators: [Self.off, Self.on])?.udid == udid)
     }
 
     @Test func withNothingBootedARunScriptsAppGoesToTheFirstSimulator() {
-        #expect(SimulatorTarget.choose(selection: nil, simulators: [Self.off])?.udid == "off")
-        #expect(SimulatorTarget.choose(selection: nil, simulators: []) == nil)
+        #expect(SimulatorTarget.choose(lastUsed: nil, simulators: [Self.off])?.udid == "off")
+        #expect(SimulatorTarget.choose(lastUsed: nil, simulators: []) == nil)
     }
 
     @Test func runningDevicesLeadAndLeaveTheirSections() {

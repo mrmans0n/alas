@@ -15,14 +15,14 @@ extension AppState {
             ? URL(fileURLWithPath: appPath)
             : worktree.path.appendingPathComponent(appPath)
         let pane = rightPaneStore.activeState(worktreeId: worktree.id)
-        guard let device = SimulatorTarget.choose(selection: pane?.devicesSelection, simulators: devicePane.devices ?? []) else {
+        guard let device = SimulatorTarget.choose(lastUsed: pane?.devicesLastUsed, simulators: devicePane.devices ?? []) else {
             let appName = app.deletingPathExtension().lastPathComponent
             inAppNotifications.post("No iOS simulator to open \(appName) on", severity: .error, worktreeID: worktree.id)
             return
         }
         noteDeviceUse(device.udid, worktreeID: worktree.id)
         if let pane {
-            pane.devicesSelection = .simulator(device.udid)
+            pane.devicesLastUsed = .simulator(device.udid)
             pane.activeTab = .device
         }
         if !config.rightPaneVisible {

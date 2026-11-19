@@ -28,6 +28,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case virtualMachine(VirtualMachineTabState)
     case runReport(RunReportTabState)
     case simulatorLogs(SimulatorLogsTabState)
+    case device(DeviceTabState)
     case plugin(PluginTabState)
     case visualAid(VisualAidTabState)
 
@@ -58,6 +59,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .virtualMachine(let s): return s.id
         case .runReport(let s):    return s.id
         case .simulatorLogs(let s): return s.id
+        case .device(let s):       return s.id
         case .plugin(let s):       return s.id
         case .visualAid(let s):    return s.id
         }
@@ -90,6 +92,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .virtualMachine(let s): return s.title
         case .runReport(let s):    return s.title
         case .simulatorLogs(let s): return s.title
+        case .device(let s):       return s.title
         case .plugin(let s):       return s.title
         case .visualAid(let s):    return s.title
         }
@@ -122,6 +125,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .virtualMachine: return "desktopcomputer"
         case .runReport:    return "terminal.fill"
         case .simulatorLogs: return "doc.text.magnifyingglass"
+        case .device:       return "iphone"
         case .plugin:       return "puzzlepiece.extension"
         case .visualAid:    return "rectangle.on.rectangle"
         }
@@ -341,6 +345,32 @@ struct SimulatorLogsTabState: Codable, Equatable, Identifiable {
         deviceName = try container.decode(String.self, forKey: .deviceName)
         // Tabs saved before Android had logs are simulators'.
         platform = try container.decodeIfPresent(AgentDevice.Platform.self, forKey: .platform) ?? .ios
+    }
+}
+
+/// A simulator's or Android device's screen in a center tab instead of the
+/// Devices rail. One per device in each worktree; it restores, showing Boot
+/// when its device isn't running.
+struct DeviceTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    /// A simulator's UDID or an Android serial.
+    let deviceID: String
+    let platform: AgentDevice.Platform
+    let deviceName: String
+    /// An emulator's AVD, to find it again after it boots under another serial.
+    let avdName: String?
+
+    var title: String { deviceName }
+    var target: DevicesTarget { platform == .ios ? .simulator(deviceID) : .android(deviceID) }
+
+    init(worktreeId: String, deviceID: String, platform: AgentDevice.Platform, deviceName: String, avdName: String? = nil) {
+        self.worktreeId = worktreeId
+        self.deviceID = deviceID
+        self.platform = platform
+        self.deviceName = deviceName
+        self.avdName = avdName
+        id = "device:\(deviceID)"
     }
 }
 

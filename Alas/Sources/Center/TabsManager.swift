@@ -1333,6 +1333,17 @@ final class TabsManager {
     }
 
     @discardableResult
+    func openOrFocusDeviceTab(worktreeId: String, state: DeviceTabState) -> Tab {
+        if let existing = tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) {
+            activate(worktreeId: worktreeId, tabId: state.id)
+            return existing
+        }
+        let tab = Tab.device(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
     func openOrFocusVisualAid(owner: SessionOwnerID, state: VisualAidTabState) -> Tab {
         let key = owner.storageKey
         if let existing = tabs(forWorktree: key).first(where: { $0.id == state.id }) {
