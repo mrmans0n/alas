@@ -23,11 +23,16 @@ struct DiffHunksView: View {
     /// keeping the spans that start past the previous one's end. Empty when the path has no grammar.
     /// Only the lines "Show all" can reach are tokenized.
     static func spans(for diff: ParsedDiff, path: String) -> [[HighlightSpan]] {
+        spans(forLines: diff.hunks.flatMap(\.lines).prefix(expandedLineLimit).map(\.text), path: path)
+    }
+
+    /// The same, for any diff's line texts.
+    nonisolated static func spans(forLines lines: [String], path: String) -> [[HighlightSpan]] {
         guard let ext = ACPCodeLanguage.highlighterExtension(forPath: path) else { return [] }
-        return diff.hunks.flatMap(\.lines).prefix(expandedLineLimit).map { line in
-            let length = (line.text as NSString).length
+        return lines.map { text in
+            let length = (text as NSString).length
             var cursor = 0
-            return TreeSitterHighlighter.tokenize(line: line.text, fileExtension: ext)
+            return TreeSitterHighlighter.tokenize(line: text, fileExtension: ext)
                 .filter { $0.range.location >= 0 && NSMaxRange($0.range) <= length }
                 .sorted { $0.range.location < $1.range.location }
                 .filter { span in

@@ -9,6 +9,13 @@ enum Load<T> {
 struct DiffKey: Hashable {
     let path: String
     let stage: String?
+    /// The commit whose change to `path` this is; nil for the working tree.
+    var sha: String? = nil
+}
+
+struct CommitFilesReply {
+    let files: [RemoteChangedFile]
+    let truncated: Bool
 }
 
 struct ChangeListReply {
@@ -45,6 +52,8 @@ struct FileReply {
 final class SessionWorkspace {
     private(set) var changes: Load<ChangeListReply> = .idle
     private(set) var diff: (key: DiffKey, Load<DiffReply>)?
+    /// The commit whose files are open, pushed from the Commits section.
+    private(set) var commit: (commit: RemoteCommit, Load<CommitFilesReply>)?
     private(set) var tree = RemoteFileTree()
     private(set) var file: (path: String, Load<FileReply>)?
     /// The screen that pushed the open diff or file. The session can be open in several tabs at once;
@@ -84,7 +93,7 @@ final class SessionWorkspace {
     }
 
     /// True while a view `owner` pushed (a diff or a file) is open.
-    func hasPushedChild(_ owner: UUID) -> Bool { pushedBy == owner && (diff != nil || file != nil) }
+    func hasPushedChild(_ owner: UUID) -> Bool { pushedBy == owner && (diff != nil || file != nil || commit != nil) }
 
     // MARK: Lifecycle
 
@@ -129,7 +138,8 @@ final class SessionWorkspace {
     /// Asks again for whatever is open; the host forgot everything it was asked while away.
     private func replay() {
         if case .idle = changes {} else { refreshChanges() }
-        if let diff { send(.fileDiff(sessionId: sessionId, path: diff.key.path, stage: diff.key.stage)) }
+        if let commit { send(.listCommitFiles(sessionId: sessionId, sha: commit.commit.revision)) }
+        if let diff { requestDiff(diff.key) }
         if treeRequested { loadTree() }
         refreshShepherd()
         if let file {
@@ -145,10 +155,30 @@ final class SessionWorkspace {
         send(.listChanges(sessionId: sessionId))
     }
 
-    func openDiff(_ path: String, stage: String?, by owner: UUID) {
+    func openDiff(_ path: String, stage: String?, sha: String? = nil, by owner: UUID) {
         pushedBy = owner
-        diff = (DiffKey(path: path, stage: stage), .loading)
-        send(.fileDiff(sessionId: sessionId, path: path, stage: stage))
+        let key = DiffKey(path: path, stage: stage, sha: sha)
+        diff = (key, .loading)
+        requestDiff(key)
+    }
+
+    private func requestDiff(_ key: DiffKey) {
+        if let sha = key.sha {
+            send(.commitFileDiff(sessionId: sessionId, sha: sha, path: key.path))
+        } else {
+            send(.fileDiff(sessionId: sessionId, path: key.path, stage: key.stage))
+        }
+    }
+
+    func openCommit(_ commit: RemoteCommit, by owner: UUID) {
+        pushedBy = owner
+        self.commit = (commit, .loading)
+        send(.listCommitFiles(sessionId: sessionId, sha: commit.revision))
+    }
+
+    func closeCommit() {
+        commit = nil
+        if diff?.key.sha != nil { closeDiff() }
     }
 
     func closeDiff() {
@@ -333,6 +363,20 @@ final class SessionWorkspace {
         case .fileDiffFailed(let id, let path, let stage, let reason, let message) where id == sessionId:
             guard diff?.key == DiffKey(path: path, stage: stage) else { return }
             diff = (DiffKey(path: path, stage: stage), .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)))
+        case .commitFiles(let id, let sha, let files, let truncated) where id == sessionId:
+            guard let open = commit?.commit, open.revision == sha else { return }
+            commit = (open, .loaded(CommitFilesReply(files: files, truncated: truncated)))
+        case .commitFilesFailed(let id, let sha, let reason, let message) where id == sessionId:
+            guard let open = commit?.commit, open.revision == sha else { return }
+            commit = (open, .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)))
+        case .commitDiffResult(let id, let sha, let path, let hunks, let truncated, let note) where id == sessionId:
+            let key = DiffKey(path: path, stage: nil, sha: sha)
+            guard diff?.key == key else { return }
+            diff = (key, .loaded(DiffReply(hunks: hunks, truncated: truncated, metadataNote: note)))
+        case .commitDiffFailed(let id, let sha, let path, let reason, let message) where id == sessionId:
+            let key = DiffKey(path: path, stage: nil, sha: sha)
+            guard diff?.key == key else { return }
+            diff = (key, .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)))
         case .fileTree(let id, let path, let nodes, let truncated) where id == sessionId:
             tree.apply(path: path, nodes: nodes)
             treeError = nil
