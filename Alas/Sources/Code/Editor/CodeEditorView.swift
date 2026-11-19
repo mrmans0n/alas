@@ -86,7 +86,7 @@ final class CodeEditorLeadingClipView: NSClipView {
     /// clears the gutter. The true leading edge is therefore `-rulerThickness`,
     /// not `0` — clamping to `0` hides the first characters of every line under
     /// the gutter with no way to scroll them back into view.
-    private var leadingBoundsOriginX: CGFloat {
+    var leadingBoundsOriginX: CGFloat {
         guard let scrollView = enclosingScrollView,
               scrollView.rulersVisible,
               let ruler = scrollView.verticalRulerView,
