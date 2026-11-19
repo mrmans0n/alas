@@ -130,12 +130,19 @@ struct TranscriptScreen: View {
                         }
                     }
                 } else {
-                    Text("This session has ended.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(.bar)
+                    HStack(spacing: 12) {
+                        Text("This session has ended.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        if session.supportsSessionTabs {
+                            Button(session.tabAction == .reopen ? "Reopening…" : "Reopen") { session.reopenTab() }
+                                .font(.footnote.weight(.semibold))
+                                .disabled(session.tabAction != nil)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(.bar)
                 }
             }
             // Below the request cards, so links in a plan under review route too. A file link opens in the
@@ -163,6 +170,10 @@ struct TranscriptScreen: View {
                         renaming = true
                     }
                     Button("Session Settings", systemImage: "slider.horizontal.3") { showSettings = true }
+                    if session.supportsSessionTabs {
+                        Button("Close Session", systemImage: "xmark.circle") { session.closeTab() }
+                            .disabled(session.tabAction != nil)
+                    }
                 }
             }
             .toolbar {
@@ -187,6 +198,11 @@ struct TranscriptScreen: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SessionSettingsSheet(session: session) }
+            .alert("Couldn't do that", isPresented: Binding { session.tabActionError != nil } set: { if !$0 { session.tabActionError = nil } }) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(session.tabActionError ?? "")
+            }
             .alert("Rename Session", isPresented: $renaming) {
                 TextField("Title", text: $newTitle)
                 Button("Cancel", role: .cancel) {}
