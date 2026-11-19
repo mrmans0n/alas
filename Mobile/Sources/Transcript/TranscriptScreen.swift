@@ -19,6 +19,8 @@ struct TranscriptScreen: View {
     @State private var newTitle = ""
     @State private var renamingBranch = false
     @State private var newBranch = ""
+    /// The branch the Rename Branch dialog opened on.
+    @State private var renamedBranch = ""
     @State private var confirmingArchive = false
     @State private var actionError: String?
     /// The worktree a Delete awaits confirmation for, as it was when the user asked.
@@ -189,6 +191,7 @@ struct TranscriptScreen: View {
                     if let branch = workspace.renamableBranch {
                         Button("Rename Branch…", systemImage: "arrow.triangle.branch") {
                             newBranch = branch
+                            renamedBranch = branch
                             renamingBranch = true
                         }
                     }
@@ -244,8 +247,8 @@ struct TranscriptScreen: View {
                 Button("Cancel", role: .cancel) {}
                 Button("Rename") {
                     let branch = newBranch.trimmingCharacters(in: .whitespaces)
-                    guard !branch.isEmpty, branch != workspace.renamableBranch else { return }
-                    Task { actionError = await workspace.renameBranch(to: branch) }
+                    guard !branch.isEmpty, branch != renamedBranch else { return }
+                    Task { actionError = await workspace.renameBranch(from: renamedBranch, to: branch) }
                 }
             }
             .confirmationDialog("Archive this session?", isPresented: $confirmingArchive, titleVisibility: .visible) {

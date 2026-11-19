@@ -275,13 +275,14 @@ final class SessionWorkspace {
         hub.supports(HostProtocolCapability.worktreesRenameBranchV1, on: hostID) ? gitTarget?.worktree.branch : nil
     }
 
-    /// Renames the worktree's branch, then refreshes the changes. Returns the host's refusal, or nil.
-    func renameBranch(to branch: String) async -> String? {
+    /// Renames the worktree's branch `from`, the one the user saw, so the host refuses a checkout
+    /// switched since; then refreshes the changes. Returns the host's refusal, or nil.
+    func renameBranch(from: String, to branch: String) async -> String? {
         guard let target = gitTarget else { return "This worktree can't be changed from here." }
         defer { refreshChanges() }
         return await hostRequest {
             RemoteGitRequest.renameBranch(id: $0, projectID: target.projectID, path: target.worktree.path,
-                                          from: target.worktree.branch, to: branch)
+                                          from: from, to: branch)
         }
     }
 
