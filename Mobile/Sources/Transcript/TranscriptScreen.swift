@@ -21,7 +21,8 @@ struct TranscriptScreen: View {
     @State private var newBranch = ""
     @State private var confirmingArchive = false
     @State private var actionError: String?
-    @State private var confirmingDelete = false
+    /// The worktree a Delete awaits confirmation for, as it was when the user asked.
+    @State private var deleting: SessionWorkspace.RemovalTarget?
     /// A worktree removal the host refused in a way the user may overrule.
     @State private var overruling: Overruling?
     @Environment(\.dismiss) private var dismiss
@@ -199,10 +200,10 @@ struct TranscriptScreen: View {
                 if workspace.canArchive {
                     Button("Archive Session", systemImage: "archivebox", role: .destructive) { confirmingArchive = true }
                 }
-                if workspace.canRemoveWorktree {
+                if let target = workspace.removalTarget {
                     Section {
-                        Button("Archive Worktree", systemImage: "archivebox") { removeWorktree(workspace, .archive) }
-                        Button("Delete Worktree…", systemImage: "trash", role: .destructive) { confirmingDelete = true }
+                        Button("Archive Worktree", systemImage: "archivebox") { removeWorktree(workspace, .archive, of: target) }
+                        Button("Delete Worktree…", systemImage: "trash", role: .destructive) { deleting = target }
                     }
                 }
             }
@@ -256,15 +257,16 @@ struct TranscriptScreen: View {
             } message: {
                 Text("The session stops and leaves the session list.")
             }
-            .confirmationDialog("Delete this worktree?", isPresented: $confirmingDelete, titleVisibility: .visible) {
-                Button("Delete", role: .destructive) { removeWorktree(workspace, .delete) }
-            } message: {
+            .confirmationDialog("Delete this worktree?", isPresented: Binding { deleting != nil } set: { if !$0 { deleting = nil } },
+                                titleVisibility: .visible, presenting: deleting) { target in
+                Button("Delete", role: .destructive) { removeWorktree(workspace, .delete, of: target) }
+            } message: { _ in
                 Text("Its folder is removed from the machine. The branch is deleted too once it's merged.")
             }
             .confirmationDialog(overruling?.failure.message ?? "", isPresented: Binding { overruling != nil } set: { if !$0 { overruling = nil } },
                                 titleVisibility: .visible, presenting: overruling) { held in
                 Button(held.failure.overrule == .force ? "Delete Anyway" : "Discard Changes", role: .destructive) {
-                    removeWorktree(workspace, held.removal, force: held.force || held.failure.overrule == .force,
+                    removeWorktree(workspace, held.removal, of: held.target, force: held.force || held.failure.overrule == .force,
                                    discard: held.discard || held.failure.overrule == .discardUnsavedEdits)
                 }
             }
@@ -277,6 +279,7 @@ struct TranscriptScreen: View {
 
     private struct Overruling {
         let removal: SessionWorkspace.WorktreeRemoval
+        let target: SessionWorkspace.RemovalTarget
         let failure: RemoteGitFailure
         let force: Bool
         let discard: Bool
@@ -284,11 +287,11 @@ struct TranscriptScreen: View {
 
     /// Sends the removal; a refusal the user may overrule asks again, any other shows.
     private func removeWorktree(_ workspace: SessionWorkspace, _ removal: SessionWorkspace.WorktreeRemoval,
-                                force: Bool = false, discard: Bool = false) {
+                                of target: SessionWorkspace.RemovalTarget, force: Bool = false, discard: Bool = false) {
         Task {
-            guard let failure = await workspace.removeWorktree(removal, force: force, discard: discard) else { return dismiss() }
+            guard let failure = await workspace.removeWorktree(removal, of: target, force: force, discard: discard) else { return dismiss() }
             if failure.overrule != nil {
-                overruling = Overruling(removal: removal, failure: failure, force: force, discard: discard)
+                overruling = Overruling(removal: removal, target: target, failure: failure, force: force, discard: discard)
             } else {
                 actionError = failure.message
             }

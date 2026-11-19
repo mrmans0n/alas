@@ -671,6 +671,8 @@ final class TranscriptSession {
         holdTask?.cancel()
         holdTask = nil
         isStopping = false
+        // A close or reopen sent on the old link has no answer coming; let the user ask again.
+        tabAction = nil
         mentionCandidates = []
         mentionCandidatesQuery = nil
         // A final read whose reply never came, or came before the exit, is asked again.

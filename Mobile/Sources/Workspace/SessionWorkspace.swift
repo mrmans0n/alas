@@ -298,17 +298,24 @@ final class SessionWorkspace {
 
     enum WorktreeRemoval { case archive, delete }
 
-    /// Not the main checkout or a folder, and one the host can tell apart from a replacement.
-    var canRemoveWorktree: Bool {
-        guard let worktree = gitTarget?.worktree, worktree.isMain != true, worktree.isFolder != true,
-              worktree.lineageID != nil else { return false }
-        return hub.supports(HostProtocolCapability.worktreesLifecycleV1, on: hostID)
+    /// The worktree as the user saw it when they asked, which every retry names again.
+    struct RemovalTarget {
+        let projectID: String
+        let worktree: RemoteWorktreeSummary
     }
 
-    /// Archives or deletes the session's worktree; a delete also deletes its branch once merged.
-    /// Returns the host's refusal, which the user may overrule by asking again with `force` or `discard`.
-    func removeWorktree(_ removal: WorktreeRemoval, force: Bool, discard: Bool) async -> RemoteGitFailure? {
-        guard let target = gitTarget else { return RemoteGitFailure("This worktree can't be changed from here.") }
+    /// The session's worktree, when removable: not the main checkout or a folder, and one the host
+    /// can tell apart from a replacement.
+    var removalTarget: RemovalTarget? {
+        guard let target = gitTarget, target.worktree.isMain != true, target.worktree.isFolder != true,
+              target.worktree.lineageID != nil, hub.supports(HostProtocolCapability.worktreesLifecycleV1, on: hostID)
+        else { return nil }
+        return RemovalTarget(projectID: target.projectID, worktree: target.worktree)
+    }
+
+    /// Archives or deletes `target`; a delete also deletes its branch once merged. Returns the
+    /// host's refusal, which the user may overrule by asking again with `force` or `discard`.
+    func removeWorktree(_ removal: WorktreeRemoval, of target: RemovalTarget, force: Bool, discard: Bool) async -> RemoteGitFailure? {
         let worktree = target.worktree
         // The host stops the worktree's sessions and terminals first, which can take minutes.
         return await hostFailure(timeout: .seconds(600)) { id in
