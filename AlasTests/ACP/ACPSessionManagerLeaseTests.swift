@@ -1569,19 +1569,24 @@ import Foundation
                 "takeOver must refresh queue from the store before spawning attach")
     }
 
-    @Test("a writer's mirror refresh keeps a queued prompt the store hasn't written yet")
-    func writerRefreshKeepsUnpersistedQueuedPrompt() async throws {
+    @Test("a prompt queued during a takeover's final mirror refresh survives it")
+    func takeoverRefreshKeepsAPromptQueuedMeanwhile() async throws {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("refresh-queue-\(UUID()).sqlite")
-        let store = try ACPSessionStore(path: url.path)
-        let manager = tempManager(instanceId: "A", store: store)
-        let session = manager.createSession(agentId: "claude")
-        _ = await manager.acquireWriterLease(sessionId: session.id)
-        await manager.flushPersistence()
-        // As a prompt submitted while a takeover's final refresh reads the store.
-        session.enqueue(blocks: [.text("submitted during the refresh")])
-        await manager.refreshMirror(sessionId: session.id)
-        #expect(session.queue.count == 1)
+            .appendingPathComponent("takeover-refresh-queue-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        await mgrA.flushPersistence()
+        let mgrB = tempManager(instanceId: "B", store: try ACPSessionStore(path: url.path))
+        let mirror = try #require(mgrB.placeholderSession(id: session.id))
+        var queuedAtAttach: Int?
+        mgrB.beforeTakeoverAttachForTesting = { _ in queuedAtAttach = mirror.queue.count }
+        await mgrB.takeOver(sessionId: session.id)
+        // Before the takeover's refresh runs, and only in memory, as a prompt whose write is in flight.
+        mirror.enqueue(blocks: [.text("submitted during the refresh")])
+        let deadline = ContinuousClock.now + .seconds(10)
+        while queuedAtAttach == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(queuedAtAttach == 1)
     }
 
     // MARK: - Fix 1 (P1): releaseAllOwnedLeases skips attaching sessions
