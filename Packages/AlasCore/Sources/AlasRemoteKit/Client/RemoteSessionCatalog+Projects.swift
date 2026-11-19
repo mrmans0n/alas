@@ -102,4 +102,9 @@ extension RemoteSessionDirectory {
     public static func attentionFirst(_ rows: [RemoteSessionCatalog.ProjectGroup.Row]) -> [RemoteSessionCatalog.ProjectGroup.Row] {
         attentionFirst(rows, by: \.worktree)
     }
+
+    public static func sorted(_ rows: [RemoteSessionCatalog.ProjectGroup.Row],
+                              by sort: RemoteWorktreeSort) -> [RemoteSessionCatalog.ProjectGroup.Row] {
+        sorted(rows, by: sort, \.worktree)
+    }
 }

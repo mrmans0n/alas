@@ -13,6 +13,7 @@ enum WorktreeGrouping: String, CaseIterable {
 @MainActor @Observable
 final class WorktreesModel {
     private static let groupingKey = "worktreesGrouping"
+    private static let sortKey = "worktreesSort"
 
     var query = ""
     var filter = RemoteSessionFilter.all
@@ -20,6 +21,9 @@ final class WorktreesModel {
     var collapsedHosts: Set<RemoteSessionCatalog.HostID> = []
     var grouping = UserDefaults.standard.string(forKey: groupingKey).flatMap(WorktreeGrouping.init) ?? .machine {
         didSet { UserDefaults.standard.set(grouping.rawValue, forKey: Self.groupingKey) }
+    }
+    var sort = UserDefaults.standard.string(forKey: sortKey).flatMap(RemoteWorktreeSort.init) ?? .lastUpdateDesc {
+        didSet { UserDefaults.standard.set(sort.rawValue, forKey: Self.sortKey) }
     }
 }
 
@@ -264,7 +268,7 @@ struct WorktreesView: View {
             .navigationTitle(title)
             .modifier(SearchField(enabled: isSearch, text: $model.query, presented: $searchPresented))
             .toolbar {
-                if hosts.count > 1 {
+                if !hosts.isEmpty {
                     ToolbarItem(placement: .topBarLeading) {
                         listOptions(hosts)
                     }
@@ -285,6 +289,7 @@ struct WorktreesView: View {
                 if let selected = model.selectedHost, !ids.contains(selected) { model.selectedHost = nil }
                 model.collapsedHosts.formIntersection(ids)
             }
+            .safeAreaInset(edge: .top) { ConnectionBanner(hub: hub) }
             .safeAreaInset(edge: .bottom) {
                 if !all.isEmpty { filterBar(counts) }
             }
@@ -306,7 +311,7 @@ struct WorktreesView: View {
                 if !showsHosts || revealingMatches || !model.collapsedHosts.contains(group.id) {
                     ForEach(group.sections) { section in
                         Section {
-                            ForEach(RemoteSessionDirectory.attentionFirst(section.worktrees)) { entry in
+                            ForEach(RemoteSessionDirectory.attentionFirst(RemoteSessionDirectory.sorted(section.worktrees, by: model.sort))) { entry in
                                 WorktreeRow(entry: entry,
                                             isSelected: selectedSessionID(in: entry, on: group.host) != nil,
                                             caption: { WorktreeRow.delegationCaption($0, in: group.host) }) { session in
@@ -334,7 +339,7 @@ struct WorktreesView: View {
                 // on several names each row's.
                 let spansMachines = group.hostIDs.count > 1
                 Section {
-                    ForEach(RemoteSessionDirectory.attentionFirst(group.rows)) { row in
+                    ForEach(RemoteSessionDirectory.attentionFirst(RemoteSessionDirectory.sorted(group.rows, by: model.sort))) { row in
                         let host = hosts[row.hostID]
                         WorktreeRow(entry: row.worktree,
                                     machine: spansMachines ? row.hostName : nil,
@@ -452,29 +457,53 @@ struct WorktreesView: View {
         .textCase(nil)
     }
 
-    /// How to group, and which machines to show.
+    /// How to sort and group, and which machines to show. One machine has
+    /// nothing to group or pick, so it only sorts.
     private func listOptions(_ hosts: [RemoteSessionCatalog.Host]) -> some View {
+        let several = hosts.count > 1
         let shown = hosts.first { $0.id == model.selectedHost }?.name ?? "All machines"
         return Menu {
-            Picker("Group by", selection: $model.grouping) {
-                Label("Machine", systemImage: "desktopcomputer").tag(WorktreeGrouping.machine)
-                Label("Project", systemImage: "folder").tag(WorktreeGrouping.project)
+            Picker("Sort by", systemImage: "arrow.up.arrow.down", selection: $model.sort) {
+                ForEach(RemoteWorktreeSort.allCases, id: \.self) { Text(Self.title(for: $0)).tag($0) }
             }
-            .pickerStyle(.inline)
-            Picker("Show", selection: $model.selectedHost) {
-                Text("All machines").tag(RemoteSessionCatalog.HostID?.none)
-                ForEach(hosts) { host in
-                    Text(host.name).tag(Optional(host.id))
+            .pickerStyle(.menu)
+            if several {
+                Picker("Group by", selection: $model.grouping) {
+                    Label("Machine", systemImage: "desktopcomputer").tag(WorktreeGrouping.machine)
+                    Label("Project", systemImage: "folder").tag(WorktreeGrouping.project)
                 }
+                .pickerStyle(.inline)
+                Picker("Show", selection: $model.selectedHost) {
+                    Text("All machines").tag(RemoteSessionCatalog.HostID?.none)
+                    ForEach(hosts) { host in
+                        Text(host.name).tag(Optional(host.id))
+                    }
+                }
+                .pickerStyle(.inline)
             }
-            .pickerStyle(.inline)
         } label: {
-            Label(shown, systemImage: "line.3.horizontal.decrease")
-                .labelStyle(.titleAndIcon)
-                .lineLimit(1)
+            if several {
+                Label(shown, systemImage: "line.3.horizontal.decrease")
+                    .labelStyle(.titleAndIcon)
+                    .lineLimit(1)
+            } else {
+                Label("Sort", systemImage: "arrow.up.arrow.down")
+            }
         }
         .accessibilityLabel("List options")
-        .accessibilityValue("Grouped by \(model.grouping == .machine ? "machine" : "project"), \(shown)")
+        .accessibilityValue(several
+            ? "Grouped by \(model.grouping == .machine ? "machine" : "project"), \(shown)"
+            : Self.title(for: model.sort))
+    }
+
+    private static func title(for sort: RemoteWorktreeSort) -> String {
+        switch sort {
+        case .lastUpdateDesc: "Recently updated"
+        case .lastUpdateAsc: "Least recently updated"
+        case .creationDesc: "Newest"
+        case .creationAsc: "Oldest"
+        case .branchAsc: "Branch name"
+        }
     }
 
     private func selectedSessionID(in entry: RemoteWorktreeEntry, on host: RemoteSessionCatalog.Host) -> String? {

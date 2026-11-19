@@ -49,7 +49,9 @@ commit, push, pull, fetch; shepherd menu; plain unified diff; file tree.
    subscribe to; a run's output is its console under Terminals.
 7. **Smaller list items**: sort choice, connection banner with manual
    reconnect, "delegated from" back link, mention picker scope tabs and empty
-   state, `/ship` slash entry, auto-run chip, copy path / branch.
+   state, `/ship` slash entry, auto-run chip, copy path / branch. Sort omits
+   Manual (a peer never sees the Mac's drag order); the auto-run chip shows
+   only while on, and turning it on stays in Session Settings.
 
 ## Parked (need host or protocol work, or low phone value)
 

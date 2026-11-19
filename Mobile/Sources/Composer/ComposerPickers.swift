@@ -17,17 +17,49 @@ struct SlashPicker: View {
     }
 }
 
+/// The Mac remote composer's scopes: no Symbols, which a peer doesn't search.
+private enum MentionScope: String, CaseIterable {
+    case all = "All", files = "Files", sessions = "Sessions"
+
+    func admits(_ mention: RemoteMention) -> Bool {
+        switch self {
+        case .all: true
+        case .files: mention.kind == RemoteMention.file
+        case .sessions: mention.kind == RemoteMention.session
+        }
+    }
+}
+
 struct MentionPicker: View {
     let candidates: [RemoteMention]
+    /// A newer query is in flight; `candidates` answer an older one.
+    let searching: Bool
     let pick: (RemoteMention) -> Void
+    @State private var scope = MentionScope.all
 
     var body: some View {
-        PickerList {
-            ForEach(candidates, id: \.self) { mention in
-                PickerRow(title: mention.name, detail: mention.detail, mono: mention.kind == RemoteMention.file) {
-                    pick(mention)
+        let shown = candidates.filter(scope.admits)
+        VStack(spacing: 6) {
+            Picker("Scope", selection: $scope) {
+                ForEach(MentionScope.allCases, id: \.self) { Text($0.rawValue) }
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+            PickerList {
+                ForEach(shown, id: \.self) { mention in
+                    PickerRow(title: mention.name, detail: mention.detail, mono: mention.kind == RemoteMention.file) {
+                        pick(mention)
+                    }
+                    .allowsHitTesting(!searching)
+                }
+                if shown.isEmpty {
+                    Text(searching ? "Searching…" : "No matches")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 9)
                 }
             }
+            .opacity(searching ? 0.5 : 1)
         }
     }
 }
