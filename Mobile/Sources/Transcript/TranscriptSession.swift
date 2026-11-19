@@ -372,6 +372,23 @@ final class TranscriptSession {
         hub.send(action == .close ? .closeSessionTab(sessionId: sessionId) : .openSessionTab(sessionId: sessionId), to: hostID)
     }
 
+    /// The issue an Install was sent for; the button waits until the host replaces it.
+    private(set) var adapterInstallRequested: RemoteAgentIssue?
+
+    /// A missing adapter Alas manages, on a host that serves `installAdapter`.
+    var offersAdapterInstall: Bool {
+        // ponytail: mirrors ACPManagedAdapterDescriptor's agents, which the phone can't import; a new managed
+        // agent shows no Install here until it's added.
+        config?.agentIssue?.kind == "needsSetup" && ["claude", "codex", "pi"].contains(summary?.agentId ?? "")
+            && hub.supports(PeerAdapterInstallCapability.v1, on: hostID)
+    }
+
+    func installAdapter() {
+        guard offersAdapterInstall, hub.state(of: hostID) == .online else { return }
+        hub.send(.installAdapter(sessionId: sessionId), to: hostID)
+        adapterInstallRequested = config?.agentIssue
+    }
+
     func queue(_ action: QueueAction) {
         let id = sessionId
         switch action {
