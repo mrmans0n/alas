@@ -20,13 +20,15 @@ struct FileViewer: View {
                 ScrollView {
                     TranscriptImage(id: "file:\(path)", source: path, label: name, session: session).padding()
                 }
+                // Read again on each opening, so an image changed since shows as it is now.
+                .task(id: path) { session.forgetHostImage(path) }
             } else {
                 switch workspace.file?.1 {
                 case .loaded(let reply):
                     if FileKind(path: path) == .markdown, !showSource {
                         ScrollView {
                             AgentMarkdown(id: "file:\(path)", text: reply.text, session: session,
-                                          resolve: { FileKind.imageSource($0, besideFile: path) })
+                                          resolve: { RemoteTranscriptLink.imageSource($0, besideFile: path) })
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding()
                                 // A file link opens in this viewer, a relative one taken from this file's folder.
@@ -34,7 +36,7 @@ struct FileViewer: View {
                                     let relative = url.scheme == nil && url.host == nil && !url.path.hasPrefix("/")
                                     // A link to a heading of this document (`#install`) keeps it open.
                                     if relative, url.path.isEmpty { return .handled }
-                                    let target = relative ? URL(fileURLWithPath: FileKind.worktreePath(url.path, besideFile: path),
+                                    let target = relative ? URL(fileURLWithPath: RemoteTranscriptLink.worktreePath(url.path, besideFile: path),
                                                                 relativeTo: session.worktreeRoot.map { URL(fileURLWithPath: $0 + "/") })
                                         : url
                                     switch RemoteTranscriptLink.route(target.absoluteURL, worktreeRoot: session.worktreeRoot) {
@@ -91,21 +93,6 @@ enum FileKind: Equatable {
         case "md", "markdown", "mdown", "mkd": self = .markdown
         default: self = .text
         }
-    }
-
-    /// A markdown image source from a document at worktree path `file`: a relative one, its URL
-    /// escapes decoded, taken from the document's folder; an absolute one or a URL left alone.
-    static func imageSource(_ source: String, besideFile file: String) -> String {
-        guard !source.hasPrefix("/"), URL(string: source)?.scheme == nil else { return source }
-        return worktreePath(source.removingPercentEncoding ?? source, besideFile: file)
-    }
-
-    /// `relative`, a decoded path from a document at worktree path `file`, as a worktree path taken
-    /// from the document's folder, `..` included.
-    static func worktreePath(_ relative: String, besideFile file: String) -> String {
-        let folder = (file as NSString).deletingLastPathComponent
-        let joined = URL(fileURLWithPath: "/" + (folder as NSString).appendingPathComponent(relative)).standardized.path
-        return String(joined.dropFirst())
     }
 }
 
