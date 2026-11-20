@@ -141,7 +141,8 @@ import Testing
         config.goal = RemoteSessionGoal(objective: "Ship it", status: "active", tokenBudget: 50_000, tokensUsed: 1_200)
         let data = try JSONEncoder().encode(RemoteServerMessage.sessionConfig(config))
         guard case .sessionConfig(let decoded) = try JSONDecoder().decode(RemoteServerMessageOf<OpaqueHostMessage, OpaqueHostMessage>.self, from: data)
-        else { Issue.record("not a sessionConfig"); return }
+        else { Issue.record("not a sessionConfig")
+        return }
         #expect(decoded.goal == config.goal)
     }
 
