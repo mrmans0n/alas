@@ -71,7 +71,7 @@ public struct CodeHostReferenceSummary: Codable, Equatable, Sendable {
     }
 }
 
-public enum CodeHostReferenceFailure: Codable, Equatable, Sendable {
+public enum CodeHostReferenceFailure: Error, Codable, Equatable, Sendable {
     /// `repository` is `host/owner/repo`, as shown in the card.
     case notFound(repository: String)
     case unauthenticated(executable: String, host: String)

@@ -31,4 +31,13 @@ extension CodeHostKind {
 extension CodeHostRemote {
     /// What a remote viewer needs to know about this repository.
     public var codeHost: RemoteCodeHost { RemoteCodeHost(kind: kind, host: host, webURL: webURL) }
+
+    /// The repository a peer's host named: owner and repository from its web
+    /// URL's path (a GitLab owner may be nested groups). Nil without both.
+    public init?(codeHost: RemoteCodeHost) {
+        let parts = codeHost.webURL.path.split(separator: "/").map(String.init)
+        guard parts.count >= 2, let repository = parts.last else { return nil }
+        self.init(kind: codeHost.kind, host: codeHost.host, owner: parts.dropLast().joined(separator: "/"),
+                  repository: repository, remoteName: "origin", webURL: codeHost.webURL)
+    }
 }

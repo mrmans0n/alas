@@ -77,6 +77,73 @@ final class NativePeerSessions {
         }
     }
 
+    // MARK: - Upstream references
+
+    typealias ReferenceLookup = Result<CodeHostReferenceSummary, CodeHostReferenceFailure>
+
+    /// Per session, the store its user messages read `#N`/`!N` from; replaced
+    /// when the host names another repository.
+    @ObservationIgnored private var referenceStores: [String: (codeHost: RemoteCodeHost, store: ACPUpstreamReferenceStore)] = [:]
+    /// Lookups waiting for the host's `referenceSummaries`, by session and spelling.
+    @ObservationIgnored private var referenceWaiters: [String: [String: [CheckedContinuation<ReferenceLookup, Never>]]] = [:]
+    nonisolated static let referenceTimeoutMessage = "The host did not answer."
+
+    /// The store the session's user messages read references from, or nil
+    /// when its host can't look them up: an older host, or a worktree with no
+    /// code host. The host runs `gh`/`glab`; nothing runs here.
+    func upstreamReferences(for sessionId: String, codeHost: RemoteCodeHost?) -> ACPUpstreamReferenceStore? {
+        guard let codeHost, let remote = CodeHostRemote(codeHost: codeHost) else { return nil }
+        if let existing = referenceStores[sessionId], existing.codeHost == codeHost { return existing.store }
+        let store = ACPUpstreamReferenceStore(
+            worktreeRoot: URL(fileURLWithPath: "/peer/\(sessionId)"),
+            environment: .peer(remote: remote) { [weak self] reference in
+                await self?.lookUp(reference, sessionId: sessionId)
+                    ?? .failure(.other(Self.referenceTimeoutMessage))
+            })
+        store.resolveRemote()
+        referenceStores[sessionId] = (codeHost, store)
+        return store
+    }
+
+    /// Asks the host and waits for its answer; one request per spelling in flight.
+    private func lookUp(_ reference: CodeHostReference, sessionId: String) async -> ReferenceLookup {
+        let spelling = reference.spelling
+        let timeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled else { return }
+            self?.answerReferences(sessionId: sessionId, spellings: [spelling], with: .failure(.other(Self.referenceTimeoutMessage)))
+        }
+        defer { timeout.cancel() }
+        return await withCheckedContinuation { continuation in
+            let asked = referenceWaiters[sessionId]?[spelling] != nil
+            referenceWaiters[sessionId, default: [:]][spelling, default: []].append(continuation)
+            guard !asked else { return }
+            let sent = selectedSessionId == sessionId
+                && routeWhileOnline { .resolveReferences(sessionId: $0, spellings: [spelling]) }
+            if !sent {
+                answerReferences(sessionId: sessionId, spellings: [spelling], with: .failure(.other(Self.peerUnavailableMessage)))
+            }
+        }
+    }
+
+    private func receiveReferenceSummaries(sessionId: String, entries: [RemoteReferenceEntry]) {
+        for entry in entries {
+            let result: ReferenceLookup? = if let summary = entry.summary {
+                .success(summary)
+            } else {
+                entry.failure.map { .failure($0) }
+            }
+            if let result { answerReferences(sessionId: sessionId, spellings: [entry.spelling], with: result) }
+        }
+    }
+
+    private func answerReferences(sessionId: String, spellings: [String], with result: ReferenceLookup) {
+        for spelling in spellings {
+            guard let waiters = referenceWaiters[sessionId]?.removeValue(forKey: spelling) else { continue }
+            for waiter in waiters { waiter.resume(returning: result) }
+        }
+    }
+
     private func finishVisual(_ requestId: String, accepted: Bool) {
         guard var submission = visualSubmissions[requestId] else { return }
         let completion = submission.completion
@@ -1111,8 +1178,10 @@ final class NativePeerSessions {
         pendingPromptPriorQueueIds = Set((transcript?.queue ?? []).filter(pending.matches).map(\.id))
         let wireIntent = intent == .steer ? "steer" : "auto"
         let wireAttachments = attachments.map(\.wire)
+        let pastedSpans = Self.pastedSpans(of: pending.composerDraft, draft: draft, sent: text)
         if drive({
-            .sendPrompt(sessionId: $0, text: text, attachments: wireAttachments, intent: wireIntent, mentions: mentions)
+            .sendPrompt(sessionId: $0, text: text, attachments: wireAttachments, intent: wireIntent, mentions: mentions,
+                        pastedSpans: pastedSpans)
         }) {
             deliveryError = nil
         } else {
@@ -1120,6 +1189,20 @@ final class NativePeerSessions {
             promptCompletion = nil
             pendingPromptExpectedIndex = nil
             deliveryError = Self.peerUnavailableMessage + " Your draft was kept."
+        }
+    }
+
+    /// The collapsed pastes' spans in `sent`, which is `draft` with its ends
+    /// trimmed; none when the composer's draft doesn't line up with `draft`.
+    nonisolated static func pastedSpans(of composerDraft: ACPComposerDraft, draft: String, sent: String) -> [ACPPastedTextSpan] {
+        let spans = composerDraft.pastedTextSpans(matching: draft)
+        guard !spans.isEmpty, let range = draft.range(of: sent) else { return [] }
+        let leading = range.lowerBound.utf16Offset(in: draft)
+        let length = sent.utf16.count
+        return spans.compactMap { span in
+            let offset = span.utf16Offset - leading
+            guard offset >= 0, offset + span.utf16Length <= length else { return nil }
+            return ACPPastedTextSpan(ordinal: span.ordinal, utf16Offset: offset, utf16Length: span.utf16Length)
         }
     }
 
@@ -1510,7 +1593,7 @@ final class NativePeerSessions {
         // A checkpoint's diff compares against the working file.
         case .diff, .checkpointDiff: true
         case .file(let path): ImageFileType.isSupported(relativePath: path)
-        case .commitDiff, .stashDiff: false
+        case .commitDiff, .stashDiff, .skill: false
         }
     }
 
@@ -1579,6 +1662,12 @@ final class NativePeerSessions {
         }
     }
 
+    /// Opens a skill command's `SKILL.md`, which the session's host reads.
+    @discardableResult
+    func openSkill(_ suggestion: ACPPromptSuggestion) -> Bool {
+        open(.skill(command: suggestion.command))
+    }
+
     /// Opens `document`, or — when it's already the open one — refreshes it.
     /// A refresh is gated the same way changes/file-tree refreshes are: a
     /// request already in flight for this same document skips the send, and
@@ -1625,7 +1714,7 @@ final class NativePeerSessions {
         // A stash's or checkpoint's sides are revisions only a newer host reads.
         let newerRevisions = switch document {
         case .stashDiff, .checkpointDiff: true
-        case .diff, .commitDiff, .file: false
+        case .diff, .commitDiff, .file, .skill: false
         }
         if let target = hostBytesTarget,
            !newerRevisions || hosts?.servesImageRevisions(serverId: target.serverId) == true,
@@ -1653,6 +1742,8 @@ final class NativePeerSessions {
             }
         case .stashDiff, .checkpointDiff:
             readHostDiff(document)
+        case .skill(let command):
+            routeWhileOnline { .readSkill(sessionId: $0, command: command) }
         }
     }
 
@@ -2126,6 +2217,10 @@ final class NativePeerSessions {
                 sessionTabError = text
             }
             return
+        case .referenceSummaries(let sessionId, let entries):
+            // Lookups wait on this whichever session is showing.
+            receiveReferenceSummaries(sessionId: sessionId, entries: entries)
+            return
         case .queueEditRestored(let sessionId, _, let text):
             // The edit was requested from the session it names; the reply
             // can land after the user switched away.
@@ -2225,7 +2320,10 @@ final class NativePeerSessions {
             .diff(path: path, stage: stage.flatMap(ChangeStage.init(rawValue:)))
         case .commitDiffResult(_, let sha, let path, _, _, _), .commitDiffFailed(_, let sha, let path, _, _):
             .commitDiff(path: path, sha: sha)
-        case .fileContents(_, let path, _, _, _), .fileUnavailable(_, let path, _, _, _), .fileBytes(_, let path, _, _):
+        case .fileContents(_, let path, _, _, _), .fileUnavailable(_, let path, _, _, _):
+            // A skill's reply names the command it was read for.
+            documentRequestsInFlight.contains(.skill(command: path)) ? .skill(command: path) : .file(path: path)
+        case .fileBytes(_, let path, _, _):
             .file(path: path)
         default: nil
         }

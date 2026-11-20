@@ -604,7 +604,8 @@ struct ACPUserMessageText: View {
     let attachments: [ACPMessage.Attachment]
     let pastedSpans: [ACPPastedTextSpan]
     let typography: ACPChatTypography
-    let session: ACPSession
+    /// The agent's commands: a local session's live list, or a peer's.
+    let commands: ACPPromptSuggestionFeed
     /// False for remote sessions, where a local existence check says nothing.
     let chipsAbsolutePaths: Bool
     /// Symbol mentions to badge inline; nil when the message has none.
@@ -619,7 +620,7 @@ struct ACPUserMessageText: View {
         attachments: [ACPMessage.Attachment],
         pastedSpans: [ACPPastedTextSpan],
         typography: ACPChatTypography,
-        session: ACPSession,
+        commands: ACPPromptSuggestionFeed,
         chipsAbsolutePaths: Bool,
         symbolMentions: ACPTranscriptSymbolMentions?
     ) {
@@ -627,10 +628,10 @@ struct ACPUserMessageText: View {
         self.attachments = attachments
         self.pastedSpans = pastedSpans
         self.typography = typography
-        self.session = session
+        self.commands = commands
         self.chipsAbsolutePaths = chipsAbsolutePaths
         self.symbolMentions = symbolMentions
-        _agentSuggestions = State(initialValue: session.promptSuggestions)
+        _agentSuggestions = State(initialValue: commands.initial)
     }
 
     var body: some View {
@@ -644,7 +645,7 @@ struct ACPUserMessageText: View {
             .environment(\.acpUpstreamReferenceChipping, chipping)
             .environment(\.acpAbsolutePathChipping, chipsAbsolutePaths)
             .environment(\.acpSymbolMentions, symbolMentions)
-            .onReceive(session.$promptSuggestions) { latest in
+            .onReceive(commands.updates) { latest in
                 if latest != agentSuggestions { agentSuggestions = latest }
             }
             .onReceive(upstreamReferences?.$remote.eraseToAnyPublisher()
@@ -705,6 +706,23 @@ struct ACPUserMessageText: View {
                 typography: typography
             )
         }
+    }
+}
+
+/// The agent commands a user message chips, and their later changes.
+struct ACPPromptSuggestionFeed {
+    let initial: [ACPPromptSuggestion]
+    let updates: AnyPublisher<[ACPPromptSuggestion], Never>
+
+    /// A local session's own list: the row re-renders only when it changes.
+    @MainActor
+    static func session(_ session: ACPSession) -> Self {
+        Self(initial: session.promptSuggestions, updates: session.$promptSuggestions.eraseToAnyPublisher())
+    }
+
+    /// A list that arrives with the row, such as a peer session's.
+    static func fixed(_ suggestions: [ACPPromptSuggestion]) -> Self {
+        Self(initial: suggestions, updates: Just(suggestions).eraseToAnyPublisher())
     }
 }
 
