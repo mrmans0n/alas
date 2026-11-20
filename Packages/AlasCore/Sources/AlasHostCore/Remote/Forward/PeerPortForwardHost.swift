@@ -13,7 +13,7 @@ import Observation
 public final class PeerPortForwardHost: @unchecked Sendable {
     public typealias Send = @Sendable (_ connectionID: UUID, _ event: PeerPortForwardEvent) -> Void
 
-    public static let notRunningMessage = "This run is no longer running on the host."
+    public static let notRunningMessage = PeerPortForwardCapability.runEndedMessage
     public static let limitReachedMessage = "Too many forwarded connections are open to this host."
     public static let protocolErrorMessage = "The forwarded connection broke the forwarding protocol."
 

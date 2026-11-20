@@ -1,7 +1,7 @@
 import Foundation
 
-/// Forwarding a host run's loopback endpoint to a paired Mac: TCP streams
-/// relayed over the peer connection. The Mac names a run by its
+/// Forwarding a host run's loopback endpoint to a paired client: TCP streams
+/// relayed over the peer connection. The client names a run by its
 /// `RunRecord.id`, never a host or a port; the host resolves the port from
 /// its own run store. Carried as `RemoteClientMessage.portForward` and
 /// `RemoteServerMessage.portForward`, which older peers skip as unknown types.
@@ -15,6 +15,7 @@ public enum PeerPortForwardCapability: Sendable {
     /// `PeerPortForwardLimits`' default `window` and `maxChunk` on both ends;
     /// changing either needs a new capability.
     public static let v1 = "host.runs.forward.v1"
+    public static let runEndedMessage = "This run is no longer running on the host."
 }
 
 /// `window` and `maxChunk` are part of `PeerPortForwardCapability.v1`: both
@@ -78,5 +79,17 @@ public enum PeerPortForwardEndpoint: Sendable {
     /// The host as `NWEndpoint.Host` takes it: lowercased, without IPv6 brackets.
     public static func dialHost(_ host: String) -> String {
         host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+    }
+}
+
+extension URL {
+    /// The explicit port or the scheme's default.
+    public var runEndpointPort: Int? {
+        if let port { return port }
+        switch scheme?.lowercased() {
+        case "http": return 80
+        case "https": return 443
+        default: return nil
+        }
     }
 }

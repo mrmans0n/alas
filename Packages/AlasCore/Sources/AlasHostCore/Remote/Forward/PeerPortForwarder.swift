@@ -1,9 +1,8 @@
 import AlasRemoteKit
 import Foundation
-import AlasFeatures
 import Synchronization
 
-/// The Mac end of a run's forward: listens on `127.0.0.1` and relays each
+/// The client end of a run's forward: listens on loopback and relays each
 /// accepted connection to the host as one `PeerPortForwardRequest` stream.
 /// The mirror of `PeerPortForwardHost`, with the same flow control.
 ///
@@ -74,23 +73,27 @@ public final class PeerPortForwarder: @unchecked Sendable {
     /// port when that one is busy, and returns the endpoint with only the
     /// port replaced by the one bound. `[::1]` listens on IPv6, `localhost` on
     /// both `127.0.0.1` and `::1` so a browser trying either lands here, and
-    /// anything else on `127.0.0.1`.
-    public func start() async throws -> URL {
+    /// anything else on `127.0.0.1`. With `preferEndpointPort: false`, only
+    /// ephemeral ports are tried and `localhost` requires both addresses.
+    public func start(preferEndpointPort: Bool = true) async throws -> URL {
         guard let port = endpoint.runEndpointPort.flatMap(UInt16.init(exactly:)),
               var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
         else { throw StartError.invalidEndpoint }
         // Port 0 lets the system choose.
-        let attempts: [([TCPHost], UInt16)]
+        let addresses: [TCPHost]
         switch endpoint.host.map(PeerPortForwardEndpoint.dialHost) {
-        case "::1":
-            attempts = [([.loopbackV6], port), ([.loopbackV6], 0)]
-        case "localhost":
+        case "::1": addresses = [.loopbackV6]
+        case "localhost": addresses = [.loopbackV4, .loopbackV6]
+        default: addresses = [.loopbackV4]
+        }
+        var attempts: [([TCPHost], UInt16)] = preferEndpointPort ? [(addresses, port)] : []
+        if addresses.count == 2 {
             // An ephemeral IPv4 port may be taken on IPv6, so try a few, then
-            // settle for IPv4 alone.
-            let both: [TCPHost] = [.loopbackV4, .loopbackV6]
-            attempts = [(both, port)] + Array(repeating: (both, 0), count: 3) + [([.loopbackV4], 0)]
-        default:
-            attempts = [([.loopbackV4], port), ([.loopbackV4], 0)]
+            // allow the desktop's IPv4 fallback.
+            attempts += Array(repeating: (addresses, 0), count: 3)
+            if preferEndpointPort { attempts.append(([.loopbackV4], 0)) }
+        } else {
+            attempts.append((addresses, 0))
         }
         var lastError: Error = StartError.invalidEndpoint
         for (addresses, port) in attempts {
@@ -200,7 +203,7 @@ public final class PeerPortForwarder: @unchecked Sendable {
             onRefused(message)
             // A backstop: the app stops the forward itself when the run
             // changes or the host disconnects.
-            if message == PeerPortForwardHost.notRunningMessage { shutDown() }
+            if message == PeerPortForwardCapability.runEndedMessage { shutDown() }
         case .data(let id, let bytes):
             write(bytes, to: id)
         case .credit(let id, let bytes):

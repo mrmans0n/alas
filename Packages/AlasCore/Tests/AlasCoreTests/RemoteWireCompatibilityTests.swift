@@ -218,6 +218,36 @@ import Testing
         #expect(removed == ["older-run"] && !resync)
     }
 
+    @Test func previewLinkMatchesOnlyRunningLocalEndpointsInItsWorktree() throws {
+        let request = RemoteRunPreview.snapshotRequest(id: 7)
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: request.json)
+            == HostClientMessage(id: 7, request: .snapshot))
+
+        let url = try #require(RemoteRunPreview.inlineURL("localhost:3000/settings?tab=account"))
+        let endpoint = try #require(URL(string: "http://127.0.0.1:3000"))
+        func run(_ id: String, worktree: String = "here", host: String? = nil, status: RunStatus = .running,
+                 at overrideEndpoint: URL? = nil) -> RunRecord {
+            RunRecord(id: id, scriptKey: "dev", scriptName: "Dev", worktreeID: worktree, branch: "main",
+                      target: RunExecutionTarget(host: host, workingDirectory: "/r"),
+                      endpoint: overrideEndpoint ?? endpoint, status: status, startedAt: .distantPast)
+        }
+        let runs = [
+            run("matching"),
+            run("other-worktree", worktree: "there"),
+            run("ssh", host: "other-host"),
+            run("stopped", status: .finished(.stopped)),
+            run("other-port", at: try #require(URL(string: "http://localhost:3001"))),
+            run("other-scheme", at: try #require(URL(string: "https://localhost:3000"))),
+            run("other-host", at: try #require(URL(string: "http://example.com:3000"))),
+        ]
+        let snapshot = HostSnapshot(cursor: .init(generation: UUID(), sequence: 0), projects: [], worktrees: [],
+                                    workspaceCheckouts: [], runs: runs, sessions: [])
+        let message = OpaqueHostMessage(json: try JSONEncoder().encode(
+            HostServerMessage.response(id: 7, result: .snapshot(snapshot: snapshot))))
+        #expect(RemoteRunPreview.matchingRunIDs(replying: 7, in: message, worktreeID: "here", url: url) == ["matching"])
+        #expect(RemoteRunPreview.matchingRunIDs(replying: 8, in: message, worktreeID: "here", url: url) == nil)
+    }
+
     @Test(arguments: [
         (HostError.worktreeDeletion(refusal: .needsForce("Uncommitted changes.")), "Uncommitted changes.", RemoteGitFailure.Overrule.force),
         (.worktreeArchive(refusal: .unsavedEdits), "An editor on the machine has unsaved changes in this worktree.", .discardUnsavedEdits),
