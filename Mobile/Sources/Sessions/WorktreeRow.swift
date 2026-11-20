@@ -94,10 +94,31 @@ struct WorktreeRow: View {
     @State private var expanded = false
 
     var body: some View {
-        if entry.activeSessions.count < 2 {
-            compactBody
-        } else {
-            sessionsBody
+        Group {
+            if entry.activeSessions.count < 2 {
+                compactBody
+            } else {
+                sessionsBody
+            }
+        }
+        .contextMenu { worktreeMenu }
+    }
+
+    /// The long press: closed sessions and the worktree's copy actions.
+    @ViewBuilder private var worktreeMenu: some View {
+        // Closed sessions open read-only, with Reopen, as the Mac's session history does.
+        if !entry.closedSessions.isEmpty {
+            Menu("Closed Sessions", systemImage: "clock.arrow.circlepath") {
+                ForEach(entry.closedSessions, id: \.id) { session in
+                    Button { open(session) } label: {
+                        Text(session.title)
+                        Text(RepoDisplay.relativeTime(session.updatedAt))
+                    }
+                }
+            }
+        }
+        if let summary = entry.summary {
+            Section { CopyWorktreeButtons(summary: summary) }
         }
     }
 
@@ -163,20 +184,6 @@ struct WorktreeRow: View {
                         .foregroundStyle(.tint)
                         .padding(.leading, 22)
                 }
-            }
-            // Closed sessions open read-only, with Reopen, as the Mac's session history does.
-            if !entry.closedSessions.isEmpty {
-                Menu("Closed Sessions", systemImage: "clock.arrow.circlepath") {
-                    ForEach(entry.closedSessions, id: \.id) { session in
-                        Button { open(session) } label: {
-                            Text(session.title)
-                            Text(RepoDisplay.relativeTime(session.updatedAt))
-                        }
-                    }
-                }
-            }
-            if let summary = entry.summary {
-                Section { CopyWorktreeButtons(summary: summary) }
             }
         }
         .padding(.vertical, 2)
