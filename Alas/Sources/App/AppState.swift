@@ -13203,6 +13203,7 @@ final class AppState {
                 let worktreePath = context.worktreePath
                 let sessionId = context.sessionId
                 let serverName = self.config.agents.alasMCPServerName(for: context.agentID)
+                let hiddenToolGroups = self.config.agents.alasMCPHiddenToolGroups(for: context.agentID)
                 guard case .local(let adapterSupportsHTTP) = context.location else {
                     // Remote projects keep app-level servers only (repo config
                     // is a local-only layer in v1).
@@ -13258,7 +13259,8 @@ final class AppState {
                         worktreePath: worktreePath,
                         sessionId: sessionId,
                         parentSessionId: parentSessionId,
-                        deviceTools: self.config.deviceAgentsEnabled
+                        deviceTools: self.config.deviceAgentsEnabled,
+                        hiddenToolGroups: hiddenToolGroups
                     ) {
                         return .local(BuiltInAlasMCP.injection(
                             enabled: self.config.harness.exposeAlasMCP,
@@ -13270,6 +13272,7 @@ final class AppState {
                             parentSessionId: parentSessionId,
                             httpEndpoint: endpoint,
                             deviceTools: self.config.deviceAgentsEnabled,
+                            hiddenToolGroups: hiddenToolGroups,
                             cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
                             serverName: serverName
                         ))
@@ -13292,6 +13295,7 @@ final class AppState {
                     sessionId: sessionId,
                     parentSessionId: parentSessionId,
                     deviceTools: self.config.deviceAgentsEnabled,
+                    hiddenToolGroups: hiddenToolGroups,
                     cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
                     serverName: serverName
                 ))
@@ -13671,6 +13675,7 @@ final class AppState {
                 let worktreePath = context.worktreePath
                 let sessionId = context.sessionId
                 let serverName = self.config.agents.alasMCPServerName(for: context.agentID)
+                let hiddenToolGroups = self.config.agents.alasMCPHiddenToolGroups(for: context.agentID)
                 let current = self.currentWorkspaceCheckoutSnapshot(checkout)
                 let configuredServers = self.workspaceFrozenMCPServers(for: current)
                 guard case .local(let adapterSupportsHTTP) = context.location else {
@@ -13701,7 +13706,8 @@ final class AppState {
                        worktreePath: worktreePath,
                        sessionId: sessionId,
                        parentSessionId: nil,
-                       workspaceOnly: true
+                       workspaceOnly: true,
+                       hiddenToolGroups: hiddenToolGroups
                    ) {
                     return .local(BuiltInAlasMCP.injection(
                         enabled: self.config.harness.exposeAlasMCP,
@@ -13712,6 +13718,7 @@ final class AppState {
                         sessionId: sessionId,
                         httpEndpoint: endpoint,
                         workspaceContext: workspaceContext,
+                        hiddenToolGroups: hiddenToolGroups,
                         cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
                         serverName: serverName
                     ))
@@ -13725,6 +13732,7 @@ final class AppState {
                     worktreePath: worktreePath,
                     sessionId: sessionId,
                     workspaceContext: workspaceContext,
+                    hiddenToolGroups: hiddenToolGroups,
                     cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
                     serverName: serverName
                 ))

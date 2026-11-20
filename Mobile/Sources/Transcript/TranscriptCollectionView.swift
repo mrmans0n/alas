@@ -55,7 +55,8 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
         .init(items: items, expanded: $expanded, canLoadOlder: canLoadOlder, loadOlder: loadOlder,
               image: image, session: session, sendCount: sendCount, onFirstLayout: onFirstLayout,
               openSubagent: openSubagent, interactive: interactive, insets: insets,
-              openURL: context.environment.openURL, chipActions: context.environment.chipActions)
+              openURL: context.environment.openURL, chipActions: context.environment.chipActions,
+              openSessionChanges: context.environment.openSessionChanges)
     }
 }
 
@@ -74,6 +75,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         var insets: EdgeInsets?
         var openURL: OpenURLAction
         var chipActions: ChipActions?
+        var openSessionChanges: (() -> Void)?
     }
 
     /// The latest values from SwiftUI; `sync()` brings the collection view in line with them.
@@ -140,6 +142,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
                                   selectText: { [weak self] in self?.presentSelection($0, quote: $1) })
                                   .environment(\.openURL, input.openURL)
                                   .environment(\.chipActions, input.chipActions)
+                                  .environment(\.openSessionChanges, input.openSessionChanges)
             }
             .margins(.all, 0)
         }

@@ -67,7 +67,7 @@ public struct RemotePushRelay: Codable, Equatable, Sendable {
               let parsed = URL(string: url), parsed.scheme?.lowercased() == "https", parsed.host?.isEmpty == false
         else { return nil }
         // Unknown kinds are dropped, and a list too long to be honest is ignored.
-        let known: Set<String> = [RemotePushKind.permission, RemotePushKind.input, RemotePushKind.finished]
+        let known: Set<String> = [RemotePushKind.permission, RemotePushKind.input, RemotePushKind.finished, RemotePushKind.inbox]
         return RemotePushRelay(url: parsed, token: token, kinds: kinds.flatMap { $0.count <= 16 ? Set($0).intersection(known) : nil })
     }
 }

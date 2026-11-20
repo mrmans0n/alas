@@ -52,7 +52,8 @@ public final class AlasMCPHTTPSupervisor {
         sessionId: String,
         parentSessionId: String?,
         workspaceOnly: Bool = false,
-        deviceTools: Bool = true
+        deviceTools: Bool = true,
+        hiddenToolGroups: Set<BuiltInMCPToolGroup> = []
     ) async -> BuiltInAlasMCP.HTTPEndpoint? {
         if let existing = running[sessionId], existing.process.isRunning {
             return Self.endpoint(port: existing.port, token: existing.token)
@@ -74,7 +75,8 @@ public final class AlasMCPHTTPSupervisor {
                 token: attempt.token,
                 parentSessionId: parentSessionId,
                 workspaceOnly: workspaceOnly,
-                deviceTools: deviceTools
+                deviceTools: deviceTools,
+                hiddenToolGroups: hiddenToolGroups
             )
             guard let launched = await Self.launch(
                 binaryPath: binaryPath,
@@ -205,7 +207,8 @@ public final class AlasMCPHTTPSupervisor {
         token: String,
         parentSessionId: String?,
         workspaceOnly: Bool = false,
-        deviceTools: Bool = true
+        deviceTools: Bool = true,
+        hiddenToolGroups: Set<BuiltInMCPToolGroup> = []
     ) -> [String: String] {
         var env = base
         env["ALAS_SOCKET_PATH"] = socketPath
@@ -215,6 +218,9 @@ public final class AlasMCPHTTPSupervisor {
         if let parentSessionId { env["ALAS_PARENT_SESSION_ID"] = parentSessionId }
         if workspaceOnly { env["ALAS_MCP_WORKSPACE_ONLY"] = "1" }
         if !deviceTools { env["ALAS_MCP_DEVICES"] = "0" }
+        if let hidden = BuiltInMCPToolGroup.environmentValue(hiddenToolGroups) {
+            env["ALAS_MCP_HIDDEN_TOOL_GROUPS"] = hidden
+        }
         return env
     }
 

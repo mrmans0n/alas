@@ -1,7 +1,9 @@
-mod parse;
 mod mcp;
+mod output;
+mod parse;
+mod tool;
 
-use alas_client::{dispatch, logical_base, resolve_target, DispatchError, TransportError};
+use alas_client::{dispatch, logical_base, resolve_target, Command, DispatchError, TransportError};
 use parse::{is_ao, parse};
 use std::process::ExitCode;
 
@@ -22,6 +24,9 @@ fn main() -> ExitCode {
     }
 
     let base = logical_base();
+    if args.first().is_some_and(|first| first == "tool") {
+        return run_tool(&args[1..], &base);
+    }
     let command = match parse(&args, &base) {
         Ok(command) => command,
         Err(usage) => {
@@ -29,26 +34,81 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    run(&command, false)
+}
 
+/// Sends `command` to Alas and prints its reply. `confirm_empty` prints the
+/// MCP server's confirmation when the app replies with no lines.
+fn run(command: &Command, confirm_empty: bool) -> ExitCode {
     let target = resolve_target();
-    match dispatch(&command, &target) {
-        Ok(resp) => {
-            if resp.ok {
-                if let Some(lines) = resp.lines {
+    match dispatch(command, &target) {
+        Ok(resp) if resp.ok => {
+            match output::success_lines(command, resp.lines, confirm_empty, &std::env::temp_dir()) {
+                Ok(lines) => {
                     for line in lines {
                         println!("{line}");
                     }
+                    ExitCode::SUCCESS
                 }
-                ExitCode::SUCCESS
-            } else {
-                eprintln!("alas: {}", resp.error.unwrap_or_else(|| "request failed".into()));
-                ExitCode::from(resp.exit_code.unwrap_or(1))
+                Err(message) => {
+                    eprintln!("alas: {message}");
+                    ExitCode::FAILURE
+                }
             }
         }
+        Ok(resp) => {
+            eprintln!("alas: {}", resp.error.unwrap_or_else(|| "request failed".into()));
+            ExitCode::from(resp.exit_code.unwrap_or(1))
+        }
         Err(err) => {
-            let (msg, code) = describe(&err);
+            let (msg, code) = match &err {
+                DispatchError::Transport(transport) => mcp::unanswered_call_message(command, transport)
+                    .map_or_else(|| describe(&err), |message| (message, 1)),
+                _ => describe(&err),
+            };
             eprintln!("alas: {msg}");
             ExitCode::from(code)
+        }
+    }
+}
+
+/// `alas tool …`: lists the built-in MCP tools, or calls one with its JSON
+/// arguments. Relative paths in them resolve against `base`, like `alas open`.
+fn run_tool(args: &[String], base: &std::path::Path) -> ExitCode {
+    let invocation = match tool::parse(args, || std::io::read_to_string(std::io::stdin())) {
+        Ok(invocation) => invocation,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(2);
+        }
+    };
+    let parent = std::env::var("ALAS_PARENT_SESSION_ID").ok().filter(|id| !id.is_empty());
+    let tools = mcp::session_tool_definitions(parent.as_deref());
+    match invocation {
+        tool::ToolCommand::List => {
+            for line in tool::list_lines(&tools) {
+                println!("{line}");
+            }
+            ExitCode::SUCCESS
+        }
+        tool::ToolCommand::Schema(name) => match tool::schema(&tools, &name) {
+            Ok(schema) => {
+                println!("{schema}");
+                ExitCode::SUCCESS
+            }
+            Err(message) => {
+                eprintln!("alas: {message}");
+                ExitCode::from(2)
+            }
+        },
+        tool::ToolCommand::Call { name, args } => {
+            match mcp::command_for_tool(&name, &args, &base.to_string_lossy()) {
+                Ok(command) => run(&command, true),
+                Err(message) => {
+                    eprintln!("alas: {message}");
+                    ExitCode::from(2)
+                }
+            }
         }
     }
 }

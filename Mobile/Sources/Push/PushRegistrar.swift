@@ -39,7 +39,7 @@ final class PushRegistrar {
     init(hub: HostHub) {
         self.hub = hub
         relayToken = defaults.string(forKey: Self.tokenKey)
-        kinds = (defaults.stringArray(forKey: Self.kindsKey)).map(Set.init) ?? RemotePushKind.defaults
+        kinds = (defaults.stringArray(forKey: Self.kindsKey)).map(Set.init) ?? RemotePushKind.defaults.union([RemotePushKind.inbox])
     }
 
     /// Asks for permission and registers, once a host is paired. Call again
@@ -49,6 +49,9 @@ final class PushRegistrar {
         let center = UNUserNotificationCenter.current()
         center.setNotificationCategories([
             UNNotificationCategory(identifier: "attention", actions: [], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "inbox", actions: [
+                UNNotificationAction(identifier: "dismiss", title: "Dismiss", options: []),
+            ], intentIdentifiers: []),
             UNNotificationCategory(identifier: "permission", actions: [
                 UNNotificationAction(identifier: "allow", title: "Allow", options: [.authenticationRequired]),
                 UNNotificationAction(identifier: "deny", title: "Deny", options: [.destructive, .authenticationRequired]),
@@ -118,8 +121,11 @@ final class PushRegistrar {
         let center = UNUserNotificationCenter.current()
         let stale = await center.deliveredNotifications().compactMap { note -> String? in
             let id = note.request.identifier
-            // A finished turn's alert is news, not a wait: it stays until the user clears it.
-            guard (note.request.content.userInfo["alas"] as? [String: Any])?["status"] as? String != "finished" else { return nil }
+            // A finished turn's alert is news, not a wait: it stays until the user clears it. An inbox
+            // alert names an inbox item, not a session; the Mac's clear ping removes it.
+            // ponytail: a clear missed while offline leaves it; reconcile against the inbox list if that bites.
+            let status = (note.request.content.userInfo["alas"] as? [String: Any])?["status"] as? String
+            guard status != "finished", status != "inbox" else { return nil }
             let origin = (note.request.content.userInfo["alas"] as? [String: Any])?["serverId"] as? String
             return (listed.contains(id) || origin.map(origins.contains) == true) && !waiting.contains(id) ? id : nil
         }

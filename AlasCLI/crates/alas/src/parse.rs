@@ -23,6 +23,8 @@ usage: alas workspace switch <checkout-uuid>
 usage: alas workspace focus <checkout-uuid> --member <member-uuid>
 usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|resize|wait|cancel> ...
 usage: alas computer <apps|screenshot|inspect|click|type|key|scroll|drag|open-app|wait> ... [--vm macos|linux]
+usage: alas vm run <command> [--timeout-seconds <1...600>] [--vm macos|linux]
+usage: alas vm status [--vm macos|linux]
 usage: alas agent list [--worktree <name-or-branch>] [--peer <name-or-server-id>]
 usage: alas session list
 usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]] [--peer <name-or-server-id> [--project <id-or-name>]]
@@ -37,7 +39,12 @@ usage: alas review comments [--state <active|resolved|dismissed|all>] [--session
 usage: alas review reply <comment-id> <body>
 usage: alas review resolve <comment-id> [--reply <body>] [--reopen]
 usage: alas review comment <path> <line> <body> [--end-line <n>] [--side <old|new>] [--session <id>]
-usage: alas review finish [--session <id>] [--verdict <approve|request-changes|comment>] [--summary <body>]";
+usage: alas review finish [--session <id>] [--verdict <approve|request-changes|comment>] [--summary <body>]
+usage: alas pr create --title <title> --body <body> [--draft] [--base <ref>]
+usage: alas pr status
+usage: alas stack ship
+usage: alas visual show --title <title> (--html <html> | --html-file <path>) [--presentation embedded|card] [--question <prompt> --option <id>=<label>... [--multiple]]
+usage: alas tool list | alas tool schema <name> | alas tool call <name> [<json-arguments> | -]  (every built-in MCP tool, devices included)";
 
 /// Parse arguments (excluding argv0) into a Command. `base` is the directory
 /// `open` paths resolve against. On misuse, returns the usage string to print.
@@ -53,8 +60,15 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
         Some("workspace") => parse_workspace(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("preview") => parse_preview(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("computer") => parse_computer(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
+        Some("vm") => parse_vm(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("agent") => parse_agent(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("session") => parse_session(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
+        Some("pr") => parse_pr(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
+        Some("stack") => parse_stack(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
+        Some("visual") => {
+            let rest: Vec<&str> = it.map(String::as_str).collect();
+            parse_visual(&rest, base)
+        }
         Some("review") => {
             let rest: Vec<&str> = it.map(String::as_str).collect();
             parse_review(&rest, base)
@@ -216,22 +230,24 @@ fn limited_raw(value: &str, max_bytes: usize) -> Result<String, String> {
 
 /// `click`, `type`, `key`, `scroll`, `drag` and `wait`: `rest` follows the window id.
 fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<Command, String> {
+    // Every action but `wait` lists the window's elements afterwards, which
+    // `--query`, `--limit`, `--max-depth` and `--include-screenshot` shape.
     let usage = match action {
         "click" => {
-            "usage: alas computer click <window-id> (--ref <eN> | --x <px> --y <px>) [--button left|right] [--count 1|2] [--max-depth <1...32>] [--direct]"
+            "usage: alas computer click <window-id> (--ref <eN> | --x <px> --y <px>) [--button left|right] [--count 1|2] [--direct] [--query <text>] [--limit <1...3000>] [--max-depth <1...32>] [--include-screenshot]"
         }
         "type" => {
-            "usage: alas computer type <window-id> <text> [--ref <eN>] [--replace] [--max-depth <1...32>] [--direct]"
+            "usage: alas computer type <window-id> <text> [--ref <eN>] [--replace] [--direct] [--query <text>] [--limit <1...3000>] [--max-depth <1...32>] [--include-screenshot]"
         }
-        "key" => "usage: alas computer key <window-id> <keys> [--max-depth <1...32>] [--direct]",
+        "key" => "usage: alas computer key <window-id> <keys> [--direct] [--query <text>] [--limit <1...3000>] [--max-depth <1...32>] [--include-screenshot]",
         "scroll" => {
-            "usage: alas computer scroll <window-id> (--ref <eN> | --x <px> --y <px>) [--dx <-100...100>] [--dy <-100...100>] [--max-depth <1...32>] [--direct]"
+            "usage: alas computer scroll <window-id> (--ref <eN> | --x <px> --y <px>) [--dx <-100...100>] [--dy <-100...100>] [--direct] [--query <text>] [--limit <1...3000>] [--max-depth <1...32>] [--include-screenshot]"
         }
         "drag" => {
-            "usage: alas computer drag <window-id> (--ref <eN> | --x <px> --y <px>) [--to-window-id <window-id>] (--to-ref <eN> | --to-x <px> --to-y <px>) [--modifiers <command,option,control,shift>] [--max-depth <1...32>] [--direct]"
+            "usage: alas computer drag <window-id> (--ref <eN> | --x <px> --y <px>) [--to-window-id <window-id>] (--to-ref <eN> | --to-x <px> --to-y <px>) [--modifiers <command,option,control,shift>] [--direct] [--query <text>] [--limit <1...3000>] [--max-depth <1...32>] [--include-screenshot]"
         }
         _ => {
-            "usage: alas computer wait <window-id> <query> [--disappear] [--timeout-ms <100...20000>]"
+            "usage: alas computer wait <window-id> <query> [--disappear] [--timeout-ms <100...20000>] [--limit <1...3000>]"
         }
     };
     // `type`, `key` and `wait` take one positional value right after the window id.
@@ -242,27 +258,12 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
         },
         _ => (None, rest),
     };
-    let allowed: &[&str] = match action {
-        "click" => &[
-            "--ref",
-            "--x",
-            "--y",
-            "--button",
-            "--count",
-            "--max-depth",
-            "--direct",
-        ],
-        "type" => &["--ref", "--replace", "--max-depth", "--direct"],
-        "key" => &["--max-depth", "--direct"],
-        "scroll" => &[
-            "--ref",
-            "--x",
-            "--y",
-            "--dx",
-            "--dy",
-            "--max-depth",
-            "--direct",
-        ],
+    const POST_FLAGS: [&str; 5] = ["--direct", "--query", "--limit", "--max-depth", "--include-screenshot"];
+    let action_flags: &[&str] = match action {
+        "click" => &["--ref", "--x", "--y", "--button", "--count"],
+        "type" => &["--ref", "--replace"],
+        "key" => &[],
+        "scroll" => &["--ref", "--x", "--y", "--dx", "--dy"],
         "drag" => &[
             "--ref",
             "--x",
@@ -272,17 +273,18 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
             "--to-x",
             "--to-y",
             "--modifiers",
-            "--max-depth",
-            "--direct",
         ],
-        _ => &["--disappear", "--timeout-ms"],
+        _ => &["--disappear", "--timeout-ms", "--limit"],
     };
-    const BOOLEAN_FLAGS: [&str; 3] = ["--direct", "--replace", "--disappear"];
+    let allowed = |flag: &str| {
+        action_flags.contains(&flag) || (action != "wait" && POST_FLAGS.contains(&flag))
+    };
+    const BOOLEAN_FLAGS: [&str; 4] = ["--direct", "--replace", "--disappear", "--include-screenshot"];
     let mut values: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
     let mut i = 0;
     while i < flags.len() {
         let flag = flags[i];
-        if !allowed.contains(&flag) || values.contains_key(flag) {
+        if !allowed(flag) || values.contains_key(flag) {
             return Err(usage.into());
         }
         if BOOLEAN_FLAGS.contains(&flag) {
@@ -316,11 +318,17 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
         }
     };
     let direct = flag("--direct").is_some();
+    let limit = flag("--limit")
+        .map(|value| bounded_u64(value, 1, 3000, usage))
+        .transpose()?
+        .unwrap_or(100);
     let post = alas_client::ComputerPost {
+        limit,
+        query: flag("--query").map(|value| limited_raw(value, 256)).transpose()?,
         max_depth: flag("--max-depth")
             .map(|value| bounded_u64(value, 1, 32, usage))
             .transpose()?,
-        ..Default::default()
+        include_screenshot: flag("--include-screenshot").is_some(),
     };
     use alas_client::ComputerCommand as C;
     let command = match action {
@@ -425,7 +433,7 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
                 .map(|value| bounded_u64(value, 100, 20000, usage))
                 .transpose()?
                 .unwrap_or(5000),
-            limit: 100,
+            limit,
             call_id: None,
         },
     };
@@ -1376,6 +1384,161 @@ fn parse_wt_delete(args: &[&str]) -> Result<Command, String> {
         force,
         keep_branch,
     })
+}
+
+/// How a flag of a tool-backed command becomes a JSON argument.
+#[derive(Clone, Copy)]
+enum Arg {
+    Text,
+    Integer,
+    /// Takes no value; present means `true`.
+    Switch,
+}
+
+/// Maps `args` onto a tool's JSON arguments. Each flag may appear once; an
+/// unknown, repeated or valueless flag is a usage error.
+fn tool_arguments(
+    args: &[&str],
+    spec: &[(&str, &str, Arg)],
+    usage: &str,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let mut arguments = serde_json::Map::new();
+    let mut i = 0;
+    while i < args.len() {
+        let (_, key, kind) = spec
+            .iter()
+            .find(|(flag, _, _)| *flag == args[i])
+            .ok_or(usage)?;
+        if arguments.contains_key(*key) {
+            return Err(usage.into());
+        }
+        let value = match kind {
+            Arg::Switch => serde_json::Value::Bool(true),
+            Arg::Text => {
+                i += 1;
+                serde_json::Value::from(flag_value(args, i).ok_or(usage)?)
+            }
+            Arg::Integer => {
+                i += 1;
+                let value = flag_value(args, i).ok_or(usage)?;
+                serde_json::Value::from(value.parse::<u64>().map_err(|_| usage.to_string())?)
+            }
+        };
+        arguments.insert(key.to_string(), value);
+        i += 1;
+    }
+    Ok(arguments)
+}
+
+/// A readable command for a tool: `mcp::command_for_tool` checks the
+/// arguments, so the command accepts exactly what the tool does. Only for
+/// tools without path arguments, which would need the caller's directory.
+fn tool_command(
+    tool: &str,
+    arguments: serde_json::Map<String, serde_json::Value>,
+    usage: &str,
+) -> Result<Command, String> {
+    crate::mcp::command_for_tool(tool, &serde_json::Value::Object(arguments), "/")
+        .map_err(|message| format!("alas: {message}\n{usage}"))
+}
+
+const PR_USAGE: &str = "\
+usage: alas pr create --title <title> --body <body> [--draft] [--base <ref>]
+usage: alas pr status";
+
+fn parse_pr(args: &[&str]) -> Result<Command, String> {
+    match args.split_first() {
+        Some((&"status", [])) => tool_command("pr_status", Default::default(), PR_USAGE),
+        Some((&"create", rest)) => {
+            let spec = [
+                ("--title", "title", Arg::Text),
+                ("--body", "body", Arg::Text),
+                ("--draft", "draft", Arg::Switch),
+                ("--base", "base", Arg::Text),
+            ];
+            tool_command("pr_create", tool_arguments(rest, &spec, PR_USAGE)?, PR_USAGE)
+        }
+        _ => Err(PR_USAGE.into()),
+    }
+}
+
+fn parse_stack(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas stack ship";
+    match args {
+        ["ship"] => tool_command("stack_ship", Default::default(), USAGE),
+        _ => Err(USAGE.into()),
+    }
+}
+
+fn parse_vm(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "\
+usage: alas vm run <command> [--timeout-seconds <1...600>] [--vm macos|linux]
+usage: alas vm status [--vm macos|linux]";
+    let vm = ("--vm", "vm", Arg::Text);
+    match args.split_first() {
+        Some((&"status", rest)) => tool_command("vm_status", tool_arguments(rest, &[vm], USAGE)?, USAGE),
+        Some((&"run", [command, rest @ ..])) => {
+            let spec = [("--timeout-seconds", "timeout_seconds", Arg::Integer), vm];
+            let mut arguments = tool_arguments(rest, &spec, USAGE)?;
+            arguments.insert("command".into(), serde_json::Value::from(*command));
+            tool_command("vm_run", arguments, USAGE)
+        }
+        _ => Err(USAGE.into()),
+    }
+}
+
+const VISUAL_USAGE: &str = "usage: alas visual show --title <title> (--html <html> | --html-file <path>) [--presentation embedded|card] [--question <prompt> --option <id>=<label>... [--multiple]]";
+
+/// `--option` repeats, so it is split out before the single-use flags.
+fn parse_visual(args: &[&str], base: &std::path::Path) -> Result<Command, String> {
+    let Some((&"show", rest)) = args.split_first() else {
+        return Err(VISUAL_USAGE.into());
+    };
+    let mut options = Vec::new();
+    let mut flags = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        if rest[i] == "--option" {
+            let (id, label) = flag_value(rest, i + 1)
+                .and_then(|option| option.split_once('='))
+                .ok_or(VISUAL_USAGE)?;
+            options.push(serde_json::json!({ "id": id, "label": label }));
+            i += 2;
+        } else {
+            flags.push(rest[i]);
+            i += 1;
+        }
+    }
+    let spec = [
+        ("--title", "title", Arg::Text),
+        ("--html", "html", Arg::Text),
+        ("--html-file", "html_file", Arg::Text),
+        ("--presentation", "presentation", Arg::Text),
+        ("--question", "question", Arg::Text),
+        ("--multiple", "allow_multiple", Arg::Switch),
+    ];
+    let mut arguments = tool_arguments(&flags, &spec, VISUAL_USAGE)?;
+    if let Some(path) = arguments.remove("html_file") {
+        if arguments.contains_key("html") {
+            return Err(VISUAL_USAGE.into());
+        }
+        let path = alas_client::absolutize(base, path.as_str().unwrap_or_default());
+        let html = std::fs::read_to_string(&path).map_err(|err| format!("alas: could not read {path}: {err}"))?;
+        arguments.insert("html".into(), serde_json::Value::from(html));
+    }
+    let allow_multiple = arguments.remove("allow_multiple");
+    match arguments.remove("question") {
+        Some(prompt) => {
+            let mut question = serde_json::json!({ "prompt": prompt, "options": options });
+            if let Some(allow_multiple) = allow_multiple {
+                question["allow_multiple"] = allow_multiple;
+            }
+            arguments.insert("question".into(), question);
+        }
+        None if options.is_empty() && allow_multiple.is_none() => {}
+        None => return Err(VISUAL_USAGE.into()),
+    }
+    tool_command("visual_show", arguments, VISUAL_USAGE)
 }
 
 #[cfg(test)]
@@ -2510,7 +2673,12 @@ mod tests {
                 "2",
                 "--max-depth",
                 "32",
-                "--direct"
+                "--direct",
+                "--query",
+                "Save",
+                "--limit",
+                "3000",
+                "--include-screenshot"
             ])
             .unwrap(),
             Command::Computer(
@@ -2521,8 +2689,10 @@ mod tests {
                     count: 2,
                     direct: true,
                     post: alas_client::ComputerPost {
+                        limit: 3000,
+                        query: Some("Save".into()),
                         max_depth: Some(32),
-                        ..post()
+                        include_screenshot: true,
                     },
                     call_id: None
                 },
@@ -2623,7 +2793,9 @@ mod tests {
                 "Done",
                 "--disappear",
                 "--timeout-ms",
-                "100"
+                "100",
+                "--limit",
+                "7"
             ])
             .unwrap(),
             Command::Computer(
@@ -2632,7 +2804,7 @@ mod tests {
                     query: "Done".into(),
                     disappear: true,
                     timeout_ms: 100,
-                    limit: 100,
+                    limit: 7,
                     call_id: None
                 },
                 None
@@ -2688,6 +2860,9 @@ mod tests {
             &["computer", "click", "7"],
             &["computer", "click", "7", "--ref", "e1", "--max-depth", "0"],
             &["computer", "wait", "7", "Done", "--max-depth", "12"],
+            &["computer", "wait", "7", "Done", "--include-screenshot"],
+            &["computer", "click", "7", "--ref", "e1", "--limit", "3001"],
+            &["computer", "key", "7", "a", "--query", "  "],
             &[
                 "computer",
                 "drag",
@@ -2752,6 +2927,77 @@ mod tests {
         ] {
             assert!(p(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn tool_backed_commands_map_flags_onto_the_tool_arguments() {
+        let dir = std::env::temp_dir().join(format!("alas-visual-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("v.html"), "<p>from file</p>").unwrap();
+        let p = |args: &[&str]| parse(&s(args), &dir);
+        assert_eq!(
+            p(&["pr", "create", "--title", "T", "--body", "B", "--draft", "--base", "main"]).unwrap(),
+            Command::PrCreate { title: "T".into(), body: "B".into(), draft: true, base: Some("main".into()) }
+        );
+        assert_eq!(p(&["pr", "status"]).unwrap(), Command::PrStatus);
+        assert_eq!(p(&["stack", "ship"]).unwrap(), Command::StackShip);
+        assert_eq!(
+            p(&["vm", "run", "--version", "--timeout-seconds", "600", "--vm", "linux"]).unwrap(),
+            Command::VmRun {
+                command: "--version".into(),
+                timeout_seconds: Some(600),
+                vm: Some(alas_client::VmGuest::Linux),
+            }
+        );
+        assert_eq!(p(&["vm", "status"]).unwrap(), Command::VmStatus { vm: None });
+        assert_eq!(
+            p(&["visual", "show", "--title", "T", "--html-file", "v.html", "--presentation", "card"]).unwrap(),
+            Command::VisualShow {
+                title: "T".into(),
+                html: "<p>from file</p>".into(),
+                question: None,
+                presentation: Some("card".into()),
+            }
+        );
+        assert_eq!(
+            p(&[
+                "visual", "show", "--title", "T", "--html", "<p>x</p>", "--question", "Pick",
+                "--option", "a=First", "--option", "b=Second=2", "--multiple",
+            ])
+            .unwrap(),
+            Command::VisualShow {
+                title: "T".into(),
+                html: "<p>x</p>".into(),
+                question: Some(alas_client::VisualQuestion {
+                    prompt: "Pick".into(),
+                    options: vec![
+                        alas_client::VisualOption { id: "a".into(), label: "First".into() },
+                        alas_client::VisualOption { id: "b".into(), label: "Second=2".into() },
+                    ],
+                    allow_multiple: true,
+                }),
+                presentation: None,
+            }
+        );
+        for bad in [
+            &["pr"][..],
+            &["pr", "create", "--title", "T"],
+            &["pr", "create", "--title", "T", "--body", "B", "--title", "U"],
+            &["pr", "status", "--draft"],
+            &["stack", "ship", "now"],
+            &["vm", "run"],
+            &["vm", "run", "ls", "--timeout-seconds", "601"],
+            &["vm", "run", "ls", "--timeout-seconds", "soon"],
+            &["vm", "status", "--vm", "windows"],
+            &["visual", "show", "--title", "T"],
+            &["visual", "show", "--title", "T", "--html", "x", "--html-file", "v.html"],
+            &["visual", "show", "--title", "T", "--html", "x", "--option", "a=A"],
+            &["visual", "show", "--title", "T", "--html", "x", "--question", "Q", "--option", "a"],
+            &["visual", "show", "--title", "T", "--html-file", "missing.html"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

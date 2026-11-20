@@ -46,10 +46,8 @@ struct TranscriptRowView: View {
     @ViewBuilder
     private var message: some View {
         switch item.row {
-        case .user(_, _, _, let card?, _, _) where Self.promptCard(card) != nil:
-            // A turn Alas sent (Ship, a shepherd, review feedback), as its card.
-            OutcomeCard(id: item.id, card: Self.promptCard(card)!)
-        case .user(let text, _, let images, _, let mentions, let pastedSpans):
+        case .user(let text, _, let images, let json, let mentions, let pastedSpans):
+            let card = json.flatMap(Self.promptCard)
             VStack(alignment: .trailing, spacing: 6) {
                 if !images.isEmpty {
                     HStack(spacing: 6) {
@@ -64,12 +62,18 @@ struct TranscriptRowView: View {
                         }
                     }
                 }
-                UserMessageBody(id: item.id, text: text, mentions: mentions, pastedSpans: pastedSpans, session: session) {
-                    messageMenu(text)
+                if let card {
+                    // A turn Alas injected reads as a card, not as something the user typed.
+                    OutcomeCard(id: item.id, card: card, instruction: text, isExpanded: isExpanded, toggle: toggle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    UserMessageBody(id: item.id, text: text, mentions: mentions, pastedSpans: pastedSpans, session: session) {
+                        messageMenu(text)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.leading, 48)
+            .padding(.leading, card == nil ? 48 : 0)
         case .agent(let text):
             AgentMarkdown(id: item.id, text: text, session: session)
                 .contextMenu { messageMenu(text) }

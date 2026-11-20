@@ -219,7 +219,7 @@ public final class HostProtocolConnection {
             close()
             return .unsubscribed
         case .listSessions:
-            return .sessions(sessions: host.sessions.list())
+            return .sessions(sessions: host.sessions.listForClient())
         case .addProject(let path, let displayName, let projectHost, let kind):
             return .project(project: try await host.projects.add(
                 path: URL(fileURLWithPath: path), displayName: displayName, icon: .default(),

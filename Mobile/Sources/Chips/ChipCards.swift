@@ -117,8 +117,8 @@ struct CommandCard: View {
     private func shipLine(_ line: ShipLine) -> some View {
         let badge = line.shepherd?.badge ?? "noRequest"
         return HStack(spacing: 4) {
-            Image(systemName: ShepherdMenu.badgeSymbol(badge))
-                .foregroundStyle(ShepherdMenu.color(badge))
+            Image(systemName: ShepherdPill.badgeSymbol(badge))
+                .foregroundStyle(ShepherdPill.color(badge))
             if let number = line.shepherd?.number {
                 Text(number).font(.footnote.monospaced().weight(.semibold))
                 if let phase = line.shepherd?.phaseLine { Text("· \(phase)").foregroundStyle(.secondary) }

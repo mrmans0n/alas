@@ -12,6 +12,7 @@ struct AgentEditView: View {
     @State private var sessionInstructions: String
     @State private var sessionHooks: String
     @State private var alasMCPServerName: String
+    @State private var hiddenToolGroups: Set<BuiltInMCPToolGroup>
     @State private var deleteConfirmShown = false
     /// Pi only: what the installed Pi extensions leave uncovered. Read once
     /// when the sheet opens.
@@ -36,6 +37,9 @@ struct AgentEditView: View {
         _alasMCPServerName = State(initialValue: targetID.flatMap {
             state.config.agents.builtinState[$0]?.alasMCPServerName
         } ?? "")
+        _hiddenToolGroups = State(initialValue: targetID.map {
+            state.config.agents.alasMCPHiddenToolGroups(for: $0)
+        } ?? [])
         _piExtensionCoverage = State(initialValue: targetID == ACPManagedAdapterDescriptor.pi.agentID
             ? ACPPiSubagentExtensions.coverage(
                 agentDirectory: ACPPiSubagentExtensions.agentDirectory(),
@@ -228,6 +232,28 @@ struct AgentEditView: View {
                         }
                     }
                 }
+                SettingsRow(
+                    name: "Alas MCP tools",
+                    desc: "The tool groups this agent loads from the built-in Alas MCP server. Leave groups out "
+                        + "when the agent caps how many MCP tools it loads: it can still run them with "
+                        + "alas tool call in its shell. Applies to new sessions."
+                ) {
+                    Menu(hiddenToolGroupsSummary) {
+                        ForEach(BuiltInMCPToolGroup.allCases, id: \.self) { group in
+                            Toggle("\(group.displayName) (\(group.toolNames.count) tools)", isOn: Binding(
+                                get: { !hiddenToolGroups.contains(group) },
+                                set: { loaded in
+                                    if loaded {
+                                        hiddenToolGroups.remove(group)
+                                    } else {
+                                        hiddenToolGroups.insert(group)
+                                    }
+                                }
+                            ))
+                        }
+                    }
+                    .settingsDropdownFrame()
+                }
             }
 
             HStack(spacing: 8) {
@@ -321,6 +347,11 @@ struct AgentEditView: View {
         return "Use letters, digits, _ and -, up to 64 characters."
     }
 
+    private var hiddenToolGroupsSummary: String {
+        let hidden = BuiltInMCPToolGroup.allCases.filter(hiddenToolGroups.contains)
+        return hidden.isEmpty ? "All groups load" : "Left out: " + hidden.map(\.displayName).joined(separator: ", ")
+    }
+
     private var isNew: Bool {
         if case .new = target { return true } else { return false }
     }
@@ -357,6 +388,8 @@ struct AgentEditView: View {
             if supportsAlasMCPServerName {
                 let name = BuiltInAlasMCP.normalizedServerName(alasMCPServerName)
                 entry.alasMCPServerName = name == BuiltInAlasMCP.serverName ? nil : name
+                let hidden = BuiltInMCPToolGroup.allCases.filter(hiddenToolGroups.contains).map(\.rawValue)
+                entry.alasMCPHiddenToolGroups = hidden.isEmpty ? nil : hidden
             }
             state.config.agents.builtinState[draft.id] = entry
         } else if isNew {

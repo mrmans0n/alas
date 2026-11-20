@@ -126,6 +126,7 @@ struct TranscriptScreen: View {
 
     private func content(_ session: TranscriptSession, _ workspace: SessionWorkspace) -> some View {
         let available = modes(session)
+        let openChanges: (() -> Void)? = available.contains(.changes) ? { mode = .changes } : nil
         let base = TranscriptContent(session: session, openSubagent: { openedSubagent = $0 })
             // Kept alive under the other tabs so the scroll position survives a switch.
             .opacity(mode == .transcript ? 1 : 0)
@@ -200,6 +201,8 @@ struct TranscriptScreen: View {
                 }
             })
             .environment(\.chipActions, chipActions)
+            // A Ship or review card's "Review changes" jumps to the Changes tab.
+            .environment(\.openSessionChanges, openChanges)
             .background(Color(.systemBackground))
             .navigationTitle(session.summary?.title ?? "Session")
             .navigationSubtitle(subtitle(session))
@@ -245,7 +248,7 @@ struct TranscriptScreen: View {
             }
             .toolbar {
                 if !session.hasEnded, workspace.canShepherd, workspace.shepherdLoaded {
-                    ToolbarItem(placement: .primaryAction) { ShepherdMenu(workspace: workspace) }
+                    ToolbarItem(placement: .primaryAction) { ShepherdPill(workspace: workspace, isBusy: session.streamingState != "idle") }
                 }
                 let children = registry.hub.sessions(of: hostID).filter { $0.parentSessionId == sessionId }
                 if !children.isEmpty {

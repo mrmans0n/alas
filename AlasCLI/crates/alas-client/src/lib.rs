@@ -199,18 +199,18 @@ pub enum Command {
         verdict: Option<String>,
         summary: Option<String>,
     },
-    /// MCP-only: push this worktree's branch, open its pull/merge request (or
-    /// adopt the open one) and have Alas shepherd it for the calling session.
+    /// Push this worktree's branch, open its pull/merge request (or adopt
+    /// the open one) and have Alas shepherd it for the calling session.
     PrCreate {
         title: String,
         body: String,
         draft: bool,
         base: Option<String>,
     },
-    /// MCP-only: fresh status of the calling session's pull/merge request.
+    /// Fresh status of the calling session's pull/merge request.
     PrStatus,
-    /// MCP-only: publish this worktree's gg stack with `gg sync` and have
-    /// Alas shepherd every request in it for the calling session.
+    /// Publish this worktree's gg stack with `gg sync` and have Alas
+    /// shepherd every request in it for the calling session.
     StackShip,
     /// Read-only discovery of the ACP agents (and remembered model catalogs)
     /// the calling session could delegate to.
@@ -242,7 +242,7 @@ pub enum Command {
         session_id: String,
         prompt: String,
     },
-    /// MCP-only: show an HTML visual aid in the calling ACP session's transcript.
+    /// Show an HTML visual aid in the calling ACP session's transcript.
     VisualShow {
         title: String,
         html: String,
@@ -286,19 +286,20 @@ pub enum Command {
     /// The VM is the one a worktree with a macOS and a Linux VM targets;
     /// the app picks the only VM, or the desktop, when it is absent.
     Computer(ComputerCommand, Option<VmGuest>),
-    /// MCP-only: run a shell command in the calling session's worktree VM.
+    /// Run a shell command in the calling session's worktree VM.
     /// The app applies the default timeout when absent.
     VmRun {
         command: String,
         timeout_seconds: Option<u32>,
         vm: Option<VmGuest>,
     },
-    /// MCP-only: whether the calling session's worktree has a running VM,
-    /// its guest helper, and the shared transfer folder.
+    /// Whether the calling session's worktree has a running VM, its guest
+    /// helper, and the shared transfer folder.
     VmStatus {
         vm: Option<VmGuest>,
     },
-    /// MCP-only: drive an iOS simulator the user also sees in the Devices tab.
+    /// Drive an iOS simulator or Android device the user also sees in the
+    /// Devices tab.
     Device(DeviceCommand),
     Resolve,
 }
@@ -2018,10 +2019,18 @@ const VM_RUN_REPLY_GRACE: Duration = Duration::from_secs(30);
 /// runs: the connection waits that out too, so the command keeps its budget.
 const VM_RUN_HOLD: Duration = Duration::from_secs(50);
 
+/// `pr_create` and `stack_ship` check the branch, push it, and open the
+/// PR/MRs with `gh`/`glab` before replying; on an SSH worktree each of those
+/// runs over ssh. `pr_status` lists a gg stack with `gg ls` and reads every
+/// request from the provider, which takes over 30 seconds on a large GitLab
+/// stack. The remote helper's relay waits slightly longer than this.
+const PR_READ_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// How long `dispatch` waits for the reply to `command`.
 pub fn read_timeout(command: &Command) -> Duration {
     match command {
         Command::Computer(..) => COMPUTER_READ_TIMEOUT,
+        Command::PrCreate { .. } | Command::PrStatus | Command::StackShip => PR_READ_TIMEOUT,
         Command::Device(DeviceCommand::Open { .. } | DeviceCommand::Install { .. }) => {
             DEVICE_OPEN_READ_TIMEOUT
         }

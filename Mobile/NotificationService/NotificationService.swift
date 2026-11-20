@@ -2,7 +2,7 @@ import AlasRemoteKit
 import UserNotifications
 
 /// Rewrites the relay's fixed "An agent needs you." alert into what the
-/// session is waiting on, by asking the paired Mac. Anything that goes wrong
+/// session is waiting on, and an inbox ping into its item, by asking the paired Mac. Anything that goes wrong
 /// delivers the alert as it arrived.
 final class NotificationService: UNNotificationServiceExtension, @unchecked Sendable {
     private var job: Job?
@@ -39,6 +39,9 @@ private final class Job {
     private let deliver: (UNNotificationContent) -> Void
     private let serverId: String?
     private let sessionId: String?
+    /// For an inbox ping, the item's event id, which travels as `sessionId`.
+    private let eventID: UUID?
+    private var item: RemoteAttentionItem?
     private var connections: [UUID: PhoneConnection] = [:]
     private var pending: PhoneServerMessage?
     private var title: String?
@@ -55,6 +58,7 @@ private final class Job {
         let alas = request.content.userInfo["alas"] as? [String: Any]
         serverId = alas?["serverId"] as? String
         sessionId = alas?["sessionId"] as? String
+        eventID = alas?["status"] as? String == "inbox" ? sessionId.flatMap(UUID.init(uuidString:)) : nil
     }
 
     func start() {
@@ -65,6 +69,7 @@ private final class Job {
         guard let serverId, let sessionId else { return finish() }
         let store = HostStore()
         let hosts = store.load()
+        if let eventID { return startInbox(eventID, serverId: serverId, hosts: hosts, store: store) }
         // Ask every host: the Mac that owns the session may be out of reach from
         // this network while a gateway, listing it under its namespaced id, is not.
         // ponytail: asks all hosts; a cached session list would pick one.
@@ -82,6 +87,30 @@ private final class Job {
         }
         if connections.isEmpty { return finish() }
         connections.values.forEach { $0.connect() }
+    }
+
+    /// Only the Mac itself holds its inbox.
+    private func startInbox(_ eventID: UUID, serverId: String, hosts: [PairedHost], store: HostStore) {
+        guard let host = hosts.first(where: { $0.serverId == serverId }), let token = store.token(for: host.id) else { return finish() }
+        let request = 1
+        let connection = PhoneConnection(
+            origins: host.origins, lastOrigin: host.lastOrigin, token: token,
+            expectedServerId: host.serverId, expectedPublicKey: host.publicKey
+        ) { [weak self] event in
+            guard let self, !finished else { return }
+            switch event {
+            case .stateChanged(.online):
+                connections[host.id]?.send(.host(RemoteAttentionRequest.list(id: request)))
+            case .message(.host(let reply)):
+                guard let items = RemoteAttentionRequest.items(replying: request, in: reply) else { return }
+                item = items.first { $0.id == eventID }
+                finish()
+            default:
+                break
+            }
+        }
+        connections[host.id] = connection
+        connection.connect()
     }
 
     private func handle(_ event: PhoneConnection.Event, target: String, direct: Bool, host: UUID) {
@@ -132,6 +161,11 @@ private final class Job {
     }
 
     private func content() -> UNNotificationContent {
+        if let item, let updated = original.mutableCopy() as? UNMutableNotificationContent {
+            updated.title = item.title
+            updated.body = item.body.flatMap { $0.split(separator: "\n").first.map(String.init) } ?? "\(item.project) · \(item.branch)"
+            return updated
+        }
         guard let pending, let alert = RemotePushAlert.content(for: pending, sessionTitle: title),
               let updated = original.mutableCopy() as? UNMutableNotificationContent else {
             // Nothing pending, as after a finished turn: the relay's text stands, under the session's name.

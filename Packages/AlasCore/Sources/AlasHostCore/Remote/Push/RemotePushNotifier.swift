@@ -2,6 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasAgents
 import AlasACP
+import AlasFeatures
 
 private let logger = Logger(subsystem: "io.nlopez.alas", category: "RemotePush")
 
@@ -9,6 +10,8 @@ private let logger = Logger(subsystem: "io.nlopez.alas", category: "RemotePush")
 /// waiting on its owner: this host's own sessions, from the host's events,
 /// and its peers' sessions, from the federation's peer lists. What to push
 /// is `RemotePushPlanner`'s call; this only gathers statuses and posts.
+/// It also pings for each item this host's own inbox gains, and clears the
+/// alert once the item is dismissed or resolved.
 @MainActor
 final class RemotePushNotifier {
     private typealias Key = RemotePushPlanner.Key
@@ -22,6 +25,8 @@ final class RemotePushNotifier {
     /// Each peer's statuses, by its `serverId`, kept while the peer is away.
     private var peers: [String: [Key: String]] = [:]
     private var subscription: HostSubscription?
+    /// The phone-visible inbox items last seen, by event id; nil while stopped.
+    private var inbox: Set<UUID>?
     /// The latest post per phone and alert. Each waits for the one before, so an alert and
     /// the clear after it (same collapse id) reach the relay, and APNs, in the order sent.
     private var sends: [String: (seq: Int, task: Task<Void, Never>)] = [:]
@@ -46,6 +51,8 @@ final class RemotePushNotifier {
         local = localStatuses()
         peers = peerStatuses()
         planner = RemotePushPlanner(current: merged)
+        // Items already open page nobody.
+        inbox = followInbox()
         federation?.onPeerRowsChanged = { [weak self] in self?.peersChanged() }
         guard let host else { return }
         let subscription = host.subscribe()
@@ -70,6 +77,33 @@ final class RemotePushNotifier {
         subscription?.cancel()
         subscription = nil
         federation?.onPeerRowsChanged = nil
+        inbox = nil
+    }
+
+    /// The inbox's item ids now, calling `inboxChanged` on the next change.
+    private func followInbox() -> Set<UUID> {
+        guard let store = host?.core.attention.store else { return [] }
+        return withObservationTracking {
+            Set(AttentionSignalAggregator.phoneInbox(store.document).map(\.id))
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.inboxChanged() }
+        }
+    }
+
+    private func inboxChanged() {
+        guard let before = inbox else { return }
+        let now = followInbox()
+        inbox = now
+        let relays = pairing.pushRelays
+        for id in now.subtracting(before) {
+            let body = Self.body(kind: "attention", key: Key(originServerId: serverId, sessionId: id.uuidString), status: "inbox")
+            for (deviceID, relay) in relays where relay.wants(RemotePushKind.inbox) { post(body, to: relay, deviceID: deviceID) }
+        }
+        // Silent, so every phone gets it.
+        for id in before.subtracting(now) {
+            let body = Self.body(kind: "clear", key: Key(originServerId: serverId, sessionId: id.uuidString), status: "inbox")
+            for (deviceID, relay) in relays { post(body, to: relay, deviceID: deviceID) }
+        }
     }
 
     private var merged: [Key: String] {

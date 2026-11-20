@@ -22,6 +22,10 @@ public struct BuiltinAgentState: Codable, Equatable, Sendable {
     /// agent. Absent (nil) means the default. See
     /// `BuiltInAlasMCP.normalizedServerName`.
     public var alasMCPServerName: String?
+    /// The built-in Alas MCP tool groups this agent's sessions leave out of
+    /// the MCP tool list, by `BuiltInMCPToolGroup` raw value. Absent (nil)
+    /// means every group loads.
+    public var alasMCPHiddenToolGroups: [String]?
 
     public init(
         isEnabled: Bool,
@@ -30,7 +34,8 @@ public struct BuiltinAgentState: Codable, Equatable, Sendable {
         nativeSubagentsDisabled: Bool? = nil,
         sessionInstructions: String? = nil,
         sessionHooks: String? = nil,
-        alasMCPServerName: String? = nil
+        alasMCPServerName: String? = nil,
+        alasMCPHiddenToolGroups: [String]? = nil
     ) {
         self.isEnabled = isEnabled
         self.binaryOverride = binaryOverride
@@ -39,5 +44,6 @@ public struct BuiltinAgentState: Codable, Equatable, Sendable {
         self.sessionInstructions = sessionInstructions
         self.sessionHooks = sessionHooks
         self.alasMCPServerName = alasMCPServerName
+        self.alasMCPHiddenToolGroups = alasMCPHiddenToolGroups
     }
 }
