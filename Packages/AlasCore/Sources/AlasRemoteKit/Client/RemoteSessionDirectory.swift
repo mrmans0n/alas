@@ -61,6 +61,8 @@ public struct RemoteWorktreeEntry: Identifiable, Equatable, Sendable {
             return (rank: groupRank(s, &seen), index: i, session: s)
         }
         for r in ranked.sorted(by: { ($0.rank, $0.index) < ($1.rank, $1.index) }) { emit(r.session, depth: 0) }
+        // Sessions that only reach each other through a parent cycle have no root; list them last.
+        for s in activeSessions { emit(s, depth: 0) }
         return rows
     }
 
