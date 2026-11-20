@@ -70,7 +70,10 @@ struct InboxView: View {
             visible = true
             model.sync(entries, registry: registry)
         }
-        .onChange(of: entries) { _, new in if visible { model.sync(new, registry: registry) } }
+        .onChange(of: entries) { _, new in
+            model.answered.formIntersection(new.map(\.route))
+            if visible { model.sync(new, registry: registry) }
+        }
         .onChange(of: answeredHere) { _, routes in model.answered.formUnion(routes) }
         .onDisappear {
             visible = false
