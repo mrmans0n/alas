@@ -51,6 +51,13 @@ test("a finished turn says so instead of asking for attention", async () => {
   assert.equal(j.alas.status, "finished");
 });
 
+test("an inbox item gets its own category, so the phone offers Dismiss", async () => {
+  const j = await apnsRequest({ ...body, status: "inbox" }, opened("sandbox"), "JWT", 1_800_000_000).json();
+  assert.equal(j.aps.category, "inbox");
+  assert.equal(j.aps["thread-id"], "inbox");
+  assert.equal(j.alas.status, "inbox");
+});
+
 test("clear request is a silent background push", async () => {
   const r = apnsRequest({ ...body, kind: "clear" }, opened("sandbox"), "JWT", 1_800_000_000);
   assert.equal(r.headers.get("apns-push-type"), "background");

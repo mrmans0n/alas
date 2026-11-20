@@ -218,10 +218,11 @@ private struct NotificationKindsSection: View {
             toggle("Permission requests", systemImage: "hand.raised", kind: RemotePushKind.permission)
             toggle("Questions and plans", systemImage: "questionmark.bubble", kind: RemotePushKind.input)
             toggle("Finished turns", systemImage: "checkmark.circle", kind: RemotePushKind.finished)
+            toggle("Mac inbox", systemImage: "tray", kind: RemotePushKind.inbox)
         } header: {
             Text("Notify me about")
         } footer: {
-            Text("Questions and plans include forms and visuals waiting for an answer.")
+            Text("Questions and plans include forms and visuals waiting for an answer. Mac inbox covers failed runs, conflicts, CI and review feedback.")
         }
     }
 

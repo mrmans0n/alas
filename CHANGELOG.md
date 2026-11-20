@@ -6,11 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Open a run's visible terminal from the iPhone and iPad Run menu, and show local notifications for confirmed successes and failures.
-- Run every built-in Alas MCP tool from the shell with `alas tool list`, `alas tool schema` and `alas tool call`, and add `alas pr create|status`, `alas stack ship`, `alas vm run|status` and `alas visual show`, for agents whose harness caps or drops MCP servers. CLI screenshots and preview captures are saved to a file whose path the output prints.
-- Choose per agent which groups of built-in Alas MCP tools (browser preview, computer use, VMs, simulators and devices) load as MCP tools. Groups left out stay reachable through `alas tool call`.
 - When Codex's managed MCP policy blocks the Alas MCP server, point the session at the `alas` CLI instead of tools that never load, and remember the block for the agent's next sessions.
 - Install Alas agent skills from Settings > Agents, or with `alas skill install`: a routing `alas` skill and skills for reviews, delegation, previews, computer use and devices, which teach any agent to drive Alas with the CLI. `alas skill guide` prints the same guides.
+
+## [0.24.5] - 2026-11-20
+
+### ✨ Features
+
+- For worktrees with multiple open sessions, show one row per session on iPhone and iPad, with attention-first ordering, delegated sessions placed under their parent, and an expandable remainder ([#2625](https://github.com/mrmans0n/alas/pull/2625)).
+- Name new branches from the first prompt and request next-prompt suggestions from the paired Mac app on iPhone and iPad ([#2627](https://github.com/mrmans0n/alas/pull/2627)).
+- Open visible terminals for runs launched from iPhone or iPad and post local notifications when the paired host confirms success or failure ([#2628](https://github.com/mrmans0n/alas/pull/2628)).
+- Suggest commit messages on compatible Apple Intelligence devices ([#2624](https://github.com/mrmans0n/alas/pull/2624)).
+- Open transcript links and links from Markdown file previews in an in-app browser when they match a running Alas script in the same worktree ([#2634](https://github.com/mrmans0n/alas/pull/2634)).
+- Show an online Mac app's run failures, conflicts, failed agents, and unreachable hosts in the iPhone Inbox, and dismiss the same stored item from either device ([#2626](https://github.com/mrmans0n/alas/pull/2626)).
+- Show injected Ship and review instructions as cards on iPhone and iPad, with shepherd status, controls, pull request details, and stack progress ([#2635](https://github.com/mrmans0n/alas/pull/2635)).
+- Add Mac Inbox push notifications and a background Dismiss action for relays with Inbox support deployed ([#2638](https://github.com/mrmans0n/alas/pull/2638)).
+- Reach every built-in Alas MCP tool from the `alas` CLI, add dedicated commands for PRs, stacks, VMs, and visual previews, and choose per agent which tool groups load through MCP ([#2637](https://github.com/mrmans0n/alas/pull/2637)).
+- Guide Computer Use permission setup with a drag-to-System Settings panel ([#2633](https://github.com/mrmans0n/alas/pull/2633)).
+
+### 🐛 Fixes
+
+- Let iPhone transcripts scroll beneath the tab picker and composer while keeping the first and last rows clear of those controls ([#2623](https://github.com/mrmans0n/alas/pull/2623), [#2631](https://github.com/mrmans0n/alas/pull/2631)).
+- Read long questions and requests in full and show sessions waiting for a typed reply in the iPhone Inbox ([#2629](https://github.com/mrmans0n/alas/pull/2629)).
+- Restore closed-session and copy actions to the long-press menu for iPhone worktree rows ([#2630](https://github.com/mrmans0n/alas/pull/2630)).
+- Retry local session archival when a concurrent attach rotates its lease, and make the socket-close test wait for observable EOF ([#2636](https://github.com/mrmans0n/alas/pull/2636)).
 
 ## [0.24.4] - 2026-11-20
 

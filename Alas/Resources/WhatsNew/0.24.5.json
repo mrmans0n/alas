@@ -1,0 +1,16 @@
+{
+  "version": "0.24.5",
+  "headline": {
+    "title": "Sessions in every worktree",
+    "body": "See every open session beneath its worktree on iPhone and iPad, with work that needs you first and delegated sessions grouped under their parent.",
+    "media": "media/0.24.5-worktree-sessions.png"
+  },
+  "also": [
+    {
+      "title": "Run terminals and local alerts"
+    },
+    {
+      "title": "Read long requests"
+    }
+  ]
+}

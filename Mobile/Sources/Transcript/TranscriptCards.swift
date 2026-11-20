@@ -139,12 +139,22 @@ struct FailureIncidentCard: View {
     }
 }
 
-/// The phone's `PromptCardRow` for outcome cards: origin, title, facts and sections. Only a `.url`
-/// action is shown, and it goes to the system.
+extension EnvironmentValues {
+    /// Opens the session's Changes tab; nil where the session has none. Hosted transcript cells re-inject it.
+    @Entry var openSessionChanges: (() -> Void)? = nil
+}
+
+/// The phone's `PromptCardRow`: origin, title, facts and sections. A `.url` action goes to the system and
+/// `.reviewChanges` opens the session's Changes tab. A turn Alas sent also discloses its exact instruction.
 struct OutcomeCard: View {
     let id: String
     let card: RemotePromptCard
+    /// The text Alas sent the agent; empty for an outcome card, which sent nothing.
+    var instruction: String? = nil
+    var isExpanded = false
+    var toggle: () -> Void = {}
     @Environment(\.openURL) private var openURL
+    @Environment(\.openSessionChanges) private var openSessionChanges
 
     var body: some View {
         let style = Self.style(card.origin)
@@ -177,14 +187,41 @@ struct OutcomeCard: View {
             }
             ForEach(card.sections.indices, id: \.self) { section(card.sections[$0], index: $0) }
             if let url = card.actionURL {
-                Button("Open in browser") { openURL(url) }
-                    .font(.footnote)
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .overlay(alignment: .top) { Divider() }
+                actionButton("Open in browser") { openURL(url) }
+            } else if card.opensChanges, let openSessionChanges {
+                actionButton("Review changes", perform: openSessionChanges)
+            }
+            if let instruction, !instruction.isEmpty {
+                Button(action: toggle) {
+                    Label(isExpanded ? "Hide instruction" : "Show instruction",
+                          systemImage: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .overlay(alignment: .top) { Divider() }
+                if isExpanded {
+                    Text(instruction)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .padding([.horizontal, .bottom], 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func actionButton(_ title: String, perform: @escaping () -> Void) -> some View {
+        Button(title, action: perform)
+            .font(.footnote)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .top) { Divider() }
     }
 
     @ViewBuilder private var facts: some View {

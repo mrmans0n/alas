@@ -28,9 +28,11 @@ export function apnsRequest(body, opened, jwt, now) {
   const host = opened.environment === "production" ? "api.push.apple.com" : "api.sandbox.push.apple.com";
   const alas = { serverId: body.serverId, sessionId: body.sessionId, status: body.status };
   const attention = body.kind === "attention";
+  const inbox = body.status === "inbox";
+  const text = inbox ? "Something on your Mac needs you." : body.status === "finished" ? "Finished its turn." : "An agent needs you.";
   const payload = attention
     ? {
-        aps: { alert: { title: "Alas", body: body.status === "finished" ? "Finished its turn." : "An agent needs you." }, "mutable-content": 1, category: "attention", "thread-id": body.sessionId },
+        aps: { alert: { title: "Alas", body: text }, "mutable-content": 1, category: inbox ? "inbox" : "attention", "thread-id": inbox ? "inbox" : body.sessionId },
         alas,
       }
     : { aps: { "content-available": 1 }, alas: { ...alas, clear: true } };

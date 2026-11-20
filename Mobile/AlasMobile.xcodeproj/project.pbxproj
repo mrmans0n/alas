@@ -17,7 +17,6 @@
 		185E46AA928760C65408C50C /* NewSessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 416F4E87800E3DD89EE7DC25 /* NewSessionSheet.swift */; };
 		1B5C0283E882903921EC7AE9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 014513AD15C2212B8C007245 /* AppDelegate.swift */; };
 		1CC892A943E9499D5E01DEAD /* VisualAidCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C692134FC753BDB9AA2D24DB /* VisualAidCard.swift */; };
-		23849CE940217D28217E4F16 /* ShepherdMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEF6DC8B0A58927446DDA20F /* ShepherdMenu.swift */; };
 		24A4226EE8C1A5B7B5E449D2 /* AttentionFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76125E107DB96A4DC64944CB /* AttentionFeed.swift */; };
 		271977086F72799EB499DD8E /* TranscriptSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */; };
 		28905A744E97862B779D9BBB /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5675178FB5741806BEB65930 /* InboxView.swift */; };
@@ -46,6 +45,7 @@
 		7DAFD28FE14392621FCDBF53 /* SessionListCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB90BAD33068D0FA5A49EE21 /* SessionListCache.swift */; };
 		82768FC0D800B66EDDFC9B99 /* MermaidBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3D6661CD737A1ADDE5B9897 /* MermaidBlockView.swift */; };
 		86D9AB9FE0BDDAC8209FCCA2 /* ImageStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21958EE58C9376495D96344 /* ImageStaging.swift */; };
+		8CC4E4A8EB4C471BF4525901 /* ShepherdSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02BAEE99CC723E41B717AD92 /* ShepherdSheet.swift */; };
 		90418683B56D8FDCE540EB72 /* WorktreesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFC88463B7E1083C886AC282 /* WorktreesView.swift */; };
 		90AE44675FE782B711960528 /* RequestCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06499964301D8FB5B30EB8B6 /* RequestCard.swift */; };
 		914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */; };
@@ -59,6 +59,7 @@
 		A71335B1FFB31FD930FB376F /* TCP.swift in Sources */ = {isa = PBXBuildFile; fileRef = E980E547B44AA84D5294286F /* TCP.swift */; };
 		ADC23C11ED7EB665B1C1BAED /* TerminalScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFE4FA35BA2B54541B0ABD61 /* TerminalScreen.swift */; };
 		B15AA036BD9AD1D8D0125304 /* ChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED6F3B8B35385E6C2729ABAA /* ChangesView.swift */; };
+		B42A9AEFF5C7B39EC665FEA8 /* ShepherdPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = F56F68CCA7CB55635220C51E /* ShepherdPill.swift */; };
 		B43121A298365C510EF57149 /* frame.html in Resources */ = {isa = PBXBuildFile; fileRef = B7A9014AA3A262509E8B3DB3 /* frame.html */; };
 		B77BD7D2A4E99D5E46F61EA2 /* TCP+Network.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10D297229E5367ADFE2F5C0D /* TCP+Network.swift */; };
 		B875C536E4958A62E00D34A1 /* DiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03FA6AEA78D99344CAAD8095 /* DiffView.swift */; };
@@ -117,6 +118,7 @@
 		014513AD15C2212B8C007245 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		01778058ACE3C53D047B6348 /* TerminalConsole.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalConsole.swift; sourceTree = "<group>"; };
 		021BD9A2EF626EAA8E99C8E6 /* Boids.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Boids.swift; sourceTree = "<group>"; };
+		02BAEE99CC723E41B717AD92 /* ShepherdSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShepherdSheet.swift; sourceTree = "<group>"; };
 		03FA6AEA78D99344CAAD8095 /* DiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffView.swift; sourceTree = "<group>"; };
 		06499964301D8FB5B30EB8B6 /* RequestCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestCard.swift; sourceTree = "<group>"; };
 		0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlocks.swift; sourceTree = "<group>"; };
@@ -165,7 +167,6 @@
 		B7A9014AA3A262509E8B3DB3 /* frame.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = frame.html; sourceTree = "<group>"; };
 		BC6BBF70EB1F96D5AC5A8594 /* TranscriptImageViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptImageViewer.swift; sourceTree = "<group>"; };
 		BC78E86F9CD60E848A8135C3 /* GrammarPack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrammarPack.swift; sourceTree = "<group>"; };
-		BEF6DC8B0A58927446DDA20F /* ShepherdMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShepherdMenu.swift; sourceTree = "<group>"; };
 		BFE4FA35BA2B54541B0ABD61 /* TerminalScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalScreen.swift; sourceTree = "<group>"; };
 		C0E84291A6AA43082A7F684D /* HostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStore.swift; sourceTree = "<group>"; };
 		C692134FC753BDB9AA2D24DB /* VisualAidCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualAidCard.swift; sourceTree = "<group>"; };
@@ -189,6 +190,7 @@
 		F11FB7A8BA65D28E96B7CFEB /* RunPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunPreviewView.swift; sourceTree = "<group>"; };
 		F3D6661CD737A1ADDE5B9897 /* MermaidBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidBlockView.swift; sourceTree = "<group>"; };
 		F555B239BFDC686B6F661BF3 /* AlasMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AlasMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F56F68CCA7CB55635220C51E /* ShepherdPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShepherdPill.swift; sourceTree = "<group>"; };
 		F829EDC62D4F3BCB4F05C4D5 /* PeerPortForwarder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerPortForwarder.swift; sourceTree = "<group>"; };
 		F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSettingsSheet.swift; sourceTree = "<group>"; };
 		FB90BAD33068D0FA5A49EE21 /* SessionListCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListCache.swift; sourceTree = "<group>"; };
@@ -244,7 +246,8 @@
 				DC497CD9E3E3ACCED5B931CD /* FileViewer.swift */,
 				F11FB7A8BA65D28E96B7CFEB /* RunPreviewView.swift */,
 				1547D85F76565F3FE516B06A /* SessionWorkspace.swift */,
-				BEF6DC8B0A58927446DDA20F /* ShepherdMenu.swift */,
+				F56F68CCA7CB55635220C51E /* ShepherdPill.swift */,
+				02BAEE99CC723E41B717AD92 /* ShepherdSheet.swift */,
 			);
 			path = Workspace;
 			sourceTree = "<group>";
@@ -678,7 +681,8 @@
 				CB152CF506A31464F04D172F /* SessionRegistry.swift in Sources */,
 				071E34299495A5835CCC2F75 /* SessionSettingsSheet.swift in Sources */,
 				422DAC40738CAE3A2226AE92 /* SessionWorkspace.swift in Sources */,
-				23849CE940217D28217E4F16 /* ShepherdMenu.swift in Sources */,
+				B42A9AEFF5C7B39EC665FEA8 /* ShepherdPill.swift in Sources */,
+				8CC4E4A8EB4C471BF4525901 /* ShepherdSheet.swift in Sources */,
 				C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */,
 				FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */,
 				144D4D88D96917B1FFFBEC15 /* SubagentCard.swift in Sources */,
