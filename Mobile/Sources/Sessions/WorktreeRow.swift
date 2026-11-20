@@ -188,7 +188,8 @@ struct WorktreeRow: View {
                         in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.borderless)
+        // Plain, not borderless: borderless tints the label. Either keeps each row its own tap target in a List.
+        .buttonStyle(.plain)
         .accessibilityLabel("\(session.title), \(session.agentId)")
         .accessibilityHint(caption(session) ?? statusCaption(session))
         .accessibilityAddTraits(row.id == selectedSessionId ? .isSelected : [])
