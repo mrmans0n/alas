@@ -114,7 +114,7 @@ struct ACPMCPPromptPreambleTests {
 
     @Test(
         "computer guidance appears only where the session has computer tools",
-        arguments: [ACPMCPPreambleMode.mcp, .cli(serverAvailability: .noServers)]
+        arguments: [ACPMCPPreambleMode.mcp, .cli(serverAvailability: .noServers), .builtInViaCLI]
     )
     func computerGuidanceFollowsAvailability(mode: ACPMCPPreambleMode) throws {
         let full = try #require(ACPMCPPromptPreamble.text(
@@ -122,7 +122,7 @@ struct ACPMCPPromptPreambleTests {
         #expect(full.contains("alas computer"))
         switch mode {
         case .mcp: for phrase in Self.computerTurnGuidance { #expect(full.contains(phrase)) }
-        case .cli: for phrase in Self.computerCLIGuidance { #expect(full.contains(phrase)) }
+        case .cli, .builtInViaCLI: for phrase in Self.computerCLIGuidance { #expect(full.contains(phrase)) }
         }
         let checkout = try #require(ACPMCPPromptPreamble.text(
             builtInTools: .full, isDelegated: false, userServerNames: [], mode: mode, computerUseAvailable: false))
@@ -192,7 +192,7 @@ struct ACPMCPPromptPreambleTests {
 
     @Test(
         "a child delegated from another machine reports with its final message and is not offered removed tools",
-        arguments: [ACPMCPPreambleMode.mcp, .cli(serverAvailability: .noServers)]
+        arguments: [ACPMCPPreambleMode.mcp, .cli(serverAvailability: .noServers), .builtInViaCLI]
     )
     func peerChildPreambleSaysFinalMessageIsTheReport(mode: ACPMCPPreambleMode) throws {
         let text = try #require(ACPMCPPromptPreamble.text(
@@ -213,7 +213,7 @@ struct ACPMCPPromptPreambleTests {
 
     @Test(
         "root preamble mentions peers only when one can be used",
-        arguments: [ACPMCPPreambleMode.mcp, .cli(serverAvailability: .noServers)]
+        arguments: [ACPMCPPreambleMode.mcp, .cli(serverAvailability: .noServers), .builtInViaCLI]
     )
     func rootPreambleMentionsPeersOnlyWhenOneCanBeUsed(mode: ACPMCPPreambleMode) throws {
         let none = try #require(ACPMCPPromptPreamble.text(
@@ -231,7 +231,7 @@ struct ACPMCPPromptPreambleTests {
 
     @Test(
         "delegated preamble never mentions peers",
-        arguments: [ACPMCPPreambleMode.mcp, .cli(serverAvailability: .noServers)], [false, true]
+        arguments: [ACPMCPPreambleMode.mcp, .cli(serverAvailability: .noServers), .builtInViaCLI], [false, true]
     )
     func delegatedPreambleNeverMentionsPeers(mode: ACPMCPPreambleMode, peerChild: Bool) throws {
         let text = try #require(ACPMCPPromptPreamble.text(
@@ -375,6 +375,18 @@ struct ACPMCPPromptPreambleTests {
         #expect(text.contains("do not use any other messaging or agent tool"))
         #expect(!text.contains("alas session new"))
         #expect(text.contains("delegated by a parent session"))
+    }
+
+    @Test("a built-in server blocked by the agent's policy is replaced by the CLI; other servers stay MCP tools")
+    func builtInBlockedByPolicyUsesTheCLI() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInTools: .full, isDelegated: false, userServerNames: ["linear"], mode: .builtInViaCLI))
+        #expect(text.contains("MCP policy blocks Alas's built-in MCP server"))
+        #expect(text.contains("alas tool call"))
+        #expect(!text.contains("MCP server \"alas\""))
+        #expect(text.contains("Additional MCP servers attached: linear."))
+        #expect(!text.contains("pi-mcp-adapter"))
+        #expect(text.contains("tool search"))
     }
 
     @Test("cli mode user servers depend on adapter server availability")

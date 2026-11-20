@@ -1,0 +1,31 @@
+# Alas delegation
+
+Alas can start child agent sessions that work in parallel and report back to
+this session.
+
+- `alas agent list [--worktree <name-or-branch>] [--peer <mac>]` lists the
+  agents you can delegate to, with their models. Only agents with
+  `available: true` can start.
+- `alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <level>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]] [--peer <mac> [--project <id-or-name>]]`
+  starts a child. The prompt must stand on its own: the child sees nothing of
+  this conversation. Give each child its own worktree when children edit
+  files in parallel.
+- `alas session list` shows this session with its parent or children.
+- `alas session send <session-id> <prompt>` queues a message for a direct
+  parent or child.
+- `alas session read <session-id> [--offset <n>] [--limit <n>] [--max-chars <n>]`
+  pages through a parent's, child's or fork's transcript;
+  `alas session search <query>` searches them.
+- `alas session wait <session-id>... [--timeout-ms <n>]` blocks until the
+  children settle or the timeout passes (at most 20 seconds per call; call
+  again while `timed_out` is true).
+- `alas session interrupt <session-id>` stops a child's running turn.
+
+When a child finishes without reporting, fails, or is blocked on a
+permission or question, this session is told; there is no need to poll. Only
+the user can answer a blocked child: reach them with `alas notify`.
+
+A delegated session cannot start children of its own. It reports to its
+parent only with `alas session send "$ALAS_PARENT_SESSION_ID" <prompt>`. A
+child started from another Mac cannot message its parent at all: its final
+message is its report.

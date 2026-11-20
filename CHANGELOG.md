@@ -6,6 +6,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- When Codex's managed MCP policy blocks the Alas MCP server, point the session at the `alas` CLI instead of tools that never load, and remember the block for the agent's next sessions.
+- Install Alas agent skills from Settings > Agents, or with `alas skill install`: a routing `alas` skill and skills for reviews, delegation, previews, computer use and devices, which teach any agent to drive Alas with the CLI. `alas skill guide` prints the same guides.
+
 ## [0.24.5] - 2026-11-20
 
 ### ✨ Features

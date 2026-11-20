@@ -143,6 +143,15 @@ public final class ACPSessionManager: ChangeTracking {
     /// built-in server. A restart that adopts the same agent again (its broker
     /// would not close) must not loop; the next live startup clears the entry.
     private var builtInMCPOutdatedAgentRestarts: Set<ACPSession.ID> = []
+    /// Where an agent's MCP policy blocks the built-in server, by agent id and
+    /// `BuiltInAlasMCP.policyIdentity`: the block's source. The agent's next
+    /// sessions start with the CLI preamble instead of waiting for the probe;
+    /// a probe that no longer reports the block clears the entry.
+    private var builtInMCPPolicyBlocks: [String: String] = [:]
+    /// An unsent MCP-mode preamble and its CLI-mode twin, kept until the
+    /// policy probe answers, so a block found after the preamble was built can
+    /// still point the agent at the `alas` CLI.
+    private var blockedBuiltInPreambles: [ACPSession.ID: (mcp: String, cli: String)] = [:]
     /// Invoked once a session has loaded, and again when the agent updates
     /// its models or config options, with the normalized chip state. Feeds
     /// `ACPAgentModelCatalog` so a session configured before it exists can
@@ -3328,6 +3337,7 @@ public final class ACPSessionManager: ChangeTracking {
         onSessionEnded?(id)
         builtInMCPSessionState.forget(sessionId: id)
         builtInMCPOutdatedAgentRestarts.remove(id)
+        blockedBuiltInPreambles[id] = nil
         cancelAutoReconnect(sessionId: id)
         scheduledReconnectTasks.removeValue(forKey: id)?.task.cancel()
         cancelPendingDraftWrite(for: id)
@@ -3722,6 +3732,20 @@ public final class ACPSessionManager: ChangeTracking {
                 fence: fence
             )
         }
+    }
+
+    /// Once the agent's policy turns out to block the built-in server, swaps
+    /// a still-unsent MCP-mode preamble for its CLI-mode twin, so the agent
+    /// drives Alas with the `alas` CLI instead of searching for tools that
+    /// never load.
+    private func useCLIPreambleForBlockedBuiltIn(sessionId: ACPSession.ID, session: ACPSession) {
+        guard let preambles = blockedBuiltInPreambles.removeValue(forKey: sessionId),
+              !session.mcpPreambleSent,
+              session.pendingMCPPreamble == preambles.mcp,
+              isWriter(for: sessionId)
+        else { return }
+        session.pendingMCPPreamble = preambles.cli
+        persistMCPPreamble(sessionId: sessionId, pendingText: preambles.cli, sent: false)
     }
 
     private func persistHelperProcOffsets(
@@ -7626,21 +7650,32 @@ extension ACPSessionManager {
             session.builtInMCPPolicyBlock = nil
             // Codex drops a server its managed requirements do not allow
             // without connecting to it or reporting it over ACP, so ask its
-            // CLI instead of waiting for a hello that cannot come.
+            // CLI instead of waiting for a hello that cannot come. A block
+            // an earlier session of this agent found applies at once, so the
+            // preamble built below already points at the `alas` CLI.
             if shouldTrackBuiltInRegistration, remoteHost == nil,
                let server = builtInMCP?.server, let builtInMCPPolicyProbe {
                 let cwd = worktreePath
+                let policyKey = session.agentId + "\u{0}" + BuiltInAlasMCP.policyIdentity(of: server)
+                session.builtInMCPPolicyBlock = builtInMCPPolicyBlocks[policyKey]
                 Task { @MainActor [weak self, weak session] in
-                    guard let source = await builtInMCPPolicyProbe(agentLaunchSpec, server, cwd),
-                          let self, let session,
-                          self.mcpRegistrationAttachEpoch[sessionId] == mcpRegistrationEpoch,
-                          session.builtInMCPRegistration != .registered
-                    else { return }
+                    let source = await builtInMCPPolicyProbe(agentLaunchSpec, server, cwd)
+                    guard let self else { return }
+                    self.builtInMCPPolicyBlocks[policyKey] = source
+                    guard let session, self.mcpRegistrationAttachEpoch[sessionId] == mcpRegistrationEpoch else { return }
+                    // A remembered block the probe no longer confirms is gone.
+                    guard let source else {
+                        session.builtInMCPPolicyBlock = nil
+                        self.blockedBuiltInPreambles[sessionId] = nil
+                        return
+                    }
+                    guard session.builtInMCPRegistration != .registered else { return }
                     session.builtInMCPPolicyBlock = source
                     session.builtInMCPRegistration = .notRegistered
                     mcpRegistrationLogger.notice(
                         "blocked by agent policy session=\(sessionId, privacy: .public) epoch=\(mcpRegistrationEpoch) name=\(server.name, privacy: .public) source=\(source, privacy: .public)"
                     )
+                    self.useCLIPreambleForBlockedBuiltIn(sessionId: sessionId, session: session)
                 }
             }
             var plannedWireServers = mcpPlan.wireServers
@@ -8561,7 +8596,9 @@ extension ACPSessionManager {
                     userServerNames = wireMCPServers.map(\.name)
                         .filter { $0 != builtInMCP?.server.name }
                         .filter { !(ggMCP != nil && $0 == GGMCPInjection.serverName) }
-                    preambleMode = .mcp
+                    // The agent's policy blocks the built-in server: its tools
+                    // come through the CLI, the other servers still attach.
+                    preambleMode = session.builtInMCPPolicyBlock != nil && cliEnvActive ? .builtInViaCLI : .mcp
                 }
                 let ggSignal = ggPreambleProvider?(worktreePath) ?? GGPreambleSignal.none
                 let ggStackContext: GGPreambleStackContext? = {
@@ -8573,32 +8610,46 @@ extension ACPSessionManager {
                         return .init(stackName: name, entryCount: entryCount, ggMCPAttached: ggMCP != nil)
                     }
                 }()
-                let preamble = ACPMCPPromptPreamble.text(
-                    builtInTools: preambleMode == .mcp
-                        ? builtInMCP?.toolScope
-                        : (cliEnvActive ? .full : nil),
-                    isDelegated: preambleMode == .mcp
-                        ? (builtInMCP?.isDelegated == true)
-                        : (cliParentSessionId != nil),
-                    userServerNames: userServerNames,
-                    builtInServerName: builtInMCP?.server.name ?? BuiltInAlasMCP.serverName,
-                    mode: preambleMode,
-                    ggStack: ggStackContext,
-                    issue: issuePreambleProvider?(worktreeId),
-                    nativeSubagentsDisabled: nativeSubagentsDisabled,
-                    nativeDelegationMechanism: ACPNativeDelegationSupport.resolve(agentID: session.agentId).mechanism,
-                    computerUseAvailable: computerUseAvailable,
-                    deviceToolsAvailable: deviceToolsAvailable(),
-                    isPeerChild: preambleMode == .mcp
-                        ? (builtInMCP?.isPeerChild == true)
-                        : (cliParentSessionId.flatMap(ACPPeerParent.serverId(from:)) != nil),
-                    delegationPeerNames: delegationPeerNamesProvider(),
-                    hiddenToolGroups: preambleMode == .mcp ? (builtInMCP?.hiddenToolGroups ?? []) : []
-                )
+                let issue = issuePreambleProvider?(worktreeId)
+                let delegationMechanism = ACPNativeDelegationSupport.resolve(agentID: session.agentId).mechanism
+                let devicesAvailable = deviceToolsAvailable()
+                let peerNames = delegationPeerNamesProvider()
+                func preambleText(_ mode: ACPMCPPreambleMode) -> String? {
+                    ACPMCPPromptPreamble.text(
+                        builtInTools: mode == .mcp
+                            ? builtInMCP?.toolScope
+                            : (cliEnvActive ? .full : nil),
+                        isDelegated: mode == .mcp
+                            ? (builtInMCP?.isDelegated == true)
+                            : (cliParentSessionId != nil),
+                        userServerNames: userServerNames,
+                        builtInServerName: builtInMCP?.server.name ?? BuiltInAlasMCP.serverName,
+                        mode: mode,
+                        ggStack: ggStackContext,
+                        issue: issue,
+                        nativeSubagentsDisabled: nativeSubagentsDisabled,
+                        nativeDelegationMechanism: delegationMechanism,
+                        computerUseAvailable: computerUseAvailable,
+                        deviceToolsAvailable: devicesAvailable,
+                        isPeerChild: mode == .mcp
+                            ? (builtInMCP?.isPeerChild == true)
+                            : (cliParentSessionId.flatMap(ACPPeerParent.serverId(from:)) != nil),
+                        delegationPeerNames: peerNames,
+                        hiddenToolGroups: mode == .mcp ? (builtInMCP?.hiddenToolGroups ?? []) : []
+                    )
+                }
+                let preamble = preambleText(preambleMode)
                 if isWriter(for: sessionId) {
                     session.pendingMCPPreamble = preamble
                     session.mcpPreambleSent = false
                     persistMCPPreamble(sessionId: sessionId, pendingText: preamble, sent: false)
+                }
+                // The policy probe may still find a block; keep the CLI twin
+                // until it answers (`useCLIPreambleForBlockedBuiltIn`).
+                blockedBuiltInPreambles[sessionId] = nil
+                if preambleMode == .mcp, shouldTrackBuiltInRegistration, remoteHost == nil, cliEnvActive,
+                   let preamble, let cli = preambleText(.builtInViaCLI) {
+                    blockedBuiltInPreambles[sessionId] = (mcp: preamble, cli: cli)
                 }
             }
             // Abort the commit if we were taken over OR the manager was disposed

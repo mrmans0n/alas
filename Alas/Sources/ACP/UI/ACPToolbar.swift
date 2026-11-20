@@ -60,7 +60,8 @@ struct ACPToolbar: View {
                             name: name
                         )
                     }
-                }
+                },
+                skillsState: state
             )
             ACPRecoveryPill(session: session)
             ACPGoalControl(session: session, onDraftChange: { objective in

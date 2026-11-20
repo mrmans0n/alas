@@ -259,6 +259,15 @@ struct BuiltInAlasMCPTests {
         #expect(BuiltInAlasMCP.agentFingerprint(of: otherSocket) != BuiltInAlasMCP.agentFingerprint(of: plain))
     }
 
+    @Test("a policy identity matches every session of the same server, not another command")
+    func policyIdentityIgnoresTheSession() throws {
+        let first = try #require(make(sessionId: "acp-1")?.server)
+        let second = try #require(make(socketPath: "/tmp/alas-501/pid-43", sessionId: "acp-2")?.server)
+        let otherBinary = try #require(make(binaryPath: "/dev/alas")?.server)
+        #expect(BuiltInAlasMCP.policyIdentity(of: first) == BuiltInAlasMCP.policyIdentity(of: second))
+        #expect(BuiltInAlasMCP.policyIdentity(of: first) != BuiltInAlasMCP.policyIdentity(of: otherBinary))
+    }
+
     @Test("a stdio entry carries the CLI build when it has one")
     func stdioEntryCarriesCLIBuild() throws {
         guard case let .stdio(_, _, _, env) = try #require(make(cliBuild: "abc123")?.server),

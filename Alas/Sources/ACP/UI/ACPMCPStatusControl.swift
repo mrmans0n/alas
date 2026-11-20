@@ -13,6 +13,8 @@ struct ACPMCPStatusControl: View {
     /// Enable/disable/approve affordance for repo-defined server rows; nil rows
     /// (app-level or not-enabled repo servers) render no control.
     var onToggleRepoServer: ((String, ACPMCPStatusState.RepoToggle) -> Void)? = nil
+    /// Offers the Alas agent skills when the agent's policy blocks the server.
+    var skillsState: AppState? = nil
     @Environment(\.theme) private var theme
     @State private var popoverOpen = false
     @State private var hovering = false
@@ -73,7 +75,8 @@ struct ACPMCPStatusControl: View {
                     onInstallPiMCPAdapter: onInstallPiMCPAdapter,
                     onSwitchToHTTP: onSwitchToHTTP,
                     onReconnect: onReconnect,
-                    onToggleRepoServer: onToggleRepoServer
+                    onToggleRepoServer: onToggleRepoServer,
+                    skillsState: skillsState
                 )
             }
         }
@@ -102,6 +105,7 @@ private struct ACPMCPStatusPopover: View {
     /// Enable/disable/approve affordance for repo-defined server rows; nil rows
     /// (app-level or not-enabled repo servers) render no control.
     var onToggleRepoServer: ((String, ACPMCPStatusState.RepoToggle) -> Void)? = nil
+    var skillsState: AppState? = nil
     @Environment(\.theme) private var theme
     @State private var installState: InstallState = .idle
 
@@ -219,6 +223,12 @@ private struct ACPMCPStatusPopover: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            if case .blockedByAgentPolicy = status.builtInWarning, let skillsState {
+                AlasSkillsControl(state: skillsState)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.vertical, scale.space[2])
+            }
+
             if status.isStale || status.hasBuiltInWarning, let onReconnect {
                 AlasButton(title: "Reconnect session", icon: "arrow.clockwise", style: .normal) {
                     onReconnect()
@@ -256,9 +266,10 @@ private struct ACPMCPStatusPopover: View {
         case .httpUnsupported:
             return "This agent does not advertise HTTP MCP support."
         case .blockedByAgentPolicy(let source):
-            return "The agent's managed policy blocks this server (\(source)). "
-                + "Such policies allow MCP servers by name and by URL or command. "
-                + "Set an allowed server name for this agent in Settings > Agents, then reconnect."
+            return "The agent's managed policy blocks this server (\(source)), so this session drives Alas "
+                + "through the alas CLI instead. Such policies allow MCP servers by name and by URL or command: "
+                + "set an allowed server name for this agent in Settings > Agents and reconnect, or install the "
+                + "Alas skills so agents know the CLI."
         }
     }
 

@@ -1324,6 +1324,7 @@
 		AC3988E601103A1001CD5FAD /* VMGuestPatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBF265AB1A28E9ED5920F831 /* VMGuestPatcher.swift */; };
 		AC47E67A657F67FF9374C654 /* DiffTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F15E14D45EC3926768DE5BD1 /* DiffTabView.swift */; };
 		AC905947E88C7A2BE39D9B00 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA43AA9C8462D579E733B46C /* AppIntents.framework */; };
+		ACA55D1FCAF99F40BD6CB328 /* AlasSkillsControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64498597DBE2ACB5A307273D /* AlasSkillsControl.swift */; };
 		ACB0AD03C9DFD88A431E6BC5 /* OutdatedThreadsDrawer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 699EA14937A07B8DDD57F401 /* OutdatedThreadsDrawer.swift */; };
 		ACD22D2C262833B77006E8BE /* DeleteFailedWorktreeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1944B7BC9FC74CD09D816B6 /* DeleteFailedWorktreeView.swift */; };
 		ACDDE4B18A94164BDFEED06B /* BranchOpsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BAD20759A17B6EFE3AC0C81 /* BranchOpsMenu.swift */; };
@@ -2851,6 +2852,7 @@
 		639B69601924624FFE573EBA /* ACPSessionRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionRecoveryTests.swift; sourceTree = "<group>"; };
 		63A0DCCA27C8B422C52E51AE /* AlasComputerUseKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = AlasComputerUseKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		63B8A99E1627EE35CADD3681 /* GGFollowEntryModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGFollowEntryModelTests.swift; sourceTree = "<group>"; };
+		64498597DBE2ACB5A307273D /* AlasSkillsControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasSkillsControl.swift; sourceTree = "<group>"; };
 		649D5CB480CE056B1C4457D6 /* GGInboxTabsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGInboxTabsTests.swift; sourceTree = "<group>"; };
 		64B653CD6D8A598C2A12E34A /* RemotePeerManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePeerManagerTests.swift; sourceTree = "<group>"; };
 		64C593F9F14DD962C9822C64 /* ReviewSessionTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewSessionTabView.swift; sourceTree = "<group>"; };
@@ -5624,6 +5626,7 @@
 				94B123596E047E4CE0FAFE3E /* AdvancedSettingsVisibility.swift */,
 				C9E480C05A2AA6FF8863B7C5 /* AgentEditView.swift */,
 				5BB6172AE118D2F9A40FD534 /* AgentsPane.swift */,
+				64498597DBE2ACB5A307273D /* AlasSkillsControl.swift */,
 				4B450918CC98255AD9170586 /* AppearancePane.swift */,
 				EB1E14CFAC880D31CE8FBE8F /* ChangesPane.swift */,
 				F2AC43D07BE4012DB52A2D1B /* ChatFontCatalog.swift */,
@@ -7982,6 +7985,7 @@
 				6B2B0731DBCD5D1BE353FFCB /* AlasGhostty.SurfaceView.swift in Sources */,
 				2DB9FB7D9A00E93375624914 /* AlasGhostty.swift in Sources */,
 				BF776A9CE2409594D67DE4BF /* AlasSegmentedControl.swift in Sources */,
+				ACA55D1FCAF99F40BD6CB328 /* AlasSkillsControl.swift in Sources */,
 				214A48509F96D0B6613A1D1D /* AlasSlider.swift in Sources */,
 				F078F588859E4B2E906D704A /* AlasToggle.swift in Sources */,
 				9E376B8E27255908BEF1DF1C /* AndroidBackend.swift in Sources */,

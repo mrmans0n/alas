@@ -13952,6 +13952,37 @@ final class AppState {
         }
     }
 
+    /// Whether the agent skills `alas skill install` writes are in place, as
+    /// the bundled CLI reports them; `.unknown` when it cannot say.
+    func alasSkillsState() async -> AlasSkillsState {
+        guard let output = await runAlasSkillCommand(["status", "--json"]),
+              let reply = try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
+              let raw = reply["state"] as? String
+        else { return .unknown }
+        return AlasSkillsState(rawValue: raw) ?? .unknown
+    }
+
+    /// Installs (or updates) the Alas agent skills. True when the CLI exits 0.
+    func installAlasSkills() async -> Bool {
+        await runAlasSkillCommand(["install"]) != nil
+    }
+
+    /// Removes the Alas agent skills, leaving anyone else's alone.
+    func removeAlasSkills() async -> Bool {
+        await runAlasSkillCommand(["remove"]) != nil
+    }
+
+    /// Runs `alas skill …` with the bundled CLI: its output, or nil when it
+    /// is missing or fails.
+    private func runAlasSkillCommand(_ args: [String]) async -> String? {
+        guard let binary = (try? TerminalCLIInjection.installExecutables())?
+            .appendingPathComponent(TerminalCLIInjection.executableName).path,
+              let result = try? await Process.run(binary, args: ["skill"] + args, timeout: 10),
+              result.exitCode == 0
+        else { return nil }
+        return result.stdout
+    }
+
     /// Release the ACP session manager for the given worktree id.
     /// Called from `cleanupWorktreeState` when a worktree is
     /// removed/archived. Stops every attached runner (which cancels

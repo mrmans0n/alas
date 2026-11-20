@@ -80,6 +80,10 @@ struct AgentsPane: View {
                                 desc: "Give chat agents an MCP server with Alas actions: open files, manage worktrees, and open reviews. Applies to newly connected sessions.") {
                         AlasToggle(on: state.bind(\.harness.exposeAlasMCP))
                     }
+                    SettingsRow(name: "Alas agent skills",
+                                desc: "Skills that teach agents to drive Alas with the alas CLI: one that routes, and one each for reviews, delegation, previews, computer use and devices. Install them when an agent's MCP policy blocks or caps the Alas MCP server. They go to ~/.agents/skills, and to ~/.claude/skills when Claude Code is set up.") {
+                        AlasSkillsControl(state: state)
+                    }
                     SettingsRow(name: "Resume automatically after usage limits",
                                 desc: "When a provider usage limit stops a session, continue it after the limit resets. When the reset time is unknown, check again periodically for up to a day.") {
                         AlasToggle(on: state.bind(\.harness.acpAutoResumeAfterUsageLimit))
