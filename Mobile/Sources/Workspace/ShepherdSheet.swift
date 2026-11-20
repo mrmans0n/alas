@@ -274,7 +274,7 @@ private struct StackEntriesSection: View {
 
     var body: some View {
         Section("Entries") {
-            ForEach(entries, id: \.position) { entry in
+            ForEach(entries, id: \.number) { entry in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Image(systemName: ShepherdPill.badgeSymbol(entry.badge))
                         .foregroundStyle(ShepherdPill.color(entry.badge))
