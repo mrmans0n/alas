@@ -70,4 +70,3 @@ struct GitLabGlyph: Shape {
         return path
     }
 }
-

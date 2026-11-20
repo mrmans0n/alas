@@ -94,4 +94,3 @@ public struct RemoteCodeHost: Codable, Equatable, Hashable, Sendable {
         self.webURL = webURL
     }
 }
-
