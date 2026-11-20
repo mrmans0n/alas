@@ -30,6 +30,23 @@ public struct RemoteShepherd: Decodable, Equatable, Sendable {
         self.detail = detail
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case badge, number, tooltip, resumable, phaseLine, autoFix, autoMerge, detail
+    }
+
+    /// A `detail` this phone can't read is dropped rather than losing the shepherd.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        badge = try c.decode(String.self, forKey: .badge)
+        number = try c.decodeIfPresent(String.self, forKey: .number)
+        tooltip = try c.decode(String.self, forKey: .tooltip)
+        resumable = try c.decodeIfPresent(Bool.self, forKey: .resumable)
+        phaseLine = try c.decodeIfPresent(String.self, forKey: .phaseLine)
+        autoFix = try c.decodeIfPresent(Bool.self, forKey: .autoFix)
+        autoMerge = try c.decodeIfPresent(Bool.self, forKey: .autoMerge)
+        detail = (try? c.decodeIfPresent(Detail.self, forKey: .detail)) ?? nil
+    }
+
     /// `HostSessionShepherd.Detail`.
     public struct Detail: Decodable, Equatable, Sendable {
         public var title: String?

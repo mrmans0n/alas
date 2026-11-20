@@ -293,6 +293,12 @@ import Testing
         #expect(RemoteShepherdRequest.listing(of: "a", replying: 5, in: reply) == RemoteShepherdListing(shepherd: nil, shipsStack: true))
         #expect(RemoteShepherdRequest.listing(of: "c", replying: 5, in: reply) == nil)
         #expect(RemoteShepherdRequest.listing(of: "b", replying: 6, in: reply) == nil)
+
+        let garbled = Data(#"{"response":{"id":9,"result":{"sessions":{"sessions":[{"id":"g","shipsStack":true,"shepherd":{"badge":"fixing","tooltip":"t","detail":{"provider":3}}}]}}}}"#.utf8)
+        let kept = try #require(RemoteShepherdRequest.listing(of: "g", replying: 9, in: OpaqueHostMessage(json: garbled)))
+        #expect(kept.shepherd?.badge == "fixing" && kept.shepherd?.detail == nil)
+        let host = try JSONDecoder().decode(HostSessionShepherd.self, from: Data(#"{"badge":"fixing","tooltip":"t","detail":{"provider":3}}"#.utf8))
+        #expect(host.badge == "fixing" && host.detail == nil)
     }
 
     @Test(arguments: RemoteWireSamples.serverMessages)
