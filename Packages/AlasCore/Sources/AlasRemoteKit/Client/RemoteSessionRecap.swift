@@ -30,7 +30,15 @@ public enum RemoteSessionRecap {
             }
         }
         guard !turns.isEmpty else { return nil }
-        if let plan, !plan.isEmpty { header.append("Plan:\n" + plan.joined(separator: "\n")) }
+        if let plan, !plan.isEmpty {
+            // At most a third of the budget, so a long plan leaves room for the conversation.
+            var room = byteLimit / 3
+            let fitting = plan.prefix { item in
+                room -= item.utf8.count + 1
+                return room >= 0
+            }
+            header.append("Plan:\n" + (fitting + (fitting.count < plan.count ? ["- …"] : [])).joined(separator: "\n"))
+        }
         var budget = byteLimit - header.joined(separator: "\n\n").utf8.count
         var kept: [String] = []
         for turn in turns.reversed() {

@@ -31,7 +31,7 @@ struct SessionRecapSheet: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         .task {
-            let prompt = RemoteSessionRecap.prompt(rows: session.items.map(\.row), goal: nil)
+            let prompt = RemoteSessionRecap.prompt(rows: session.transcriptRows, goal: nil)
             if let prompt, let found = await SessionRecapModel.recap(prompt) {
                 recap = .loaded(found)
             } else {
