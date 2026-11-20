@@ -205,8 +205,24 @@ struct ComposerTextView: UIViewRepresentable {
         private func replace(_ range: NSRange, in view: UITextView, with segments: [RemoteDraftSegment]) {
             let replacement = NSMutableAttributedString()
             for segment in segments { replacement.append(render(segment)) }
+            replace(range, in: view, with: replacement,
+                    selecting: NSRange(location: range.location + replacement.length, length: 0))
+        }
+
+        /// Edits the storage directly, which the text view's own undo doesn't
+        /// see, so the inverse is registered here; undoing registers the redo.
+        private func replace(_ range: NSRange, in view: UITextView, with replacement: NSAttributedString, selecting: NSRange) {
+            let previous = view.textStorage.attributedSubstring(from: range)
+            let selectionBefore = view.selectedRange
             view.textStorage.replaceCharacters(in: range, with: replacement)
-            view.selectedRange = NSRange(location: range.location + replacement.length, length: 0)
+            view.undoManager?.registerUndo(withTarget: self) { [weak view] coordinator in
+                guard let view else { return }
+                MainActor.assumeIsolated {
+                    coordinator.replace(NSRange(location: range.location, length: replacement.length), in: view,
+                                        with: previous, selecting: selectionBefore)
+                }
+            }
+            view.selectedRange = selecting
             view.typingAttributes = ComposerTextView.typingAttributes
             publish(view)
         }
