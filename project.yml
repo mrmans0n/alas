@@ -75,6 +75,8 @@ targets:
         buildPhase: resources
       - path: Alas/Resources/MCPLogo-LICENSE.txt
         buildPhase: resources
+      - path: Alas/Resources/AppLogos-LICENSE.txt
+        buildPhase: resources
       - path: Alas/Resources/LocalTextModelLicenses.txt
         buildPhase: resources
       - path: Alas/Resources/LocalTextModelManifest.json

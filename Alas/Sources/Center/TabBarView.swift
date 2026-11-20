@@ -59,6 +59,7 @@ struct TabBarView: View {
     let titleLookup: (TabID) -> String?
     let transcriptLookup: (TabID) -> ACPTranscript?
     var acpAgentLookup: (TabID) -> AgentDefinition? = { _ in nil }
+    var terminalPresenceLookup: (TabID) -> TerminalTabPresence? = { _ in nil }
     var pluginCommands: [PluginCommandItem] = []
     var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
     /// Plugin commands for an agent session tab's context menu, run with its session id.
@@ -144,6 +145,7 @@ struct TabBarView: View {
             dirtyLookup: { dirtyLookup(tab.id) },
             transcript: transcriptLookup(tab.id),
             acpAgent: acpAgentLookup(tab.id),
+            terminalPresence: terminalPresenceLookup(tab.id),
             onActivate: { onActivate(tab.id) },
             onClose: { onClose(tab.id) }
         )
@@ -358,6 +360,10 @@ struct TabItem {
     var activityState: ActivityState? = nil
     /// Logo drawn beside the icon of an agent session tab.
     var agent: AgentDefinition? = nil
+    /// The program running in a terminal tab, drawn beside its icon.
+    var terminalBadge: TerminalTabPresence.Badge? = nil
+    /// Dimmed text after the title, such as the working directory.
+    var subtitle: String? = nil
 }
 
 /// One tab in a `TabStrip`. `trailing` holds per-kind extras such as the
@@ -382,14 +388,24 @@ struct TabItemView<Trailing: View>: View {
                 if let agent = item.agent {
                     AgentLogoView(agent: agent, size: 12)
                         .frame(width: 12, height: 12)
+                } else if let badge = item.terminalBadge {
+                    TerminalTabBadgeView(badge: badge, size: 12)
                 }
             }
-            Text(item.title)
-                .font(scale.metaFont)
-                .foregroundColor(active ? theme.color("fg") : theme.color("fg-dim"))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: Self.maxTitleWidth, alignment: .leading)
+            HStack(spacing: scale.space[1]) {
+                Text(item.title)
+                    .foregroundColor(active ? theme.color("fg") : theme.color("fg-dim"))
+                    .layoutPriority(1)
+                if let subtitle = item.subtitle {
+                    Text(subtitle)
+                        .foregroundColor(theme.color("fg-faint"))
+                        .truncationMode(.head)
+                }
+            }
+            .font(scale.metaFont)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: Self.maxTitleWidth, alignment: .leading)
             trailing
         }
         .padding(.horizontal, scale.space[2])
@@ -434,6 +450,7 @@ struct TabButton: View {
     let dirtyLookup: () -> Bool
     let transcript: ACPTranscript?
     let acpAgent: AgentDefinition?
+    var terminalPresence: TerminalTabPresence? = nil
     let onActivate: () -> Void
     let onClose: () -> Void
     @Environment(\.theme) var theme
@@ -442,10 +459,12 @@ struct TabButton: View {
         var agent: AgentDefinition?
         if case .acpSession = tab { agent = acpAgent }
         return TabItem(
-            title: titleLookup(tab.id) ?? tab.title,
+            title: terminalPresence?.title ?? titleLookup(tab.id) ?? tab.title,
             iconName: tab.iconName,
             activityState: harnessInfo?.state,
-            agent: agent
+            agent: agent,
+            terminalBadge: terminalPresence?.badge,
+            subtitle: terminalPresence?.subtitle
         )
     }
 

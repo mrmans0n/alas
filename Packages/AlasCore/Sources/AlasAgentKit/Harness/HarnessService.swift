@@ -39,6 +39,8 @@ public final class HarnessService {
     public private(set) var activityBySession: [String: HarnessActivityState] = [:]
     public private(set) var harnessBySession: [String: HarnessKind] = [:]
     public private(set) var activeHarnessBySession: [String: HarnessKind] = [:]
+    /// The catalogued non-agent program in each session's foreground.
+    public private(set) var foregroundAppBySession: [String: TerminalApp] = [:]
 
     public var onClickThrough: ((String, String, String) -> Void)?
     public var onContextClickThrough: ((NotificationClickContext) -> Void)?
@@ -113,6 +115,9 @@ public final class HarnessService {
             guard let self else { return }
             self.recordHarnessDetection(sessionId: sid, kind: kind)
         }
+        detector.onAppUpdate = { [weak self] sid, app in
+            self?.recordForegroundApp(sessionId: sid, app: app)
+        }
         detector.start()
 
         notifications.setup { [weak self] context in
@@ -158,6 +163,12 @@ public final class HarnessService {
                 activityBySession.removeValue(forKey: sessionId)
             }
         }
+    }
+
+    public func recordForegroundApp(sessionId: String, app: TerminalApp?) {
+        // Polled every second: write only on change so observers stay quiet.
+        guard foregroundAppBySession[sessionId] != app else { return }
+        foregroundAppBySession[sessionId] = app
     }
 
     public func handleSocketEvent(
@@ -468,6 +479,7 @@ public final class HarnessService {
         let previous = activityBySession[sessionId]
         harnessBySession.removeValue(forKey: sessionId)
         activeHarnessBySession.removeValue(forKey: sessionId)
+        foregroundAppBySession.removeValue(forKey: sessionId)
         activityBySession.removeValue(forKey: sessionId)
         cursorIdleDebouncers.removeValue(forKey: sessionId)?.cancel()
         pendingCursorIdleEvents.removeValue(forKey: sessionId)

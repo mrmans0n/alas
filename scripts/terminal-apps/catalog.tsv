@@ -1,0 +1,210 @@
+# Terminal apps badged in tab bars. Regenerate with scripts/terminal-apps/generate.py.
+# id	display name	process names (comma separated)	glyph	tint (RRGGBB)
+#
+# Glyphs: a Simple Icons slug (tint defaults to its brand colour); file:<name> for a
+# monochrome mark in extra/<name>.svg; logo:<name> for a full-colour logo in
+# extra/<name>.svg, drawn without a tile; or sf:<symbol>. Record the source and
+# licence of every extra/ file in Alas/Resources/AppLogos-LICENSE.txt.
+# Editors
+neovim	Neovim	nvim	neovim
+vim	Vim	vim,vi,vimdiff,view	vim
+emacs	Emacs	emacs,emacsclient	gnuemacs
+helix	Helix	hx,helix	helix
+zed	Zed	zed	zedindustries
+vscode	VS Code	code,code-insiders	file:vscode	007ACC
+sublime	Sublime Text	subl	sublimetext
+editor	Editor	nano,micro,pico,ed,kak	sf:pencil	6E7781
+# Version control
+git	Git	git	git
+git-changes	Git Changes	lazygit,gitui,tig,gitu	sf:arrow.triangle.branch	34A853
+github	GitHub CLI	gh	github
+gitlab	GitLab CLI	glab	gitlab
+gitea	Gitea	tea	gitea
+mercurial	Mercurial	hg	mercurial
+jujutsu	Jujutsu	jj,lazyjj	logo:jujutsu	4F9FDF
+# Languages and runtimes
+node	Node.js	node	nodedotjs
+deno	Deno	deno	deno
+bun	Bun	bun,bunx	bun
+typescript	TypeScript	tsc,tsx,ts-node,tsserver	typescript
+python	Python	python,ipython,bpython,ptpython	python
+ruby	Ruby	ruby,irb,pry	ruby
+rust	Cargo	cargo,rustc,rustup,rust-analyzer	rust
+go	Go	go,gopls,dlv	go
+swift	Swift	swift,swiftc,swift-frontend,sourcekit-lsp	swift
+kotlin	Kotlin	kotlin,kotlinc,ki,kotlin-lsp	kotlin
+java	Java	java,jshell,javac,jbang	openjdk
+scala	Scala	scala,scala-cli,sbt,metals	scala
+clojure	Clojure	clj,clojure,lein,bb	clojure
+elixir	Elixir	elixir,iex,mix	elixir
+erlang	Erlang	erl,rebar3	erlang
+haskell	Haskell	ghc,ghci,stack,cabal,haskell-language-server	haskell
+ocaml	OCaml	ocaml,utop,dune,opam	ocaml
+php	PHP	php,psysh	php
+perl	Perl	perl	perl
+lua	Lua	lua,luajit	lua
+r	R	r,rscript,radian	r
+julia	Julia	julia	julia
+zig	Zig	zig,zls	zig
+dart	Dart	dart	dart
+flutter	Flutter	flutter	flutter
+crystal	Crystal	crystal,shards	crystal
+nim	Nim	nim,nimble	nim
+gleam	Gleam	gleam	gleam
+racket	Racket	racket	racket
+dotnet	.NET	dotnet	dotnet
+llvm	LLVM	clang,clang++,lldb,clangd	llvm
+debugger	Debugger	gdb	sf:ant	B54A4A
+# Build and package tools
+gradle	Gradle	gradle,gradlew	gradle
+maven	Maven	mvn,mvnw	apachemaven
+npm	npm	npm,npx	npm
+pnpm	pnpm	pnpm,pnpx	pnpm
+yarn	Yarn	yarn	yarn
+homebrew	Homebrew	brew	homebrew
+cmake	CMake	cmake,ctest	cmake
+bazel	Bazel	bazel,bazelisk	bazel
+nix	Nix	nix,nix-shell,nix-build,nix-env,darwin-rebuild,nixos-rebuild,home-manager	nixos
+composer	Composer	composer	composer
+rubygems	RubyGems	gem,bundle,bundler	rubygems
+rails	Rails	rails	rubyonrails
+poetry	Poetry	poetry	poetry
+uv	uv	uv,uvx	uv
+pip	pip	pip,pipx	pypi
+conda	Conda	conda,mamba,micromamba	anaconda
+cocoapods	CocoaPods	pod	cocoapods
+fastlane	fastlane	fastlane	fastlane
+xcode	Xcode	xcodebuild,xcrun,simctl,xcodegen,xcbeautify,xcpretty	xcode
+turborepo	Turborepo	turbo	turborepo
+nx	Nx	nx	nx
+build	Build	make,gmake,just,ninja,task,meson,scons	sf:hammer	B7791F
+# Web tooling
+webpack	webpack	webpack,webpack-cli,webpack-dev-server	webpack
+vite	Vite	vite	vite
+esbuild	esbuild	esbuild	esbuild
+rollup	Rollup	rollup	rollupdotjs
+eslint	ESLint	eslint	eslint
+prettier	Prettier	prettier	prettier
+biome	Biome	biome	biome
+jest	Jest	jest	jest
+vitest	Vitest	vitest	vitest
+mocha	Mocha	mocha	mocha
+cypress	Cypress	cypress	cypress
+playwright	Playwright	playwright	file:playwright	2EAD33
+nextjs	Next.js	next	nextdotjs
+nuxt	Nuxt	nuxt,nuxi	nuxt
+astro	Astro	astro	astro
+svelte	Svelte	svelte-kit,sv	svelte
+angular	Angular	ng	angular
+vue	Vue	vue,vue-cli-service	vuedotjs
+remix	Remix	remix	remix
+gatsby	Gatsby	gatsby	gatsby
+expo	Expo	expo	expo
+react-native	React Native	react-native	react
+storybook	Storybook	storybook,start-storybook	storybook
+electron	Electron	electron,electron-forge	electron
+tauri	Tauri	tauri	tauri
+nestjs	NestJS	nest	nestjs
+hugo	Hugo	hugo	hugo
+jekyll	Jekyll	jekyll	jekyll
+nodemon	Nodemon	nodemon	nodemon
+pm2	PM2	pm2	pm2
+prisma	Prisma	prisma	prisma
+drizzle	Drizzle	drizzle-kit	drizzle
+# Python tooling
+pytest	pytest	pytest,py.test	pytest
+ruff	Ruff	ruff	ruff
+jupyter	Jupyter	jupyter,jupyter-lab,jupyter-notebook	jupyter
+django	Django	django-admin,manage	django
+flask	Flask	flask	flask
+fastapi	FastAPI	fastapi,uvicorn	fastapi
+gunicorn	Gunicorn	gunicorn	gunicorn
+celery	Celery	celery	celery
+# Containers, infrastructure, cloud
+docker	Docker	docker,lazydocker,docker-compose,dive,ctop	docker
+podman	Podman	podman,podman-compose	podman
+kubernetes	Kubernetes	kubectl,k9s,kubectx,kubens,stern,kind,minikube,kustomize	kubernetes
+helm	Helm	helm,helmfile	helm
+argo	Argo CD	argocd,argo	argo
+rancher	Rancher	rancher,rdctl	rancher
+terraform	Terraform	terraform,terragrunt	terraform
+opentofu	OpenTofu	tofu	opentofu
+pulumi	Pulumi	pulumi	pulumi
+ansible	Ansible	ansible,ansible-playbook,ansible-galaxy	ansible
+vagrant	Vagrant	vagrant	vagrant
+packer	Packer	packer	packer
+consul	Consul	consul	consul
+vault	Vault	vault	vault
+nomad	Nomad	nomad	nomad
+aws	AWS CLI	aws,sam,cdk	file:aws	232F3E
+azure	Azure CLI	az,azd,func	file:azure	0078D4
+gcloud	Google Cloud	gcloud,gsutil,bq	googlecloud
+cloudflare	Cloudflare	wrangler,cloudflared	cloudflare
+vercel	Vercel	vercel,vc	vercel
+netlify	Netlify	netlify,ntl	netlify
+fly	Fly.io	fly,flyctl	flydotio
+firebase	Firebase	firebase	firebase
+supabase	Supabase	supabase	supabase
+railway	Railway	railway	railway
+digitalocean	DigitalOcean	doctl	digitalocean
+tailscale	Tailscale	tailscale	tailscale
+ngrok	ngrok	ngrok	ngrok
+nginx	nginx	nginx	nginx
+caddy	Caddy	caddy	caddy
+apache	Apache	httpd,apachectl	apache
+jenkins	Jenkins	jenkins	jenkins
+github-actions	act	act	githubactions
+circleci	CircleCI	circleci	circleci
+temporal	Temporal	temporal	temporal
+minio	MinIO	mc-minio,minio	minio
+# Databases and queues
+postgresql	PostgreSQL	psql,pgcli,postgres,pg_dump,pg_restore	postgresql
+mysql	MySQL	mysql,mycli,mysqld,mysqldump	mysql
+mariadb	MariaDB	mariadb	mariadb
+sqlite	SQLite	sqlite,litecli	sqlite
+redis	Redis	redis-cli,redis-server,iredis,valkey-cli	redis
+mongodb	MongoDB	mongosh,mongo,mongod	mongodb
+clickhouse	ClickHouse	clickhouse,clickhouse-client	clickhouse
+duckdb	DuckDB	duckdb	duckdb
+cockroachdb	CockroachDB	cockroach	cockroachlabs
+neo4j	Neo4j	cypher-shell,neo4j	neo4j
+cassandra	Cassandra	cqlsh	apachecassandra
+influxdb	InfluxDB	influx,influxd	influxdb
+elasticsearch	Elasticsearch	elasticsearch	elasticsearch
+kafka	Kafka	kafka-console-consumer,kafka-console-producer,kcat,kafkacat	apachekafka
+rabbitmq	RabbitMQ	rabbitmqctl,rabbitmq-server	rabbitmq
+spark	Spark	spark-shell,pyspark,spark-submit	apachespark
+# AI and media
+ollama	Ollama	ollama	ollama
+huggingface	Hugging Face	huggingface-cli,hf	huggingface
+ffmpeg	FFmpeg	ffmpeg,ffprobe,ffplay	ffmpeg
+yt-dlp	yt-dlp	yt-dlp,youtube-dl	youtube
+mpv	mpv	mpv	mpv
+media	Media	magick,convert,vlc,sox	sf:photo	9C27B0
+# Terminal, network, and system
+tmux	tmux	tmux	tmux
+zellij	Zellij	zellij	logo:zellij	4F9FDF
+multiplexer	Multiplexer	screen	sf:rectangle.split.2x1	5E5CE6
+ssh	SSH	ssh,mosh,mosh-client,autossh,et	sf:network	5B6B7F
+curl	curl	curl	curl
+http	HTTP	http,https,xh,httpie	sf:arrow.up.arrow.down	3D7AB8
+wireshark	Wireshark	tshark,wireshark,termshark	wireshark
+activity	Activity	htop,btop,top,btm,glances,atop,bpytop,gtop	sf:gauge.with.dots.needle.67percent	E8710A
+files	Files	yazi,ranger,nnn,lf,mc,vifm,broot,superfile,spf	sf:folder	1A73E8
+viewer	Viewer	less,more,bat,most,glow	sf:doc.text	6E7781
+manual	Manual	man,tldr	sf:book	8B5E3C
+logs	Logs	tail,lnav,journalctl,log	sf:list.bullet.rectangle	607D8B
+watch	Watch	watch,watchexec,entr	sf:eye	607D8B
+# Mobile
+android	Android	adb,emulator,avdmanager,sdkmanager,scrcpy	android
+# Services and security
+onepassword	1Password	op	1password
+bitwarden	Bitwarden	bw	bitwarden
+stripe	Stripe	stripe	stripe
+shopify	Shopify	shopify	shopify
+sentry	Sentry	sentry-cli	sentry
+grafana	Grafana	grafana,grafana-server	grafana
+prometheus	Prometheus	prometheus,promtool	prometheus
+k6	k6	k6	k6
+snyk	Snyk	snyk	snyk
+sonar	SonarQube	sonar-scanner	sonar
