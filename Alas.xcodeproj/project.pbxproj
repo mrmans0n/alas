@@ -145,6 +145,7 @@
 		128B611E5324A5621897A267 /* ACPVisibleRowsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0582531788CE9D1D49769F6B /* ACPVisibleRowsCache.swift */; };
 		12FD90326DDF6E8BDF2A67B4 /* ACPComposerCodeFenceKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42F1A28F4C52A2FC6B0B4186 /* ACPComposerCodeFenceKeyTests.swift */; };
 		12FE0C703FF59CE4B154F615 /* VMFirstBootSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9700CD6923ABFB917413DA6 /* VMFirstBootSetup.swift */; };
+		132DEBD1D2E36DE9AFD8BA41 /* PermissionGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = C32FC8D85225D0FF03973AF5 /* PermissionGuide.swift */; };
 		133597E7D43CFE746EF4EF2B /* RepoGroupViewLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01675626CE431DD5867636BF /* RepoGroupViewLayoutTests.swift */; };
 		1339BE8F736D53991DDD19CD /* FileSearchBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D68E2007F0370A6C4E7DBC7 /* FileSearchBackend.swift */; };
 		134F7DE151C7728BE1C73F31 /* AppState+PeerConsoles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D1566BDB099224888C7FEF3 /* AppState+PeerConsoles.swift */; };
@@ -3539,6 +3540,7 @@
 		C2CA853E91C240B7B5551859 /* GitServiceStagedTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceStagedTests.swift; sourceTree = "<group>"; };
 		C2D7EA3F2B69C0A8D2F8F8A5 /* ACPPromptCapabilitiesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPromptCapabilitiesTests.swift; sourceTree = "<group>"; };
 		C2E0C7ED63A67D16A79DF4BA /* ReleaseCheckerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseCheckerTests.swift; sourceTree = "<group>"; };
+		C32FC8D85225D0FF03973AF5 /* PermissionGuide.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionGuide.swift; sourceTree = "<group>"; };
 		C333FC7915436F54A251FF67 /* ACPTranscriptRowAccessibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptRowAccessibility.swift; sourceTree = "<group>"; };
 		C33AEF4AA4C36DBC1B912F25 /* MermaidModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidModelsTests.swift; sourceTree = "<group>"; };
 		C33E8F2129F2A32E3C4534CC /* RemoteDeviceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDeviceTests.swift; sourceTree = "<group>"; };
@@ -5641,6 +5643,7 @@
 				0B2F41880B917155F7ADE622 /* MonospaceFontCatalog.swift */,
 				F81444DE5CCE4EA5E968828A /* OnDeviceAIPane.swift */,
 				FE35A47BA74E306A4699B27D /* OpenSessionsSection.swift */,
+				C32FC8D85225D0FF03973AF5 /* PermissionGuide.swift */,
 				01B42244BDE33A69EDE16562 /* PromptEditorBody.swift */,
 				07A17183B064CAB5EB5D5C11 /* ReviewRequestPromptEditorWindow.swift */,
 				6A190D4B29B35C457AA9829F /* SettingsBinding.swift */,
@@ -8406,6 +8409,7 @@
 				449C7E4A63455D01633B791A /* PendingDiscard.swift in Sources */,
 				E3C34254BA474878AEC6683D /* PendingReviewTray.swift in Sources */,
 				DC86127564ACE3337640D0AD /* PendingStashDrop.swift in Sources */,
+				132DEBD1D2E36DE9AFD8BA41 /* PermissionGuide.swift in Sources */,
 				F395848DB5A63DBDED6B2323 /* PlatformServices.swift in Sources */,
 				9B737B25989848466D918EF0 /* PluginCommands.swift in Sources */,
 				0CB7CC70D568B0B35C55A320 /* PluginDecorations.swift in Sources */,
