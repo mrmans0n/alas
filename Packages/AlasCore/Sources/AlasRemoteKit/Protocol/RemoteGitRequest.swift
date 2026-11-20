@@ -9,7 +9,12 @@ public enum RemoteGitChange: Equatable, Sendable {
     case push
     case pull
     case fetch
+    /// The `index`th hunk of `path`'s diff as the phone was shown it: the unstaged diff to stage or
+    /// discard it, the staged one to unstage it.
+    case hunk(path: String, index: Int, header: String, linesHash: String, action: RemoteHunkAction)
 }
+
+public enum RemoteHunkAction: String, Sendable { case stage, unstage, discard }
 
 /// Why the host refused a git action, worded for the user.
 public struct RemoteGitFailure: Error, Equatable, Sendable {
@@ -117,6 +122,20 @@ public enum RemoteGitRequest {
         return .some(try? JSONDecoder().decode(RemotePullRequest.self, from: data))
     }
 
+    /// What the worktree's staged change suggests a commit message from (`HostRequest.commitMessageInput`).
+    public static func commitMessageInput(id: Int, projectID: String, path: String) -> OpaqueHostMessage {
+        envelope(id: id, ["commitMessageInput": ["worktree": ["projectID": projectID, "path": path]]])
+    }
+
+    /// The input in a `commitMessageInput` reply; nil for any other message.
+    public static func commitMessageInput(in message: OpaqueHostMessage) -> CommitMessageSuggestionInput? {
+        guard let object = try? JSONSerialization.jsonObject(with: message.json) as? [String: Any],
+              let result = (object["response"] as? [String: Any])?["result"] as? [String: Any],
+              let raw = (result["commitMessageInput"] as? [String: Any])?["input"],
+              let data = try? JSONSerialization.data(withJSONObject: raw) else { return nil }
+        return try? JSONDecoder().decode(CommitMessageSuggestionInput.self, from: data)
+    }
+
     /// The worktree's run scripts (`HostRequest.listRunScripts`).
     public static func listRunScripts(id: Int, projectID: String, path: String) -> OpaqueHostMessage {
         envelope(id: id, ["listRunScripts": ["worktree": ["projectID": projectID, "path": path]]])
@@ -147,16 +166,14 @@ public enum RemoteGitRequest {
         }
     }
 
-    private static func envelope(id: Int, _ request: [String: Any]) -> OpaqueHostMessage {
+    static func envelope(id: Int, _ request: [String: Any]) -> OpaqueHostMessage {
         let body: [String: Any] = ["version": hostProtocolVersion, "id": id, "request": request]
         return OpaqueHostMessage(json: (try? JSONSerialization.data(withJSONObject: body, options: .sortedKeys)) ?? Data())
     }
 
     /// The outcome `message` reports for request `id`; nil when it answers something else.
     public static func reply(to id: Int, in message: OpaqueHostMessage) -> Result<Void, RemoteGitFailure>? {
-        guard let object = try? JSONSerialization.jsonObject(with: message.json) as? [String: Any],
-              let response = object["response"] as? [String: Any], response["id"] as? Int == id,
-              let result = response["result"] as? [String: Any] else { return nil }
+        guard let result = responseResult(in: message, matching: id) else { return nil }
         // A launch the host refused still answers `runStart`.
         if let start = (result["runStart"] as? [String: Any])?["start"] as? [String: Any] {
             if let refused = start["refused"] as? [String: Any] {
@@ -173,6 +190,19 @@ public enum RemoteGitRequest {
         return .failure(RemoteGitFailure(Self.message(error), overrule: overrule))
     }
 
+    /// The new launch's ID in an accepted Start or Restart reply. Stop has none.
+    public static func startedRunID(in message: OpaqueHostMessage) -> String? {
+        let start = (responseResult(in: message)?["runStart"] as? [String: Any])?["start"] as? [String: Any]
+        return (start?["started"] as? [String: Any])?["runID"] as? String
+    }
+
+    private static func responseResult(in message: OpaqueHostMessage, matching id: Int? = nil) -> [String: Any]? {
+        guard let object = try? JSONSerialization.jsonObject(with: message.json) as? [String: Any],
+              let response = object["response"] as? [String: Any],
+              id == nil || response["id"] as? Int == id else { return nil }
+        return response["result"] as? [String: Any]
+    }
+
     private static func encode(_ change: RemoteGitChange) -> [String: Any] {
         switch change {
         case .stage(let paths): ["stage": ["paths": paths]]
@@ -182,6 +212,9 @@ public enum RemoteGitRequest {
         case .push: ["push": ["forceWithLease": false]]
         case .pull: ["pull": [String: Any]()]
         case .fetch: ["fetch": [String: Any]()]
+        case .hunk(let path, let index, let header, let linesHash, let action):
+            ["hunk": ["path": path, "stage": action == .unstage ? "staged" : "unstaged", "index": index, "header": header,
+                      "linesHash": linesHash, "action": action.rawValue]]
         }
     }
 
@@ -206,7 +239,7 @@ public enum RemoteGitRequest {
         if error["operationInProgress"] != nil { return "Another operation is running in this worktree. Try again when it finishes." }
         if error["notFound"] != nil { return "This worktree is no longer on its machine." }
         if let refusal = (error["session"] as? [String: Any])?["refusal"] as? [String: Any] {
-            if refusal["notWriter"] != nil { return "Another device is driving this session." }
+            if refusal["notWriter"] != nil { return "Take over this session first." }
             if refusal["notFound"] != nil { return "Its machine no longer lists this session." }
             if refusal["promptRejected"] != nil { return "The session didn't take the prompt." }
         }

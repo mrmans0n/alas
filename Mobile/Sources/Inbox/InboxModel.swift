@@ -13,6 +13,9 @@ final class InboxModel {
     }
 
     private(set) var sessions: [SessionRoute: TranscriptSession] = [:]
+    /// Sessions whose request was answered here, hidden until their summary stops listing them.
+    /// Pruned on every summary change, including while the Inbox is hidden, so a later wait shows.
+    var answered: Set<SessionRoute> = []
     @ObservationIgnored private var tokens: [SessionRoute: ListenerToken] = [:]
 
     /// Active sessions awaiting permission or input, across every host. Summaries only, so the

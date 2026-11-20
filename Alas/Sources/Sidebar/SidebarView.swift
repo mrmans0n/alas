@@ -135,6 +135,10 @@ struct SidebarView: View {
                                         },
                                         onOpenGGLanding: { state.openGGLanding(projectId: project.id) },
                                         harnessSummary: { state.harnessSummary(forWorktree: $0) },
+                                        harnessBadges: { state.harnessBadges(forWorktree: $0) },
+                                        badgePopoverModel: {
+                                            state.agentBadgePopoverModel(sessionId: $0, worktreeId: $1)
+                                        },
                                         ggMenuModel: { wt in
                                             state.ggWorktreeMenuModel(project: rowProject(wt, in: project), worktree: wt)
                                         },

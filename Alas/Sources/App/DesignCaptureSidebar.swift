@@ -13,9 +13,11 @@ import Foundation
 /// - peers-rename: the same with the peer worktree rename sheet open.
 /// - live-activity: the demo project's rows with scripted VMs, devices, stack
 ///   ships and shepherds (`DesignCaptureLiveActivity`).
+/// - badge-hover: the hover card of the selected row's first agent badge, held
+///   open in its real panel (`DesignCaptureAgentBadges.Hover`).
 @MainActor
 enum DesignCaptureSidebar {
-    static let targets: Set<String> = ["peers", "peers-hover", "peers-rename", "live-activity"]
+    static let targets: Set<String> = ["peers", "peers-hover", "peers-rename", "live-activity", "badge-hover"]
 
     /// Registered by `SidebarView` when it appears; the model lives in its `@State`.
     static weak var peerModel: NativePeerSidebarModel?
@@ -36,6 +38,14 @@ enum DesignCaptureSidebar {
                 return condition()
             }
             guard await eventually({ !state.projects.isEmpty }) else { return }
+            if target == "badge-hover" {
+                @MainActor func firstBadge() -> String? {
+                    state.selectedWorktreeId.flatMap { state.harnessBadges(forWorktree: $0).first?.id }
+                }
+                guard await eventually({ firstBadge() != nil }) else { return }
+                DesignCaptureAgentBadges.Hover.shared.sessionId = firstBadge()
+                return
+            }
             if target == "live-activity" {
                 DesignCaptureLiveActivity.shared.byBranch = DesignCaptureLiveActivity.demo
                 return

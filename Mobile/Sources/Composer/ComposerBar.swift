@@ -23,6 +23,10 @@ struct ComposerBar: View {
     /// What the editor shows, chips as one character each: the `/` and `@` tokens are read from it.
     private var display: String { session.draft.content.displayText }
     private var hasContent: Bool { session.draft.hasContent }
+    /// The host's suggestion, while the composer is empty.
+    private var suggestion: String? {
+        session.draft.content.isEmpty && session.draft.images.isEmpty ? session.nextPromptSuggestion : nil
+    }
 
     /// The commands the picker offers. Alas intercepts /ship before the agent
     /// could see it, so the agent's own is hidden.
@@ -77,6 +81,7 @@ struct ComposerBar: View {
         .padding(.bottom, 6)
         .onChange(of: mentionToken?.query) { _, query in searchMentions(query) }
         .onChange(of: RemoteQueueRules.waiting(session.queue).isEmpty) { _, empty in if empty { queueOpen = false } }
+        .onChange(of: session.composerFocusRequest) { selection = NSRange(location: (display as NSString).length, length: 0) }
         .onChange(of: picked) { _, items in
             guard !items.isEmpty else { return }
             picked = []
@@ -91,12 +96,14 @@ struct ComposerBar: View {
             if !session.draft.images.isEmpty { tiles }
             ZStack(alignment: .topLeading) {
                 if session.draft.content.isEmpty {
-                    Text("Message").foregroundStyle(.tertiary).padding(.horizontal, 4).padding(.vertical, 8)
+                    Text(suggestion ?? "Message").foregroundStyle(.tertiary).lineLimit(4)
+                        .padding(.horizontal, 4).padding(.vertical, 8)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
                 ComposerTextView(draft: $session.draft.content, selection: $selection, rules: rules,
                                  references: session.references, actions: actions,
+                                 focusRequest: session.composerFocusRequest,
                                  onPasteImages: config?.acceptsImages == true ? { images in
                                      Task { for data in images { await ImageStaging.stage(data, into: session) } }
                                  } : nil)
@@ -105,6 +112,13 @@ struct ComposerBar: View {
                 if config?.acceptsImages == true { attachButton }
                 chips
                 QueueBadge(session: session, open: $queueOpen)
+                if let suggestion {
+                    Button("Use suggestion", systemImage: "text.insert") { session.acceptNextPromptSuggestion() }
+                        .font(.footnote.weight(.medium))
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .accessibilityValue(suggestion)
+                }
                 Spacer(minLength: 0)
                 if let usage = config?.usage, usage.context != nil || !usage.lastTurn.isEmpty || !usage.cumulative.isEmpty {
                     UsageRing(usage: usage)
@@ -269,7 +283,7 @@ struct ComposerBar: View {
 
     private var takeOverPill: some View {
         Button { session.takeOver() } label: {
-            Label("Another device is driving. Take over", systemImage: "hand.raised")
+            Label("Take over to drive this session", systemImage: "hand.raised")
                 .font(.footnote.weight(.medium))
                 .padding(.horizontal, 14).padding(.vertical, 8)
         }

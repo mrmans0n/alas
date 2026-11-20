@@ -430,7 +430,10 @@ public final class HostProtocolConnection {
         case .mutateWorktree(let ref, let branch, let change):
             // The branch the client saw is checked under the project's gate.
             let listed = try gitWorktree(ref)
-            if let capability = change.capability { _ = try servedWorktree(ref, capability: capability) }
+            // The phone, which an app host serves git to, also stages hunks there.
+            if let capability = change.capability, !(capability == HostProtocolCapability.worktreesHunksV1 && callerIsPhone) {
+                _ = try servedWorktree(ref, capability: capability)
+            }
             return try await host.worktrees.mutate(listed, branch: branch, change: change, caller: caller)
         case .commitMessageInput(let ref):
             let listed = try gitWorktree(ref)

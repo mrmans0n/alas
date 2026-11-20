@@ -200,7 +200,8 @@ extension AlasCoreContext {
             endpoint: script.endpoint,
             status: .starting,
             startedAt: Date(),
-            portConflict: runPortConflict(endpoint: script.endpoint, target: target, excludingRunID: runID)
+            portConflict: runPortConflict(endpoint: script.endpoint, target: target, excludingRunID: runID),
+            consoleIsHidden: isHidden
         ))
         if let onSettled {
             awaitRunSettlement(runID: runID, worktreeID: worktree.id, notify: onSettled)

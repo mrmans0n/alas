@@ -1,18 +1,5 @@
 import Foundation
 
-enum ACPMessageQuote {
-    static func canQuote(_ message: String) -> Bool {
-        !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    static func markdown(_ message: String) -> String {
-        message
-            .components(separatedBy: "\n")
-            .map { "> \($0)" }
-            .joined(separator: "\n")
-    }
-}
-
 enum ACPAttachmentPickerContent: Equatable {
     case images
     case allFiles

@@ -37,6 +37,8 @@ struct ComposerTextView: UIViewRepresentable {
     var rules: ChipRules
     var references: ReferenceCache?
     var actions: ChipActions?
+    /// A change raises the keyboard on this view.
+    let focusRequest: Int
     /// Takes pasted images; nil leaves Paste to text only.
     var onPasteImages: (([Data]) -> Void)?
     private static let maxLines: CGFloat = 6
@@ -79,6 +81,11 @@ struct ComposerTextView: UIViewRepresentable {
         let wanted = NSRange(location: min(selection.location, length),
                              length: min(selection.length, max(0, length - selection.location)))
         if view.selectedRange != wanted, view.markedTextRange == nil { view.selectedRange = wanted }
+        if coordinator.focusRequest != focusRequest {
+            coordinator.focusRequest = focusRequest
+            // After this update: taking first responder inside it re-enters SwiftUI's graph, which cycles.
+            DispatchQueue.main.async { [weak view] in view?.becomeFirstResponder() }
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
@@ -102,8 +109,13 @@ struct ComposerTextView: UIViewRepresentable {
         var shown: RemoteComposerDraft?
         var shownEntries: [CodeHostReference: ReferenceCache.Entry] = [:]
         var tapHandler: ChipTapHandler?
+        /// The request last acted on; the one the view appeared with is not a request.
+        var focusRequest: Int
 
-        init(_ parent: ComposerTextView) { self.parent = parent }
+        init(_ parent: ComposerTextView) {
+            self.parent = parent
+            focusRequest = parent.focusRequest
+        }
 
         func render(_ draft: RemoteComposerDraft) -> NSAttributedString {
             let result = NSMutableAttributedString()

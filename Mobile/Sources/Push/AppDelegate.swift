@@ -21,6 +21,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     @MainActor private static var pending: [SessionRoute?] = []
     /// Background answers in flight: only the last to finish may disconnect the hosts they share.
     @MainActor private static var answering = 0
+    private static let runNotificationPrefix = "run-script-"
+    @MainActor private static var runAuthorization: Task<Bool, Never>?
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
@@ -58,6 +60,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     }
 
     @MainActor private static func handle(_ response: UNNotificationResponse) async {
+        // A run result is not an Inbox session alert. The default tap simply opens Alas.
+        guard !response.notification.request.identifier.hasPrefix(runNotificationPrefix) else { return }
         let alas = response.notification.request.content.userInfo["alas"] as? [String: Any]
         let serverId = alas?["serverId"] as? String
         let sessionId = alas?["sessionId"] as? String
@@ -148,6 +152,34 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Settled means ours is gone: resolved after the answer went out, answered elsewhere, or replaced by
         // the next request, which the 500 ms a resolved one lingers can hide behind without a nil in between.
         return settled
+    }
+
+    @MainActor static func prepareRunNotifications() {
+        Task { _ = await authorizeRunNotifications() }
+    }
+
+    @MainActor private static func authorizeRunNotifications() async -> Bool {
+        if let runAuthorization { return await runAuthorization.value }
+        // Local run results also work in builds without an APNs relay.
+        let request = Task {
+            (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) == true
+        }
+        runAuthorization = request
+        defer { runAuthorization = nil }
+        return await request.value
+    }
+
+    @MainActor static func postRunResult(hostID: UUID, runID: String, name: String, exitCode: Int32) {
+        Task {
+            guard await authorizeRunNotifications() else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "\(name) finished"
+            content.body = exitCode == 0 ? "Succeeded" : "Failed with exit code \(exitCode)"
+            content.sound = .default
+            let id = "\(runNotificationPrefix)\(hostID.uuidString)-\(runID)"
+            try? await UNUserNotificationCenter.current().add(
+                UNNotificationRequest(identifier: id, content: content, trigger: nil))
+        }
     }
 
     private static func postCouldntAnswer(serverId: String, sessionId: String, title: String) async {

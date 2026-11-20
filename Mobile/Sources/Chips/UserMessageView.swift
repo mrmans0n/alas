@@ -220,12 +220,14 @@ extension EnvironmentValues {
 /// A sent message's badges and bubble, as the Mac's user row: mention and
 /// symbol badges and one row per typed reference above, then the text with
 /// a leading command pulled out as its own pill.
-struct UserMessageBody: View {
+struct UserMessageBody<Menu: View>: View {
     let id: String
     let text: String
     let mentions: [RemoteUserMention]
     let pastedSpans: [ACPPastedTextSpan]
     var session: TranscriptSession?
+    /// The bubble's long-press menu.
+    @ViewBuilder let menu: () -> Menu
     @Environment(\.chipActions) private var actions
 
     private var chips: UserMessageChips {
@@ -277,6 +279,8 @@ struct UserMessageBody: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 18))
+        .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 18))
+        .contextMenu { menu() }
     }
 
     /// Each reference typed outside code, once, in order.

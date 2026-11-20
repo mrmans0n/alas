@@ -25,6 +25,8 @@ struct TranscriptScreen: View {
     @State private var renamedBranch = ""
     @State private var confirmingArchive = false
     @State private var actionError: String?
+    /// What a slow worktree or session action is doing, shown until the host answers.
+    @State private var progress: String?
     /// The worktree a Delete awaits confirmation for, as it was when the user asked.
     @State private var deleting: SessionWorkspace.RemovalTarget?
     /// A worktree removal the host refused in a way the user may overrule.
@@ -32,6 +34,9 @@ struct TranscriptScreen: View {
     @Environment(\.dismiss) private var dismiss
     /// The worktree whose terminals are pushed from this screen.
     @State private var terminalsWorktree: String?
+    @State private var runTerminal: PeerConsoleSummary?
+    /// Only the latest Run or Restart from this screen may push a terminal.
+    @State private var runNavigation: UUID?
     /// The subagent whose transcript is pushed from this screen; it reads through this screen's session.
     @State private var openedSubagent: RemoteWireMessage.Subagent?
     /// The delegated child, or the delegating parent, pushed from this screen.
@@ -51,6 +56,12 @@ struct TranscriptScreen: View {
             TerminalsList(hub: registry.hub, hostID: hostID, worktreeId: worktreeId)
         }
         .navigationDestination(isPresented: Binding(
+            get: { runTerminal != nil }, set: { if !$0 { runTerminal = nil } })) {
+            if let runTerminal {
+                TerminalScreen(hub: registry.hub, hostID: hostID, console: runTerminal)
+            }
+        }
+        .navigationDestination(isPresented: Binding(
             get: { openedSubagent != nil }, set: { if !$0 { openedSubagent = nil } })) {
             if let openedSubagent, let session = held?.session {
                 SubagentScreen(session: session, subagent: openedSubagent)
@@ -65,13 +76,15 @@ struct TranscriptScreen: View {
         }
         .onDisappear {
             visible = false
+            runNavigation = nil
             // A view pushed from this screen (a diff, a file) covers it and fires this too; keep
             // the session and workspace alive until the screen itself leaves the stack.
             // Checked a turn later so a pushed view popped along with this screen has cleared
             // its state first (DiffView's own onDisappear), and so a screen that came straight
             // back keeps what it holds.
             Task { @MainActor in
-                if visible || terminalsWorktree != nil || openedSubagent != nil || delegated != nil || workspace?.hasPushedChild(screenID) == true { return }
+                if visible || terminalsWorktree != nil || runTerminal != nil || openedSubagent != nil || delegated != nil
+                    || workspace?.hasPushedChild(screenID) == true { return }
                 held = nil
                 workspaceToken = nil
             }
@@ -107,7 +120,7 @@ struct TranscriptScreen: View {
                 switch mode {
                 case .transcript: EmptyView()
                 case .changes: ChangesView(workspace: workspace, owner: screenID).background(Color(.systemBackground))
-                case .files: FilesView(workspace: workspace, owner: screenID).background(Color(.systemBackground))
+                case .files: FilesView(workspace: workspace, session: session, owner: screenID).background(Color(.systemBackground))
                 }
             }
             .safeAreaInset(edge: .top) {
@@ -137,7 +150,7 @@ struct TranscriptScreen: View {
             .navigationDestination(isPresented: Binding(
                 get: { workspace.file != nil && workspace.pushedBy == screenID },
                 set: { if !$0 { workspace.closeFile() } })) {
-                FileViewer(workspace: workspace)
+                FileViewer(workspace: workspace, session: session)
             }
             .onChange(of: session.streamingState, initial: true) { workspace.noteStreaming(session.streamingState) }
             .onChange(of: available) { if !available.contains(mode) { mode = .transcript } }
@@ -229,8 +242,6 @@ struct TranscriptScreen: View {
                     }
                 }
                 if workspace.canRun, !workspace.runScripts.isEmpty {
-                    // ponytail: no run state, since the host only pushes it as events; a run's output
-                    // shows in its console under Terminals.
                     ToolbarItem(placement: .primaryAction) {
                         Menu("Run", systemImage: "play") {
                             ForEach(workspace.runScripts, id: \.key) { script in
@@ -250,6 +261,14 @@ struct TranscriptScreen: View {
                     }
                 }
             }
+            .overlay {
+                if let busy = progress ?? (session.tabAction == .close ? "Closing session…" : nil) {
+                    ProgressView(busy)
+                        .padding(20)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+            }
+            .disabled(progress != nil)
             .sheet(isPresented: $showSettings) { SessionSettingsSheet(session: session) }
             .alert("Couldn't do that", isPresented: Binding { session.tabActionError != nil } set: { if !$0 { session.tabActionError = nil } }) {
                 Button("OK", role: .cancel) {}
@@ -279,6 +298,8 @@ struct TranscriptScreen: View {
             .confirmationDialog("Archive this session?", isPresented: $confirmingArchive, titleVisibility: .visible) {
                 Button("Archive", role: .destructive) {
                     Task {
+                        progress = "Archiving session…"
+                        defer { progress = nil }
                         if let error = await workspace.archiveSession() { actionError = error } else { dismiss() }
                     }
                 }
@@ -323,13 +344,23 @@ struct TranscriptScreen: View {
     }
 
     private func run(_ workspace: SessionWorkspace, _ action: RemoteRunAction, _ script: RemoteRunScript) {
-        Task { if let error = await workspace.run(action, script) { actionError = error } }
+        let navigation = UUID()
+        runNavigation = navigation
+        Task {
+            let error = await workspace.run(action, script) { console in
+                guard visible, runNavigation == navigation else { return }
+                runTerminal = console
+            }
+            if let error { actionError = error }
+        }
     }
 
     /// Sends the removal; a refusal the user may overrule asks again, any other shows.
     private func removeWorktree(_ workspace: SessionWorkspace, _ removal: SessionWorkspace.WorktreeRemoval,
                                 of target: SessionWorkspace.RemovalTarget, force: Bool = false, discard: Bool = false) {
         Task {
+            progress = removal == .delete ? "Deleting worktree…" : "Archiving worktree…"
+            defer { progress = nil }
             guard let failure = await workspace.removeWorktree(removal, of: target, force: force, discard: discard) else { return dismiss() }
             if failure.overrule != nil {
                 overruling = Overruling(removal: removal, target: target, failure: failure, force: force, discard: discard)
@@ -366,10 +397,13 @@ private struct TranscriptContent: View {
     let openSubagent: (RemoteWireMessage.Subagent) -> Void
 
     var body: some View {
-        TranscriptCollectionView(
-            items: session.items, expanded: $session.expanded, canLoadOlder: session.canLoadOlder,
-            loadOlder: session.loadOlder, image: session.image(for:), session: session,
-            sendCount: session.sendCount, openSubagent: openSubagent)
+        // Rows scroll on under the glass tab picker and composer.
+        ScrollsUnderBars { insets in
+            TranscriptCollectionView(
+                items: session.items, expanded: $session.expanded, canLoadOlder: session.canLoadOlder,
+                loadOlder: session.loadOlder, image: session.image(for:), session: session,
+                sendCount: session.sendCount, openSubagent: openSubagent, insets: insets)
+        }
         .overlay {
             if session.items.isEmpty, !session.hasEnded {
                 if session.hasSnapshot {

@@ -35,6 +35,7 @@
 		4890F4ED46FAF3D1F5FA0BE4 /* NewSessionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B8568ACBAA2AEDD6BB231F /* NewSessionModel.swift */; };
 		4B7EADFD451E201FB1F49451 /* GrammarPack.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC78E86F9CD60E848A8135C3 /* GrammarPack.swift */; };
 		51FE96121006D8E96A5D4D4E /* UserMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 012D2E401A820E739B67A15D /* UserMessageView.swift */; };
+		5522F1EB9EBB197357A9EFB1 /* PeerDeviceSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79A243DE383BC28F89B667A6 /* PeerDeviceSession.swift */; };
 		56AB129852CC6503F3A8D52F /* TerminalConsole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01778058ACE3C53D047B6348 /* TerminalConsole.swift */; };
 		58B17D6F2BE10B9E3F575E8D /* ComposerEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8173FF37ED4600303C8C0AA6 /* ComposerEditor.swift */; };
 		5BAE5DB8CB923C7AC98F2884 /* TranscriptRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18514DE5113754F3401217CA /* TranscriptRowView.swift */; };
@@ -74,6 +75,7 @@
 		D9D22B71C3A3A47B85DCCD63 /* light.json in Resources */ = {isa = PBXBuildFile; fileRef = 33A5D219FC6E604BC0767265 /* light.json */; };
 		DF598609D6139DEEC76F939F /* CodeBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1D5D2BB1BAC229CEC583231 /* CodeBlockView.swift */; };
 		E25E7EA6243D3DCDD5C3ACB4 /* AlasHighlight in Frameworks */ = {isa = PBXBuildFile; productRef = FE403EEB6E8C9E313B1992FF /* AlasHighlight */; };
+		E42D013137737D7897D0CA96 /* PeerDevicePlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34AC8563B9152BF83272D605 /* PeerDevicePlayback.swift */; };
 		E4947A2F3BC9605489AF746D /* cool-slate.json in Resources */ = {isa = PBXBuildFile; fileRef = 9F0B4947542B7AB2F010C5B2 /* cool-slate.json */; };
 		E55F6FE33979517F56313A84 /* ComposerBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57A94D2BB531632B6E5027AE /* ComposerBar.swift */; };
 		E77139BEB6A5145597C12214 /* HostHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */; };
@@ -82,6 +84,7 @@
 		EC970213412064871D907E2A /* LazyStackTranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */; };
 		F089F4FEFE5CB481C1682375 /* FileViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC497CD9E3E3ACCED5B931CD /* FileViewer.swift */; };
 		F740E76CFABB323563752B7B /* PhoneProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */; };
+		F916510C7AFCAAE74E1CF017 /* PeerDevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E6CE88D7E1B2D530E7D0450 /* PeerDevicesView.swift */; };
 		FB774A2243E6DDC0B91251BC /* PairHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8C41B3901C2155F0CB451B1 /* PairHostView.swift */; };
 		FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A0D3457CA4F83043146752 /* SpikeTranscript.swift */; };
 		FE38E919C60DB03596D4E124 /* TranscriptScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 372565FA395364953D615BC3 /* TranscriptScreen.swift */; };
@@ -127,11 +130,13 @@
 		1547D85F76565F3FE516B06A /* SessionWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionWorkspace.swift; sourceTree = "<group>"; };
 		18514DE5113754F3401217CA /* TranscriptRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptRowView.swift; sourceTree = "<group>"; };
 		1E48FA0BE7E008A99E5968A8 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		1E6CE88D7E1B2D530E7D0450 /* PeerDevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerDevicesView.swift; sourceTree = "<group>"; };
 		1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptCollectionView.swift; sourceTree = "<group>"; };
 		21408E08006F4C64E22701EE /* SessionRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRegistry.swift; sourceTree = "<group>"; };
 		27A0D3457CA4F83043146752 /* SpikeTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeTranscript.swift; sourceTree = "<group>"; };
 		2B686F711B93C4B67C8D0CA0 /* SubagentCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubagentCard.swift; sourceTree = "<group>"; };
 		33A5D219FC6E604BC0767265 /* light.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = light.json; sourceTree = "<group>"; };
+		34AC8563B9152BF83272D605 /* PeerDevicePlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerDevicePlayback.swift; sourceTree = "<group>"; };
 		36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasMobileApp.swift; sourceTree = "<group>"; };
 		36EF07169AED6A5434648BCD /* WorktreeDuskScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeDuskScene.swift; sourceTree = "<group>"; };
 		372565FA395364953D615BC3 /* TranscriptScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptScreen.swift; sourceTree = "<group>"; };
@@ -152,6 +157,7 @@
 		703A93DEDFDC64715553851D /* AlasNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = AlasNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyStackTranscriptView.swift; sourceTree = "<group>"; };
 		7728D27BA09D4A7193ABB64C /* TranscriptImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptImage.swift; sourceTree = "<group>"; };
+		79A243DE383BC28F89B667A6 /* PeerDeviceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerDeviceSession.swift; sourceTree = "<group>"; };
 		7BD5988CE50A901089331310 /* ToolCallCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallCard.swift; sourceTree = "<group>"; };
 		7D428F50776808D0D66B1899 /* BranchNameField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BranchNameField.swift; sourceTree = "<group>"; };
 		8173FF37ED4600303C8C0AA6 /* ComposerEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerEditor.swift; sourceTree = "<group>"; };
@@ -326,6 +332,16 @@
 			path = ../Alas/Resources/VisualAid;
 			sourceTree = "<group>";
 		};
+		76FA6C5FE1D5C5BF8759AF6A /* Native */ = {
+			isa = PBXGroup;
+			children = (
+				34AC8563B9152BF83272D605 /* PeerDevicePlayback.swift */,
+				79A243DE383BC28F89B667A6 /* PeerDeviceSession.swift */,
+			);
+			name = Native;
+			path = ../Alas/Sources/Remote/Native;
+			sourceTree = "<group>";
+		};
 		86D2285A87658206EB81FAF0 /* App */ = {
 			isa = PBXGroup;
 			children = (
@@ -367,6 +383,7 @@
 			children = (
 				E8BE68B7690E4EB8C3B0DE9F /* Config */,
 				35F6F2757408ED17A056CDD0 /* Icons */,
+				76FA6C5FE1D5C5BF8759AF6A /* Native */,
 				A10F0C1261F881B209231490 /* NotificationService */,
 				5DCBB4F5E953BC7D6DCB2D6C /* Packages */,
 				117FB60A904CAB45AAADD266 /* Resources */,
@@ -444,6 +461,7 @@
 				62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */,
 				C0E84291A6AA43082A7F684D /* HostStore.swift */,
 				D8C41B3901C2155F0CB451B1 /* PairHostView.swift */,
+				1E6CE88D7E1B2D530E7D0450 /* PeerDevicesView.swift */,
 				C859167B848F3A5C43EEE3D7 /* PeersView.swift */,
 				EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */,
 				FB90BAD33068D0FA5A49EE21 /* SessionListCache.swift */,
@@ -659,6 +677,9 @@
 				4890F4ED46FAF3D1F5FA0BE4 /* NewSessionModel.swift in Sources */,
 				185E46AA928760C65408C50C /* NewSessionSheet.swift in Sources */,
 				FB774A2243E6DDC0B91251BC /* PairHostView.swift in Sources */,
+				E42D013137737D7897D0CA96 /* PeerDevicePlayback.swift in Sources */,
+				5522F1EB9EBB197357A9EFB1 /* PeerDeviceSession.swift in Sources */,
+				F916510C7AFCAAE74E1CF017 /* PeerDevicesView.swift in Sources */,
 				0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */,
 				914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */,
 				1635F671055BF795E113B685 /* PushRegistrar.swift in Sources */,

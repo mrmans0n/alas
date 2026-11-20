@@ -46,6 +46,8 @@ import AlasSessions
     /// What references name in the session's worktree; only those that
     /// finished loading or failed get an entry.
     public var referenceSummaries: @MainActor (_ sessionID: String, _ spellings: [String]) async -> [RemoteReferenceEntry]
+    /// A suggestion for the session's next prompt, or nil when there is none.
+    public var nextPromptSuggestion: @MainActor (_ sessionID: String) async -> String?
 
     public init(
         sessionSummaries: @escaping @MainActor (_ tabIndex: @MainActor (_ sessionID: String, _ owner: SessionOwnerID) -> Int?) async
@@ -71,7 +73,8 @@ import AlasSessions
         toolTerminal: @escaping @MainActor (_ sessionID: String, _ terminalID: String) -> ACPTerminalOutputResult? = { _, _ in nil },
         subagentRun: @escaping @MainActor (_ sessionID: String, _ subagentID: String) -> ACPSubagentRun? = { _, _ in nil },
         skillFile: @escaping @MainActor (_ sessionID: String, _ command: String) async -> (text: String, truncated: Bool)? = { _, _ in nil },
-        referenceSummaries: @escaping @MainActor (_ sessionID: String, _ spellings: [String]) async -> [RemoteReferenceEntry] = { _, _ in [] }
+        referenceSummaries: @escaping @MainActor (_ sessionID: String, _ spellings: [String]) async -> [RemoteReferenceEntry] = { _, _ in [] },
+        nextPromptSuggestion: @escaping @MainActor (_ sessionID: String) async -> String? = { _ in nil }
     ) {
         self.sessionSummaries = sessionSummaries
         self.worktrees = worktrees
@@ -89,6 +92,7 @@ import AlasSessions
         self.subagentRun = subagentRun
         self.skillFile = skillFile
         self.referenceSummaries = referenceSummaries
+        self.nextPromptSuggestion = nextPromptSuggestion
     }
 
     /// The host's lists and creations; empty and refused without a host.
@@ -142,6 +146,9 @@ import AlasSessions
             },
             referenceSummaries: { [weak host] sessionID, spellings in
                 await host?.sessions.referenceSummaries(sessionID, spellings: spellings) ?? []
+            },
+            nextPromptSuggestion: { [weak host] sessionID in
+                await host?.nextPromptSuggester?(sessionID)
             }
         )
     }

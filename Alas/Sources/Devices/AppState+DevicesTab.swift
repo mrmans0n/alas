@@ -35,7 +35,7 @@ extension AppState {
         activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
     }
 
-    func devicesTabState(worktree: Worktree, selection: DevicesTarget?) -> DevicesTabState {
+    func devicesTabState(worktree: Worktree, lastUsed: DevicesTarget?) -> DevicesTabState {
         let guests: [VMGuestOS] = canOpenVirtualMachine(in: worktree) ? [.macOS, .linux] : []
         var vms: [VMGuestOS: VMDeviceStatus] = [:]
         var driving: Set<DevicesTarget> = []
@@ -63,7 +63,7 @@ extension AppState {
         return .resolve(
             simulators: devicePane.simulatorToolsFound == nil ? nil : devicePane.devices,
             listError: noTools ? "Install Xcode to use iOS simulators." : devicePane.listError,
-            vms: vms, selection: selection, bootingUDIDs: devicePane.bootingUDIDs, agentDriving: driving,
+            vms: vms, lastUsed: lastUsed, bootingUDIDs: devicePane.bootingUDIDs, agentDriving: driving,
             android: androidPane.listing, agentNames: agentNames
         )
     }

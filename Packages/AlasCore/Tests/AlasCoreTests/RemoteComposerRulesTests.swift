@@ -156,4 +156,18 @@ struct RemoteComposerRulesTests {
         case .chip(.pasted(let ordinal, _)): "pst:\(ordinal)"
         }
     }
+
+    @Test(arguments: [
+        ("", "one", "> one\n"),
+        ("draft", "one\n\n**two**", "draft\n> one\n> \n> **two**\n"),
+        ("draft\n", "one", "draft\n> one\n"),
+    ])
+    func quoteQuotesEveryLineOnItsOwnLinesAfterTheDraft(draft: String, message: String, expected: String) {
+        #expect(ACPMessageQuote.appending(message, to: draft) == expected)
+    }
+
+    @Test func onlyNonWhitespaceMessagesCanBeQuoted() {
+        #expect(ACPMessageQuote.canQuote("hello"))
+        #expect(!ACPMessageQuote.canQuote(" \n\t"))
+    }
 }

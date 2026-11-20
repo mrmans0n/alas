@@ -43,9 +43,9 @@ struct AndroidControlTests {
         """
         #expect(AndroidDevice.parseList(output) == [
             AndroidDevice(serial: "emulator-5554", state: .ready, model: "sdk_gphone64_arm64"),
-            AndroidDevice(serial: "R5CT1234ABC", state: .unauthorized, model: nil),
+            AndroidDevice(serial: "R5CT1234ABC", state: .unauthorized, model: nil, isUSBConnected: true),
             AndroidDevice(serial: "0A1B2C3D", state: .offline, model: nil),
-            AndroidDevice(serial: "9C2X", state: .ready, model: "Pixel_9_Pro"),
+            AndroidDevice(serial: "9C2X", state: .ready, model: "Pixel_9_Pro", isUSBConnected: true),
         ])
     }
 

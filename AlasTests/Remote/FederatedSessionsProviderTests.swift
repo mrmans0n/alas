@@ -45,9 +45,9 @@ struct FederatedSessionsProviderTests {
         func loseDownstream() { downstream = nil }
     }
 
-    private func row(_ id: String, serverId: String? = nil) -> RemoteSessionSummary {
+    private func row(_ id: String, serverId: String? = nil, detail: RemoteSessionDetail? = nil) -> RemoteSessionSummary {
         RemoteSessionSummary(id: id, title: "T \(id)", agentId: "claude", status: "idle", canDrive: false,
-                             serverId: serverId, serverName: serverId.map { "Name \($0)" })
+                             serverId: serverId, serverName: serverId.map { "Name \($0)" }, detail: detail)
     }
 
     @Test func aPeerComingOnlineIsAskedForItsSessionsAndItsRowsAreTaggedAndNamespaced() {
@@ -57,9 +57,11 @@ struct FederatedSessionsProviderTests {
         provider.attach(client.downstream)
         links.goOnline("srv-b", name: "Mac B")
         #expect(links.sent(to: "srv-b") == [.listSessions, .listProjects])
-        links.receive(.sessionList(sessions: [row("s1"), row("s2")]), from: "srv-b")
+        let detail = RemoteSessionDetail(model: "Opus", contextPercent: 40, preview: "hi", previewKind: .reply)
+        links.receive(.sessionList(sessions: [row("s1", detail: detail), row("s2")]), from: "srv-b")
         let rows = provider.peerSessionSummaries
         #expect(rows.map(\.id) == ["srv-b:s1", "srv-b:s2"])
+        #expect(rows.first?.detail == detail)
         #expect(rows.allSatisfy { $0.serverId == "srv-b" && $0.serverName == "Mac B" })
         #expect(rows.first?.title == "T s1")
         #expect(client.listRefreshes == 1)

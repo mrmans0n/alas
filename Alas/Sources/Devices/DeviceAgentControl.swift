@@ -31,8 +31,8 @@ extension SimulatorStreamClient: DeviceInput {}
 final class DeviceAgentControl {
     static let disabled =
         "device_disabled: Agents can't use simulators or Android devices. Ask the user to turn on Settings › Computer Use › Let agents use simulators and Android devices."
-    static let userDriving = "device_user_active: The user took over this simulator. Try again after they hand it back."
-    static let stillDriving = "device_user_active: The user is still driving this simulator. Try again in a minute."
+    static let userDriving = "device_user_active: The user took over this device. Try again after they hand it back."
+    static let stillDriving = "device_user_active: The user is still driving this device. Try again in a minute."
     /// The session of a flow the user runs from the toolbar.
     static let userFlowSession = "flow:user"
     /// The agent cancelled the call, or its MCP server went away.
@@ -55,11 +55,24 @@ final class DeviceAgentControl {
     @ObservationIgnored private let holds: HeldCalls
 
     /// A released call carries its input turn when it needs one.
-    private enum Hold: Sendable { case go(inputTurn: UUID?), timedOut, cancelled }
+    private enum Hold: Sendable { case go(inputTurn: UUID?), remoteDriving, timedOut, cancelled }
+
+    private enum RemoteInput: Equatable {
+        case reserving(UUID), active(UUID), releasing(UUID)
+
+        var owner: UUID {
+            switch self {
+            case .reserving(let owner), .active(let owner), .releasing(let owner): owner
+            }
+        }
+    }
 
     private var lastCalls: [String: AgentCall] = [:]
     private var inFlight: [String: Int] = [:]
     private var takenOver: Set<String> = []
+    private var remoteInput: [String: RemoteInput] = [:]
+    @ObservationIgnored private var inputDrainWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    @ObservationIgnored private var localInputStops: [String: [UUID: @MainActor () -> Void]] = [:]
     @ObservationIgnored private var snapshots: [String: DeviceSnapshot] = [:]
     /// The session that last received each device's screen: diffs are against
     /// what the calling session saw, not another session's view.
@@ -127,12 +140,81 @@ final class DeviceAgentControl {
     }
 
     func takeOver(udid: String) {
+        guard remoteInput[udid] == nil else { return }
         takenOver.insert(udid)
     }
 
     func handBack(udid: String) {
+        guard remoteInput[udid] == nil else { return }
         takenOver.remove(udid)
         holds.releaseAll(udid)
+    }
+
+    /// Includes reservation and cleanup, when neither local nor remote input may start.
+    func remoteInputOwner(udid: String) -> UUID? {
+        remoteInput[udid]?.owner
+    }
+
+    func allowsLocalInput(udid: String, at date: Date? = nil) -> Bool {
+        remoteInput[udid] == nil && VMDriver.allowsViewInput(driver(udid: udid, at: date))
+    }
+
+    /// The screen must lift a local pointer and keys before granting control, not
+    /// when SwiftUI eventually redraws the disabled screen.
+    func registerLocalInputStop(udid: String, _ stop: @escaping @MainActor () -> Void) -> UUID {
+        let token = UUID()
+        localInputStops[udid, default: [:]][token] = stop
+        return token
+    }
+
+    func unregisterLocalInputStop(udid: String, token: UUID) {
+        localInputStops[udid]?[token] = nil
+        if localInputStops[udid]?.isEmpty == true { localInputStops[udid] = nil }
+    }
+
+    func acquireRemoteInput(udid: String, owner: UUID) async -> Bool {
+        guard remoteInput[udid] == nil, !takenOver.contains(udid), !Task.isCancelled else { return false }
+        remoteInput[udid] = .reserving(owner)
+        if let stops = localInputStops[udid]?.values {
+            for stop in stops { stop() }
+        }
+        await drainInputTurns(udid)
+        guard remoteInput[udid] == .reserving(owner) else { return false }
+        guard !Task.isCancelled, !takenOver.contains(udid) else {
+            endRemoteInput(udid)
+            return false
+        }
+        remoteInput[udid] = .active(owner)
+        return true
+    }
+
+    func acceptsRemoteInput(udid: String, owner: UUID) -> Bool {
+        remoteInput[udid] == .active(owner) && !takenOver.contains(udid)
+    }
+
+    func releaseRemoteInput(udid: String, owner: UUID, cleanup: () async -> Void) async {
+        guard remoteInput[udid]?.owner == owner, remoteInput[udid] != .releasing(owner) else { return }
+        remoteInput[udid] = .releasing(owner)
+        await drainInputTurns(udid)
+        await cleanup()
+        endRemoteInput(udid)
+    }
+
+    /// Pair this with the host's lease revocation on the same actor turn.
+    /// Cleanup still gates input, but once it finishes the local user drives.
+    func reclaimRemoteInput(udid: String) {
+        guard remoteInput[udid] != nil else { return }
+        takenOver.insert(udid)
+    }
+
+    private func endRemoteInput(_ udid: String) {
+        remoteInput[udid] = nil
+        if !takenOver.contains(udid) { holds.releaseAll(udid) }
+    }
+
+    private func drainInputTurns(_ udid: String) async {
+        guard inputTurns[udid] != nil else { return }
+        await withCheckedContinuation { inputDrainWaiters[udid, default: []].append($0) }
     }
 
     /// Sessions whose calls wait for the user to hand `udid` back, first to arrive first.
@@ -140,10 +222,14 @@ final class DeviceAgentControl {
         holds.waiting(udid)
     }
 
-    /// Waits while the user drives `udid`: until they hand it back, the hold
-    /// limit passes, or the calling task is cancelled.
-    private func holdWhileTakenOver(_ udid: String, sessionID: String, isInput: Bool) async -> Hold {
-        guard takenOver.contains(udid) else { return .go(inputTurn: nil) }
+    /// Reserves an input turn before the first asynchronous operation, or waits
+    /// for the driver to hand the device back.
+    private func admit(_ udid: String, sessionID: String, isInput: Bool) async -> Hold {
+        let remoteDriving = isInput && remoteInput[udid] != nil
+        guard !remoteDriving || sessionID != Self.userFlowSession else { return .remoteDriving }
+        guard takenOver.contains(udid) || remoteDriving else {
+            return .go(inputTurn: isInput ? takeInputTurn(udid) : nil)
+        }
         guard !Task.isCancelled else { return .cancelled }
         // Input turns are taken at release, in arrival order: a released call still
         // lists devices before it runs, and those listings can finish in any order.
@@ -159,7 +245,7 @@ final class DeviceAgentControl {
     }
 
     private func userDriving(_ udid: String) -> Bool {
-        VMDriver.decision(for: driver(udid: udid)) == .userDriving
+        remoteInput[udid] != nil || takenOver.contains(udid)
     }
 
     // MARK: Calls
@@ -198,14 +284,13 @@ final class DeviceAgentControl {
              .setNetwork, .clearData, .setSlim, .runFlow, .setRoute: true
         case .list, .open, .snapshot, .screenshot, .logs, .record, .recordFlow: false
         }
-        var inputTurn: UUID?
-        switch await holdWhileTakenOver(udid, sessionID: sessionID, isInput: isInput) {
+        let inputTurn: UUID?
+        switch await admit(udid, sessionID: sessionID, isInput: isInput) {
         case .go(let turn): inputTurn = turn
+        case .remoteDriving: return .error(Self.userDriving)
         case .timedOut: return .error(Self.stillDriving)
         case .cancelled: return .error(Self.cancelled)
         }
-        // Taken before the device listing below, whose calls can finish in any order.
-        if isInput, inputTurn == nil { inputTurn = takeInputTurn(udid) }
         defer { if let inputTurn { endInputTurn(udid, inputTurn) } }
         let backend: any DeviceBackend
         var device: AgentDevice
@@ -218,7 +303,7 @@ final class DeviceAgentControl {
         // Who drives is tracked under the device's own id: an AVD's `avd:` id
         // names it until it boots, then its emulator's serial does.
         var driven = device.id
-        if userDriving(driven) { return .error(Self.userDriving) }
+        if takenOver.contains(driven) || (isInput && remoteInput[driven] != nil) { return .error(Self.userDriving) }
 
         lastCalls[driven] = AgentCall(sessionID: sessionID, tool: command.toolName, at: now())
         inFlight[driven, default: 0] += 1
@@ -887,14 +972,14 @@ final class DeviceAgentControl {
     /// Runs the user's own operation on `udid`, such as installing and
     /// launching an app, in an input turn: it waits for agent input already
     /// queued, and agent input started meanwhile waits for it. Returns false
-    /// without running it while an agent drives the simulator.
+    /// without running it while an agent drives or remote input is reserved.
     func whileUserHoldsInput(udid: String, _ operation: () async -> Void) async -> Bool {
-        if case .agent = driver(udid: udid) { return false }
+        guard allowsLocalInput(udid: udid) else { return false }
         let turn = takeInputTurn(udid)
         defer { endInputTurn(udid, turn) }
         await waitForInputTurn(udid, turn)
         // Agent input that ran first makes it the driver.
-        if case .agent = driver(udid: udid) { return false }
+        guard allowsLocalInput(udid: udid), !Task.isCancelled else { return false }
         await operation()
         return true
     }
@@ -914,7 +999,10 @@ final class DeviceAgentControl {
     /// finds its turn first when it does.
     private func endInputTurn(_ udid: String, _ turn: UUID) {
         inputTurns[udid]?.removeAll { $0 == turn }
-        if inputTurns[udid]?.isEmpty == true { inputTurns[udid] = nil }
+        if inputTurns[udid]?.isEmpty == true {
+            inputTurns[udid] = nil
+            for waiter in inputDrainWaiters.removeValue(forKey: udid) ?? [] { waiter.resume() }
+        }
         if let next = inputTurns[udid]?.first, let waiter = inputWaiters.removeValue(forKey: next) {
             waiter.resume()
         }

@@ -18,7 +18,7 @@ extension RemoteClientMessage {
     public var sessionId: String? {
         switch self {
         case .helloAck, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
-             .createWorktreeSession, .createSession, .console, .portForward, .host, .peerHost, .pushRegistration:
+             .createWorktreeSession, .createSession, .console, .device, .portForward, .host, .peerHost, .pushRegistration:
             return nil
         case .subscribe(let id), .unsubscribe(let id), .takeOver(let id), .stop(let id), .queueClear(let id),
              .openSessionTab(let id), .closeSessionTab(let id), .installAdapter(let id):
@@ -30,7 +30,7 @@ extension RemoteClientMessage {
              .queueMove(let id, _, _), .queuePromote(let id, _),
              .listCommitFiles(let id, _), .commitFileDiff(let id, _, _), .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _, _), .readFile(let id, _), .readTranscriptImage(let id, _),
              .readSkill(let id, _), .resolveReferences(let id, _),
-             .readToolTerminal(let id, _), .readSubagent(let id, _),
+             .readToolTerminal(let id, _), .readSubagent(let id, _), .suggestNextPrompt(let id),
              .visualAidResponse(let id, _, _, _, _, _):
             return id
         }
@@ -39,7 +39,7 @@ extension RemoteClientMessage {
     public func replacingSessionId(_ new: String) -> RemoteClientMessage {
         switch self {
         case .helloAck, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
-             .createWorktreeSession, .createSession, .console, .portForward, .host, .peerHost, .pushRegistration:
+             .createWorktreeSession, .createSession, .console, .device, .portForward, .host, .peerHost, .pushRegistration:
             return self
         case .subscribe: return .subscribe(sessionId: new)
         case .unsubscribe: return .unsubscribe(sessionId: new)
@@ -96,6 +96,7 @@ extension RemoteClientMessage {
         case .resolveReferences(_, let spellings): return .resolveReferences(sessionId: new, spellings: spellings)
         case .readToolTerminal(_, let terminalId): return .readToolTerminal(sessionId: new, terminalId: terminalId)
         case .readSubagent(_, let subagentId): return .readSubagent(sessionId: new, subagentId: subagentId)
+        case .suggestNextPrompt: return .suggestNextPrompt(sessionId: new)
         }
     }
 }
@@ -103,7 +104,7 @@ extension RemoteClientMessage {
 extension RemoteServerMessage {
     public var sessionId: String? {
         switch self {
-        case .hello, .identityProof, .console, .portForward, .host, .peerHost, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
+        case .hello, .identityProof, .console, .device, .portForward, .host, .peerHost, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
              .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .worktreeSessionNeedsRepoHookApproval,
              .sessionCreated, .createSessionFailed:
             return nil
@@ -125,7 +126,7 @@ extension RemoteServerMessage {
              .fileTree(let id, _, _, _), .fileTreeFailed(let id, _, _, _), .fileContents(let id, _, _, _, _),
              .fileUnavailable(let id, _, _, _, _), .fileBytes(let id, _, _, _), .transcriptImage(let id, _, _), .mentionCandidates(let id, _, _),
              .referenceSummaries(let id, _),
-             .toolTerminal(let id, _, _, _, _, _, _), .subagentTranscript(let id, _, _, _, _),
+             .toolTerminal(let id, _, _, _, _, _, _), .subagentTranscript(let id, _, _, _, _), .nextPromptSuggestion(let id, _),
              .fileHistory(let id, _, _, _), .fileHistoryFailed(let id, _, _, _):
             return id
         case .sessionConfig(let cfg):
@@ -135,7 +136,7 @@ extension RemoteServerMessage {
 
     public func replacingSessionId(_ new: String) -> RemoteServerMessage {
         switch self {
-        case .hello, .identityProof, .console, .portForward, .host, .peerHost, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
+        case .hello, .identityProof, .console, .device, .portForward, .host, .peerHost, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
              .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .worktreeSessionNeedsRepoHookApproval,
              .sessionCreated, .createSessionFailed:
             return self
@@ -216,6 +217,8 @@ extension RemoteServerMessage {
                                  exitCode: exitCode, signal: signal, retained: retained)
         case .subagentTranscript(_, let subagentId, let found, let state, let messages):
             return .subagentTranscript(sessionId: new, subagentId: subagentId, found: found, state: state, messages: messages)
+        case .nextPromptSuggestion(_, let text):
+            return .nextPromptSuggestion(sessionId: new, text: text)
         case .fileBytes(_, let path, let data, let byteSize):
             return .fileBytes(sessionId: new, path: path, data: data, byteSize: byteSize)
         case .fileHistory(_, let path, let entries, let truncated):

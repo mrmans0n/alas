@@ -1210,7 +1210,7 @@ final class TabsManager {
         openWebPreview(worktreeId: owner.storageKey, url: url, remoteHost: remoteHost ?? Self.remoteHost(for: owner))
     }
 
-    /// The VM screen of a VM tab, kept while the tab is open.
+    /// The VM screen of a VM tab, kept while the tab is open or the Devices rail shows the VM.
     func vmView(tabID: TabID) -> VZVirtualMachineView {
         if let view = vmViews[tabID] { return view }
         let view = VZVirtualMachineView()
@@ -1328,6 +1328,17 @@ final class TabsManager {
             return existing
         }
         let tab = Tab.simulatorLogs(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func openOrFocusDeviceTab(worktreeId: String, state: DeviceTabState) -> Tab {
+        if let existing = tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) {
+            activate(worktreeId: worktreeId, tabId: state.id)
+            return existing
+        }
+        let tab = Tab.device(state)
         append(tab, to: worktreeId)
         return tab
     }
@@ -2333,7 +2344,7 @@ final class TabsManager {
             case .webPreview(let state):
                 clearWebPreviewBrowser(ownerKey: state.ownerKey)
             case .virtualMachine(let state):
-                clearVMView(tabID: state.id)
+                releaseVMView(tabID: state.id)
                 onVMTabClosed?(state)
             default:
                 continue
@@ -2341,7 +2352,8 @@ final class TabsManager {
         }
     }
 
-    private func clearVMView(tabID: TabID) {
+    /// Drops a VM's cached screen view: when its tab closes, or when the Devices rail stops showing it.
+    func releaseVMView(tabID: TabID) {
         guard let view = vmViews.removeValue(forKey: tabID) else { return }
         view.virtualMachine = nil
         view.removeFromSuperview()

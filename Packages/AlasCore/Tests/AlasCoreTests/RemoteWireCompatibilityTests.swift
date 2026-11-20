@@ -18,6 +18,10 @@ import Testing
         (.push, .push(forceWithLease: false)),
         (.pull, .pull),
         (.fetch, .fetch),
+        (.hunk(path: "a", index: 1, header: "@@ -1 +1 @@", linesHash: "h", action: .unstage),
+         .hunk(path: "a", stage: .staged, index: 1, header: "@@ -1 +1 @@", linesHash: "h", action: .unstage)),
+        (.hunk(path: "a", index: 0, header: "@@", linesHash: "h", action: .discard),
+         .hunk(path: "a", stage: .unstaged, index: 0, header: "@@", linesHash: "h", action: .discard)),
     ] as [(RemoteGitChange, HostWorktreeChange)])
     func phoneGitRequestsDecodeOnTheMac(change: RemoteGitChange, expected: HostWorktreeChange) throws {
         let json = RemoteGitRequest.message(id: 7, projectID: "p", path: "/r", branch: "main", change: change).json
@@ -29,7 +33,7 @@ import Testing
         (HostResponse.done, nil),
         (.failure(error: .failed(message: "Nothing is staged to commit.")), "Nothing is staged to commit."),
         (.failure(error: .operationInProgress), "Another operation is running in this worktree. Try again when it finishes."),
-        (.failure(error: .session(refusal: .notWriter)), "Another device is driving this session."),
+        (.failure(error: .session(refusal: .notWriter)), "Take over this session first."),
     ] as [(HostResponse, String?)])
     func phoneReadsTheMacsGitReply(result: HostResponse, failure: String?) throws {
         let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 7, result: result)))
@@ -38,6 +42,24 @@ import Testing
         case .success: #expect(failure == nil)
         case .failure(let error): #expect(error.message == failure)
         }
+    }
+
+    @Test func sessionDetailRoundTripsAndStaysOffTheWireWhenAbsent() throws {
+        let detail = RemoteSessionDetail(model: "Opus 5.5", contextPercent: 63, planCompleted: 2, planTotal: 5,
+                                         planStep: "Write tests", preview: "Done.", previewKind: .reply)
+        let full = RemoteSessionSummary(id: "s", title: "T", agentId: "claude", status: "idle", canDrive: false, detail: detail)
+        #expect(try JSONDecoder().decode(RemoteSessionSummary.self, from: JSONEncoder().encode(full)) == full)
+
+        let legacy = Data(#"{"id":"s","title":"T","agentId":"claude","status":"idle","canDrive":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(RemoteSessionSummary.self, from: legacy)
+        #expect(decoded.detail == nil)
+        #expect(!String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self).contains("\"detail\""))
+    }
+
+    @Test func anUnknownPreviewKindDropsOnlyTheKind() throws {
+        let json = Data(#"{"id":"s","title":"T","agentId":"claude","status":"idle","canDrive":false,"detail":{"model":"Opus","previewKind":"future","preview":"p"}}"#.utf8)
+        let detail = try #require(JSONDecoder().decode(RemoteSessionSummary.self, from: json).detail)
+        #expect(detail == RemoteSessionDetail(model: "Opus", preview: "p"))
     }
 
     @Test func phoneShepherdRequestsDecodeOnTheMac() throws {
@@ -83,6 +105,17 @@ import Testing
         #expect(RemoteGitRequest.pullRequest(replying: 4, in: found) == nil)
     }
 
+    @Test func phoneReadsWhatACommitMessageIsSuggestedFrom() throws {
+        let request = RemoteGitRequest.commitMessageInput(id: 3, projectID: "p", path: "/r").json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: request)
+            == HostClientMessage(id: 3, request: .commitMessageInput(worktree: WorktreeRef(projectID: "p", path: "/r"))))
+        let input = CommitMessageSuggestionInput(stat: " a | 1 +", diff: "diff --git a/a b/a", branch: nil,
+                                                 ticketTitle: "Login", recentSubjects: ["fix: x"])
+        let reply = OpaqueHostMessage(json: try JSONEncoder().encode(
+            HostServerMessage.response(id: 3, result: .commitMessageInput(input: input))))
+        #expect(RemoteGitRequest.commitMessageInput(in: reply) == input)
+    }
+
     @Test func phoneRunsTheMacsScripts() throws {
         let ref = WorktreeRef(projectID: "p", path: "/r")
         let decode = { (m: OpaqueHostMessage) in try JSONDecoder().decode(HostClientMessage.self, from: m.json).request }
@@ -106,6 +139,52 @@ import Testing
             return
         }
         #expect(refused.message == "Approve the hook first.")
+        #expect(RemoteGitRequest.startedRunID(in: try reply(.runStart(start: .started(runID: "run-42")))) == "run-42")
+    }
+
+    @Test(arguments: [
+        (RunOutcome.succeeded, Int32?.some(0)),
+        (.stopped, nil),
+        (.unknown, nil),
+    ])
+    func phoneRecoversARunsOutcomeAndResumesAfterTheSnapshot(outcome: RunOutcome, exitCode: Int32?) throws {
+        let run = RunRecord(
+            id: "run-42", scriptKey: "repo:build.sh", scriptName: "Build", worktreeID: "w", branch: "main",
+            target: RunExecutionTarget(host: nil, workingDirectory: "/r"), status: .finished(outcome),
+            startedAt: .now, sessionID: "terminal-42")
+        let cursor = HostCursor(generation: UUID(), sequence: 7)
+        let snapshot = HostSnapshot(cursor: cursor, projects: [], worktrees: [], workspaceCheckouts: [], runs: [run], sessions: [])
+        let message = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(
+            id: 5, result: .snapshot(snapshot: snapshot))))
+        guard case .snapshot(id: 5, let phoneCursor, let runs) = RemoteRunFeed.update(in: message) else {
+            Issue.record("the phone missed the run snapshot")
+            return
+        }
+        let observed = try #require(runs.first)
+        #expect(observed.status == .finished(exitCode: exitCode))
+        #expect(observed.visibleConsoleID == nil)
+        let follow = try JSONDecoder().decode(HostClientMessage.self, from: RemoteRunFeed.subscribe(id: 6, after: phoneCursor).json)
+        #expect(follow == HostClientMessage(id: 6, request: .subscribe(after: cursor)))
+    }
+
+    @Test(arguments: [false, true])
+    func phoneReadsOnlyTheVisibleConsoleAndTheActualExitStatus(hidden: Bool) throws {
+        let run = RunRecord(
+            id: "run-42", scriptKey: "repo:build.sh", scriptName: "Build", worktreeID: "w", branch: "main",
+            target: RunExecutionTarget(host: nil, workingDirectory: "/r"), status: .finished(.failed(exitCode: 17)),
+            startedAt: .now, sessionID: "terminal-42", consoleIsHidden: hidden)
+        let cursor = HostCursor(generation: UUID(), sequence: 7)
+        let message = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.events(
+            events: [.runChanged(run), .runRemoved(id: "older-run")], cursor: cursor)))
+        guard case .events(let changed, let removed, let resync) = RemoteRunFeed.update(in: message) else {
+            Issue.record("the phone missed the run event")
+            return
+        }
+        let observed = try #require(changed.first)
+        #expect(observed.id == "run-42")
+        #expect(observed.visibleConsoleID == (hidden ? nil : "terminal-42"))
+        #expect(observed.status == .finished(exitCode: 17))
+        #expect(removed == ["older-run"] && !resync)
     }
 
     @Test(arguments: [
@@ -455,6 +534,8 @@ enum RemoteWireSamples {
                 url: URL(string: "https://gitlab.example.com/group/repo/-/issues/1")!)),
             RemoteReferenceEntry(spelling: "!2", failure: .unauthenticated(executable: "glab", host: "gitlab.example.com")),
         ]),
+        .nextPromptSuggestion(sessionId: "s1", text: "Run the tests"),
+        .nextPromptSuggestion(sessionId: "s1", text: nil),
     ]
 
     static let clientMessages: [RemoteClientMessage] = [
@@ -479,5 +560,6 @@ enum RemoteWireSamples {
             pastedSpans: [ACPPastedTextSpan(ordinal: 1, utf16Offset: 4, utf16Length: 1)]),
         .readSkill(sessionId: "s1", command: "/review"),
         .resolveReferences(sessionId: "s1", spellings: ["#1", "!2"]),
+        .suggestNextPrompt(sessionId: "s1"),
     ]
 }

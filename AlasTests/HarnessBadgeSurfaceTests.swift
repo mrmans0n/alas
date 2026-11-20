@@ -14,6 +14,16 @@ struct HarnessBadgeSurfaceTests {
         #expect(awaiting == OKLCH(l: HarnessSessionBadgeChrome.surfaceLightness, c: 0.13, h: 95, a: 1))
     }
 
+    @Test func badgeSurfaceIgnoresIdleSessionsAndIsNilWhenAllIdle() {
+        typealias B = HarnessService.WorktreeBadgeSession
+        let idle = B(id: "i", agent: .claude, state: nil, updatedAt: nil)
+        let run = B(id: "r", agent: .codex, state: .running, updatedAt: .now)
+        let wait = B(id: "w", agent: .codex, state: .awaiting, updatedAt: .now)
+        #expect(HarnessSessionBadgeSurface(badges: [idle, idle]) == nil)
+        #expect(HarnessSessionBadgeSurface(badges: [idle, run]) == .running)
+        #expect(HarnessSessionBadgeSurface(badges: [run, idle, wait]) == .mixed)
+    }
+
     @Test func overflowSurfaceReflectsOnlyHiddenSessionStates() {
         let running = HarnessService.WorktreeHarnessSession(id: "running", state: .running, agent: .claude)
         let awaiting = HarnessService.WorktreeHarnessSession(id: "awaiting", state: .awaiting, agent: .pi)

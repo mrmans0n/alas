@@ -581,21 +581,66 @@ public final class HarnessService {
         }
     }
 
+    /// A session shown as a sidebar badge: active (`state` set) or idle (`state` nil).
+    public struct WorktreeBadgeSession: Equatable, Identifiable, Sendable {
+        public let id: String
+        public let agent: AgentKind
+        /// Nil when the session is idle.
+        public let state: AggregatedState?
+        /// The activity's `updatedAt`; nil for idle sessions with no harness activity.
+        public let updatedAt: Date?
+
+        public init(id: String, agent: AgentKind, state: AggregatedState?, updatedAt: Date?) {
+            self.id = id
+            self.agent = agent
+            self.state = state
+            self.updatedAt = updatedAt
+        }
+    }
+
+    private static func aggregatedState(for state: ActivityState) -> AggregatedState? {
+        switch state {
+        case .awaitingInput, .permissionRequest: .awaiting
+        case .busy: .running
+        case .limited: .limited
+        case .failed: .failed
+        case .idle: nil
+        }
+    }
+
+    /// Active sessions first (sorted like `summary`), then idle sessions in input order.
+    /// Ids without harness activity appear only when listed in `idleAgents`.
+    public func badgeSessions(forSessionIds ids: [String], idleAgents: [String: AgentKind]) -> [WorktreeBadgeSession] {
+        var seen = Set<String>()
+        var active: [(session: WorktreeBadgeSession, offset: Int)] = []
+        var idle: [WorktreeBadgeSession] = []
+        for (offset, id) in ids.enumerated() where seen.insert(id).inserted {
+            if let activity = activityBySession[id] {
+                if let state = Self.aggregatedState(for: activity.state) {
+                    active.append((WorktreeBadgeSession(id: id, agent: activity.agent, state: state, updatedAt: activity.updatedAt), offset))
+                } else if activeHarnessBySession[id] != nil || idleAgents[id] != nil {
+                    // Idle activity outlives the agent process; only a still-detected harness
+                    // (or a live ACP session) earns an idle badge.
+                    idle.append(WorktreeBadgeSession(id: id, agent: activity.agent, state: nil, updatedAt: activity.updatedAt))
+                }
+            } else if let agent = idleAgents[id] {
+                idle.append(WorktreeBadgeSession(id: id, agent: agent, state: nil, updatedAt: nil))
+            }
+        }
+        active.sort { lhs, rhs in
+            if lhs.session.state != rhs.session.state {
+                return (lhs.session.state?.rollUpRank ?? 0) < (rhs.session.state?.rollUpRank ?? 0)
+            }
+            if lhs.session.updatedAt != rhs.session.updatedAt { return (lhs.session.updatedAt ?? .distantPast) > (rhs.session.updatedAt ?? .distantPast) }
+            return lhs.offset < rhs.offset
+        }
+        return active.map(\.session) + idle
+    }
+
     public func summary(forSessionIds ids: [String]) -> WorktreeHarnessSummary? {
         let sessions = ids.enumerated().compactMap { offset, id -> (session: WorktreeHarnessSession, updatedAt: Date, offset: Int)? in
-            guard let activity = activityBySession[id] else { return nil }
-            switch activity.state {
-            case .awaitingInput, .permissionRequest:
-                return (WorktreeHarnessSession(id: id, state: .awaiting, agent: activity.agent), activity.updatedAt, offset)
-            case .busy:
-                return (WorktreeHarnessSession(id: id, state: .running, agent: activity.agent), activity.updatedAt, offset)
-            case .limited:
-                return (WorktreeHarnessSession(id: id, state: .limited, agent: activity.agent), activity.updatedAt, offset)
-            case .failed:
-                return (WorktreeHarnessSession(id: id, state: .failed, agent: activity.agent), activity.updatedAt, offset)
-            case .idle:
-                return nil
-            }
+            guard let activity = activityBySession[id], let state = Self.aggregatedState(for: activity.state) else { return nil }
+            return (WorktreeHarnessSession(id: id, state: state, agent: activity.agent), activity.updatedAt, offset)
         }
         .sorted { lhs, rhs in
             if lhs.session.state != rhs.session.state {

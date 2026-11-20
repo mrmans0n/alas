@@ -68,6 +68,9 @@ struct RepoGroupView: View {
     var landingStatus: GGLandingPresentation.SidebarStatus? = nil
     var onOpenGGLanding: (() -> Void)? = nil
     let harnessSummary: (String) -> HarnessService.WorktreeHarnessSummary?
+    var harnessBadges: (String) -> [HarnessService.WorktreeBadgeSession] = { _ in [] }
+    /// Session id, then worktree id.
+    var badgePopoverModel: (String, String) -> AgentBadgePopoverModel? = { _, _ in nil }
     let ggMenuModel: (Worktree) -> GGWorktreeMenuModel
     let onSelect: (Worktree) -> Void
     let onNewWorktree: () -> Void
@@ -277,6 +280,8 @@ struct RepoGroupView: View {
             landingStatus: wt.id == landingHostWorktreeId ? landingStatus : nil,
             onOpenGGLanding: onOpenGGLanding,
             harnessSummary: harnessSummary(wt.id),
+            harnessBadges: harnessBadges(wt.id),
+            badgePopoverModel: { sessionId in badgePopoverModel(sessionId, wt.id) },
             ggMenuModel: ggMenuModel(wt),
             onTap: { onSelect(wt) },
             onOpenTerminal: { onOpenTerminal(wt) },

@@ -232,6 +232,13 @@ final class AppState {
     @ObservationIgnored var nextPromptSessionID: String?
     @ObservationIgnored var nextPromptActiveIncarnation: UUID?
     @ObservationIgnored var nextPromptComposerEnvironment = NextPromptEligibilitySnapshot.Environment()
+    /// Each live session's last completed turn, which a Remote client's
+    /// suggestion is for.
+    @ObservationIgnored var nextPromptCompletedTurns: [String: NextPromptCompletedTurn] = [:]
+    /// The suggestion a Remote client got for a session, by the request it
+    /// answered, so asking again with nothing changed does not run the model
+    /// again, and a settings or model change asks anew.
+    @ObservationIgnored var remoteNextPromptSuggestions: [String: (id: NextPromptRequestID, text: String)] = [:]
     var config: AppConfig
     var themeStore: ThemeStore
     /// The headless core: projects, worktrees and session managers.
@@ -814,14 +821,126 @@ final class AppState {
     /// The agents running in a worktree's terminal panes and chat tabs,
     /// rolled up as the sidebar row and the Changes tab show them.
     func harnessSummary(forWorktree worktreeId: String) -> HarnessService.WorktreeHarnessSummary? {
-        let ids = tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
+        harness.summary(forSessionIds: harnessSessionIds(forWorktree: worktreeId))
+    }
+
+    /// Every agent session in the worktree's open tabs: terminal panes and chat tabs.
+    private func harnessSessionIds(forWorktree worktreeId: String) -> [String] {
+        tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
             switch tab {
             case .terminal(let s): return s.root.leaves().map(\.sessionId)
             case .acpSession(let s): return [s.sessionId]
             default: return []
             }
         }
-        return harness.summary(forSessionIds: ids)
+    }
+
+    /// The sessions open in a worktree as sidebar badges: active ones first,
+    /// then idle chat tabs whose agent is known.
+    func harnessBadges(forWorktree worktreeId: String) -> [HarnessService.WorktreeBadgeSession] {
+        let manager = acpManager(forWorktreeId: worktreeId)
+        var idleAgents: [String: AgentKind] = [:]
+        for tab in tabs.tabs(forWorktree: worktreeId) {
+            guard case .acpSession(let s) = tab else { continue }
+            let agentId = manager?.liveSession(for: s.sessionId)?.agentId
+                ?? manager?.sessionRows.first { $0.id == s.sessionId }?.agentId
+            if let agentId { idleAgents[s.sessionId] = ACPHarnessBridge.agentKind(for: agentId) }
+        }
+        return harness.badgeSessions(
+            forSessionIds: harnessSessionIds(forWorktree: worktreeId),
+            idleAgents: idleAgents
+        )
+    }
+
+    /// What the hover popover on a sidebar badge shows. Built only when the
+    /// popover opens; nil when the session is no longer in an open tab.
+    func agentBadgePopoverModel(sessionId: String, worktreeId: String) -> AgentBadgePopoverModel? {
+        let activity = harness.activityBySession[sessionId]
+        let status = activity.map { Self.popoverStatus(for: $0.state) } ?? .idle
+        for tab in tabs.tabs(forWorktree: worktreeId) {
+            switch tab {
+            case .acpSession(let s) where s.sessionId == sessionId:
+                return acpBadgePopoverModel(sessionId: sessionId, tabTitle: s.title, worktreeId: worktreeId, activity: activity, status: status)
+            case .terminal(let s) where s.root.leaves().contains(where: { $0.sessionId == sessionId }):
+                guard let activity else { return nil }
+                return AgentBadgePopoverModel(
+                    agentName: activity.agent.displayName,
+                    agentLogoAsset: activity.agent.logoAssetName,
+                    title: s.title,
+                    status: status,
+                    since: activity.updatedAt,
+                    body: AgentBadgePopoverModel.body(
+                        status: status,
+                        // The hook's notification body is the closest a pane has to the request.
+                        permissionTitle: activity.lastBody.flatMap { ACPSessionTranscriptReader.replyExcerpt($0) },
+                        plan: nil,
+                        reply: activity.lastBody.flatMap { ACPSessionTranscriptReader.replyExcerpt($0) }
+                    )
+                )
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+
+    private func acpBadgePopoverModel(
+        sessionId: String,
+        tabTitle: String,
+        worktreeId: String,
+        activity: HarnessService.HarnessActivityState?,
+        status: AgentBadgePopoverModel.Status
+    ) -> AgentBadgePopoverModel? {
+        let manager = acpManager(forWorktreeId: worktreeId)
+        let row = manager?.sessionRows.first { $0.id == sessionId }
+        let rowUpdatedAt = row.map { Date(timeIntervalSince1970: TimeInterval($0.updatedAt)) }
+        guard let session = manager?.liveSession(for: sessionId) else {
+            guard let row else { return nil }
+            let agent = ACPHarnessBridge.agentKind(for: row.agentId)
+            return AgentBadgePopoverModel(
+                agentName: agent.displayName,
+                agentLogoAsset: agent.logoAssetName,
+                title: row.title.isEmpty ? tabTitle : row.title,
+                status: .idle,
+                since: rowUpdatedAt,
+                body: .none
+            )
+        }
+        let agent = activity?.agent ?? ACPHarnessBridge.agentKind(for: session.agentId)
+        let transcript = session.transcript
+        return AgentBadgePopoverModel(
+            agentName: agent.displayName,
+            agentLogoAsset: agent.logoAssetName,
+            title: session.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? tabTitle : session.title,
+            status: status,
+            // An idle activity may be stamped when the session was restored, not when its turn ended.
+            since: status == .idle ? (rowUpdatedAt ?? activity?.updatedAt) : activity?.updatedAt,
+            body: AgentBadgePopoverModel.body(
+                status: status,
+                permissionTitle: transcript.pendingPermission?.params.toolCall.title,
+                plan: AgentSidebarRollupBuilder.planProgress(for: transcript.currentPlan),
+                // Skips the transcript walk when the body has no reply line.
+                reply: status.showsReply
+                    ? ACPSessionTranscriptReader.lastAgentReplyStart(transcript.messages)
+                    : nil
+            ),
+            model: AgentSidebarRollupBuilder.modelDisplay(
+                currentModel: session.currentModel,
+                availableModels: session.availableModels
+            ),
+            contextPercent: AgentBadgePopoverModel.contextPercent(session.contextUsage)
+        )
+    }
+
+    private static func popoverStatus(for state: ActivityState) -> AgentBadgePopoverModel.Status {
+        switch state {
+        case .busy: .running
+        case .awaitingInput: .awaitingInput
+        case .permissionRequest: .permission
+        case .limited: .limited
+        case .failed: .failed
+        case .idle: .idle
+        }
     }
     /// Settle window before a harness awaiting/permission transition reaches
     /// the attention store, so flapping states never flash the sidebar badge.
@@ -939,6 +1058,19 @@ final class AppState {
     /// Built on first peer console request; see `AppState+PeerConsoles`.
     /// Observable so a pane drawn before it existed still shows peer control.
     var _peerConsoleHost: PeerConsoleHost?
+    @ObservationIgnored lazy var peerDeviceGrantStore = Result {
+        try PeerDeviceGrants(file: PeerDeviceGrants.defaultURL)
+    }
+    @ObservationIgnored var servedPeerDevices: PeerDeviceHost?
+    @ObservationIgnored var peerDeviceInventoryTask: Task<Void, Never>?
+    @ObservationIgnored var peerDeviceSettingsObservers = 0
+    var peerDeviceInventory: [AndroidDevice] = []
+    var peerDeviceDriverNames: [String: String] = [:]
+    @ObservationIgnored var peerDeviceProxyTask: Task<Void, Never>?
+    @ObservationIgnored var monitoredPeerDeviceProxy: PeerDeviceProxyTarget?
+    var confirmedPeerDeviceProxy: PeerDeviceProxyTarget?
+    var peerDeviceGrantRevision: UInt64 = 0
+    var peerDeviceGrantError: String?
     /// Last queued remote tab action per session id; see `serializedSessionTabAction`.
     /// Stands in for the terminal registry in tests that route CLI commands
     /// from a terminal session without building one.
@@ -961,6 +1093,22 @@ final class AppState {
     private(set) var remoteTailscaleError: String?
     @ObservationIgnored private var remoteTailscaleSync: Task<Void, Never>?
     @ObservationIgnored private var remoteTailscaleServeProcess: RemoteTailscaleServeProcess?
+
+    var canServePeerDevices: Bool {
+        guard let target = peerDeviceProxyTarget else { return false }
+        return confirmedPeerDeviceProxy == target
+    }
+
+    var peerDeviceProxyTarget: PeerDeviceProxyTarget? {
+        guard config.remote.enabled, config.remote.tailscaleOnly, config.remote.tailscaleServe,
+              let server = remoteServer, server.loopbackOnly, let port = server.port,
+              let serve = remoteTailscaleServeProcess, serve.port == port, serve.isRunning,
+              remoteTailscaleServe == .serving(port: port),
+              let tailscale = remoteTailscale, tailscale.httpsEnabled,
+              let url = URL(string: "https://\(tailscale.dnsName)/remote-info")
+        else { return nil }
+        return PeerDeviceProxyTarget(processID: ObjectIdentifier(serve), url: url, port: port, serverID: config.remote.serverId)
+    }
     private(set) var remoteConnectedDeviceCountsSnapshot: [String: Int] = [:]
 
     private func makeRemoteInterfaces() -> [RemoteNetworkInterface] {
@@ -1008,7 +1156,10 @@ final class AppState {
             name: remoteDisplayName,
             // Only reach for the lazy manager when a server is up, for the
             // same reason `syncRemotePeers` does.
-            peers: remoteServer != nil ? remotePeers.helloPeers : []
+            peers: remoteServer != nil ? remotePeers.helloPeers : [],
+            consoleCapabilities: PeerConsoleCapability.appHost,
+            hostCapabilities: HostProtocolCapability.served
+                + [HostProtocolCapability.worktreesAutoBranchNameV1, HostProtocolCapability.sessionsNextPromptV1]
         )
     }
 
@@ -1039,6 +1190,9 @@ final class AppState {
             origin: makeRemoteOriginPolicy(interfaces: interfaces)
         )
         syncPairingApprovalState()
+        syncPeerDeviceProxy()
+        remoteServer?.refreshPeerDevicePolicy()
+        syncPeerDeviceInventory()
     }
 
     func remoteConnectedDeviceCounts() -> [String: Int] {
@@ -1096,6 +1250,9 @@ final class AppState {
             let root = (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
                 .appendingPathComponent("RemoteWeb")
             let assets = RemoteWebAssets(root: root)
+            host.nextPromptSuggester = { [weak self] sessionID in
+                await self?.remoteNextPromptSuggestion(sessionID: sessionID)
+            }
             let server = RemoteServer(
                 pairing: remotePairing,
                 assets: assets,
@@ -1164,6 +1321,7 @@ final class AppState {
             remoteServer?.stop()
             remoteServer = nil
             _peerConsoleHost?.shutdown()
+            stopServingPeerDevices()
             remotePort = nil
             remoteAdvertisedAddresses = []
             remoteConnectedDeviceCountsSnapshot = [:]
@@ -2100,6 +2258,7 @@ final class AppState {
             await self?.vmManager.stopAll()
             // simctl would record on after Alas quits; this also saves your recordings.
             await self?.madeDeviceRecorder?.stopAll()
+            await self?.stopServingPeerDevicesForQuit()
             // Takes down the scrcpy servers and their adb forwards.
             await self?.androidStreams.stopAll()
         }

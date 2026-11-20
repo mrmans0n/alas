@@ -42,6 +42,8 @@ targets:
       - path: ../Alas/Sources/UI/Boids.swift
       # Shared with the Mac: the GitHub and GitLab marks reference chips draw.
       - path: ../Alas/Sources/Icons/CodeHostGlyphs.swift
+      - path: ../Alas/Sources/Remote/Native/PeerDeviceSession.swift
+      - path: ../Alas/Sources/Remote/Native/PeerDevicePlayback.swift
       - path: Resources/Assets.xcassets
       # Shared with the Mac: the frame visual aid fragments are wrapped in.
       - path: ../Alas/Resources/VisualAid/frame.html

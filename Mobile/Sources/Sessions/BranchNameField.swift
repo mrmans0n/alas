@@ -5,10 +5,10 @@ import UIKit
 /// Filters the inserted text before UIKit replaces the user's selection.
 struct BranchNameField: UIViewRepresentable {
     @Binding var text: String
+    var placeholder = "New branch"
 
     func makeUIView(context: Context) -> UITextField {
         let field = UITextField()
-        field.placeholder = "New branch"
         field.accessibilityLabel = "New branch"
         field.font = .preferredFont(forTextStyle: .body)
         field.adjustsFontForContentSizeCategory = true
@@ -28,6 +28,7 @@ struct BranchNameField: UIViewRepresentable {
     func updateUIView(_ field: UITextField, context: Context) {
         context.coordinator.text = $text
         field.isEnabled = context.environment.isEnabled
+        field.placeholder = placeholder
         if field.markedTextRange == nil, field.text != text {
             field.text = text
         }
