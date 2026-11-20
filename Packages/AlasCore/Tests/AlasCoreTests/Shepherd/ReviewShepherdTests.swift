@@ -201,6 +201,49 @@ struct ReviewShepherdTests {
         #expect(HostSessionShepherd.make(sessionID: "session-2", review: shepherd, stack: stack) == nil)
     }
 
+    @Test func boundPillCarriesTheRequestDetail() async throws {
+        let request = F.request(checks: [F.check("lint", .pass), F.check("tests", .fail)], threads: [F.trustedThread])
+        let shepherd = makeShepherd(request: request, deliverPrompt: { _, _ in .delivered })
+        let stack = StackShepherd(store: MemoryStore(), fileURL: URL(fileURLWithPath: "/memory/stack-shepherds.json"))
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: false, autoMerge: false, contextRules: nil
+        )
+        await shepherd.evaluateNow(record.id)
+
+        let detail = try #require(HostSessionShepherd.make(sessionID: "session-1", review: shepherd, stack: stack)?.detail)
+        let current = try #require(shepherd.records[record.id])
+        #expect(detail.title == "Fix login")
+        #expect(detail.checks?.map(\.bucket) == ["pass", "fail"])
+        #expect(detail.openThreads == 1 && detail.trustedThreads == 1)
+        #expect(detail.fixAttempts == current.fixAttempts && detail.fixAttemptBudget == current.fixAttemptBudget)
+        #expect(detail.branch == "\(record.branch) → \(record.baseBranch)")
+        #expect(detail.headSHA == String(F.head.prefix(7)))
+        #expect(detail.provider == CodeHostKind.github.displayName)
+        #expect(detail.requestLabel == CodeHostKind.github.reviewRequestLabel)
+    }
+
+    @Test func detailIgnoresASnapshotOfAnotherRequest() async throws {
+        let bound = F.request()
+        let other = ReviewRequest(
+            remote: bound.remote, number: 8, title: "Another", url: bound.remote.reviewRequestURL(number: 8),
+            state: .open, isDraft: false, headRefName: "fix-login", baseRefName: "main",
+            headSHA: F.head, reviewDecision: .approved, mergeState: .clean,
+            checks: [F.check("lint", .pass)], threads: [], areThreadsComplete: true
+        )
+        let shepherd = makeShepherd(request: other, deliverPrompt: { _, _ in .delivered })
+        let stack = StackShepherd(store: MemoryStore(), fileURL: URL(fileURLWithPath: "/memory/stack-shepherds.json"))
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: bound, baseBranch: "main",
+            autoFix: false, autoMerge: false, contextRules: nil
+        )
+        await shepherd.evaluateNow(record.id)
+
+        let detail = try #require(HostSessionShepherd.make(sessionID: "session-1", review: shepherd, stack: stack)?.detail)
+        #expect(detail.title == nil && detail.checks == nil)
+        #expect(detail.url == record.remote.reviewRequestURL(number: record.id.requestNumber))
+    }
+
     @Test(arguments: [
         (HostSessionShepherd(badge: "fixing", number: "#7", tooltip: "t"), ShepherdBadgeState.fixing),
         (HostSessionShepherd(badge: "fromANewerHost", number: "#7", tooltip: "t"), nil),

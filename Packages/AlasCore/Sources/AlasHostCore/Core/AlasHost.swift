@@ -497,6 +497,10 @@ public struct HostSessionSummary: Codable, Equatable, Sendable {
     /// The paired Mac that delegated this session, named from this Mac's own
     /// device record; nil for a session no paired Mac started.
     public var delegatedFromName: String? = nil
+    /// Ship publishes a stack for this session: its worktree is on a gg stack
+    /// and no stack shepherd is live for it. Nil otherwise, and from hosts
+    /// that predate it.
+    public var shipsStack: Bool? = nil
 }
 
 extension HostSessionSummary {
@@ -516,6 +520,7 @@ extension HostSessionSummary {
         parentID = try c.decodeIfPresent(String.self, forKey: .parentID)
         shepherd = (try? c.decodeIfPresent(HostSessionShepherd.self, forKey: .shepherd)) ?? nil
         delegatedFromName = (try? c.decodeIfPresent(String.self, forKey: .delegatedFromName)) ?? nil
+        shipsStack = (try? c.decodeIfPresent(Bool.self, forKey: .shipsStack)) ?? nil
     }
 }
 
@@ -547,7 +552,19 @@ public struct SessionsAPI {
             isWriter: manager.isWriter(for: row.id),
             parentID: core.delegatedSessionParents[row.id],
             shepherd: HostSessionShepherd.make(sessionID: row.id, review: core.reviewShepherd, stack: core.stackShepherd),
-            delegatedFromName: core.delegatedFromName(of: row.id)
+            delegatedFromName: core.delegatedFromName(of: row.id),
+            shipsStack: shipsStack(
+                owner: manager.owner,
+                hasLiveStackRecord: core.stackShepherd.record(forSession: row.id).map { !$0.isFinished } ?? false,
+                stackName: { core.stackShepherd.effects?.worktreeContext($0)?.stackName }
+            )
         )
+    }
+
+    /// True for a worktree session that Ship would publish a stack for; nil
+    /// keeps the summary small for every other session.
+    static func shipsStack(owner: SessionOwnerID, hasLiveStackRecord: Bool, stackName: (String) -> String?) -> Bool? {
+        guard !hasLiveStackRecord, case .worktree(let id) = owner, stackName(id) != nil else { return nil }
+        return true
     }
 }

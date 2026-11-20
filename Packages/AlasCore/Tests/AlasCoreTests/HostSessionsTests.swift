@@ -1052,6 +1052,18 @@ struct HostSessionsTests {
         #expect(summary(child)?.delegatedFromName == "another Mac")
     }
 
+    @Test(arguments: [
+        (SessionOwnerID.worktree("w"), false, "s", true as Bool?),
+        (.worktree("w"), true, "s", nil),
+        (.worktree("w"), false, nil, nil),
+        (.workspaceCheckout(UUID(), .local), false, "s", nil),
+    ] as [(SessionOwnerID, Bool, String?, Bool?)])
+    func shipsStackOnlyForAStackWorktreeWithoutALiveShepherd(
+        owner: SessionOwnerID, hasLiveStackRecord: Bool, stackName: String?, expected: Bool?
+    ) {
+        #expect(SessionsAPI.shipsStack(owner: owner, hasLiveStackRecord: hasLiveStackRecord, stackName: { _ in stackName }) == expected)
+    }
+
     /// Binding a shepherd changes no session row, yet subscribers see the pill.
     @Test func bindingAShepherdRepublishesTheSessionWithItsPill() async throws {
         let fixture = try Fixture()
