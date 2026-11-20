@@ -29,6 +29,12 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
     /// A subagent's row: the child it stands for, read with `readSubagent`.
     /// The key is left out on other rows.
     public var subagent: Subagent? = nil
+    /// A user row's mentions, in the order of its `📎` lines; a viewer that
+    /// shows them drops those lines. The key is left out when nil.
+    public var mentions: [RemoteUserMention]? = nil
+    /// Where a user row's collapsed pastes sit in `text`, in UTF-16 units.
+    /// The key is left out when nil.
+    public var pastedSpans: [ACPPastedTextSpan]? = nil
 
     public struct Subagent: Codable, Equatable, Sendable {
         public let id: String
@@ -73,7 +79,8 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
     public init(
         stableId: String, kind: String, text: String?, json: String?, index: Int, isHidden: Bool? = nil,
         checkpointId: String? = nil, images: [Image]? = nil, card: String? = nil,
-        phase: String? = nil, createdAt: Int64? = nil, fold: Fold? = nil, subagent: Subagent? = nil
+        phase: String? = nil, createdAt: Int64? = nil, fold: Fold? = nil, subagent: Subagent? = nil,
+        mentions: [RemoteUserMention]? = nil, pastedSpans: [ACPPastedTextSpan]? = nil
     ) {
         self.stableId = stableId
         self.kind = kind
@@ -88,6 +95,8 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.fold = fold
         self.subagent = subagent
+        self.mentions = mentions
+        self.pastedSpans = pastedSpans
     }
 }
 

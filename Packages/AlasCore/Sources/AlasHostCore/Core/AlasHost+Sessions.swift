@@ -195,10 +195,13 @@ extension SessionsAPI {
     /// turn and sends this prompt at once, keeping the queue. With `owner`,
     /// only that owner's session: ids are not unique across owners.
     /// `delegatedSource` marks a turn Alas sends (Ship), shown as its card.
+    /// `draft` is the composer's, when it had chips: its pasted text shows as
+    /// badges in the recorded row.
     public func submit(
         _ sessionID: String,
         prompt: String,
         attachments: [ACPMessage.Attachment] = [],
+        draft: ACPComposerDraft? = nil,
         steer: Bool = false,
         delegatedSource: ACPDelegatedPromptSource? = nil,
         owner: SessionOwnerID? = nil,
@@ -215,10 +218,10 @@ extension SessionsAPI {
             report.finish()
         }
         if steer {
-            await manager.steerPrompt(for: sessionID, text: prompt, attachments: attachments, onResult: onResult)
+            await manager.steerPrompt(for: sessionID, text: prompt, attachments: attachments, draft: draft, onResult: onResult)
         } else {
             await manager.sendPrompt(
-                for: sessionID, text: prompt, attachments: attachments,
+                for: sessionID, text: prompt, attachments: attachments, draft: draft,
                 delegatedSource: delegatedSource, normalUserTurn: delegatedSource == nil, onResult: onResult
             )
         }
@@ -271,6 +274,49 @@ extension SessionsAPI {
     /// Subagent `subagentID` of the loaded session `sessionID`, or nil when it has no such child.
     public func subagentRun(_ sessionID: String, subagentID: String) -> ACPSubagentRun? {
         (try? liveManager(for: sessionID))?.liveSession(for: sessionID)?.subagentRun(subagentID)
+    }
+
+    /// The `SKILL.md` of the loaded session's skill command `command`, up to
+    /// 512 KiB; nil when the command is not a skill with a file. The path
+    /// comes from the session's own command list, never from the caller.
+    public func skillFile(_ sessionID: String, command: String) async -> (text: String, truncated: Bool)? {
+        guard let suggestion = (try? liveManager(for: sessionID))?.liveSession(for: sessionID)?
+            .promptSuggestions.first(where: { $0.command == command }),
+              suggestion.presentation?.isSkill == true,
+              let path = suggestion.presentation?.skillPath
+        else { return nil }
+        let limit = 512 * 1024
+        return await Task.detached {
+            guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+            defer { try? handle.close() }
+            guard let data = try? handle.read(upToCount: limit + 1) else { return nil }
+            return (String(decoding: data.prefix(limit), as: UTF8.self), data.count > limit)
+        }.value
+    }
+
+    /// What `#N`/`!N` references in the loaded session's worktree name, as
+    /// the Mac's own chips resolve them. Waits up to 10 s for lookups; a
+    /// reference still loading then, or one the worktree's host can't look
+    /// up, gets no entry.
+    public func referenceSummaries(_ sessionID: String, spellings: [String]) async -> [RemoteReferenceEntry] {
+        guard let manager = try? liveManager(for: sessionID) else { return [] }
+        let store = manager.upstreamReferences.store(for: URL(fileURLWithPath: manager.worktreePath))
+        store.resolveRemote()
+        await store.waitForRemote()
+        guard store.remote != nil else { return [] }
+        let references = spellings.compactMap(CodeHostReference.init(spelling:))
+        references.forEach(store.ensureLoaded)
+        let deadline = ContinuousClock.now + .seconds(10)
+        while references.contains(where: { store.entry(for: $0) == .loading }), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        return references.compactMap { reference in
+            switch store.entry(for: reference) {
+            case .loaded(let summary): RemoteReferenceEntry(spelling: reference.spelling, summary: summary)
+            case .failed(let failure): RemoteReferenceEntry(spelling: reference.spelling, failure: failure)
+            case .idle, .loading: nil
+            }
+        }
     }
 
     /// Adds `visual` to the transcript of session `sessionID`, which this

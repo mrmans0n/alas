@@ -40,6 +40,12 @@ import AlasSessions
     public var toolTerminal: @MainActor (_ sessionID: String, _ terminalID: String) -> ACPTerminalOutputResult?
     /// A live session's subagent, or nil when the session has no such child.
     public var subagentRun: @MainActor (_ sessionID: String, _ subagentID: String) -> ACPSubagentRun?
+    /// A skill command's `SKILL.md`, or nil when the command is not a skill
+    /// with a file in that session.
+    public var skillFile: @MainActor (_ sessionID: String, _ command: String) async -> (text: String, truncated: Bool)?
+    /// What references name in the session's worktree; only those that
+    /// finished loading or failed get an entry.
+    public var referenceSummaries: @MainActor (_ sessionID: String, _ spellings: [String]) async -> [RemoteReferenceEntry]
 
     public init(
         sessionSummaries: @escaping @MainActor (_ tabIndex: @MainActor (_ sessionID: String, _ owner: SessionOwnerID) -> Int?) async
@@ -63,7 +69,9 @@ import AlasSessions
         fullToolCallContent: @escaping @MainActor (_ sessionID: String, _ toolCallID: String) async -> String? = { _, _ in nil },
         spillToolImage: @escaping @MainActor (_ sessionID: String, _ data: Data) async -> String? = { _, _ in nil },
         toolTerminal: @escaping @MainActor (_ sessionID: String, _ terminalID: String) -> ACPTerminalOutputResult? = { _, _ in nil },
-        subagentRun: @escaping @MainActor (_ sessionID: String, _ subagentID: String) -> ACPSubagentRun? = { _, _ in nil }
+        subagentRun: @escaping @MainActor (_ sessionID: String, _ subagentID: String) -> ACPSubagentRun? = { _, _ in nil },
+        skillFile: @escaping @MainActor (_ sessionID: String, _ command: String) async -> (text: String, truncated: Bool)? = { _, _ in nil },
+        referenceSummaries: @escaping @MainActor (_ sessionID: String, _ spellings: [String]) async -> [RemoteReferenceEntry] = { _, _ in [] }
     ) {
         self.sessionSummaries = sessionSummaries
         self.worktrees = worktrees
@@ -79,6 +87,8 @@ import AlasSessions
         self.spillToolImage = spillToolImage
         self.toolTerminal = toolTerminal
         self.subagentRun = subagentRun
+        self.skillFile = skillFile
+        self.referenceSummaries = referenceSummaries
     }
 
     /// The host's lists and creations; empty and refused without a host.
@@ -126,6 +136,12 @@ import AlasSessions
             },
             subagentRun: { [weak host] sessionID, subagentID in
                 host?.sessions.subagentRun(sessionID, subagentID: subagentID)
+            },
+            skillFile: { [weak host] sessionID, command in
+                await host?.sessions.skillFile(sessionID, command: command)
+            },
+            referenceSummaries: { [weak host] sessionID, spellings in
+                await host?.sessions.referenceSummaries(sessionID, spellings: spellings) ?? []
             }
         )
     }

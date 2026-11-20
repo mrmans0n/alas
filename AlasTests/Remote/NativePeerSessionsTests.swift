@@ -2392,7 +2392,7 @@ struct NativePeerSessionsTests {
         client.sendPrompt()
 
         #expect(links.sent(to: "B").filter {
-            if case .sendPrompt(_, "run the checks", _, _, _) = $0 { return true }
+            if case .sendPrompt(_, "run the checks", _, _, _, _) = $0 { return true }
             return false
         }.count == 1)
         #expect(client.isPromptPending)

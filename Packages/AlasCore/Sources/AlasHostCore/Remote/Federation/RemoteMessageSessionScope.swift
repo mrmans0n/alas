@@ -24,11 +24,12 @@ extension RemoteClientMessage {
              .openSessionTab(let id), .closeSessionTab(let id), .installAdapter(let id):
             return id
         case .permissionDecision(let id, _, _, _), .questionAnswer(let id, _, _), .planResponse(let id, _, _, _),
-             .elicitationResponse(let id, _, _, _), .sendPrompt(let id, _, _, _, _), .searchMentions(let id, _), .setModel(let id, _),
+             .elicitationResponse(let id, _, _, _), .sendPrompt(let id, _, _, _, _, _), .searchMentions(let id, _), .setModel(let id, _),
              .setMode(let id, _), .setAutoRun(let id, _), .setConfigOption(let id, _, _), .renameSession(let id, _), .fetchOlder(let id, _, _),
              .queueForceSend(let id, _), .queueRemove(let id, _), .queueRetry(let id, _), .queueEdit(let id, _),
              .queueMove(let id, _, _), .queuePromote(let id, _),
              .listCommitFiles(let id, _), .commitFileDiff(let id, _, _), .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _, _), .readFile(let id, _), .readTranscriptImage(let id, _),
+             .readSkill(let id, _), .resolveReferences(let id, _),
              .readToolTerminal(let id, _), .readSubagent(let id, _),
              .visualAidResponse(let id, _, _, _, _, _):
             return id
@@ -56,8 +57,9 @@ extension RemoteClientMessage {
         case .openSessionTab: return .openSessionTab(sessionId: new)
         case .closeSessionTab: return .closeSessionTab(sessionId: new)
         case .installAdapter: return .installAdapter(sessionId: new)
-        case .sendPrompt(_, let text, let attachments, let intent, let mentions):
-            return .sendPrompt(sessionId: new, text: text, attachments: attachments, intent: intent, mentions: mentions)
+        case .sendPrompt(_, let text, let attachments, let intent, let mentions, let pastedSpans):
+            return .sendPrompt(sessionId: new, text: text, attachments: attachments, intent: intent,
+                               mentions: mentions, pastedSpans: pastedSpans)
         case .searchMentions(_, let query): return .searchMentions(sessionId: new, query: query)
         case .stop: return .stop(sessionId: new)
         case .setModel(_, let modelId): return .setModel(sessionId: new, modelId: modelId)
@@ -90,6 +92,8 @@ extension RemoteClientMessage {
         case .commitFileDiff(_, let sha, let path): return .commitFileDiff(sessionId: new, sha: sha, path: path)
         case .readTranscriptImage(_, let path): return .readTranscriptImage(sessionId: new, path: path)
         case .readFile(_, let path): return .readFile(sessionId: new, path: path)
+        case .readSkill(_, let command): return .readSkill(sessionId: new, command: command)
+        case .resolveReferences(_, let spellings): return .resolveReferences(sessionId: new, spellings: spellings)
         case .readToolTerminal(_, let terminalId): return .readToolTerminal(sessionId: new, terminalId: terminalId)
         case .readSubagent(_, let subagentId): return .readSubagent(sessionId: new, subagentId: subagentId)
         }
@@ -120,6 +124,7 @@ extension RemoteServerMessage {
              .commitDiffResult(let id, _, _, _, _, _), .commitDiffFailed(let id, _, _, _, _),
              .fileTree(let id, _, _, _), .fileTreeFailed(let id, _, _, _), .fileContents(let id, _, _, _, _),
              .fileUnavailable(let id, _, _, _, _), .fileBytes(let id, _, _, _), .transcriptImage(let id, _, _), .mentionCandidates(let id, _, _),
+             .referenceSummaries(let id, _),
              .toolTerminal(let id, _, _, _, _, _, _), .subagentTranscript(let id, _, _, _, _),
              .fileHistory(let id, _, _, _), .fileHistoryFailed(let id, _, _, _):
             return id
@@ -219,6 +224,8 @@ extension RemoteServerMessage {
             return .fileHistoryFailed(sessionId: new, path: path, reason: reason, message: message)
         case .mentionCandidates(_, let query, let candidates):
             return .mentionCandidates(sessionId: new, query: query, candidates: candidates)
+        case .referenceSummaries(_, let entries):
+            return .referenceSummaries(sessionId: new, entries: entries)
         }
     }
 }

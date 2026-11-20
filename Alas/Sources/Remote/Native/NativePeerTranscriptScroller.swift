@@ -520,12 +520,12 @@ private struct NativePeerRowView: View {
 
     var body: some View {
         switch row {
-        case .user(let text, _, _, let card?) where Self.promptCard(card) != nil:
+        case .user(let text, _, _, let card?, _, _) where Self.promptCard(card) != nil:
             // A turn Alas sent, as the local transcript shows it.
             PromptCardRow(card: Self.promptCard(card)!, text: text, contentMaxWidth: contentMaxWidth, typography: typography)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contextMenu { messageMenu(text, checkpointID: nil) }
-        case .user(let text, let checkpointID, let images, _):
+        case .user(let text, let checkpointID, let images, _, _, _):
             HStack {
                 Spacer(minLength: 40)
                 VStack(alignment: .trailing, spacing: 4) {

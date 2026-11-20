@@ -279,7 +279,7 @@ public final class RemoteSessionGateway {
             Task { try? await sessions?.installAdapter(id, caller: caller) }
         case .closeSessionTab(let id):
             reportTabAction(await presenter?.closeSessionTab(for: id) ?? .failure("Closing session tabs is unavailable."), sessionId: id)
-        case .sendPrompt(let id, let text, let attachments, let intent, let mentions):
+        case .sendPrompt(let id, let text, let attachments, let intent, let mentions, let pastedSpans):
             // Pre-check the lease BEFORE materializing — `materialize` writes the
             // decoded images to disk, and a non-writer must be rejected without
             // leaving orphan files under acp-attachments/. The manager re-checks
@@ -320,7 +320,9 @@ public final class RemoteSessionGateway {
             let delivery: Task<Bool, Never>
             do {
                 delivery = try await sessions.submit(
-                    id, prompt: trimmed, attachments: materialized, steer: intent == "steer", caller: hostCaller
+                    id, prompt: trimmed, attachments: materialized,
+                    draft: Self.pastedDraft(text: text, trimmedText: trimmed, spans: pastedSpans),
+                    steer: intent == "steer", caller: hostCaller
                 )
             } catch {
                 // Refused before the session recorded the message, so the
@@ -508,6 +510,23 @@ public final class RemoteSessionGateway {
             guard inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
             send(await hostCalls.inspection.remoteRead(.file(path: path), sessionId: id))
+        case .readSkill(let id, let command):
+            let key = "readSkill\u{0}\(id)\u{0}\(command)"
+            guard inFlightFileRequests.insert(key).inserted else { return }
+            defer { inFlightFileRequests.remove(key) }
+            if let file = await hostCalls.skillFile(id, command) {
+                send(.fileContents(sessionId: id, path: command, text: file.text, truncated: file.truncated))
+            } else {
+                send(.fileUnavailable(sessionId: id, path: command, reason: .notFound, byteSize: nil, message: nil))
+            }
+        case .resolveReferences(let id, let spellings):
+            // A lookup runs `gh`/`glab` and may take seconds; answered off the
+            // ordered chain so the connection's next message isn't held up.
+            let lookup = hostCalls.referenceSummaries
+            Task { [weak self] in
+                let entries = await lookup(id, Array(spellings.prefix(RemoteChipLimits.maxReferences)))
+                if !entries.isEmpty { self?.send(.referenceSummaries(sessionId: id, entries: entries)) }
+            }
         }
     }
 
@@ -1477,6 +1496,60 @@ public final class RemoteSessionGateway {
         RemoteWireMessage.userRowText(text, removingImageNames: names)
     }
 
+    /// The draft a local composer would have produced for a viewer's prompt
+    /// with collapsed pastes, so the recorded row shows their badges. `spans`
+    /// are UTF-16 ranges of `text`; the session gets `trimmedText`, so they
+    /// shift by what the trim dropped. Spans that are empty, out of range,
+    /// overlapping or reuse an ordinal are dropped; nil when none is left.
+    public nonisolated static func pastedDraft(
+        text: String, trimmedText: String, spans: [ACPPastedTextSpan]
+    ) -> ACPComposerDraft? {
+        guard !spans.isEmpty, !trimmedText.isEmpty else { return nil }
+        let trimmed = trimmedText as NSString
+        let lead = (text as NSString).range(of: trimmedText, options: .literal).location
+        guard lead != NSNotFound else { return nil }
+        // Filtered before shifting: an untrusted offset near `Int.min` must not overflow.
+        let shifted = spans.filter { $0.utf16Offset >= 0 }.map {
+            ACPPastedTextSpan(ordinal: $0.ordinal, utf16Offset: $0.utf16Offset - lead, utf16Length: $0.utf16Length)
+        }
+        var kept: [ACPPastedTextSpan] = []
+        var ordinals = Set<Int>()
+        for span in shifted.sorted(by: { $0.utf16Offset < $1.utf16Offset }) {
+            guard span.utf16Offset >= (kept.last.map { $0.utf16Offset + $0.utf16Length } ?? 0),
+                  span.utf16Length > 0,
+                  span.utf16Length <= trimmed.length - span.utf16Offset,
+                  ordinals.insert(span.ordinal).inserted
+            else { continue }
+            kept.append(span)
+        }
+        guard !kept.isEmpty else { return nil }
+        var segments: [ACPComposerDraft.Segment] = []
+        var cursor = 0
+        for span in kept {
+            if span.utf16Offset > cursor {
+                segments.append(.text(trimmed.substring(with: NSRange(location: cursor, length: span.utf16Offset - cursor))))
+            }
+            segments.append(.pastedText(ordinal: span.ordinal, content: trimmed.substring(with: span.utf16Range)))
+            cursor = span.utf16Offset + span.utf16Length
+        }
+        if cursor < trimmed.length { segments.append(.text(trimmed.substring(from: cursor))) }
+        return ACPComposerDraft(segments: segments)
+    }
+
+    /// A sent mention as its row shows it: labelled as the `📎` line is, so
+    /// a viewer can swap the line for the chip.
+    nonisolated static func userMention(_ attachment: ACPMessage.Attachment) -> RemoteUserMention {
+        if let target = ACPSymbolReference.target(fromURI: attachment.uri) {
+            return RemoteUserMention(
+                kind: RemoteMention.symbol, name: attachment.name ?? "Resource",
+                symbol: RemoteSymbolMention(
+                    path: target.path, name: target.name, kind: target.kind.rawValue, container: target.container,
+                    lineRange: target.lineRange, includesCode: target.includeCode, snapshot: attachment.symbol))
+        }
+        let kind = ACPSessionReference.sessionId(fromURI: attachment.uri) == nil ? RemoteMention.file : RemoteMention.session
+        return RemoteUserMention(kind: kind, name: attachment.name ?? "Resource")
+    }
+
     public static func toWire(
         _ message: ACPMessage,
         index: Int,
@@ -1508,7 +1581,7 @@ public final class RemoteSessionGateway {
     ) -> RemoteWireMessage {
         let sid = "m\(index)"
         switch message {
-        case .user(_, _, let text, let attachments, let source, _):
+        case .user(_, _, let text, let attachments, let source, let pastedSpans):
             // The text labels each attachment, so an image-only prompt isn't a
             // blank bubble on a viewer that can't show the image; `images`
             // lets one that can read the bytes show it instead.
@@ -1517,15 +1590,18 @@ public final class RemoteSessionGateway {
             let shown = attachments.filter { !$0.isLocalReference }
             let isImage = { (a: ACPMessage.Attachment) in a.mimeType?.hasPrefix("image/") == true }
             let images = shown.filter(isImage)
+            let resources = shown.filter { !isImage($0) }
             let rowText = userRowText(text: text, attachmentNames: images.map(\.name),
-                                      resourceNames: shown.filter { !isImage($0) }.map(\.name))
+                                      resourceNames: resources.map(\.name))
             // Only files travel as paths: an inline `data:` image would make
             // the row too large to send, so it keeps its label.
             let files = images.filter { $0.uri.hasPrefix("/") || $0.uri.lowercased().hasPrefix("file:") }
             return .init(stableId: sid, kind: "user", text: rowText, json: nil, index: index,
                          checkpointId: attachments.first(where: \.isCheckpointReference)?.checkpointID?.uuidString,
                          images: files.isEmpty ? nil : files.map { .init(uri: $0.uri, name: $0.name) },
-                         card: ACPPromptCard.resolved(for: source).flatMap { Self.encodeJSON($0) })
+                         card: ACPPromptCard.resolved(for: source).flatMap { Self.encodeJSON($0) },
+                         mentions: resources.isEmpty ? nil : resources.map(userMention),
+                         pastedSpans: pastedSpans.isEmpty ? nil : pastedSpans)
         case .agent(_, _, let streaming):
             return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil, index: index)
         case .thought(_, _, let streaming):

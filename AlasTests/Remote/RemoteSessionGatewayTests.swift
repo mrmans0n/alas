@@ -1637,6 +1637,24 @@ struct RemoteSessionGatewayTests {
                          .mentionCandidates(sessionId: "s1", query: "a", candidates: provider.mentionCandidates)])
     }
 
+    /// A viewer's pasted spans follow the text the session records, which the
+    /// gateway trims; spans that don't fit it are dropped, not trusted.
+    @Test func pastedSpansFollowTheTrimmedTextAndInvalidOnesAreDropped() {
+        let text = " \n intro PASTE tail "
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let draft = RemoteSessionGateway.pastedDraft(text: text, trimmedText: trimmed, spans: [
+            ACPPastedTextSpan(ordinal: 1, utf16Offset: 9, utf16Length: 5),        // "PASTE"
+            ACPPastedTextSpan(ordinal: 2, utf16Offset: 40, utf16Length: 3),       // past the end
+            ACPPastedTextSpan(ordinal: 3, utf16Offset: 10, utf16Length: 2),       // overlaps #1
+            ACPPastedTextSpan(ordinal: 4, utf16Offset: Int.min, utf16Length: 1),  // would overflow
+        ])
+        #expect(draft?.segments == [.text("intro "), .pastedText(ordinal: 1, content: "PASTE"), .text(" tail")])
+        #expect(draft?.pastedTextSpans(matching: trimmed) == [ACPPastedTextSpan(ordinal: 1, utf16Offset: 6, utf16Length: 5)])
+        #expect(RemoteSessionGateway.pastedDraft(text: text, trimmedText: trimmed, spans: [
+            ACPPastedTextSpan(ordinal: 1, utf16Offset: 0, utf16Length: 2),        // only the trimmed whitespace
+        ]) == nil)
+    }
+
     /// A setting the host refuses changes nothing, so no new config arrives;
     /// the gateway re-sends the last one, so the viewer reverts.
     @Test(arguments: [true, false])
