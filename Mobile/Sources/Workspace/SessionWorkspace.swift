@@ -62,18 +62,11 @@ final class SessionWorkspace {
     }
     /// The mode the loaded changes were asked with.
     @ObservationIgnored private var changesMode: ChangesComparisonMode?
-    /// When the change-list request in flight was sent. One at a time: replies don't name their mode, and the
-    /// host drops a repeat of a request still queued, so overlapping ones could leave another mode's list showing.
-    @ObservationIgnored private var changesSentAt: ContinuousClock.Instant?
-    /// A refresh asked for while one was in flight; sent when its reply lands.
-    @ObservationIgnored private var changesAgain = false
+    @ObservationIgnored private var changesFlight = RemoteSingleFlight()
 
-    /// Notes the in-flight change list answered; true when a newer refresh was waiting, which is sent
-    /// instead of showing this reply, possibly asked with an older mode.
+    /// Notes the change list answered; true when a newer refresh was waiting and went out instead.
     private func changeListLanded() -> Bool {
-        changesSentAt = nil
-        guard changesAgain else { return false }
-        changesAgain = false
+        guard changesFlight.landed() else { return false }
         refreshChanges()
         return true
     }
@@ -179,8 +172,7 @@ final class SessionWorkspace {
 
     /// Asks again for whatever is open; the host forgot everything it was asked while away.
     private func replay() {
-        changesSentAt = nil
-        changesAgain = false
+        changesFlight.reset()
         if case .idle = changes {} else { refreshChanges() }
         if let commit { send(.listCommitFiles(sessionId: sessionId, sha: commit.commit.revision)) }
         if let diff { requestDiff(diff.key) }
@@ -197,12 +189,7 @@ final class SessionWorkspace {
 
     func refreshChanges() {
         if case .loaded = changes {} else { changes = .loading }
-        // A reply lost without a disconnect would otherwise hold every later refresh.
-        if let sent = changesSentAt, ContinuousClock.now - sent < .seconds(30) {
-            changesAgain = true
-            return
-        }
-        changesSentAt = .now
+        guard changesFlight.shouldSend() else { return }
         changesMode = comparisonMode
         send(.listChanges(sessionId: sessionId, comparisonMode: comparisonMode))
         refreshPullRequest()
