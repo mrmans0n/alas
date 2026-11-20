@@ -1,7 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
 
 /// A same-repository PR/MR/issue reference as typed in prose: `#1234`, or on
 /// GitLab also `!1234` for a merge request.
@@ -33,30 +30,16 @@ public struct CodeHostReference: Hashable, Sendable {
     }
 
     public var spelling: String { "\(sigil.rawValue)\(number)" }
-
-    /// Browser URL before any lookup has resolved the kind. GitHub redirects
-    /// `/issues/N` to `/pull/N` when N is a pull request.
-    public func webURL(on remote: CodeHostRemote) -> URL {
-        switch (remote.kind, sigil) {
-        case (.gitlab, .bang):
-            return remote.reviewRequestURL(number: number)
-        case (.gitlab, .hash):
-            return remote.webURL.appendingPathComponent("-")
-                .appendingPathComponent("issues").appendingPathComponent("\(number)")
-        case (.github, _):
-            return remote.webURL.appendingPathComponent("issues").appendingPathComponent("\(number)")
-        }
-    }
 }
 
 /// The compact metadata a reference chip's hover card shows.
-public struct CodeHostReferenceSummary: Equatable, Sendable {
-    public enum Kind: Equatable, Sendable {
+public struct CodeHostReferenceSummary: Codable, Equatable, Sendable {
+    public enum Kind: Codable, Equatable, Sendable {
         case reviewRequest
         case issue
     }
 
-    public enum State: Equatable, Sendable {
+    public enum State: Codable, Equatable, Sendable {
         case open
         case draft
         case merged
@@ -88,7 +71,7 @@ public struct CodeHostReferenceSummary: Equatable, Sendable {
     }
 }
 
-public enum CodeHostReferenceFailure: Equatable, Sendable {
+public enum CodeHostReferenceFailure: Codable, Equatable, Sendable {
     /// `repository` is `host/owner/repo`, as shown in the card.
     case notFound(repository: String)
     case unauthenticated(executable: String, host: String)
@@ -96,11 +79,19 @@ public enum CodeHostReferenceFailure: Equatable, Sendable {
     case other(String)
 }
 
-extension CodeHostKind {
-    public var cliExecutable: String {
-        switch self {
-        case .github: "gh"
-        case .gitlab: "glab"
-        }
+/// The repository a session's references point into, as a viewer needs it:
+/// which grammar to detect, which glyph to draw, and which URLs name it.
+public struct RemoteCodeHost: Codable, Equatable, Hashable, Sendable {
+    public var kind: CodeHostKind
+    /// `github.com`, `gitlab.example.com`.
+    public var host: String
+    /// `https://github.com/owner/repo`.
+    public var webURL: URL
+
+    public init(kind: CodeHostKind, host: String, webURL: URL) {
+        self.kind = kind
+        self.host = host
+        self.webURL = webURL
     }
 }
+

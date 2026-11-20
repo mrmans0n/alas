@@ -1,10 +1,4 @@
-import Crypto
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
-import AlasCode
 
 /// What a sent symbol mention looked like at send time. Stored on the
 /// recorded attachment so the transcript can show it later.

@@ -195,25 +195,11 @@ enum ACPTranscriptSymbolChip {
     @discardableResult
     static func chipify(_ rendered: NSMutableAttributedString, mentions: ACPTranscriptSymbolMentions) -> Int {
         let source = rendered.string as NSString
-        var matches: [(range: NSRange, mention: ACPTranscriptSymbolMentions.Mention)] = []
-        // Longest first, so `@Type.member()` wins over `@Type` at the same spot.
-        for (label, mention) in mentions.byLabel.sorted(by: { $0.key.count > $1.key.count }) {
-            var searchStart = 0
-            while searchStart < source.length {
-                let range = source.range(
-                    of: label, options: .literal,
-                    range: NSRange(location: searchStart, length: source.length - searchStart))
-                guard range.location != NSNotFound else { break }
-                searchStart = NSMaxRange(range)
-                guard isBoundary(before: range, in: source), isBoundary(after: range, in: source),
-                      !matches.contains(where: { NSIntersectionRange($0.range, range).length > 0 }),
-                      !isExcluded(range, in: rendered)
-                else { continue }
-                matches.append((range, mention))
-            }
-        }
-        for match in matches.sorted(by: { $0.range.location > $1.range.location }) {
-            let chip = NSMutableAttributedString(attachment: ACPTranscriptSymbolChipAttachment(mention: match.mention))
+        let matches = SymbolMentionText.labelRanges(
+            Array(mentions.byLabel.keys), in: source, excluded: { isExcluded($0, in: rendered) })
+        for match in matches.reversed() {
+            guard let mention = mentions.byLabel[match.label] else { continue }
+            let chip = NSMutableAttributedString(attachment: ACPTranscriptSymbolChipAttachment(mention: mention))
             var attributes = rendered.attributes(at: match.range.location, effectiveRange: nil)
             attributes[.attachment] = nil
             attributes[.symbolMention] = source.substring(with: match.range)
@@ -237,32 +223,6 @@ enum ACPTranscriptSymbolChip {
             stop.pointee = true
         }
         return hit
-    }
-
-    /// The base scalar of the user-perceived character at `location`, so an
-    /// emoji's surrogate pair or variation selector reads as the emoji itself.
-    private static func baseScalar(at location: Int, in source: NSString) -> Unicode.Scalar? {
-        source.substring(with: source.rangeOfComposedCharacterSequence(at: location)).unicodeScalars.first
-    }
-
-    private static func isIdentifier(_ scalar: Unicode.Scalar?) -> Bool {
-        guard let scalar else { return false }
-        return scalar == "_" || CharacterSet.alphanumerics.contains(scalar)
-    }
-
-    private static func isBoundary(before range: NSRange, in source: NSString) -> Bool {
-        guard range.location > 0 else { return true }
-        let previous = baseScalar(at: range.location - 1, in: source)
-        return !isIdentifier(previous) && previous != "@" && previous != "."
-    }
-
-    private static func isBoundary(after range: NSRange, in source: NSString) -> Bool {
-        let end = NSMaxRange(range)
-        guard end < source.length else { return true }
-        let next = baseScalar(at: end, in: source)
-        if isIdentifier(next) { return false }
-        guard next == ".", end + 1 < source.length else { return true }
-        return !isIdentifier(baseScalar(at: end + 1, in: source))
     }
 
     @MainActor
