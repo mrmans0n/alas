@@ -13,6 +13,8 @@ struct ComposerBar: View {
 
     @State private var selection = NSRange(location: 0, length: 0)
     @State private var picked: [PhotosPickerItem] = []
+    @State private var pickingPhotos = false
+    @State private var takingPhoto = false
     @State private var searchTask: Task<Void, Never>?
     @State private var queueOpen = false
 
@@ -145,10 +147,20 @@ struct ComposerBar: View {
     }
 
     private var attachButton: some View {
-        PhotosPicker(selection: $picked, maxSelectionCount: max(1, RemoteAttachmentLimits.maxCount - session.draft.images.count),
-                     matching: .images) {
+        Menu {
+            Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhotos = true }
+            if CameraPicker.isAvailable {
+                Button("Take Photo", systemImage: "camera") { takingPhoto = true }
+            }
+        } label: {
             Image(systemName: "paperclip").font(.system(size: 17, weight: .medium))
                 .frame(width: 32, height: 32).contentShape(Circle())
+        }
+        .photosPicker(isPresented: $pickingPhotos, selection: $picked,
+                      maxSelectionCount: max(1, RemoteAttachmentLimits.maxCount - session.draft.images.count), matching: .images)
+        .fullScreenCover(isPresented: $takingPhoto) {
+            CameraPicker { data in Task { await ImageStaging.stage(data, into: session) } }
+                .ignoresSafeArea()
         }
         .disabled(session.draft.images.count >= RemoteAttachmentLimits.maxCount)
         .accessibilityLabel("Attach photo")
