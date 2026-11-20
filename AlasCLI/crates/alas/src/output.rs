@@ -51,13 +51,27 @@ fn save_image(line: &str, dir: &Path) -> Result<Option<String>, String> {
         _ => "png",
     };
     let path = image_path(dir, extension);
-    std::fs::write(&path, bytes)
+    write_private(&path, &bytes)
         .map_err(|err| format!("could not write {}: {err}", path.display()))?;
     metadata.insert(
         "image_path".into(),
         Value::String(path.to_string_lossy().into_owned()),
     );
     Ok(Some(Value::Object(metadata).to_string()))
+}
+
+/// Screenshots show the user's apps, so only the user may read them, even in
+/// a shared temp directory. `create_new` also refuses a file or symlink
+/// another user planted at the path.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?
+        .write_all(bytes)
 }
 
 /// A fresh file name: one process writes at most one image.
@@ -129,6 +143,9 @@ mod tests {
             let path = metadata["image_path"].as_str().unwrap();
             assert!(path.ends_with(".png"));
             assert_eq!(std::fs::read(path).unwrap(), b"hello");
+            // Owner-only whatever the umask: the capture shows the user's apps.
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
             assert_eq!(lines[1], "extra");
         }
         std::fs::remove_dir_all(dir).unwrap();
