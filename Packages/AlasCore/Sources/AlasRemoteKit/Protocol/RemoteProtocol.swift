@@ -1066,7 +1066,7 @@ extension RemoteServerMessageOf: Codable {
         case type, sessions, sessionId, projectId, streamingState, canDrive, messages, upserts, payload, requestId, message
         case hasCancellableBackgroundWork
         case worktrees, agents, session, projects, branches, preferredBase, stage, worktreeId
-        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder, supportsMentions, agentIssue
+        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder, supportsMentions, agentIssue, goal
         case query, candidates
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
@@ -1236,6 +1236,7 @@ extension RemoteServerMessageOf: Codable {
             config.supportsQueueReorder = try? c.decodeIfPresent(Bool.self, forKey: .supportsQueueReorder) ?? nil
             config.supportsMentions = try? c.decodeIfPresent(Bool.self, forKey: .supportsMentions) ?? nil
             config.agentIssue = try? c.decodeIfPresent(RemoteAgentIssue.self, forKey: .agentIssue) ?? nil
+            config.goal = try? c.decodeIfPresent(RemoteSessionGoal.self, forKey: .goal) ?? nil
             self = .sessionConfig(config)
         case "sessionRenamed":
             self = .sessionRenamed(
@@ -1551,6 +1552,7 @@ extension RemoteServerMessageOf: Codable {
             try c.encodeIfPresent(cfg.supportsQueueReorder, forKey: .supportsQueueReorder)
             try c.encodeIfPresent(cfg.supportsMentions, forKey: .supportsMentions)
             try c.encodeIfPresent(cfg.agentIssue, forKey: .agentIssue)
+            try c.encodeIfPresent(cfg.goal, forKey: .goal)
         case .sessionRenamed(let id, let title):
             try c.encode("sessionRenamed", forKey: .type)
             try c.encode(id, forKey: .sessionId)
