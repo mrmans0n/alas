@@ -30,9 +30,50 @@ public struct RemoteWorktreeEntry: Identifiable, Equatable, Sendable {
             ?? closedSessions.first
     }
 
+    /// `activeSessions` as the list shows them: each delegated session right after
+    /// its parent, groups needing the user first, then running ones, then idle,
+    /// each rank keeping newest-first order.
+    public var sessionRows: [RemoteSessionRow] {
+        let ids = Set(activeSessions.map(\.id))
+        var children: [String: [RemoteSessionSummary]] = [:]
+        var roots: [RemoteSessionSummary] = []
+        for s in activeSessions {
+            if let p = s.parentSessionId, p != s.id, ids.contains(p) {
+                children[p, default: []].append(s)
+            } else {
+                roots.append(s)
+            }
+        }
+        func rank(_ s: RemoteSessionSummary) -> Int { s.isAwaitingUser ? 0 : s.status != "idle" ? 1 : 2 }
+        func groupRank(_ s: RemoteSessionSummary, _ seen: inout Set<String>) -> Int {
+            guard seen.insert(s.id).inserted else { return 2 }
+            return (children[s.id] ?? []).reduce(rank(s)) { min($0, groupRank($1, &seen)) }
+        }
+        var emitted = Set<String>()
+        var rows: [RemoteSessionRow] = []
+        func emit(_ s: RemoteSessionSummary, depth: Int) {
+            guard emitted.insert(s.id).inserted else { return }
+            rows.append(RemoteSessionRow(session: s, depth: depth))
+            for c in children[s.id] ?? [] { emit(c, depth: 1) }
+        }
+        let ranked = roots.enumerated().map { i, s in
+            var seen = Set<String>()
+            return (rank: groupRank(s, &seen), index: i, session: s)
+        }
+        for r in ranked.sorted(by: { ($0.rank, $0.index) < ($1.rank, $1.index) }) { emit(r.session, depth: 0) }
+        return rows
+    }
+
     var recency: Int64 {
         (activeSessions + closedSessions).map(\.updatedAt).max() ?? 0
     }
+}
+
+public struct RemoteSessionRow: Identifiable, Equatable, Sendable {
+    public let session: RemoteSessionSummary
+    /// 0 for a top-level session, 1 for one delegated by a session listed above it (deeper nesting clamps to 1).
+    public let depth: Int
+    public var id: String { session.id }
 }
 
 public struct RemoteRepoSection: Identifiable, Equatable, Sendable {
