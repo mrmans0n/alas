@@ -46,6 +46,7 @@ final class HostHub {
     /// Holders per session per host. The host keeps one follow per socket, so
     /// only the last holder's release may unsubscribe.
     @ObservationIgnored private var subscriptions: [UUID: [String: Int]] = [:]
+    @ObservationIgnored private var runTrackers: [UUID: PhoneRunTracker] = [:]
     @ObservationIgnored private let store: HostStore
     @ObservationIgnored var registrar: PushRegistrar? {
         didSet { registrar?.onTokenChange = { [weak self] in self?.sendPushRegistrationToOnlineHosts() } }
@@ -151,6 +152,8 @@ final class HostHub {
         sessionLists[id] = nil
         listeners[id] = nil
         subscriptions[id] = nil
+        runTracker(for: id).forget()
+        runTrackers[id] = nil
         store.save(hosts)
         if pushes { unregisterPending() } else { store.deleteToken(for: id) }
         let cache = listCache
@@ -229,6 +232,13 @@ final class HostHub {
         connections[id]?.send(message)
     }
 
+    func runTracker(for hostID: UUID) -> PhoneRunTracker {
+        if let tracker = runTrackers[hostID] { return tracker }
+        let tracker = PhoneRunTracker(hub: self, hostID: hostID)
+        runTrackers[hostID] = tracker
+        return tracker
+    }
+
     func addListener(_ id: UUID, _ handler: @escaping @MainActor (PhoneServerMessage) -> Void) -> ListenerToken {
         let key = UUID()
         listeners[id, default: [:]][key] = handler
@@ -289,11 +299,15 @@ final class HostHub {
         switch event {
         case .stateChanged(let state):
             states[id] = state
-            if state != .online { listedLive.remove(id) }
+            if state != .online {
+                listedLive.remove(id)
+                runTrackers[id]?.disconnect()
+            }
             if state == .online {
                 onlineCounts[id, default: 0] += 1
                 send(.listSessions, to: id)
                 sendPushRegistration(to: id)
+                if supports(HostProtocolCapability.runsScriptsV1, on: id) { runTracker(for: id).refresh() }
             }
         case .hello(_, _, _, _, let capabilities, _):
             // Arrives just before `.online`, while `send` is still a no-op;
@@ -326,6 +340,7 @@ final class HostHub {
             default:
                 break
             }
+            runTrackers[id]?.receive(message)
             for handler in (listeners[id] ?? [:]).values {
                 handler(message)
             }

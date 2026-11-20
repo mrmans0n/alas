@@ -106,6 +106,53 @@ import Testing
             return
         }
         #expect(refused.message == "Approve the hook first.")
+        #expect(RemoteGitRequest.runReply(to: 2, in: try reply(.runStart(start: .started(runID: "run-42"))))
+            == .success("run-42"))
+    }
+
+    @Test(arguments: [
+        (RunOutcome.succeeded, Int32?.some(0)),
+        (.stopped, nil),
+        (.unknown, nil),
+    ])
+    func phoneRecoversARunsOutcomeAndResumesAfterTheSnapshot(outcome: RunOutcome, exitCode: Int32?) throws {
+        let run = RunRecord(
+            id: "run-42", scriptKey: "repo:build.sh", scriptName: "Build", worktreeID: "w", branch: "main",
+            target: RunExecutionTarget(host: nil, workingDirectory: "/r"), status: .finished(outcome),
+            startedAt: .now, sessionID: "terminal-42")
+        let cursor = HostCursor(generation: UUID(), sequence: 7)
+        let snapshot = HostSnapshot(cursor: cursor, projects: [], worktrees: [], workspaceCheckouts: [], runs: [run], sessions: [])
+        let message = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(
+            id: 5, result: .snapshot(snapshot: snapshot))))
+        guard case .snapshot(id: 5, let phoneCursor, let runs) = RemoteRunFeed.update(in: message) else {
+            Issue.record("the phone missed the run snapshot")
+            return
+        }
+        let observed = try #require(runs.first)
+        #expect(observed.status == .finished(exitCode: exitCode))
+        #expect(observed.visibleConsoleID == nil)
+        let follow = try JSONDecoder().decode(HostClientMessage.self, from: RemoteRunFeed.subscribe(id: 6, after: phoneCursor).json)
+        #expect(follow == HostClientMessage(id: 6, request: .subscribe(after: cursor)))
+    }
+
+    @Test(arguments: [false, true])
+    func phoneReadsOnlyTheVisibleConsoleAndTheActualExitStatus(hidden: Bool) throws {
+        let run = RunRecord(
+            id: "run-42", scriptKey: "repo:build.sh", scriptName: "Build", worktreeID: "w", branch: "main",
+            target: RunExecutionTarget(host: nil, workingDirectory: "/r"), status: .finished(.failed(exitCode: 17)),
+            startedAt: .now, sessionID: "terminal-42", consoleIsHidden: hidden)
+        let cursor = HostCursor(generation: UUID(), sequence: 7)
+        let message = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.events(
+            events: [.runChanged(run), .runRemoved(id: "older-run")], cursor: cursor)))
+        guard case .events(let changed, let removed, let resync) = RemoteRunFeed.update(in: message) else {
+            Issue.record("the phone missed the run event")
+            return
+        }
+        let observed = try #require(changed.first)
+        #expect(observed.id == "run-42")
+        #expect(observed.visibleConsoleID == (hidden ? nil : "terminal-42"))
+        #expect(observed.status == .finished(exitCode: 17))
+        #expect(removed == ["older-run"] && !resync)
     }
 
     @Test(arguments: [

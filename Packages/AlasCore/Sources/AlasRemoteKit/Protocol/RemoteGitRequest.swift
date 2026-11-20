@@ -147,13 +147,18 @@ public enum RemoteGitRequest {
         }
     }
 
-    private static func envelope(id: Int, _ request: [String: Any]) -> OpaqueHostMessage {
+    static func envelope(id: Int, _ request: [String: Any]) -> OpaqueHostMessage {
         let body: [String: Any] = ["version": hostProtocolVersion, "id": id, "request": request]
         return OpaqueHostMessage(json: (try? JSONSerialization.data(withJSONObject: body, options: .sortedKeys)) ?? Data())
     }
 
     /// The outcome `message` reports for request `id`; nil when it answers something else.
     public static func reply(to id: Int, in message: OpaqueHostMessage) -> Result<Void, RemoteGitFailure>? {
+        runReply(to: id, in: message)?.map { _ in () }
+    }
+
+    /// Acknowledges a run action. Start and Restart return the launch's ID, Stop returns nil.
+    public static func runReply(to id: Int, in message: OpaqueHostMessage) -> Result<String?, RemoteGitFailure>? {
         guard let object = try? JSONSerialization.jsonObject(with: message.json) as? [String: Any],
               let response = object["response"] as? [String: Any], response["id"] as? Int == id,
               let result = response["result"] as? [String: Any] else { return nil }
@@ -164,8 +169,11 @@ public enum RemoteGitRequest {
             }
             if start["alreadyStarting"] != nil { return .failure(RemoteGitFailure("It's already starting.")) }
             if start["projectUnavailable"] != nil { return .failure(RemoteGitFailure("Its project is no longer on the machine.")) }
+            if let started = start["started"] as? [String: Any], let runID = started["runID"] as? String {
+                return .success(runID)
+            }
         }
-        guard let failure = result["failure"] as? [String: Any] else { return .success(()) }
+        guard let failure = result["failure"] as? [String: Any] else { return .success(nil) }
         let error = failure["error"] as? [String: Any] ?? [:]
         let refusal = worktreeRefusal(error)
         let overrule: RemoteGitFailure.Overrule? = refusal?["needsForce"] != nil ? .force

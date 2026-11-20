@@ -442,6 +442,8 @@ struct HostProtocolServerTests {
         #expect(environment.launcher.requests.map(\.isHidden) == [hidden])
         #expect(environment.launcher.requests.map(\.activatesConsole) == [activates])
         #expect(environment.launcher.requests.map(\.promptsForRepoHooks) == [caller == .localUser(uid: 501)])
+        let record = try #require(fixture.host.runs.list(worktreeID: fixture.worktree.id).first)
+        #expect(record.consoleIsHidden == hidden)
     }
 
     nonisolated static func devScript(

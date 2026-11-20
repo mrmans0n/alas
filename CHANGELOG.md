@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Open a run's visible terminal from the iPhone and iPad Run menu, and show local notifications for confirmed successes and failures.
+
 ## [0.24.3] - 2026-11-19
 
 ### ✨ Features

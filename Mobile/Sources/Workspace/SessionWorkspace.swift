@@ -79,7 +79,7 @@ final class SessionWorkspace {
     /// The git action in flight; one at a time, as the Mac's worktree gate allows.
     private(set) var gitRunning: RemoteGitChange?
     /// Host requests awaiting their answer, by request id.
-    @ObservationIgnored private var hostWaiters: [Int: CheckedContinuation<Result<Void, RemoteGitFailure>, Never>] = [:]
+    @ObservationIgnored private var hostWaiters: [Int: CheckedContinuation<Result<String?, RemoteGitFailure>, Never>] = [:]
     /// The session's PR shepherd, once the host's session list said; nil without one.
     private(set) var shepherd: RemoteShepherd?
     private(set) var shepherdLoaded = false
@@ -360,11 +360,17 @@ final class SessionWorkspace {
         send(.host(RemoteGitRequest.listRunScripts(id: id, projectID: target.projectID, path: target.worktree.path)))
     }
 
-    /// Returns the host's refusal, worded for the user, or nil once it took the action.
-    func run(_ action: RemoteRunAction, _ script: RemoteRunScript) async -> String? {
+    /// Follows an accepted launch by its run ID, independently of the screen that asked for it.
+    func run(_ action: RemoteRunAction, _ script: RemoteRunScript, openConsole: @escaping PhoneRunTracker.OpenConsole) async -> String? {
         guard let target = gitTarget else { return "This worktree can't run scripts from here." }
-        return await hostRequest {
+        let result = await hostResult {
             RemoteGitRequest.run(id: $0, action, scriptKey: script.key, projectID: target.projectID, path: target.worktree.path)
+        }
+        switch result {
+        case .success(let runID):
+            if let runID { hub.runTracker(for: hostID).follow(runID, openConsole: openConsole) }
+            return nil
+        case .failure(let failure): return failure.message
         }
     }
 
@@ -417,26 +423,31 @@ final class SessionWorkspace {
 
     /// `hostRequest`, keeping whether the user may overrule the refusal.
     private func hostFailure(timeout: Duration = .seconds(120), _ make: (Int) -> OpaqueHostMessage) async -> RemoteGitFailure? {
+        if case .failure(let failure) = await hostResult(timeout: timeout, make) { return failure }
+        return nil
+    }
+
+    private func hostResult(timeout: Duration = .seconds(120), _ make: (Int) -> OpaqueHostMessage) async -> Result<String?, RemoteGitFailure> {
         // A send while the link is down goes nowhere, and the reply would never come.
         guard hub.state(of: hostID) == .online else {
             let name = hub.hosts.first { $0.id == hostID }?.name ?? "the machine"
-            return RemoteGitFailure("Not connected to \(name). Try again once it's back online.")
+            return .failure(RemoteGitFailure("Not connected to \(name). Try again once it's back online."))
         }
         let id = hub.nextHostRequestId()
         let hold = activate()
         defer { hold.cancel() }
-        send(.host(make(id)))
         // ponytail: a fixed wait; a push to a slow remote that outlasts it reads as lost.
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: timeout)
             self?.finishHostRequest(id, .failure(RemoteGitFailure("The machine didn't answer. Check the session there.")))
         }
-        let result = await withCheckedContinuation { hostWaiters[id] = $0 }
-        if case .failure(let failure) = result { return failure }
-        return nil
+        return await withCheckedContinuation {
+            hostWaiters[id] = $0
+            send(.host(make(id)))
+        }
     }
 
-    private func finishHostRequest(_ id: Int, _ result: Result<Void, RemoteGitFailure>) {
+    private func finishHostRequest(_ id: Int, _ result: Result<String?, RemoteGitFailure>) {
         hostWaiters.removeValue(forKey: id)?.resume(returning: result)
     }
 
@@ -461,7 +472,7 @@ final class SessionWorkspace {
                 return
             }
             for id in hostWaiters.keys {
-                if let result = RemoteGitRequest.reply(to: id, in: reply) { return finishHostRequest(id, result) }
+                if let result = RemoteGitRequest.runReply(to: id, in: reply) { return finishHostRequest(id, result) }
             }
         case .changeList(let id, let ref, let metrics, let files, let staged, let unstaged, let commits,
                          let truncated, let commitsTruncated, _, _) where id == sessionId:

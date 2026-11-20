@@ -63,6 +63,7 @@
 		CB152CF506A31464F04D172F /* SessionRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21408E08006F4C64E22701EE /* SessionRegistry.swift */; };
 		CD0D017197AAB3BF52A44D12 /* TranscriptImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7728D27BA09D4A7193ABB64C /* TranscriptImage.swift */; };
 		D8B8FBA1F9B4014A6DFF2679 /* TerminalsList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 987B94F79FFA056339E54033 /* TerminalsList.swift */; };
+		D901D2FA968FF0A55493FA7E /* PhoneRunTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70597BEB25E6FE57DAB3EE96 /* PhoneRunTracker.swift */; };
 		D9D22B71C3A3A47B85DCCD63 /* light.json in Resources */ = {isa = PBXBuildFile; fileRef = 33A5D219FC6E604BC0767265 /* light.json */; };
 		DF598609D6139DEEC76F939F /* CodeBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1D5D2BB1BAC229CEC583231 /* CodeBlockView.swift */; };
 		E25E7EA6243D3DCDD5C3ACB4 /* AlasHighlight in Frameworks */ = {isa = PBXBuildFile; productRef = FE403EEB6E8C9E313B1992FF /* AlasHighlight */; };
@@ -138,6 +139,7 @@
 		67165C95A555833F59448D9E /* VisualAidWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualAidWebView.swift; sourceTree = "<group>"; };
 		69BE14FB4617210C8AB913F2 /* FilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesView.swift; sourceTree = "<group>"; };
 		703A93DEDFDC64715553851D /* AlasNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = AlasNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		70597BEB25E6FE57DAB3EE96 /* PhoneRunTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneRunTracker.swift; sourceTree = "<group>"; };
 		74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyStackTranscriptView.swift; sourceTree = "<group>"; };
 		7728D27BA09D4A7193ABB64C /* TranscriptImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptImage.swift; sourceTree = "<group>"; };
 		7BD5988CE50A901089331310 /* ToolCallCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallCard.swift; sourceTree = "<group>"; };
@@ -226,6 +228,7 @@
 				03FA6AEA78D99344CAAD8095 /* DiffView.swift */,
 				69BE14FB4617210C8AB913F2 /* FilesView.swift */,
 				DC497CD9E3E3ACCED5B931CD /* FileViewer.swift */,
+				70597BEB25E6FE57DAB3EE96 /* PhoneRunTracker.swift */,
 				1547D85F76565F3FE516B06A /* SessionWorkspace.swift */,
 				BEF6DC8B0A58927446DDA20F /* ShepherdMenu.swift */,
 			);
@@ -614,6 +617,7 @@
 				FB774A2243E6DDC0B91251BC /* PairHostView.swift in Sources */,
 				0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */,
 				914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */,
+				D901D2FA968FF0A55493FA7E /* PhoneRunTracker.swift in Sources */,
 				1635F671055BF795E113B685 /* PushRegistrar.swift in Sources */,
 				468E5015B45747F86FC3A04F /* QueueTray.swift in Sources */,
 				90AE44675FE782B711960528 /* RequestCard.swift in Sources */,
