@@ -215,6 +215,20 @@ public enum BuiltInAlasMCP: Sendable {
             .map { String(format: "%02x", $0) }.joined()
     }
 
+    /// What an agent's MCP allowlist matches the server on, stable across
+    /// sessions: the name with the command and its arguments, or with the
+    /// transport for a URL, whose port is picked per session. Unlike
+    /// `agentFingerprint`, it leaves out the per-session socket.
+    public static func policyIdentity(of server: ACPMCPServer) -> String {
+        let identity: [String]
+        switch server {
+        case let .http(name, _, _): identity = [name, "http"]
+        case let .sse(name, _, _): identity = [name, "sse"]
+        case let .stdio(name, command, args, _): identity = [name, "stdio", command] + args
+        }
+        return identity.joined(separator: "\u{0}")
+    }
+
     /// The status row for a built-in server that was requested but cannot be
     /// served, e.g. an SSH host whose helper cannot relay it.
     public static func unavailableStatus(

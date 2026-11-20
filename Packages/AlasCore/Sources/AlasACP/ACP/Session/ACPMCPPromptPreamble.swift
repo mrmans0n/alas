@@ -12,10 +12,13 @@ import AlasCode
 /// MCP config entirely (`ACPMCPInjectionSupport.external`) get the `alas`
 /// CLI env injected into their process instead (see `AlasCLIEnvInjection`),
 /// so the preamble must point the agent at CLI commands rather than tool
-/// names.
+/// names. When an agent's MCP policy blocks the built-in server
+/// (`.builtInViaCLI`), its tools come through the CLI the same way while the
+/// other servers still attach over ACP.
 public enum ACPMCPPreambleMode: Equatable, Sendable {
     case mcp
     case cli(serverAvailability: ACPMCPExternalStatus.AdapterServerAvailability)
+    case builtInViaCLI
 }
 
 /// gg stacked-diffs context for the session's worktree, rendered as one
@@ -179,6 +182,19 @@ public enum ACPMCPPromptPreamble: Sendable {
                 deviceToolsAvailable: deviceToolsAvailable,
                 isPeerChild: isPeerChild,
                 peersLine: isDelegated ? nil : peersLine(delegationPeerNames, cli: true))
+        case .builtInViaCLI:
+            return cliText(
+                builtInInjected: builtInTools == .full,
+                isDelegated: isDelegated,
+                userServerNames: userServerNames,
+                serverAvailability: nil,
+                ggStack: ggStack,
+                issue: issue,
+                delegation: delegation,
+                computerUseAvailable: computerUseAvailable,
+                deviceToolsAvailable: deviceToolsAvailable,
+                isPeerChild: isPeerChild,
+                peersLine: isDelegated ? nil : peersLine(delegationPeerNames, cli: true))
         }
     }
 
@@ -208,7 +224,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         }
         let route = switch mode {
         case .mcp: "the alas session_new tool"
-        case .cli: "`alas session new --prompt <text>`"
+        case .cli, .builtInViaCLI: "`alas session new --prompt <text>`"
         }
         return off + " To delegate a task, use \(route): it starts a child "
             + "agent session in Alas that reports back to you here."
@@ -405,11 +421,14 @@ public enum ACPMCPPromptPreamble: Sendable {
         return lines.joined(separator: "\n")
     }
 
+    /// - Parameter serverAvailability: how Pi reaches the other MCP servers,
+    ///   or nil when they attach over ACP and only the built-in server is
+    ///   blocked by the agent's MCP policy.
     private static func cliText(
         builtInInjected: Bool,
         isDelegated: Bool,
         userServerNames: [String],
-        serverAvailability: ACPMCPExternalStatus.AdapterServerAvailability,
+        serverAvailability: ACPMCPExternalStatus.AdapterServerAvailability?,
         ggStack: GGPreambleStackContext?,
         issue: IssuePreambleContext?,
         delegation: String?,
@@ -421,7 +440,11 @@ public enum ACPMCPPromptPreamble: Sendable {
         var lines: [String] = []
         lines.append("<alas-workspace-context>")
         var intro = "This session runs inside Alas, the user's macOS workspace app."
-        if serverAvailability == .available, !userServerNames.isEmpty {
+        if serverAvailability == nil, builtInInjected {
+            intro += " This agent's MCP policy blocks Alas's built-in MCP server, so its tools never "
+                + "load; do not search for them. The `alas` CLI below does the same things."
+        }
+        if serverAvailability == nil || serverAvailability == .available, !userServerNames.isEmpty {
             intro += " MCP tools may be deferred behind tool search — they ARE "
                 + "available; use your tool discovery/search mechanism to load them."
         }
@@ -472,7 +495,8 @@ public enum ACPMCPPromptPreamble: Sendable {
             lines.append(line)
             lines.append("Every built-in Alas tool also runs as `alas tool call <name> '<json-arguments>'`: "
                 + "`alas tool list` names the tools and `alas tool schema <name>` prints one's arguments. "
-                + "An image in a reply, such as a screenshot, is saved to a file whose path the output prints.")
+                + "An image in a reply, such as a screenshot, is saved to a file whose path the output prints. "
+                + "`alas skill guide` prints a fuller guide and routes to one per task.")
             if !isPeerChild {
                 lines.append("Use `alas preview list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel` "
                     + "to control your owner's actual browser tab. Commands use the preview_id returned by list/open. "
@@ -514,6 +538,8 @@ public enum ACPMCPPromptPreamble: Sendable {
         if !userServerNames.isEmpty {
             let names = userServerNames.joined(separator: ", ")
             switch serverAvailability {
+            case nil:
+                lines.append("Additional MCP servers attached: \(names).")
             case .available:
                 lines.append("Additional MCP servers are available through the "
                     + "`mcp()` tool (pi-mcp-adapter): \(names).")
