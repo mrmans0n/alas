@@ -7,7 +7,8 @@ struct ShepherdSheet: View {
     let workspace: SessionWorkspace
     let isBusy: Bool
     @Environment(\.dismiss) private var dismiss
-    @State private var error: String?
+    /// Shows a refusal on the pill, which outlives this sheet.
+    let reportError: (String) -> Void
 
     var body: some View {
         let shepherd = workspace.shepherd
@@ -21,7 +22,7 @@ struct ShepherdSheet: View {
                     } else if let detail = shepherd.detail {
                         RequestHeaderSection(number: shepherd.number, detail: detail)
                         ChecksSection(checks: detail.checks)
-                        reviewsSection(detail)
+                        if detail.openThreads != nil { reviewsSection(detail) }
                         statusSection(shepherd, detail: detail, isStack: false)
                     } else {
                         statusSection(shepherd, detail: nil, isStack: false)
@@ -37,11 +38,6 @@ struct ShepherdSheet: View {
         }
         .presentationDetents([.medium, .large])
         .onAppear { workspace.refreshShepherd() }
-        .alert("Couldn't Do That", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(error ?? "")
-        }
     }
 
     // MARK: Bound
@@ -100,9 +96,7 @@ struct ShepherdSheet: View {
                     get: { autoFix }, set: { run($0 ? .enableAutoFix : .disableAutoFix) }))
                     .disabled(disabled)
             } footer: {
-                Text(isStack
-                    ? "CI failures, conflicts and reviewer threads in any entry go back to this session as one turn"
-                    : "CI failures, conflicts and reviewer threads go back to this session")
+                Text("CI failures, conflicts and reviewer threads go back to this session")
             }
         }
         if let autoMerge = shepherd.autoMerge {
@@ -169,13 +163,15 @@ struct ShepherdSheet: View {
     // MARK: Actions
 
     private func run(_ action: RemoteShepherdAction) {
-        Task { error = await workspace.shepherd(action) }
+        Task {
+            if let refusal = await workspace.shepherd(action) { reportError(refusal) }
+        }
     }
 
     private func ship() {
         Task {
             if let refusal = await workspace.shepherd(.ship) {
-                error = refusal
+                reportError(refusal)
             } else {
                 dismiss()
             }

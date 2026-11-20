@@ -7,6 +7,7 @@ struct ShepherdPill: View {
     let workspace: SessionWorkspace
     let isBusy: Bool
     @State private var showsSheet = false
+    @State private var error: String?
 
     var body: some View {
         let shepherd = workspace.shepherd
@@ -24,7 +25,12 @@ struct ShepherdPill: View {
         .accessibilityLabel("Pull request")
         .accessibilityValue(accessibilityValue(shepherd))
         .sheet(isPresented: $showsSheet) {
-            ShepherdSheet(workspace: workspace, isBusy: isBusy)
+            ShepherdSheet(workspace: workspace, isBusy: isBusy) { error = $0 }
+        }
+        .alert("Couldn't Do That", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(error ?? "")
         }
     }
 
@@ -37,6 +43,7 @@ struct ShepherdPill: View {
         let stackShip = workspace.shipsStack && shepherd == nil
         let invites = Self.invitesShip(shepherd: shepherd, isBusy: isBusy)
         let tint = invites ? Color.green : Self.color(badge)
+        // Mirrors `ShepherdBadgeState.isActive` (AlasIntegrations), which AlasRemoteKit can't see.
         let active = badge == "fixing" || badge == "merging"
         return Label {
             Text(shepherd?.number ?? (workspace.shipsStack ? "Ship stack" : "Ship"))
