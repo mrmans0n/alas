@@ -284,10 +284,9 @@ final class PastingTextView: UITextView {
     }
 
     override func cut(_ sender: Any?) {
-        guard spelled != nil, selectedRange.length > 0 else { return super.cut(sender) }
+        guard spelled != nil, selectedRange.length > 0, let range = selectedTextRange else { return super.cut(sender) }
         copy(sender)
-        textStorage.replaceCharacters(in: selectedRange, with: "")
-        selectedRange = NSRange(location: selectedRange.location, length: 0)
-        delegate?.textViewDidChange?(self)
+        // Through the text input, so the text view records the cut for undo.
+        replace(range, withText: "")
     }
 }
