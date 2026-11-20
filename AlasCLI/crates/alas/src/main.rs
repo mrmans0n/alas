@@ -1,6 +1,7 @@
 mod mcp;
 mod output;
 mod parse;
+mod skill;
 mod tool;
 
 use alas_client::{dispatch, logical_base, resolve_target, Command, DispatchError, TransportError};
@@ -24,8 +25,10 @@ fn main() -> ExitCode {
     }
 
     let base = logical_base();
-    if args.first().is_some_and(|first| first == "tool") {
-        return run_tool(&args[1..], &base);
+    match args.first().map(String::as_str) {
+        Some("tool") => return run_tool(&args[1..], &base),
+        Some("skill") => return run_skill(&args[1..], &base),
+        _ => {}
     }
     let command = match parse(&args, &base) {
         Ok(command) => command,
@@ -68,6 +71,40 @@ fn run(command: &Command, confirm_empty: bool) -> ExitCode {
             };
             eprintln!("alas: {msg}");
             ExitCode::from(code)
+        }
+    }
+}
+
+/// `alas skill …`: prints a guide, or installs, removes or reports the Alas
+/// agent skills. Runs locally; Alas need not be running.
+fn run_skill(args: &[String], base: &std::path::Path) -> ExitCode {
+    let command = match skill::parse(args, base) {
+        Ok(command) => command,
+        Err(usage) => {
+            eprintln!("{usage}");
+            return ExitCode::from(2);
+        }
+    };
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+    let result = match command {
+        skill::SkillCommand::Guide(topic) => {
+            let parent = std::env::var("ALAS_PARENT_SESSION_ID").ok().filter(|id| !id.is_empty());
+            skill::guide(topic.as_deref(), &mcp::session_tool_definitions(parent.as_deref())).map(|text| vec![text])
+        }
+        skill::SkillCommand::Install(dirs) => skill::install(&skill::target_dirs(dirs, &home)),
+        skill::SkillCommand::Remove(dirs) => skill::remove(&skill::target_dirs(dirs, &home)),
+        skill::SkillCommand::Status { dirs, json } => Ok(skill::status(&skill::target_dirs(dirs, &home), json)),
+    };
+    match result {
+        Ok(lines) => {
+            for line in lines {
+                println!("{line}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("alas: {message}");
+            ExitCode::FAILURE
         }
     }
 }

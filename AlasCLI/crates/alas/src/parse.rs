@@ -44,7 +44,8 @@ usage: alas pr create --title <title> --body <body> [--draft] [--base <ref>]
 usage: alas pr status
 usage: alas stack ship
 usage: alas visual show --title <title> (--html <html> | --html-file <path>) [--presentation embedded|card] [--question <prompt> --option <id>=<label>... [--multiple]]
-usage: alas tool list | alas tool schema <name> | alas tool call <name> [<json-arguments> | -]  (every built-in MCP tool, devices included)";
+usage: alas tool list | alas tool schema <name> | alas tool call <name> [<json-arguments> | -]  (every built-in MCP tool, devices included)
+usage: alas skill guide [topic] | alas skill install|remove|status [--dir <skills-dir>]...  (agent skills that teach the CLI)";
 
 /// Parse arguments (excluding argv0) into a Command. `base` is the directory
 /// `open` paths resolve against. On misuse, returns the usage string to print.
