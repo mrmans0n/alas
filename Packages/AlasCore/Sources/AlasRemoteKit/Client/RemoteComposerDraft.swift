@@ -210,7 +210,19 @@ public struct RemoteComposerDraft: Equatable, Sendable {
         var targets = SlashCommandText.chipTargets(inFragment: pasted, replacing: range, in: current, commands: commands)
             .map { (range: $0.range, chip: RemoteDraftChip.command($0.command)) }
         if let codeHost, !isInCode(range.location, in: string) {
-            let urls = UpstreamReferenceText.urlReferences(in: pasted, repository: codeHost, precededBy: before, followedBy: after)
+            // The two characters before the paste are scanned with it, so a URL
+            // pasted as a link target (after `](`) stays a URL.
+            let contextStart = max(0, range.location - 2)
+            let context = string.substring(with: NSRange(location: contextStart, length: range.location - contextStart))
+            let contextLength = (context as NSString).length
+            let urls = UpstreamReferenceText.urlReferences(
+                in: context + pasted, repository: codeHost,
+                precededBy: contextStart > 0 ? string.character(at: contextStart - 1) : nil, followedBy: after
+            ).compactMap { match in
+                match.range.location < contextLength ? nil : UpstreamReferenceText.Match(
+                    range: NSRange(location: match.range.location - contextLength, length: match.range.length),
+                    reference: match.reference)
+            }
             let tokens = UpstreamReferenceText.references(in: pasted, host: codeHost.kind, precededBy: before, followedBy: after)
             targets += (urls + tokens).map { (range: $0.range, chip: RemoteDraftChip.reference($0.reference)) }
         }

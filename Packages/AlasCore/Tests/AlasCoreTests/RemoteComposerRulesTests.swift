@@ -137,6 +137,9 @@ struct RemoteComposerRulesTests {
                                                   commands: [], codeHost: repo, nextOrdinal: 1) == [.text(url)])
         #expect(RemoteComposerDraft.pasteSegments(url, replacing: NSRange(location: 4, length: 0), in: "```\n\n```",
                                                   commands: [], codeHost: repo, nextOrdinal: 1) == [.text(url)])
+        // So does a URL pasted as a Markdown link's target.
+        #expect(RemoteComposerDraft.pasteSegments(url, replacing: NSRange(location: 5, length: 0), in: "[PR]()",
+                                                  commands: [], codeHost: repo, nextOrdinal: 1) == [.text(url)])
     }
 
     /// Editor offsets count a chip as one character; a replace splits text runs and keeps chips whole.
