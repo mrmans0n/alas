@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Open a run's visible terminal from the iPhone and iPad Run menu, and show local notifications for confirmed successes and failures.
 - Run every built-in Alas MCP tool from the shell with `alas tool list`, `alas tool schema` and `alas tool call`, and add `alas pr create|status`, `alas stack ship`, `alas vm run|status` and `alas visual show`, for agents whose harness caps or drops MCP servers. CLI screenshots and preview captures are saved to a file whose path the output prints.
 - Choose per agent which groups of built-in Alas MCP tools (browser preview, computer use, VMs, simulators and devices) load as MCP tools. Groups left out stay reachable through `alas tool call`.
+- When Codex's managed MCP policy blocks the Alas MCP server, point the session at the `alas` CLI instead of tools that never load, and remember the block for the agent's next sessions.
+- Install Alas agent skills from Settings > Agents, or with `alas skill install`: a routing `alas` skill and skills for reviews, delegation, previews, computer use and devices, which teach any agent to drive Alas with the CLI. `alas skill guide` prints the same guides.
 
 ## [0.24.4] - 2026-11-20
 
