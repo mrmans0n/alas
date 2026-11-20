@@ -72,7 +72,12 @@ final class PermissionGuide {
             return
         }
         guard attempt < 30 else {
-            if let frame { place(beside: frame) } else { panel.center(); panel.orderFrontRegardless() }
+            if let frame {
+                place(beside: frame)
+            } else {
+                panel.center()
+                panel.orderFrontRegardless()
+            }
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
