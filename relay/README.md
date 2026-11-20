@@ -10,7 +10,7 @@ its own.
 relay token (AES-256-GCM, key derived from `RELAY_SECRET`). The phone hands that
 token to its hosts; a host sends it back on `POST /push` and the relay opens it
 to learn where to deliver. The relay never keeps the token, and a push carries
-only IDs (`serverId`, `sessionId`, `status`), never titles, prompts, tool text,
+only IDs (`serverId`, `sessionId`, or an inbox item's event id in its place, `status`), never titles, prompts, tool text,
 host names or paths. Rotating `RELAY_SECRET` invalidates every token.
 
 ## Deploy

@@ -66,13 +66,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let serverId = alas?["serverId"] as? String
         let sessionId = alas?["sessionId"] as? String
         let action = response.actionIdentifier
+        // An inbox item's sessionId is its event id: Dismiss acknowledges it, a tap opens the Inbox.
+        if alas?["status"] as? String == "inbox" {
+            if action == "dismiss", let serverId, let eventID = sessionId.flatMap(UUID.init(uuidString:)) {
+                await inBackground("Dismiss inbox item") { await dismiss(serverId: serverId, eventID: eventID) }
+            } else if let open { open(nil) } else { pending.append(nil) }
+            return
+        }
         if action == "allow" || action == "deny", let serverId, let sessionId {
             // Only the request the alert showed may be answered; an alert the extension did not rewrite names none.
             let request = alas?["request"] as? String
             var answered = false
             if let request {
-                answered = await answerInBackground(serverId: serverId, sessionId: sessionId, request: request,
-                                                         allow: action == "allow")
+                answered = await inBackground("Answer permission") {
+                    await answer(serverId: serverId, sessionId: sessionId, request: request, allow: action == "allow")
+                }
             }
             if !answered { await postCouldntAnswer(serverId: serverId, sessionId: sessionId, title: response.notification.request.content.title) }
             return
@@ -89,12 +97,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     }
 
     /// The actions do not open the app, so iOS may run this with the app in the background and its
-    /// hosts disconnected: connect for the answer, and let go again unless the app came forward.
-    @MainActor private static func answerInBackground(serverId: String, sessionId: String, request: String,
-                                                      allow: Bool) async -> Bool {
+    /// hosts disconnected: connect for the work, and let go again unless the app came forward.
+    @MainActor private static func inBackground(_ name: String, _ work: @MainActor () async -> Bool) async -> Bool {
         let app = UIApplication.shared
-        // No expiration handler: `answer` gives up after 25 s, inside the system's budget.
-        let task = app.beginBackgroundTask(withName: "Answer permission")
+        // No expiration handler: the work gives up after 25 s, inside the system's budget.
+        let task = app.beginBackgroundTask(withName: name)
         answering += 1
         defer {
             answering -= 1
@@ -103,7 +110,35 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             if answering == 0, app.applicationState == .background { hub?.disconnectAll() }
             app.endBackgroundTask(task)
         }
-        return await answer(serverId: serverId, sessionId: sessionId, request: request, allow: allow)
+        return await work()
+    }
+
+    /// Acknowledges an item of the Mac's inbox, waiting for the Mac to confirm.
+    /// ponytail: only the Mac itself; a gateway does not relay another Mac's inbox.
+    @MainActor private static func dismiss(serverId: String, eventID: UUID) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(25)
+        guard let hub else { return false }
+        hub.connectAll()
+        var host: PairedHost?
+        while host == nil {
+            host = hub.hosts.first { $0.serverId == serverId && hub.state(of: $0.id) == .online }
+            guard host == nil else { break }
+            guard ContinuousClock.now < deadline, !Task.isCancelled else { return false }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard let host else { return false }
+        let id = hub.nextHostRequestId()
+        var done = false
+        let token = hub.addListener(host.id) { message in
+            if case .host(let reply) = message, RemoteGitRequest.reply(to: id, in: reply) != nil { done = true }
+        }
+        defer { token.cancel() }
+        hub.send(.host(RemoteAttentionRequest.dismiss(id: id, eventIDs: [eventID])), to: host.id)
+        while !done {
+            guard ContinuousClock.now < deadline, !Task.isCancelled else { return false }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return true
     }
 
     /// Answers the session's pending permission once, if it is the request `request` names, taking over

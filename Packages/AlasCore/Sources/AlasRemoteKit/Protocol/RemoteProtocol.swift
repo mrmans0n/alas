@@ -303,6 +303,8 @@ public enum RemotePushKind {
     public static let input = "input"
     /// A session's turn ended.
     public static let finished = "finished"
+    /// A new item in the Mac's own inbox: a failed run, conflicts, CI or review feedback.
+    public static let inbox = "inbox"
     /// What a registration without kinds gets, as before kinds existed.
     public static let defaults: Set<String> = [permission, input]
 }
