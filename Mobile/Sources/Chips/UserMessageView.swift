@@ -149,7 +149,10 @@ struct UserMessageChips {
         for match in Self.marker.matches(in: string.string, range: NSRange(location: 0, length: source.length)).reversed() {
             guard let ordinal = Int(source.substring(with: match.range(at: 1))),
                   let content = pasted?.content(ordinal: ordinal) else { continue }
-            string.replaceCharacters(in: match.range, with: ChipAttachment.string(.pasted(ordinal: ordinal, text: content), font: font))
+            let chip = NSMutableAttributedString(
+                attributedString: ChipAttachment.string(.pasted(ordinal: ordinal, text: content), font: font))
+            chip.addAttribute(Self.spelling, value: content, range: NSRange(location: 0, length: chip.length))
+            string.replaceCharacters(in: match.range, with: chip)
         }
     }
 
@@ -173,12 +176,37 @@ struct UserMessageChips {
             return plain
         }
         for (range, model, mention) in found.sorted(by: { $0.0.location > $1.0.location }) {
-            string.replaceCharacters(in: range, with: ChipAttachment.string(model, sent: mention, references: references, font: font))
+            let chip = NSMutableAttributedString(
+                attributedString: ChipAttachment.string(model, sent: mention, references: references, font: font))
+            chip.addAttribute(Self.spelling, value: source.substring(with: range), range: NSRange(location: 0, length: chip.length))
+            string.replaceCharacters(in: range, with: chip)
         }
     }
 
     /// Marks inline code and links, which never become chips.
     private static let keepsText = NSAttributedString.Key("alas.chips.keepsText")
+    /// What a chip stands for in the sent text, for Copy.
+    static let spelling = NSAttributedString.Key("alas.chips.spelling")
+
+    /// `text` with each chip written out as the text it stands for.
+    static func spelled(_ text: NSAttributedString) -> String {
+        var result = ""
+        let source = text.string as NSString
+        // By attachment: two chips side by side that spell the same stay two.
+        text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+            let chip = value == nil ? nil : text.attribute(spelling, at: range.location, effectiveRange: nil) as? String
+            result += chip ?? source.substring(with: range)
+        }
+        return result
+    }
+}
+
+/// A read-only text view whose Copy writes chips out, as the composer's does.
+final class SpellingTextView: UITextView {
+    override func copy(_ sender: Any?) {
+        guard selectedRange.length > 0 else { return super.copy(sender) }
+        UIPasteboard.general.string = UserMessageChips.spelled(attributedText.attributedSubstring(from: selectedRange))
+    }
 }
 
 /// Read-only message text with chips, sized to its text so a short message
@@ -194,7 +222,7 @@ struct ChipText: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = SpellingTextView()
         view.isEditable = false
         view.isSelectable = true
         view.isScrollEnabled = false
