@@ -1008,7 +1008,9 @@ final class AppState {
             name: remoteDisplayName,
             // Only reach for the lazy manager when a server is up, for the
             // same reason `syncRemotePeers` does.
-            peers: remoteServer != nil ? remotePeers.helloPeers : []
+            peers: remoteServer != nil ? remotePeers.helloPeers : [],
+            consoleCapabilities: PeerConsoleCapability.appHost,
+            hostCapabilities: HostProtocolCapability.served + [HostProtocolCapability.worktreesAutoBranchNameV1]
         )
     }
 

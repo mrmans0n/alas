@@ -106,8 +106,14 @@ extension AlasHost {
         // Clients send the typed name; the branch follows this Mac's naming
         // settings, as it does in its own New Worktree dialog.
         let naming = AlasCoreContext.remoteBranchNaming(for: project, settings: core.environment.configuration().worktrees)
-        let branch = naming.compose(name: request.branch, enabled: request.useBranchNaming != false)
-        guard case .valid = GitNameValidator.validateBranchName(branch) else { return refused() }
+        let useNaming = request.useBranchNaming != false
+        // No name: a temporary one the first prompt replaces, as the Mac's
+        // New Worktree dialog does.
+        let namesBranchFromFirstPrompt = request.branch.isEmpty
+        var branch = naming.compose(name: request.branch, enabled: useNaming)
+        if !namesBranchFromFirstPrompt {
+            guard case .valid = GitNameValidator.validateBranchName(branch) else { return refused() }
+        }
         let branches: [String]
         do {
             branches = try await core.branches(of: project)
@@ -115,6 +121,16 @@ extension AlasHost {
         } catch {
             logger.error("Could not load branches for remote worktree creation in project \(project.id, privacy: .private): \(String(describing: error), privacy: .private)")
             return refused("Could not load branches.")
+        }
+        if namesBranchFromFirstPrompt {
+            // Never an existing branch: the worktree would check it out and
+            // the first prompt would then rename it.
+            let worktreeBranches = Set(core.projects.worktrees(projectId: project.id).map(\.branch))
+            branch = naming.compose(name: WorktreeAutoBranchName.placeholder { candidate in
+                let composed = naming.compose(name: candidate, enabled: useNaming)
+                return branches.contains(composed) || worktreeBranches.contains(composed)
+            }, enabled: useNaming)
+            guard case .valid = GitNameValidator.validateBranchName(branch) else { return refused() }
         }
 
         let destination: URL
@@ -152,6 +168,7 @@ extension AlasHost {
         creation.destinationAlreadyPrepared = true
         creation.launchSurface = .delegated
         creation.asksAboutRepoHooks = false
+        creation.namesBranchFromFirstPrompt = namesBranchFromFirstPrompt
         let worktree: Worktree
         do {
             worktree = try await worktrees.create(creation, caller: caller)

@@ -1268,8 +1268,10 @@ struct RemoteAppStateAccessTests {
         #expect(result == .failure("Repository is no longer available."))
     }
 
-    @Test(arguments: [(nil, "feature/phone"), (false, "phone")] as [(Bool?, String)])
-    func remoteSessionsProviderCreatesWorktreeSessionAndFocusesIt(useBranchNaming: Bool?, expectedBranch: String) async throws {
+    /// An empty `typed` asks the host for a temporary name, recorded as
+    /// pending so the first prompt renames it.
+    @Test(arguments: [(nil, "phone", "feature/phone"), (false, "phone", "phone"), (nil, "", "feature/")] as [(Bool?, String, String)])
+    func remoteSessionsProviderCreatesWorktreeSessionAndFocusesIt(useBranchNaming: Bool?, typed: String, expectedBranch: String) async throws {
         let repository = try await makeRemoteBranchesRepository()
         let worktreeRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-remote-create-root-\(UUID().uuidString)")
@@ -1293,7 +1295,7 @@ struct RemoteAppStateAccessTests {
         state.core.sessionAttachScheduler = { _, _ in }
 
         let result = await createRemoteWorktreeSession(
-            state, projectId: project.id, base: "main", branch: "phone", agentId: "claude",
+            state, projectId: project.id, base: "main", branch: typed, agentId: "claude",
             caller: .remotePeer(deviceID: "phone"), branchPrefix: "feature/", useBranchNaming: useBranchNaming
         )
 
@@ -1304,7 +1306,14 @@ struct RemoteAppStateAccessTests {
         let worktree = try #require(summary.worktree)
         let worktreeId = Worktree.makeId(path: URL(fileURLWithPath: worktree.path))
         defer { cleanupRemoteRenameFiles(worktreeId: worktreeId) }
-        #expect(worktree.branch == expectedBranch)
+        let pending = state.projectsManager.pendingAutoBranchName(projectId: project.id, worktreeId: worktreeId)
+        if typed.isEmpty {
+            #expect(worktree.branch.hasPrefix(expectedBranch) && worktree.branch.count > expectedBranch.count)
+            #expect(pending == worktree.branch)
+        } else {
+            #expect(worktree.branch == expectedBranch)
+            #expect(pending == nil)
+        }
         #expect(FileManager.default.fileExists(atPath: worktree.path))
         #expect(state.selectedWorktreeId == worktreeId)
         let tab = try #require(firstACPTab(in: state, worktreeId: worktreeId))

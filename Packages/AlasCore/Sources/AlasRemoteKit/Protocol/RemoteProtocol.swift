@@ -1755,6 +1755,10 @@ public enum HostProtocolCapability: Sendable {
     /// `worktreeSessionNeedsRepoHookApproval` for a hook the client's user
     /// must approve first.
     public static let repoHooksApprovalV1 = "host.repoHooks.approval.v1"
+    /// Hosts whose `createWorktreeSession` takes an empty branch: the
+    /// worktree starts on a temporary name and its first prompt names the
+    /// branch. Only a Mac, which runs the naming.
+    public static let worktreesAutoBranchNameV1 = "host.worktrees.autoBranchName.v1"
     /// Hosts that serve `delegation`, and send `delegationOutboxChanged`.
     public static let delegationV1 = "host.delegation.v1"
     /// Delegation over a link the other side opened. A headless host offers it
