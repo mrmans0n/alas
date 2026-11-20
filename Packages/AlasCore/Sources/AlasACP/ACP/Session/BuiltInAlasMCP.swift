@@ -27,6 +27,36 @@ public enum BuiltInMCPToolScope: Equatable, Sendable {
     }
 }
 
+/// Groups of built-in tools an agent's settings can leave out of the MCP
+/// tool list, for harnesses that cap how many MCP tools they load. Left-out
+/// tools still run, and the agent reaches them with `alas tool call`. The raw
+/// value is the tools' name prefix, as `alas mcp` reads it from
+/// `ALAS_MCP_HIDDEN_TOOL_GROUPS`.
+public enum BuiltInMCPToolGroup: String, CaseIterable, Codable, Sendable {
+    case preview
+    case computer
+    case vm
+    case device
+
+    public var displayName: String {
+        switch self {
+        case .preview: "Browser preview"
+        case .computer: "Computer use"
+        case .vm: "Worktree VMs"
+        case .device: "Simulators and devices"
+        }
+    }
+
+    public var toolNames: [String] {
+        ACPMCPPromptPreamble.builtInToolNames.filter { $0.hasPrefix("\(rawValue)_") }
+    }
+
+    /// The `ALAS_MCP_HIDDEN_TOOL_GROUPS` value, or nil when nothing is hidden.
+    static func environmentValue(_ groups: Set<Self>) -> String? {
+        groups.isEmpty ? nil : allCases.filter(groups.contains).map(\.rawValue).joined(separator: ",")
+    }
+}
+
 /// What the session manager knows when it asks for the built-in server.
 public struct BuiltInMCPAttachmentContext: Sendable {
     public enum Location: Equatable, Sendable {
@@ -142,16 +172,19 @@ public enum BuiltInAlasMCP: Sendable {
         /// The child was delegated from another Mac: its parent is a `peer:` sentinel.
         public let isPeerChild: Bool
         public let toolScope: BuiltInMCPToolScope
+        /// Groups left out of the server's tool list; see `BuiltInMCPToolGroup`.
+        public let hiddenToolGroups: Set<BuiltInMCPToolGroup>
 
         public init(
             server: ACPMCPServer, status: MCPAttachmentServerStatus, isDelegated: Bool, isPeerChild: Bool = false,
-            toolScope: BuiltInMCPToolScope = .full
+            toolScope: BuiltInMCPToolScope = .full, hiddenToolGroups: Set<BuiltInMCPToolGroup> = []
         ) {
             self.server = server
             self.status = status
             self.isDelegated = isDelegated
             self.isPeerChild = isPeerChild
             self.toolScope = toolScope
+            self.hiddenToolGroups = hiddenToolGroups
         }
     }
 
@@ -292,6 +325,7 @@ public enum BuiltInAlasMCP: Sendable {
         workspaceContext: WorkspaceContext? = nil,
         headless: Bool = false,
         deviceTools: Bool = true,
+        hiddenToolGroups: Set<BuiltInMCPToolGroup> = [],
         cliBuild: String? = nil,
         serverName: String = BuiltInAlasMCP.serverName
     ) -> Injection? {
@@ -339,6 +373,9 @@ public enum BuiltInAlasMCP: Sendable {
                     + workspaceEnvironment
                     + (headless ? [.init(name: "ALAS_MCP_HEADLESS", value: "1")] : [])
                     + (deviceTools ? [] : [.init(name: "ALAS_MCP_DEVICES", value: "0")])
+                    + (BuiltInMCPToolGroup.environmentValue(hiddenToolGroups).map {
+                        [.init(name: "ALAS_MCP_HIDDEN_TOOL_GROUPS", value: $0)]
+                    } ?? [])
             )
             transport = .stdio
         }
@@ -352,7 +389,8 @@ public enum BuiltInAlasMCP: Sendable {
                 disposition: .requested
             ),
             isDelegated: parentSessionId != nil,
-            isPeerChild: parentSessionId.flatMap(ACPPeerParent.serverId(from:)) != nil
+            isPeerChild: parentSessionId.flatMap(ACPPeerParent.serverId(from:)) != nil,
+            hiddenToolGroups: hiddenToolGroups
         )
     }
 }

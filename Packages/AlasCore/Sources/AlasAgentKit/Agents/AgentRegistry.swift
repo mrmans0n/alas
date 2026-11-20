@@ -40,6 +40,12 @@ extension AppConfig.Agents {
         BuiltInAlasMCP.normalizedServerName(builtinState[agentID]?.alasMCPServerName)
             ?? BuiltInAlasMCP.serverName
     }
+
+    /// The built-in Alas MCP tool groups `agentID`'s sessions leave out of
+    /// the MCP tool list. Names this build does not know are dropped.
+    public func alasMCPHiddenToolGroups(for agentID: String) -> Set<BuiltInMCPToolGroup> {
+        Set((builtinState[agentID]?.alasMCPHiddenToolGroups ?? []).compactMap(BuiltInMCPToolGroup.init(rawValue:)))
+    }
 }
 
 /// Runtime view over the agent catalog. Built-ins come first (in catalog

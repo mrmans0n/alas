@@ -174,8 +174,8 @@ struct ACPMCPPromptPreambleTests {
             userServerNames: [],
             mode: .mcp
         )
-        #expect(text?.contains("alas") == true)
         #expect(text?.contains("`alas` CLI") == true)
+        #expect(text?.contains("alas tool call <name>") == true)
     }
 
     @Test("delegated preamble omits child-only session tools and explains delegation")
@@ -333,6 +333,20 @@ struct ACPMCPPromptPreambleTests {
         #expect(text.contains("computer_"))
     }
 
+    @Test("a tool group left out of the MCP list is pointed at alas tool call, and only that group")
+    func hiddenToolGroupsRouteThroughTheCLI() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInTools: .full, isDelegated: false, userServerNames: [], hiddenToolGroups: [.device, .vm]))
+        let line = { (prefix: String) in
+            try #require(text.split(separator: "\n").first { $0.hasPrefix(prefix) })
+        }
+        let route = "as MCP tools: run them with `alas tool call"
+        #expect(try line("Device tools").contains(route))
+        #expect(try line("In a worktree with a VM").contains("does not load vm_status and vm_run \(route)"))
+        #expect(try !line("Computer tools").contains(route))
+        #expect(try !line("Preview tools").contains(route))
+    }
+
     @Test("cli mode swaps MCP wording for alas CLI commands")
     func cliMode() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
@@ -343,7 +357,9 @@ struct ACPMCPPromptPreambleTests {
         #expect(text.contains("alas review"))
         #expect(text.contains("alas session"))
         #expect(!text.contains("MCP server \"alas\""))
-        // pr_create/pr_status have no CLI command, so CLI-mode agents aren't told about them.
+        for command in ["alas pr create", "alas stack ship", "alas visual show", "alas tool call", "alas vm run"] {
+            #expect(text.contains(command), "\(command)")
+        }
         #expect(!text.contains("pr_create"))
         // no adapter → no tool-search hint
         #expect(!text.contains("tool search"))

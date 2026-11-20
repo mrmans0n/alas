@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - Open a run's visible terminal from the iPhone and iPad Run menu, and show local notifications for confirmed successes and failures.
+- Run every built-in Alas MCP tool from the shell with `alas tool list`, `alas tool schema` and `alas tool call`, and add `alas pr create|status`, `alas stack ship`, `alas vm run|status` and `alas visual show`, for agents whose harness caps or drops MCP servers. CLI screenshots and preview captures are saved to a file whose path the output prints.
+- Choose per agent which groups of built-in Alas MCP tools (browser preview, computer use, VMs, simulators and devices) load as MCP tools. Groups left out stay reachable through `alas tool call`.
 
 ## [0.24.4] - 2026-11-20
 
