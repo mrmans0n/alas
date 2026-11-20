@@ -137,6 +137,11 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// Ships, resumes or stops session `sessionID`'s shepherd
     /// (`host.shepherds.v1`).
     case shepherdSession(sessionID: String, action: HostShepherdAction)
+    /// The open items of this Mac's attention inbox, but for agent waits,
+    /// which the phone lists as sessions (`host.attention.phone.v1`).
+    case attention
+    /// Dismisses those items, as the Mac's inbox does (`host.attention.phone.v1`).
+    case dismissAttention(eventIDs: [UUID])
     /// Reads a listed worktree's code as a session in it would
     /// (`host.worktrees.read.v1`).
     case readWorktree(worktree: WorktreeRef, read: HostWorktreeRead)
@@ -713,6 +718,8 @@ public enum HostResponse: Codable, Equatable, Sendable {
     indirect case worktreeRead(reply: RemoteServerMessage)
     /// The answer to `listRunScripts`.
     case runScripts(scripts: [HostRunScript])
+    /// The answer to `attention`.
+    case attention(items: [RemoteAttentionItem])
     /// The answer to `commitMessageInput`.
     case commitMessageInput(input: CommitMessageSuggestionInput)
     /// The answer to `reviewStatus`; nil when the host could not read it.

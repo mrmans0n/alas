@@ -1737,6 +1737,9 @@ public enum HostProtocolCapability: Sendable {
     /// Hosts that serve `shepherdSession`, and list each session's shepherd,
     /// to a device paired as the native phone app, an app host included.
     public static let shepherdsPhoneV1 = "host.shepherds.phone.v1"
+    /// Hosts that serve `attention` and `dismissAttention` to a device paired
+    /// as the native phone app, an app host included.
+    public static let attentionPhoneV1 = "host.attention.phone.v1"
     /// Hosts that serve `listReviews`, `readReview` and `mutateReview`:
     /// only a headless host.
     public static let reviewsV1 = "host.reviews.v1"

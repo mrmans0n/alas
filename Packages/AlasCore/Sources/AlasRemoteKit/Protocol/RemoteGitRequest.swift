@@ -152,7 +152,7 @@ public enum RemoteGitRequest {
         }
     }
 
-    private static func envelope(id: Int, _ request: [String: Any]) -> OpaqueHostMessage {
+    static func envelope(id: Int, _ request: [String: Any]) -> OpaqueHostMessage {
         let body: [String: Any] = ["version": hostProtocolVersion, "id": id, "request": request]
         return OpaqueHostMessage(json: (try? JSONSerialization.data(withJSONObject: body, options: .sortedKeys)) ?? Data())
     }

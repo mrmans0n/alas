@@ -105,6 +105,37 @@ import Testing
         #expect(RemoteGitRequest.pullRequest(replying: 4, in: found) == nil)
     }
 
+    /// The phone lists the Mac's open inbox items but for agent waits, which it shows as sessions.
+    @Test func phoneReadsAndDismissesTheMacsInbox() throws {
+        let owner = AttentionWorktreeIdentity(projectID: "p", location: .local, lineageID: "l", legacyPath: nil)
+        let display = AttentionWorktreeDisplaySnapshot(projectName: "Alas", branch: "main", path: "/r", host: nil)
+        func event(_ kind: AttentionKind, _ target: AttentionJumpTarget = .none) -> AttentionEvent {
+            AttentionEvent(id: UUID(), sourceKey: AttentionSourceKey(rawValue: UUID().uuidString), fingerprint: "f",
+                           owner: owner, kind: kind, title: "\(kind)", body: "out", jumpTarget: target, display: display,
+                           occurredAt: Date(timeIntervalSinceReferenceDate: 1_000), requiresAction: true)
+        }
+        let failure = event(.runScriptFailure), failed = event(.agentFailed, .session(sessionID: "s1"))
+        let acknowledged = event(.conflicts), waiting = event(.agentAwaiting, .session(sessionID: "s2"))
+        let events = [failure, failed, acknowledged, waiting]
+        var document = AttentionDocument(events: events)
+        for event in events {
+            document.observations[event.sourceKey] = .init(isActive: true, fingerprint: "f", eventID: event.id)
+        }
+        document.acknowledgments[acknowledged.id] = .init(eventID: acknowledged.id, acknowledgedAt: .now)
+
+        let items = AttentionSignalAggregator.phoneInbox(document)
+        #expect(Set(items.map(\.id)) == [failure.id, failed.id])
+        #expect(items.first { $0.id == failed.id }?.sessionID == "s1")
+
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: RemoteAttentionRequest.list(id: 4).json)
+            == HostClientMessage(id: 4, request: .attention))
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: RemoteAttentionRequest.dismiss(id: 5, eventIDs: [failure.id]).json)
+            == HostClientMessage(id: 5, request: .dismissAttention(eventIDs: [failure.id])))
+        let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 4, result: .attention(items: items))))
+        #expect(RemoteAttentionRequest.items(replying: 4, in: reply) == items)
+        #expect(RemoteAttentionRequest.items(replying: 9, in: reply) == nil)
+    }
+
     @Test func phoneRunsTheMacsScripts() throws {
         let ref = WorktreeRef(projectID: "p", path: "/r")
         let decode = { (m: OpaqueHostMessage) in try JSONDecoder().decode(HostClientMessage.self, from: m.json).request }

@@ -3,6 +3,7 @@ import SwiftUI
 /// Everything waiting on the user, answerable in place.
 struct InboxView: View {
     let hub: HostHub
+    let attention: AttentionFeed
     /// A route to push, set by a tapped notification; cleared once pushed.
     @Binding var openRoute: SessionRoute?
     @Environment(SessionRegistry.self) private var registry
@@ -13,6 +14,8 @@ struct InboxView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     /// A hidden tab keeps its view alive; it must not hold sessions then.
     @State private var visible = false
+    /// Mac items whose whole body is showing.
+    @State private var expanded: Set<UUID> = []
 
     var body: some View {
         let entries = InboxModel.entries(in: hub)
@@ -67,6 +70,7 @@ struct InboxView: View {
         .onAppear {
             visible = true
             model.sync(entries, registry: registry)
+            attention.refresh()
         }
         .onChange(of: entries) { _, new in if visible { model.sync(new, registry: registry) } }
         .onDisappear {
@@ -77,16 +81,23 @@ struct InboxView: View {
 
     private func list(_ shown: [InboxModel.Entry]) -> some View {
         Group {
-            if shown.isEmpty {
+            let items = attention.entries
+            if shown.isEmpty, items.isEmpty {
                 ContentUnavailableView("Nothing needs you right now", systemImage: "tray",
-                                       description: Text("Permission requests, questions and plans from your sessions show up here."))
+                                       description: Text("Permission requests, questions and plans from your sessions show up here, with run failures, conflicts and failed agents from your Macs."))
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 20) {
+                    LazyVStack(alignment: .leading, spacing: 20) {
                         ForEach(shown) { entry in section(entry) }
+                        if !items.isEmpty {
+                            Text("From your Macs").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                                .padding(.horizontal, 4)
+                            ForEach(items) { entry in attentionRow(entry) }
+                        }
                     }
                     .padding(16)
                 }
+                .refreshable { attention.refresh() }
             }
         }
         .navigationTitle("Inbox")
@@ -126,6 +137,58 @@ struct InboxView: View {
                     .frame(maxWidth: .infinity, minHeight: 64)
                     .modifier(CardSurface(floats: false))
             }
+        }
+    }
+
+    private func attentionRow(_ entry: AttentionFeed.Entry) -> some View {
+        let item = entry.item
+        let isExpanded = expanded.contains(item.id)
+        return VStack(alignment: .leading, spacing: 10) {
+            Button {
+                if let route = entry.route {
+                    open(route)
+                } else if isExpanded {
+                    expanded.remove(item.id)
+                } else {
+                    expanded.insert(item.id)
+                }
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: Self.symbol(item.kind)).foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.title).font(.headline).foregroundStyle(.primary).lineLimit(isExpanded ? nil : 2)
+                        Text("\(item.project) · \(item.branch) · \(entry.hostName) · \(item.occurredAt, format: .relative(presentation: .named))")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        if let body = item.body, !body.isEmpty {
+                            Text(body).font(.caption.monospaced()).foregroundStyle(.secondary)
+                                .lineLimit(isExpanded ? nil : 3)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    if entry.route != nil {
+                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button("Dismiss") {
+                expanded.remove(item.id)
+                attention.dismiss(entry)
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+        }
+        .padding(12)
+        .modifier(CardSurface(floats: false))
+    }
+
+    private static func symbol(_ kind: String) -> String {
+        switch kind {
+        case "runScriptFailure": "exclamationmark.triangle"
+        case "conflicts": "arrow.triangle.merge"
+        case "agentFailed": "xmark.octagon"
+        case "hostDisconnected": "wifi.slash"
+        default: "bell"
         }
     }
 }
