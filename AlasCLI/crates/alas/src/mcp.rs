@@ -263,13 +263,17 @@ fn error_reply(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-/// The agent-facing tools. Most mirror a CLI command; `visual_show` is
-/// MCP-only because a terminal caller has no transcript to show it in.
-/// Descriptions make explicit that these act on the user's Alas UI — that is
-/// what makes the agent-side permission prompt legible. `resolve` is internal
-/// and not exposed.
-pub fn tool_definitions() -> Vec<Value> {
-    tool_definitions_for_mode(ToolScope::All)
+/// The agent-facing tools. Each one is also reachable from the shell with
+/// `alas tool call`; most also mirror a readable CLI command. Descriptions
+/// make explicit that these act on the user's Alas UI — that is what makes
+/// the agent-side permission prompt legible. `resolve` is internal and not
+/// exposed.
+///
+/// This is the list `alas tool list` shows a session with the given parent:
+/// the whole surface, since Alas, not the CLI, decides what this session may
+/// call.
+pub(crate) fn session_tool_definitions(parent_session_id: Option<&str>) -> Vec<Value> {
+    tool_definitions_for_session(ToolScope::All, parent_session_id)
 }
 
 fn tool_definitions_for_mode(scope: ToolScope) -> Vec<Value> {
@@ -3188,16 +3192,7 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
         Some(env.worktree_dir.clone()),
     );
     req.mcp_transport = Some(env.transport);
-    if publishes(command) {
-        alas_client::send_with_timeout(&env.socket, &req, PR_CREATE_READ_TIMEOUT)
-    } else if matches!(command, Command::PrStatus) {
-        alas_client::send_with_timeout(&env.socket, &req, PR_STATUS_READ_TIMEOUT)
-    } else if is_computer_call(command) {
-        alas_client::send_with_timeout(&env.socket, &req, alas_client::COMPUTER_READ_TIMEOUT)
-    } else {
-        // Covers `vm_run`, which waits out its own command timeout.
-        alas_client::send_with_timeout(&env.socket, &req, alas_client::read_timeout(command))
-    }
+    alas_client::send_with_timeout(&env.socket, &req, alas_client::read_timeout(command))
 }
 
 /// `dispatch` for a call the app stops when its client leaves (`vm_run`):
@@ -3220,17 +3215,6 @@ fn dispatch_while(
         keep_going,
     )
 }
-
-/// `pr_create` checks the branch, pushes it, and opens the PR/MR with
-/// `gh`/`glab` before replying; on an SSH worktree each of those runs over
-/// ssh, so it gets far longer than the default 30-second reply bound. The
-/// remote helper's relay waits slightly longer than this.
-const PR_CREATE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// `pr_status` lists a gg stack with `gg ls` and reads every request from the
-/// provider before replying, which takes over 30 seconds on a large GitLab
-/// stack, so it gets `pr_create`'s bound.
-const PR_STATUS_READ_TIMEOUT: std::time::Duration = PR_CREATE_READ_TIMEOUT;
 
 /// Unknown tools and invalid arguments are JSON-RPC protocol errors
 /// (-32602); failures while executing a valid call are tool results with
@@ -3259,7 +3243,9 @@ fn call_tool(
     })
 }
 
-fn visual_show_result(lines: Option<&[String]>) -> Value {
+/// What to tell the agent after `visual_show`: Ok when the app confirmed
+/// the visual, Err when it did not.
+pub(crate) fn visual_show_message(lines: Option<&[String]>) -> Result<String, String> {
     let reply = lines
         .and_then(|lines| lines.first())
         .and_then(|line| serde_json::from_str::<Value>(line).ok());
@@ -3271,20 +3257,21 @@ fn visual_show_result(lines: Option<&[String]>) -> Value {
         .and_then(|reply| reply.get("presentation").and_then(Value::as_str))
         == Some("embedded");
     match visual_id {
-        Some(id) if embedded => text_result(
-            format!(
-                "Shown to the user as visual {id}, above your reply. Don't restate or describe it; reply with only what it doesn't already say."
-            ),
-            false,
-        ),
-        Some(id) => text_result(
-            format!(
-                "Shown to the user as visual {id}. Their selection, if any, arrives as their next message. End your turn unless you have more to show."
-            ),
-            false,
-        ),
-        None => text_result("Alas did not confirm the visual.".into(), true),
+        Some(id) if embedded => Ok(format!(
+            "Shown to the user as visual {id}, above your reply. Don't restate or describe it; reply with only what it doesn't already say."
+        )),
+        Some(id) => Ok(format!(
+            "Shown to the user as visual {id}. Their selection, if any, arrives as their next message. End your turn unless you have more to show."
+        )),
+        None => Err("Alas did not confirm the visual.".into()),
     }
+}
+
+/// Whether the app's reply to `command` carries an image in its first line.
+pub(crate) fn returns_image(command: &Command) -> bool {
+    matches!(command, Command::Preview(alas_client::PreviewCommand::Capture { .. }))
+        || matches!(command, Command::Computer(computer, _) if computer.includes_screenshot())
+        || matches!(command, Command::Device(device) if device.includes_screenshot())
 }
 
 fn tool_result(command: &Command, resp: Response) -> Value {
@@ -3292,14 +3279,12 @@ fn tool_result(command: &Command, resp: Response) -> Value {
         return text_result(resp.error.unwrap_or_else(|| "request failed".into()), true);
     }
     if matches!(command, Command::VisualShow { .. }) {
-        return visual_show_result(resp.lines.as_deref());
+        return match visual_show_message(resp.lines.as_deref()) {
+            Ok(text) => text_result(text, false),
+            Err(text) => text_result(text, true),
+        };
     }
-    if matches!(
-        command,
-        Command::Preview(alas_client::PreviewCommand::Capture { .. })
-    ) || matches!(command, Command::Computer(computer, _) if computer.includes_screenshot())
-        || matches!(command, Command::Device(device) if device.includes_screenshot())
-    {
+    if returns_image(command) {
         if let Some(result) = capture_tool_result(resp.lines.as_ref()) {
             return result;
         }
@@ -3312,7 +3297,7 @@ fn tool_result(command: &Command, resp: Response) -> Value {
 
 /// The app replies to UI-action commands with a bare ok; agents read better
 /// with an explicit confirmation than with empty content.
-fn success_message(command: &Command) -> String {
+pub(crate) fn success_message(command: &Command) -> String {
     match command {
         Command::Open { paths } => format!("Opened {} file(s) in Alas.", paths.len()),
         Command::OpenAt { .. } => "Opened file at the requested lines in Alas.".into(),
@@ -3353,21 +3338,24 @@ fn success_message(command: &Command) -> String {
     }
 }
 
-fn transport_error_result(command: &Command, err: &TransportError) -> Value {
-    // A publish that was sent but got no reply keeps running in the app, so
-    // its push and PR/MRs may still land; never report that as a failure.
-    if let Some(tool) = publish_tool(command).filter(|_| matches!(err, TransportError::Io)) {
-        return text_result(
-            format!("Alas did not reply before the {tool} deadline; the push and PR/MR(s) may still complete. Call pr_status before retrying."),
-            true,
-        );
+/// The error for a call Alas took but did not answer in time, when that is
+/// not a failure: a publish keeps running in the app, so its push and PR/MRs
+/// may still land, and a slow `pr_status` is most likely still reading.
+pub(crate) fn unanswered_call_message(command: &Command, err: &TransportError) -> Option<String> {
+    if !matches!(err, TransportError::Io) {
+        return None;
     }
-    // Alas took the call but sent no reply: most likely still reading.
-    if matches!(command, Command::PrStatus) && matches!(err, TransportError::Io) {
-        return text_result(
-            "Alas took pr_status but did not reply in time. It is most likely still listing the gg stack and reading its pull/merge requests, which can be slow. Call pr_status again in a moment.".into(),
-            true,
-        );
+    if let Some(tool) = publish_tool(command) {
+        return Some(format!("Alas did not reply before the {tool} deadline; the push and PR/MR(s) may still complete. Call pr_status before retrying."));
+    }
+    matches!(command, Command::PrStatus).then(|| {
+        "Alas took pr_status but did not reply in time. It is most likely still listing the gg stack and reading its pull/merge requests, which can be slow. Call pr_status again in a moment.".into()
+    })
+}
+
+fn transport_error_result(command: &Command, err: &TransportError) -> Value {
+    if let Some(message) = unanswered_call_message(command, err) {
+        return text_result(message, true);
     }
     // Mirrors describe() in main.rs so agents and humans read the same words.
     let message = match err {
@@ -4215,7 +4203,7 @@ mod tests {
         build_http_response, cancellation_command_for_message, command_for_tool, dispatch,
         env_from, handle_line, handle_line_with_parent, http_response, initialize_result, is_peer_child,
         parse_http_request, register_pending_call, runs_on_worker, session_wait_timed_out,
-        tool_definitions, tool_definitions_for_session, tool_result, tools_call_command, transport_error_result,
+        session_tool_definitions, tool_definitions_for_session, tool_result, tools_call_command, transport_error_result,
     };
     use alas_client::{Command, Response, TransportError, VisualOption, VisualQuestion};
     use serde_json::{Value, json};
@@ -5014,7 +5002,7 @@ mod tests {
                 |_| unreachable!(),
             )
             .unwrap();
-            let expected: Vec<Value> = tool_definitions()
+            let expected: Vec<Value> = session_tool_definitions(None)
                 .into_iter()
                 .filter(|tool| allowed.contains(&tool["name"].as_str().unwrap()))
                 .collect();
@@ -5022,7 +5010,7 @@ mod tests {
 
             // Every other name, listed or hidden, is refused before dispatch on
             // both the shared path and the stdio/HTTP pre-parse path.
-            let mut names: Vec<String> = tool_definitions()
+            let mut names: Vec<String> = session_tool_definitions(None)
                 .iter()
                 .map(|tool| tool["name"].as_str().unwrap().to_string())
                 .filter(|name| !allowed.contains(&name.as_str()))
@@ -5777,7 +5765,7 @@ mod tests {
 
     #[test]
     fn device_tools_mark_what_they_change_and_stay_out_of_relays_and_workspace_mode() {
-        let tools = tool_definitions();
+        let tools = session_tool_definitions(None);
         let annotation = |name: &str, hint: &str| {
             tools.iter().find(|tool| tool["name"] == json!(name)).unwrap()["annotations"][hint]
                 .clone()
@@ -6535,7 +6523,7 @@ mod tests {
                 project: Some("alas".into()),
             }
         );
-        let tools = tool_definitions();
+        let tools = session_tool_definitions(None);
         let schema = |name: &str| {
             tools
                 .iter()
