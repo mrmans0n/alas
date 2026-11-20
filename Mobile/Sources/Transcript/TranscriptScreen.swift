@@ -243,7 +243,7 @@ struct TranscriptScreen: View {
             }
             .toolbar {
                 if !session.hasEnded, workspace.canShepherd, workspace.shepherdLoaded {
-                    ToolbarItem(placement: .primaryAction) { ShepherdMenu(workspace: workspace) }
+                    ToolbarItem(placement: .primaryAction) { ShepherdPill(workspace: workspace, isBusy: session.streamingState != "idle") }
                 }
                 let children = registry.hub.sessions(of: hostID).filter { $0.parentSessionId == sessionId }
                 if !children.isEmpty {

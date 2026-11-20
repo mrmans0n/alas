@@ -3,8 +3,9 @@ import SwiftUI
 
 /// The session's pull request pill, as on the Mac: Ship with agent without a shepherd, else its
 /// number and state, with what the host lets the phone do about it.
-struct ShepherdMenu: View {
+struct ShepherdPill: View {
     let workspace: SessionWorkspace
+    let isBusy: Bool
     @State private var error: String?
 
     var body: some View {
@@ -31,19 +32,51 @@ struct ShepherdMenu: View {
             if workspace.shepherdRunning != nil {
                 ProgressView()
             } else {
-                Label(shepherd?.number ?? "Ship", systemImage: Self.badgeSymbol(badge))
-                    .labelStyle(.titleAndIcon)
-                    .foregroundStyle(Self.color(badge))
+                label(shepherd: shepherd, badge: badge)
             }
         }
         .disabled(workspace.shepherdRunning != nil)
         .accessibilityLabel("Pull request")
-        .accessibilityValue(shepherd?.tooltip ?? "Ship with agent")
+        .accessibilityValue(accessibilityValue(shepherd))
         .alert("Couldn't Do That", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(error ?? "")
         }
+    }
+
+    /// The Mac pill invites a Ship while there is no shepherd and the agent is free to be asked.
+    static func invitesShip(shepherd: RemoteShepherd?, isBusy: Bool) -> Bool {
+        shepherd == nil && !isBusy
+    }
+
+    private func label(shepherd: RemoteShepherd?, badge: String) -> some View {
+        let stackShip = workspace.shipsStack && shepherd == nil
+        let invites = Self.invitesShip(shepherd: shepherd, isBusy: isBusy)
+        let tint = invites ? Color.green : Self.color(badge)
+        let active = badge == "fixing" || badge == "merging"
+        return Label {
+            Text(shepherd?.number ?? (workspace.shipsStack ? "Ship stack" : "Ship"))
+        } icon: {
+            Image(systemName: stackShip ? "square.stack.3d.up.fill" : Self.badgeSymbol(badge))
+                .symbolEffect(.pulse, isActive: active)
+        }
+        .labelStyle(.titleAndIcon)
+        .fontWeight(invites ? .semibold : nil)
+        .foregroundStyle(tint)
+        .padding(.horizontal, invites ? 8 : 0)
+        .padding(.vertical, invites ? 3 : 0)
+        .background {
+            if invites {
+                Capsule().fill(Color.green.opacity(0.15))
+                Capsule().strokeBorder(Color.green.opacity(0.5), lineWidth: 0.5)
+            }
+        }
+    }
+
+    private func accessibilityValue(_ shepherd: RemoteShepherd?) -> String {
+        if let shepherd { return shepherd.tooltip }
+        return isBusy ? "Ship with agent after the current turn" : "Ship with agent"
     }
 
     private func run(_ action: RemoteShepherdAction) {
@@ -71,7 +104,7 @@ struct ShepherdMenu: View {
     }
 
     /// The Mac pill's symbols and colors, by `ShepherdBadgeState` raw value.
-    private static func badgeSymbol(_ badge: String) -> String {
+    static func badgeSymbol(_ badge: String) -> String {
         switch badge {
         case "unshepherded": "arrow.triangle.pull"
         case "waiting": "clock.fill"
@@ -85,7 +118,7 @@ struct ShepherdMenu: View {
         }
     }
 
-    private static func color(_ badge: String) -> Color {
+    static func color(_ badge: String) -> Color {
         switch badge {
         case "waiting": .yellow
         case "fixing": .accentColor
