@@ -171,6 +171,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                 issue: issue,
                 delegation: delegation,
                 computerUseAvailable: computerUseAvailable,
+                deviceToolsAvailable: deviceToolsAvailable,
                 isPeerChild: isPeerChild,
                 peersLine: isDelegated ? nil : peersLine(delegationPeerNames, cli: true))
         }
@@ -209,22 +210,11 @@ public enum ACPMCPPromptPreamble: Sendable {
     }
 
     /// Worktree VMs need Apple silicon, so elsewhere there is none to prefer.
-    private static var worktreeVMPreference: String {
+    /// - Parameter statusCheck: how the agent asks whether the worktree has a VM.
+    private static func worktreeVMPreference(statusCheck: String) -> String {
         #if arch(arm64)
         "To test an app you built, prefer a VM: it leaves the user's desktop, focus and files alone. "
-            + "If vm_status says this worktree has none, ask for one to be created from its VM tab before driving "
-            + "the user's Mac, unless they asked you to use their Mac or the task needs something only it has. "
-        #else
-        ""
-        #endif
-    }
-
-    /// `worktreeVMPreference` for sessions with the CLI only, which has no command that reports
-    /// whether the worktree has a VM.
-    private static var worktreeVMPreferenceForCLI: String {
-        #if arch(arm64)
-        "To test an app you built, prefer a VM: it leaves the user's desktop, focus and files alone. "
-            + "If this worktree has none, ask for one to be created from its VM tab before driving "
+            + "If \(statusCheck) says this worktree has none, ask for one to be created from its VM tab before driving "
             + "the user's Mac, unless they asked you to use their Mac or the task needs something only it has. "
         #else
         ""
@@ -262,7 +252,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                 + "or chart) in this session's transcript as part of your reply, optionally with a question. "
                 + "The user's answer arrives as their next prompt. No other Alas tools are "
                 + "available in this session.")
-            lines.append(visualPolicy)
+            lines.append(visualPolicy(tool: "visual_show"))
         } else if builtInTools == .remote {
             lines.append("The MCP server \"\(builtInServerName)\" (built-in) provides visual_show (show an HTML visual, "
                 + "such as a diagram, comparison, or chart, in this session's transcript as part of your "
@@ -271,7 +261,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                 + "and have Alas watch it until it merges; offer pr_create when you've finished a change "
                 + "the user will want reviewed, and call it only after the user agrees or asks). No other "
                 + "Alas tools are available in this session.")
-            lines.append(visualPolicy)
+            lines.append(visualPolicy(tool: "visual_show"))
         } else if builtInTools == .full {
             let sessionTools = isPeerChild
                 ? "session_list/session_read/session_search"
@@ -335,7 +325,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                         + "computer_user_active means the user is working there: wait and retry later instead of switching apps. "
                         + "Secure fields can't be typed into; ask the user instead.")
                     lines.append("In a worktree with a VM, computer tools drive the VM instead of the user's Mac. "
-                        + worktreeVMPreference
+                        + worktreeVMPreference(statusCheck: "vm_status")
                         + "vm_status tells whether it runs and where to put builds (copy to transfer_host_path on the Mac, "
                         + "find them at transfer_guest_path in the VM); vm_run runs a shell command in the VM, "
                         + "for example to open a built app. "
@@ -365,20 +355,18 @@ public enum ACPMCPPromptPreamble: Sendable {
                 }
             }
             if !isDelegated {
-                lines.append(visualPolicy)
+                lines.append(visualPolicy(tool: "visual_show"))
             }
             lines.append(
                 "If these MCP tools do not appear in your inventory (some harnesses "
-                + "restrict MCP servers by policy), the same actions are available via "
-                + "the `alas` CLI in your shell: "
+                + "cap or restrict MCP servers), each one also runs from the `alas` CLI in your shell as "
+                + "`alas tool call <name> '<json-arguments>'` (`alas tool list` names them, "
+                + "`alas tool schema <name>` prints one's arguments). Shorter commands cover the common ones: "
                 + (isPeerChild
-                    ? "`alas notify`, `alas review …` (comments/reply/resolve/finish), and `alas session …`. "
-                    : "`alas open`, `alas notify`, "
-                        + "`alas wt …`, `alas review …` (comments/reply/resolve/finish), "
-                        + (computerUseAvailable
-                            ? "`alas session …`, `alas preview …`, and `alas computer …`. "
-                            : "`alas session …`, and `alas preview …`. "))
-                + "pr_create, pr_status and stack_ship are MCP-only.")
+                    ? "`alas notify`, `alas review …`, `alas session …`, `alas pr …`, `alas stack ship` and `alas visual show`."
+                    : "`alas open`, `alas notify`, `alas wt …`, `alas review …`, `alas session …`, "
+                        + "`alas pr …`, `alas stack ship`, `alas visual show`, `alas preview …`"
+                        + (computerUseAvailable ? ", `alas computer …` and `alas vm …`." : ".")))
         }
         if !userServerNames.isEmpty {
             lines.append("Additional MCP servers attached: "
@@ -409,6 +397,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         issue: IssuePreambleContext?,
         delegation: String?,
         computerUseAvailable: Bool,
+        deviceToolsAvailable: Bool,
         isPeerChild: Bool,
         peersLine: String?
     ) -> String {
@@ -435,6 +424,12 @@ public enum ACPMCPPromptPreamble: Sendable {
                     ? ""
                     : "`alas wt list|switch|new|delete` manages worktrees, ")
                 + "`alas review …` drives the review pane (comments/reply/resolve/finish), "
+                + "`alas pr create --title <title> --body <body>` opens a PR/MR for this worktree's branch and has "
+                + "Alas watch it until it merges (offer it when you've finished a change the user will want "
+                + "reviewed, and run it only after the user agrees or asks), `alas pr status` reports it, "
+                + "`alas stack ship` does the same for a gg stack (same consent rule), "
+                + "`alas visual show --title <title> --html-file <path>` shows an HTML visual inline in this "
+                + "transcript, before your final reply, "
                 + "and `\(sessionCLI)` manages delegated sessions."
             if isPeerChild {
                 line += " " + peerChildReportSentence + " It cannot create descendants."
@@ -453,10 +448,14 @@ public enum ACPMCPPromptPreamble: Sendable {
                     + "reach them."
             }
             line += isPeerChild
-                ? " Prefer these commands when the user asks to run or respond to reviews, or be notified."
+                ? " Prefer these commands when the user asks to run or respond to reviews, "
+                    + "open or check a pull request, or be notified."
                 : " Prefer these commands when the user asks to open/show files, "
-                    + "manage worktrees, run or respond to reviews, or be notified."
+                    + "manage worktrees, run or respond to reviews, open or check a pull request, or be notified."
             lines.append(line)
+            lines.append("Every built-in Alas tool also runs as `alas tool call <name> '<json-arguments>'`: "
+                + "`alas tool list` names the tools and `alas tool schema <name>` prints one's arguments. "
+                + "An image in a reply, such as a screenshot, is saved to a file whose path the output prints.")
             if !isPeerChild {
                 lines.append("Use `alas preview list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel` "
                     + "to control your owner's actual browser tab. Commands use the preview_id returned by list/open. "
@@ -473,9 +472,26 @@ public enum ACPMCPPromptPreamble: Sendable {
                         + "Secure fields can't be typed into; ask the user instead.")
                     lines.append("In a worktree with a VM, `alas computer` drives the VM instead of the user's Mac; "
                         + "pass `--vm macos` or `--vm linux` when it has both. "
-                        + worktreeVMPreferenceForCLI
+                        + worktreeVMPreference(statusCheck: "`alas vm status`")
+                        + "`alas vm status` tells whether it runs and where to put builds (copy to transfer_host_path "
+                        + "on the Mac, find them at transfer_guest_path in the VM); `alas vm run <command>` runs a "
+                        + "shell command in the VM, for example to open a built app. "
                         + "An error starting with computer_vm_starting or computer_vm_slot_pending means try again shortly.")
+                    if deviceToolsAvailable {
+                        lines.append("Device tools drive iOS simulators and Android devices the user also sees in the "
+                            + "Devices tab; run them with `alas tool call`: "
+                            + builtInToolNames.filter { $0.hasPrefix("device_") }.joined(separator: ", ")
+                            + ". Start with device_list, then device_open (it boots the device if needed; an Android "
+                            + "AVD comes back under its serial, which later calls use). Prefer refs from "
+                            + "device_snapshot; x/y are pixels in the latest device_screenshot. "
+                            + "An error starting with device_user_active means the user is driving the device: try "
+                            + "again later. device_disabled means the user hasn't let agents use simulators and "
+                            + "Android devices; ask them instead of retrying.")
+                    }
                 }
+            }
+            if !isDelegated {
+                lines.append(visualPolicy(tool: "`alas visual show`"))
             }
         }
         if !userServerNames.isEmpty {
@@ -501,7 +517,7 @@ public enum ACPMCPPromptPreamble: Sendable {
             }
         }
         if let ggStack {
-            lines.append(ggStackLine(ggStack, cliMode: true, shipsWithAlas: false))
+            lines.append(ggStackLine(ggStack, cliMode: true, shipsWithAlas: builtInInjected))
         }
         if let delegation {
             lines.append(delegation)
@@ -516,14 +532,16 @@ public enum ACPMCPPromptPreamble: Sendable {
         return lines.joined(separator: "\n")
     }
 
-    /// When to reach for visual_show. Mirrors the server instructions and tool
+    /// When to reach for a visual. Mirrors the server instructions and tool
     /// description in AlasCLI/crates/alas/src/mcp.rs; keep them in sync.
-    private static let visualPolicy = "Reach for visual_show when an explanation has shape: "
-        + "how parts connect (architecture, data or control flow, state machines, sequences), "
-        + "options compared on several dimensions, before/after layouts or UI sketches, "
-        + "or numbers that read better as a chart. Keep it to one visual per reply, usually none: "
-        + "skip it for short answers, single facts, code edits, status updates, and anything "
-        + "a list or code block already shows clearly."
+    private static func visualPolicy(tool: String) -> String {
+        "Reach for \(tool) when an explanation has shape: "
+            + "how parts connect (architecture, data or control flow, state machines, sequences), "
+            + "options compared on several dimensions, before/after layouts or UI sketches, "
+            + "or numbers that read better as a chart. Keep it to one visual per reply, usually none: "
+            + "skip it for short answers, single facts, code edits, status updates, and anything "
+            + "a list or code block already shows clearly."
+    }
 
     private static func ggStackLine(_ context: GGPreambleStackContext, cliMode: Bool, shipsWithAlas: Bool) -> String {
         var line: String
@@ -544,8 +562,11 @@ public enum ACPMCPPromptPreamble: Sendable {
                 + "(list/log/sync/land); prefer them over parsing CLI output."
         }
         if shipsWithAlas {
-            line += " To open the stack's PRs for review and have Alas watch them, call stack_ship, "
-                + "not pr_create."
+            line += cliMode
+                ? " To open the stack's PRs for review and have Alas watch them, run `alas stack ship`, "
+                    + "not `alas pr create`."
+                : " To open the stack's PRs for review and have Alas watch them, call stack_ship, "
+                    + "not pr_create."
         }
         return line
     }

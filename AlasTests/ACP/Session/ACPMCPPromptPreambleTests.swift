@@ -174,8 +174,8 @@ struct ACPMCPPromptPreambleTests {
             userServerNames: [],
             mode: .mcp
         )
-        #expect(text?.contains("alas") == true)
         #expect(text?.contains("`alas` CLI") == true)
+        #expect(text?.contains("alas tool call <name>") == true)
     }
 
     @Test("delegated preamble omits child-only session tools and explains delegation")
@@ -343,7 +343,9 @@ struct ACPMCPPromptPreambleTests {
         #expect(text.contains("alas review"))
         #expect(text.contains("alas session"))
         #expect(!text.contains("MCP server \"alas\""))
-        // pr_create/pr_status have no CLI command, so CLI-mode agents aren't told about them.
+        for command in ["alas pr create", "alas stack ship", "alas visual show", "alas tool call", "alas vm run"] {
+            #expect(text.contains(command), "\(command)")
+        }
         #expect(!text.contains("pr_create"))
         // no adapter → no tool-search hint
         #expect(!text.contains("tool search"))
