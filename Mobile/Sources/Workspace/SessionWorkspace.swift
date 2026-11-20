@@ -79,7 +79,7 @@ final class SessionWorkspace {
     /// The git action in flight; one at a time, as the Mac's worktree gate allows.
     private(set) var gitRunning: RemoteGitChange?
     /// Host requests awaiting their answer, by request id.
-    @ObservationIgnored private var hostWaiters: [Int: CheckedContinuation<Result<Void, RemoteGitFailure>, Never>] = [:]
+    @ObservationIgnored private var hostWaiters: [Int: CheckedContinuation<Result<OpaqueHostMessage, RemoteGitFailure>, Never>] = [:]
     /// The session's PR shepherd, once the host's session list said; nil without one.
     private(set) var shepherd: RemoteShepherd?
     private(set) var shepherdLoaded = false
@@ -299,6 +299,15 @@ final class SessionWorkspace {
         }
     }
 
+    /// What the host suggests a message for the staged change from; nil when it couldn't say.
+    func commitMessageInput() async -> CommitMessageSuggestionInput? {
+        guard canUseGit, let target = gitTarget,
+              case .success(let reply) = await hostReply(timeout: .seconds(30), {
+                  RemoteGitRequest.commitMessageInput(id: $0, projectID: target.projectID, path: target.worktree.path)
+              }) else { return nil }
+        return RemoteGitRequest.commitMessageInput(in: reply)
+    }
+
     // MARK: Lifecycle
 
     /// The branch the session's worktree is on, when the host lets the phone rename it.
@@ -432,10 +441,17 @@ final class SessionWorkspace {
 
     /// `hostRequest`, keeping whether the user may overrule the refusal.
     private func hostFailure(timeout: Duration = .seconds(120), _ make: (Int) -> OpaqueHostMessage) async -> RemoteGitFailure? {
+        if case .failure(let failure) = await hostReply(timeout: timeout, make) { return failure }
+        return nil
+    }
+
+    /// The host's answer to the request `make` builds, or why there was none.
+    private func hostReply(timeout: Duration = .seconds(120),
+                           _ make: (Int) -> OpaqueHostMessage) async -> Result<OpaqueHostMessage, RemoteGitFailure> {
         // A send while the link is down goes nowhere, and the reply would never come.
         guard hub.state(of: hostID) == .online else {
             let name = hub.hosts.first { $0.id == hostID }?.name ?? "the machine"
-            return RemoteGitFailure("Not connected to \(name). Try again once it's back online.")
+            return .failure(RemoteGitFailure("Not connected to \(name). Try again once it's back online."))
         }
         let id = hub.nextHostRequestId()
         let hold = activate()
@@ -446,12 +462,10 @@ final class SessionWorkspace {
             try? await Task.sleep(for: timeout)
             self?.finishHostRequest(id, .failure(RemoteGitFailure("The machine didn't answer. Check the session there.")))
         }
-        let result = await withCheckedContinuation { hostWaiters[id] = $0 }
-        if case .failure(let failure) = result { return failure }
-        return nil
+        return await withCheckedContinuation { hostWaiters[id] = $0 }
     }
 
-    private func finishHostRequest(_ id: Int, _ result: Result<Void, RemoteGitFailure>) {
+    private func finishHostRequest(_ id: Int, _ result: Result<OpaqueHostMessage, RemoteGitFailure>) {
         hostWaiters.removeValue(forKey: id)?.resume(returning: result)
     }
 
@@ -476,7 +490,7 @@ final class SessionWorkspace {
                 return
             }
             for id in hostWaiters.keys {
-                if let result = RemoteGitRequest.reply(to: id, in: reply) { return finishHostRequest(id, result) }
+                if let result = RemoteGitRequest.reply(to: id, in: reply) { return finishHostRequest(id, result.map { reply }) }
             }
         case .changeList(let id, let ref, let metrics, let files, let staged, let unstaged, let commits,
                          let truncated, let commitsTruncated, _, _) where id == sessionId:
