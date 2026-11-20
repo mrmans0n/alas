@@ -32,6 +32,7 @@ struct TranscriptScreen: View {
     @Environment(\.dismiss) private var dismiss
     /// The worktree whose terminals are pushed from this screen.
     @State private var terminalsWorktree: String?
+    @State private var preview: RunPreviewSession?
     /// The subagent whose transcript is pushed from this screen; it reads through this screen's session.
     @State private var openedSubagent: RemoteWireMessage.Subagent?
     /// The delegated child, or the delegating parent, pushed from this screen.
@@ -54,11 +55,15 @@ struct TranscriptScreen: View {
             get: { openedSubagent != nil }, set: { if !$0 { openedSubagent = nil } })) {
             if let openedSubagent, let session = held?.session {
                 SubagentScreen(session: session, subagent: openedSubagent)
+                    .environment(\.openURL, OpenURLAction { url in
+                        openPreview(url, in: session) ?? .systemAction
+                    })
             }
         }
         .navigationDestination(item: $delegated) { id in
             TranscriptScreen(hostID: hostID, sessionId: id)
         }
+        .sheet(item: $preview) { RunPreviewView(session: $0) }
         .onAppear {
             visible = true
             acquire()
@@ -71,7 +76,8 @@ struct TranscriptScreen: View {
             // its state first (DiffView's own onDisappear), and so a screen that came straight
             // back keeps what it holds.
             Task { @MainActor in
-                if visible || terminalsWorktree != nil || openedSubagent != nil || delegated != nil || workspace?.hasPushedChild(screenID) == true { return }
+                if visible || terminalsWorktree != nil || openedSubagent != nil || delegated != nil || preview != nil
+                    || workspace?.hasPushedChild(screenID) == true { return }
                 held = nil
                 workspaceToken = nil
             }
@@ -80,6 +86,16 @@ struct TranscriptScreen: View {
 
     private enum SessionMode: String, CaseIterable {
         case transcript = "Transcript", changes = "Changes", files = "Files"
+    }
+
+    private func openPreview(_ url: URL, in session: TranscriptSession) -> OpenURLAction.Result? {
+        guard RemoteRunPreview.isLoopbackWebURL(url) else { return nil }
+        guard let summary = session.summary, summary.serverId == nil, let worktreeID = summary.worktreeId else {
+            actionError = "Open this worktree directly on its paired host to preview its runs."
+            return .handled
+        }
+        preview = RunPreviewSession(hub: registry.hub, hostID: hostID, worktreeID: worktreeID, endpoint: url)
+        return .handled
     }
 
     private func modes(_ session: TranscriptSession) -> [SessionMode] {
@@ -136,7 +152,7 @@ struct TranscriptScreen: View {
             .navigationDestination(isPresented: Binding(
                 get: { workspace.file != nil && workspace.pushedBy == screenID },
                 set: { if !$0 { workspace.closeFile() } })) {
-                FileViewer(workspace: workspace, session: session)
+                FileViewer(workspace: workspace, session: session, openPreview: { openPreview($0, in: session) })
             }
             .onChange(of: session.streamingState, initial: true) { workspace.noteStreaming(session.streamingState) }
             .onChange(of: available) { if !available.contains(mode) { mode = .transcript } }
@@ -160,6 +176,7 @@ struct TranscriptScreen: View {
             // Below the request cards, so links in a plan under review route too. A file link opens in the
             // file viewer; one outside the worktree opens nothing.
             .environment(\.openURL, OpenURLAction { url in
+                if let result = openPreview(url, in: session) { return result }
                 switch RemoteTranscriptLink.route(url, worktreeRoot: session.worktreeRoot) {
                 case .file(let path):
                     workspace.openFile(path, by: screenID)

@@ -1051,6 +1051,7 @@ final class AppState {
     /// Built on first peer console request; see `AppState+PeerConsoles`.
     /// Observable so a pane drawn before it existed still shows peer control.
     var _peerConsoleHost: PeerConsoleHost?
+    @ObservationIgnored private lazy var runForwardHost = PeerPortForwardHost(core: core)
     @ObservationIgnored lazy var peerDeviceGrantStore = Result {
         try PeerDeviceGrants(file: PeerDeviceGrants.defaultURL)
     }
@@ -1149,7 +1150,8 @@ final class AppState {
             name: remoteDisplayName,
             // Only reach for the lazy manager when a server is up, for the
             // same reason `syncRemotePeers` does.
-            peers: remoteServer != nil ? remotePeers.helloPeers : []
+            peers: remoteServer != nil ? remotePeers.helloPeers : [],
+            consoleCapabilities: PeerConsoleCapability.appHost + [PeerPortForwardCapability.v1]
         )
     }
 
@@ -15113,6 +15115,8 @@ private struct RemoteSessionListInputs: Equatable {
 
 /// Remote tab requests open and close tabs in this window, as the tab bar does.
 extension AppState: RemoteSessionPresenter {
+    var peerPortForwardHost: PeerPortForwardHost? { runForwardHost }
+
     var sessionListChanges: ChangeSignal<Void>? {
         if let remoteSessionListChanges { return remoteSessionListChanges }
         let signal = ChangeSignal<Void>()

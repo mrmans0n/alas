@@ -158,7 +158,8 @@ struct PeerPortForwardTests {
         try await eventually { (try? await TestClient.connect(host: clientHost, port: endpointPort)) == nil }
     }
 
-    @Test func anEndpointWithItsSchemesDefaultPortIsForwarded() async throws {
+    @Test(arguments: [true, false])
+    func anEndpointWithItsSchemesDefaultPortIsForwarded(preferEndpointPort: Bool) async throws {
         let server = try await EchoServer.start()
         defer { server.stop() }
         let serverPort = server.port
@@ -173,8 +174,8 @@ struct PeerPortForwardTests {
         forwarderBox.withLock { $0 = forwarder }
         defer { forwarder.stop() }
 
-        // Port 80 when free, else an ephemeral one.
-        let url = try await forwarder.start()
+        let url = try await forwarder.start(preferEndpointPort: preferEndpointPort)
+        if !preferEndpointPort { #expect(url.port != nil && url.port != 80) }
         let client = try await TestClient.connect(host: "127.0.0.1", port: url.port ?? 80)
         client.send(Data("ping".utf8))
         try await eventually { client.received.bytes == Data("ping".utf8) }

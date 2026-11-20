@@ -7,6 +7,7 @@ import SwiftUI
 struct FileViewer: View {
     let workspace: SessionWorkspace
     let session: TranscriptSession
+    let openPreview: (URL) -> OpenURLAction.Result?
     @State private var showSource = false
     /// False once the viewer leaves the stack; a full-screen image over it leaves it true.
     @Environment(\.isPresented) private var isPresented
@@ -33,6 +34,7 @@ struct FileViewer: View {
                                 .padding()
                                 // A file link opens in this viewer, a relative one taken from this file's folder.
                                 .environment(\.openURL, OpenURLAction { url in
+                                    if let result = openPreview(url) { return result }
                                     let relative = url.scheme == nil && url.host == nil && !url.path.hasPrefix("/")
                                     // A link to a heading of this document (`#install`) keeps it open.
                                     if relative, url.path.isEmpty { return .handled }
