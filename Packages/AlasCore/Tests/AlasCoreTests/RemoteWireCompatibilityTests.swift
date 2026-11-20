@@ -388,6 +388,8 @@ enum RemoteWireSamples {
                 subagent: .init(id: "c2", name: "Explorer", task: "Look around", state: "failed", lastError: "boom")),
         ]),
         .subagentTranscript(sessionId: "s1", subagentId: "gone", found: false, state: nil, messages: []),
+        .nextPromptSuggestion(sessionId: "s1", text: "Run the tests"),
+        .nextPromptSuggestion(sessionId: "s1", text: nil),
     ]
 
     static let clientMessages: [RemoteClientMessage] = [
@@ -407,5 +409,6 @@ enum RemoteWireSamples {
         .host(HostClientMessage(id: 5, request: .listSessions)),
         .readToolTerminal(sessionId: "s1", terminalId: "t1"),
         .readSubagent(sessionId: "s1", subagentId: "c1"),
+        .suggestNextPrompt(sessionId: "s1"),
     ]
 }

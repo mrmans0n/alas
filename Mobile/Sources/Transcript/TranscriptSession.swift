@@ -191,6 +191,10 @@ final class TranscriptSession {
     /// The query `mentionCandidates` answers; nil while a new query is in flight.
     private(set) var mentionCandidatesQuery: String?
     var draft = ComposerDraft()
+    /// The host's suggestion for the next prompt, for the transcript as it stands.
+    private(set) var nextPromptSuggestion: String?
+    /// The transcript the last suggestion request was for.
+    @ObservationIgnored private var suggestionGeneration: UInt64?
     var visualAids: [UUID: VisualAidCardState] = [:]
 
     let hostID: UUID
@@ -664,6 +668,8 @@ final class TranscriptSession {
     /// The hold in `publish()` keeps a card through the host's re-send, so nothing flashes.
     private func forgetTransientState() {
         state.clearPendingRequests()
+        // A request sent on the old link has no answer coming.
+        suggestionGeneration = nil
         // A request answered but refused comes back identical; show it again. The hold restarts so
         // the re-send gets the full grace period.
         answered = []
@@ -788,6 +794,12 @@ final class TranscriptSession {
             if toolTerminals[terminalId] != tail { toolTerminals[terminalId] = tail }
             // A call can end before its terminal exits; keep reading until the exit lands.
             if tail.isAwaitingExit { pollTerminals() }
+            return
+        case .nextPromptSuggestion(let id, let text) where id == sessionId:
+            // Every follower gets the reply; it counts only for the transcript it was asked for.
+            if let text, !text.isEmpty, streamingState == "idle", state.messagesGeneration == suggestionGeneration {
+                nextPromptSuggestion = text
+            }
             return
         case .subagentTranscript(let id, let subagentId, let found, let state, let messages) where id == sessionId:
             // Rows whose message is unchanged keep their item, so a poll does not re-highlight them.
@@ -916,6 +928,29 @@ final class TranscriptSession {
         }
         refreshCanLoadOlder()
         pollTerminals()
+        refreshNextPromptSuggestion()
+    }
+
+    /// Asks once per finished transcript for a suggestion, and drops one the
+    /// transcript has moved past.
+    private func refreshNextPromptSuggestion() {
+        let generation = state.messagesGeneration
+        if nextPromptSuggestion != nil, streamingState != "idle" || generation != suggestionGeneration {
+            nextPromptSuggestion = nil
+        }
+        guard generation != suggestionGeneration, streamingState == "idle", canDrive, hasSnapshot, isOpen,
+              permission == nil, question == nil, plan == nil, elicitation == nil,
+              hub.state(of: hostID) == .online,
+              hub.supports(HostProtocolCapability.sessionsNextPromptV1, on: hostID) else { return }
+        suggestionGeneration = generation
+        hub.send(.suggestNextPrompt(sessionId: sessionId), to: hostID)
+    }
+
+    /// Puts the suggestion in the composer.
+    func acceptNextPromptSuggestion() {
+        guard let nextPromptSuggestion, draft.text.isEmpty else { return }
+        draft.text = nextPromptSuggestion
+        self.nextPromptSuggestion = nil
     }
 
     /// Reads the terminals of expanded tool calls: once a second while their call runs, then once

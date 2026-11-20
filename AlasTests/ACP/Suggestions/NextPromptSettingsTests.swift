@@ -328,6 +328,33 @@ struct NextPromptSettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
+    /// A Remote client gets the suggestion without this Mac's composer, and
+    /// none once the turn it was for has moved on.
+    @Test func remoteSuggestionAnswersOnlyTheLastCompletedTurn() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let inference = NextPromptInference(acquireLease: { try await fixture.store.acquireVerifiedLease() }, load: { _ in
+            { _ in #"{"suggestion":"Show an example."}"# }
+        })
+        let state = makeState(fixture, SettingsStore(), inference: inference)
+        await state.enableNextPromptSuggestions()
+        let session = ACPSession(id: "s", agentId: "test", worktreeId: "w", title: "Test")
+        session.agentState = .ready
+        let userID = session.recordUserPrompt(text: "Explain the parser.", attachments: [])
+        session.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
+        state.nextPromptCompleted(NextPromptCompletedTurn(
+            sessionID: session.id, incarnation: session.incarnation, promptID: session.allocatePromptID(),
+            userMessageID: userID, transcriptRevision: session.transcript.conversationRevision
+        ), owner: .worktree("w"))
+
+        #expect(await state.remoteNextPromptSuggestion(sessionID: session.id) { session } == "Show an example.")
+        session.transcript.appendMessage(.agent(id: UUID(), StreamingText("And builds a tree.")))
+        #expect(await state.remoteNextPromptSuggestion(sessionID: session.id) { session } == nil)
+        await state.shutdownLocalTextFeatures()
+    }
+
     @Test func freshDownloadEnablesRequestedFeaturesAfterVerification() async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }

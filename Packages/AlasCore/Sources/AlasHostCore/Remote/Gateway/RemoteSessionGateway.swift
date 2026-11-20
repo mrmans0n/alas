@@ -503,6 +503,11 @@ public final class RemoteSessionGateway {
             } else {
                 send(.subagentTranscript(sessionId: id, subagentId: subagentId, found: false, state: nil, messages: []))
             }
+        case .suggestNextPrompt(let id):
+            let key = "suggestNextPrompt\u{0}\(id)"
+            guard inFlightFileRequests.insert(key).inserted else { return }
+            defer { inFlightFileRequests.remove(key) }
+            send(.nextPromptSuggestion(sessionId: id, text: await hostCalls.nextPromptSuggestion(id)))
         case .readFile(let id, let path):
             let key = "readFile\u{0}\(id)\u{0}\(path)"
             guard inFlightFileRequests.insert(key).inserted else { return }

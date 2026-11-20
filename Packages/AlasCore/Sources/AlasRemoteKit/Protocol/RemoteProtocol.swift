@@ -401,6 +401,9 @@ public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, Se
     case readToolTerminal(sessionId: String, terminalId: String)
     /// A subagent's own transcript; see `PeerSubagentCapability`.
     case readSubagent(sessionId: String, subagentId: String)
+    /// A suggestion for the session's next prompt; see
+    /// `HostProtocolCapability.sessionsNextPromptV1`.
+    case suggestNextPrompt(sessionId: String)
     /// The phone's answer to a visual aid question. `action` is "answer" or
     /// "dismiss"; the gateway validates the choices against the question.
     /// `requestId` is an opaque correlation token echoed on any `visualAidRejected`, so one of several
@@ -607,6 +610,8 @@ extension RemoteClientMessageOf: Codable {
         case "readSubagent":
             self = .readSubagent(sessionId: try c.decode(String.self, forKey: .sessionId),
                                  subagentId: try c.decode(String.self, forKey: .subagentId))
+        case "suggestNextPrompt":
+            self = .suggestNextPrompt(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "console":
             self = .console(try c.decode(PeerConsoleRequest.self, forKey: .console))
         case "portForward":
@@ -814,6 +819,9 @@ extension RemoteClientMessageOf: Codable {
             try c.encode("readSubagent", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(subagentId, forKey: .subagentId)
+        case .suggestNextPrompt(let s):
+            try c.encode("suggestNextPrompt", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
         case .console(let request):
             try c.encode("console", forKey: .type)
             try c.encode(request, forKey: .console)
@@ -885,6 +893,8 @@ extension RemoteClientMessageOf {
             return "readToolTerminal\u{0}\(sessionId)\u{0}\(terminalId)"
         case .readSubagent(let sessionId, let subagentId):
             return "readSubagent\u{0}\(sessionId)\u{0}\(subagentId)"
+        case .suggestNextPrompt(let sessionId):
+            return "suggestNextPrompt\u{0}\(sessionId)"
         default:
             return nil
         }
@@ -1018,6 +1028,9 @@ public enum RemoteServerMessageOf<ServerHost: Codable & Equatable & Sendable, Cl
     /// transcript that fit a frame, and its `ACPSubagentState` raw value, or
     /// `found: false` with no state and no rows when the session has no such child.
     case subagentTranscript(sessionId: String, subagentId: String, found: Bool, state: String?, messages: [RemoteWireMessage])
+    /// The answer to `suggestNextPrompt`: nil when the host has none for the
+    /// session as it stands.
+    case nextPromptSuggestion(sessionId: String, text: String?)
     /// The answer to `HostWorktreeRead.fileHistory`: `truncated` when more commits touched it.
     case fileHistory(sessionId: String, path: String, entries: [HostFileHistoryEntry], truncated: Bool)
     case fileHistoryFailed(sessionId: String, path: String, reason: RemoteFileAccessReason, message: String?)
@@ -1326,6 +1339,9 @@ extension RemoteServerMessageOf: Codable {
                 exitCode: try c.decodeIfPresent(Int.self, forKey: .exitCode),
                 signal: try c.decodeIfPresent(String.self, forKey: .signal),
                 retained: try c.decode(Bool.self, forKey: .retained))
+        case "nextPromptSuggestion":
+            self = .nextPromptSuggestion(sessionId: try c.decode(String.self, forKey: .sessionId),
+                                         text: try c.decodeIfPresent(String.self, forKey: .text))
         case "subagentTranscript":
             self = .subagentTranscript(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -1643,6 +1659,10 @@ extension RemoteServerMessageOf: Codable {
             try c.encodeIfPresent(exitCode, forKey: .exitCode)
             try c.encodeIfPresent(signal, forKey: .signal)
             try c.encode(retained, forKey: .retained)
+        case .nextPromptSuggestion(let s, let text):
+            try c.encode("nextPromptSuggestion", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encodeIfPresent(text, forKey: .text)
         case .subagentTranscript(let s, let subagentId, let found, let state, let messages):
             try c.encode("subagentTranscript", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -1759,6 +1779,9 @@ public enum HostProtocolCapability: Sendable {
     /// worktree starts on a temporary name and its first prompt names the
     /// branch. Only a Mac, which runs the naming.
     public static let worktreesAutoBranchNameV1 = "host.worktrees.autoBranchName.v1"
+    /// Hosts that serve `suggestNextPrompt`. Only a Mac, which runs the
+    /// suggestions.
+    public static let sessionsNextPromptV1 = "host.sessions.nextPrompt.v1"
     /// Hosts that serve `delegation`, and send `delegationOutboxChanged`.
     public static let delegationV1 = "host.delegation.v1"
     /// Delegation over a link the other side opened. A headless host offers it
