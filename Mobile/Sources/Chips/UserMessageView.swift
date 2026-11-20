@@ -38,19 +38,57 @@ struct UserMessageChips {
     private static let marker = try! NSRegularExpression(pattern: "\u{E000}([0-9]+)\u{E001}")
 
     /// `text` with each pasted span from `offset` on replaced by its marker.
+    /// A marker that lands in a code block or table, which draw without
+    /// chips, gives its span's text back instead.
     func marked(_ text: String, from offset: Int) -> String {
         guard let pasted else { return text }
         let source = text as NSString
-        var result = ""
+        var spans: [(range: NSRange, ordinal: Int)] = []
         var cursor = 0
         for span in pasted.spans where span.utf16Offset >= offset {
             let start = span.utf16Offset - offset
             guard start >= cursor, start + span.utf16Length <= source.length else { continue }
-            result += source.substring(with: NSRange(location: cursor, length: start - cursor))
-            result += "\(Self.markerOpen)\(span.ordinal)\(Self.markerClose)"
+            spans.append((NSRange(location: start, length: span.utf16Length), span.ordinal))
             cursor = start + span.utf16Length
         }
-        return result + source.substring(from: cursor)
+        func build(keeping kept: Set<Int>) -> (text: String, markerStarts: [Int]) {
+            var result = ""
+            var starts: [Int] = []
+            var cursor = 0
+            for (index, span) in spans.enumerated() {
+                result += source.substring(with: NSRange(location: cursor, length: span.range.location - cursor))
+                if kept.contains(index) {
+                    result += source.substring(with: span.range)
+                } else {
+                    starts.append(result.utf16.count)
+                    result += "\(Self.markerOpen)\(span.ordinal)\(Self.markerClose)"
+                }
+                cursor = NSMaxRange(span.range)
+            }
+            return (result + source.substring(from: cursor), starts)
+        }
+        let marked = build(keeping: [])
+        let verbatim = MarkdownBlock.verbatimLines(in: marked.text)
+        guard !verbatim.isEmpty else { return marked.text }
+        let lines = Self.lineStarts(marked.text as NSString)
+        let kept = Set(marked.markerStarts.indices.filter { index in
+            let line = lines.lastIndex { $0 <= marked.markerStarts[index] }.map { $0 + 1 } ?? 1
+            return verbatim.contains { $0.contains(line) }
+        })
+        return kept.isEmpty ? marked.text : build(keeping: kept).text
+    }
+
+    /// Where each line starts, splitting as cmark does: `\n`, `\r\n` or `\r`.
+    private static func lineStarts(_ text: NSString) -> [Int] {
+        var starts = [0]
+        var index = 0
+        while index < text.length {
+            let unit = text.character(at: index)
+            index += 1
+            if unit == 0x0D, index < text.length, text.character(at: index) == 0x0A { index += 1 }
+            if unit == 0x0A || unit == 0x0D { starts.append(index) }
+        }
+        return starts
     }
 
     /// One rendered paragraph with its chips: pasted text, symbols, commands

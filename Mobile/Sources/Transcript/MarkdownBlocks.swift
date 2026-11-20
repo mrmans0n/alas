@@ -28,6 +28,15 @@ enum MarkdownBlock: Equatable {
         return Document(parsing: text).children.compactMap { block($0, lines: lines) }
     }
 
+    /// The 1-based lines (as cmark counts them) of top-level code blocks and
+    /// tables: blocks drawn from their text alone, without inline chips.
+    static func verbatimLines(in text: String) -> [ClosedRange<Int>] {
+        Document(parsing: text).children.compactMap { child in
+            guard child is CodeBlock || child is Markdown.Table, let range = child.range else { return nil }
+            return range.lowerBound.line ... max(range.lowerBound.line, range.upperBound.line)
+        }
+    }
+
     private static func block(_ markup: Markup, lines: [Substring]) -> MarkdownBlock? {
         switch markup {
         case let p as Paragraph:
