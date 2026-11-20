@@ -731,6 +731,20 @@ struct StackShepherdTests {
         )
     }
 
+    @Test func stackPillListsItsEntriesTopFirst() async throws {
+        let stack = Self.stack([41, 42])
+        let shepherd = makeShepherd(requests: [Self.request(41), Self.request(42)], stack: stack)
+        let review = ReviewShepherd(store: MemoryStore(), fileURL: URL(fileURLWithPath: "/memory/review-shepherds.json"))
+        let record = await bind(shepherd, session: "session-1", stack: stack)
+        await shepherd.evaluateNow(record.id)
+
+        let detail = try #require(HostSessionShepherd.make(sessionID: "session-1", review: review, stack: shepherd)?.detail)
+        #expect(detail.stackEntries?.map(\.position) == [2, 1])
+        #expect(detail.stackEntries?.map(\.number) == ["#42", "#41"])
+        #expect(detail.branch == record.id.stackName)
+        #expect(detail.fixAttemptBudget == record.fixAttemptBudget)
+    }
+
     /// The popover's choice wins over the record's plan, which a later
     /// `stack_ship` (a fix push) keeps; another session's record says nothing.
     @Test func shipPlanPrefersThePopoversChoiceThenTheRecordsPlan() async {

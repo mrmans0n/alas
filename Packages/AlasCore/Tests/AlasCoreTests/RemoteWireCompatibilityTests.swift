@@ -263,21 +263,42 @@ import Testing
     }
 
     @Test func phoneReadsASessionsShepherdFromTheMacsList() throws {
-        func summary(_ id: String, _ shepherd: HostSessionShepherd?) -> HostSessionSummary {
+        func summary(_ id: String, _ shepherd: HostSessionShepherd?, shipsStack: Bool? = nil) -> HostSessionSummary {
             var summary = HostSessionSummary(owner: .worktree("w"), id: id, agentId: "codex", title: "t", remoteSessionId: nil,
                                              createdAt: 1, updatedAt: 2, lastOpenedAt: 3, streamingState: nil, isWriter: true)
             summary.shepherd = shepherd
+            summary.shipsStack = shipsStack
             return summary
         }
+        let detail = HostSessionShepherd.Detail(
+            title: "Add X", url: URL(string: "https://github.com/acme/app/pull/12"), branch: "feature → main", headSHA: "a3f9c1e",
+            provider: "GitHub", requestLabel: "pull request",
+            checks: [.init(name: "lint", bucket: "pass", url: URL(string: "https://ci.example/lint"))],
+            openThreads: 2, trustedThreads: 1, fixAttempts: 1, fixAttemptBudget: 3,
+            stackEntries: [.init(position: 1, number: "#12", title: "Add X", badge: "fixing", phaseLine: "fixing")])
         let shepherd = HostSessionShepherd(badge: "fixing", number: "#12", tooltip: "#12 · fixing", resumable: false,
-                                           phaseLine: "fixing", autoFix: true, autoMerge: false)
+                                           phaseLine: "fixing", autoFix: true, autoMerge: false, detail: detail)
         let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(
-            id: 5, result: .sessions(sessions: [summary("a", nil), summary("b", shepherd)]))))
-        #expect(RemoteShepherdRequest.shepherd(of: "b", replying: 5, in: reply) == .some(RemoteShepherd(
-            badge: "fixing", number: "#12", tooltip: "#12 · fixing", resumable: false, phaseLine: "fixing", autoFix: true, autoMerge: false)))
-        #expect(RemoteShepherdRequest.shepherd(of: "a", replying: 5, in: reply) == .some(nil))
-        #expect(RemoteShepherdRequest.shepherd(of: "c", replying: 5, in: reply) == nil)
-        #expect(RemoteShepherdRequest.shepherd(of: "b", replying: 6, in: reply) == nil)
+            id: 5, result: .sessions(sessions: [summary("a", nil, shipsStack: true), summary("b", shepherd)]))))
+        let found = try #require(RemoteShepherdRequest.listing(of: "b", replying: 5, in: reply))
+        #expect(found.shepherd == RemoteShepherd(
+            badge: "fixing", number: "#12", tooltip: "#12 · fixing", resumable: false, phaseLine: "fixing", autoFix: true, autoMerge: false,
+            detail: RemoteShepherd.Detail(
+                title: "Add X", url: URL(string: "https://github.com/acme/app/pull/12"), branch: "feature → main", headSHA: "a3f9c1e",
+                provider: "GitHub", requestLabel: "pull request",
+                checks: [.init(name: "lint", bucket: "pass", url: URL(string: "https://ci.example/lint"))],
+                openThreads: 2, trustedThreads: 1, fixAttempts: 1, fixAttemptBudget: 3,
+                stackEntries: [.init(position: 1, number: "#12", title: "Add X", badge: "fixing", phaseLine: "fixing")])))
+        #expect(found.shipsStack == false)
+        #expect(RemoteShepherdRequest.listing(of: "a", replying: 5, in: reply) == RemoteShepherdListing(shepherd: nil, shipsStack: true))
+        #expect(RemoteShepherdRequest.listing(of: "c", replying: 5, in: reply) == nil)
+        #expect(RemoteShepherdRequest.listing(of: "b", replying: 6, in: reply) == nil)
+
+        let garbled = Data(#"{"response":{"id":9,"result":{"sessions":{"sessions":[{"id":"g","shipsStack":true,"shepherd":{"badge":"fixing","tooltip":"t","detail":{"provider":3}}}]}}}}"#.utf8)
+        let kept = try #require(RemoteShepherdRequest.listing(of: "g", replying: 9, in: OpaqueHostMessage(json: garbled)))
+        #expect(kept.shepherd?.badge == "fixing" && kept.shepherd?.detail == nil)
+        let host = try JSONDecoder().decode(HostSessionShepherd.self, from: Data(#"{"badge":"fixing","tooltip":"t","detail":{"provider":3}}"#.utf8))
+        #expect(host.badge == "fixing" && host.detail == nil)
     }
 
     @Test(arguments: RemoteWireSamples.serverMessages)
@@ -356,6 +377,23 @@ import Testing
         default:
             Issue.record("\(row) decoded as \(decoded)")
         }
+    }
+
+    @Test(arguments: [
+        (ACPPromptCard.Action.reviewChanges(worktreeID: "wt"), true, nil as URL?),
+        (.url(URL(string: "https://x/1")!), false, URL(string: "https://x/1")),
+    ])
+    func promptCardReadsTheActionsAPhoneCanRun(action: ACPPromptCard.Action, opensChanges: Bool, url: URL?) throws {
+        let json = try JSONEncoder().encode(ACPPromptCard(origin: .review, title: "t", action: action))
+        let card = try JSONDecoder().decode(RemotePromptCard.self, from: json)
+        #expect(card.opensChanges == opensChanges)
+        #expect(card.actionURL == url)
+    }
+
+    @Test func promptCardDecodesUnknownActionWithoutOne() throws {
+        let json = #"{"origin":"fromTheFuture","title":"t","facts":[],"sections":[],"action":{"somethingNew":{}}}"#
+        let card = try JSONDecoder().decode(RemotePromptCard.self, from: Data(json.utf8))
+        #expect(!card.opensChanges && card.actionURL == nil)
     }
 
     @Test(arguments: ["questionAnswer", "outcomeCard", "failureIncident", "system"], [nil, "{"] as [String?])

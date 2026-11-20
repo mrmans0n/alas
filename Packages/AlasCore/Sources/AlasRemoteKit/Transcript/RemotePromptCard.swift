@@ -2,7 +2,7 @@ import Foundation
 
 /// An `ACPPromptCard` as a peer reads it from `RemoteWireMessage.json`. The
 /// Mac's card also opens reviews, which need the Mac's models, so only its
-/// `.url` action is read here; the parts below are the card's own types.
+/// `.url` and `.reviewChanges` actions are read here; the parts below are the card's own types.
 public struct RemotePromptCard: Decodable, Equatable, Sendable {
     public let origin: Origin
     public let title: String
@@ -10,6 +10,8 @@ public struct RemotePromptCard: Decodable, Equatable, Sendable {
     public let sections: [Section]
     /// The card's `.url` action; nil for any other action.
     public let actionURL: URL?
+    /// Whether the card's action is `.reviewChanges`, which the phone runs by opening its Changes tab.
+    public let opensChanges: Bool
 
     private enum CodingKeys: String, CodingKey {
         case origin, title, facts, sections, action
@@ -21,6 +23,12 @@ public struct RemotePromptCard: Decodable, Equatable, Sendable {
         let url: Payload
     }
 
+    /// `ACPPromptCard.Action.reviewChanges(worktreeID:)` as Swift encodes it; only its presence matters.
+    private struct ChangesAction: Decodable {
+        let reviewChanges: Empty
+        struct Empty: Decodable {}
+    }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         origin = try c.decode(Origin.self, forKey: .origin)
@@ -28,6 +36,7 @@ public struct RemotePromptCard: Decodable, Equatable, Sendable {
         facts = try c.decode([Fact].self, forKey: .facts)
         sections = try c.decode([Section].self, forKey: .sections)
         actionURL = (try? c.decodeIfPresent(URLAction.self, forKey: .action))?.url._0
+        opensChanges = (try? c.decodeIfPresent(ChangesAction.self, forKey: .action)) != nil
     }
 
     /// String-backed so a value written by a newer build still decodes.

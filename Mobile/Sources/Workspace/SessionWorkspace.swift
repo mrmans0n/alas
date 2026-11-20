@@ -82,6 +82,8 @@ final class SessionWorkspace {
     @ObservationIgnored private var hostWaiters: [Int: CheckedContinuation<Result<OpaqueHostMessage, RemoteGitFailure>, Never>] = [:]
     /// The session's PR shepherd, once the host's session list said; nil without one.
     private(set) var shepherd: RemoteShepherd?
+    /// Ship would publish a stack for this session, which has no shepherd yet.
+    private(set) var shipsStack = false
     private(set) var shepherdLoaded = false
     private(set) var shepherdRunning: RemoteShepherdAction?
     /// The worktree's pull request, once the host reported one.
@@ -492,8 +494,9 @@ final class SessionWorkspace {
                 pullRequest = found
                 return
             }
-            if let id = shepherdListId, let found = RemoteShepherdRequest.shepherd(of: sessionId, replying: id, in: reply) {
-                shepherd = found
+            if let id = shepherdListId, let found = RemoteShepherdRequest.listing(of: sessionId, replying: id, in: reply) {
+                shepherd = found.shepherd
+                shipsStack = found.shipsStack
                 shepherdLoaded = true
                 return
             }
