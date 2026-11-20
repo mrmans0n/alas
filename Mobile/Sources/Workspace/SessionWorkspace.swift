@@ -392,7 +392,7 @@ final class SessionWorkspace {
         }
         switch result {
         case .success(let reply):
-            if let runID = RemoteGitRequest.startedRunID(in: reply) { hub.runTracker(for: hostID).follow(runID, openConsole: openConsole) }
+            if let runID = RemoteGitRequest.startedRunID(in: reply) { hub.followRun(runID, on: hostID, openConsole: openConsole) }
             return nil
         case .failure(let failure): return failure.message
         }

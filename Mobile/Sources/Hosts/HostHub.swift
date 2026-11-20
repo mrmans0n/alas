@@ -240,9 +240,24 @@ final class HostHub {
         connections[id]?.send(message)
     }
 
-    func runTracker(for hostID: UUID) -> PhoneRunTracker {
+    func followRun(_ runID: String, on hostID: UUID, openConsole: @escaping PhoneRunTracker.OpenConsole) {
+        AppDelegate.prepareRunNotifications()
+        runTracker(for: hostID).follow(runID, openConsole: supports(PeerConsoleCapability.phoneV1, on: hostID) ? openConsole : nil)
+    }
+
+    private func runTracker(for hostID: UUID) -> PhoneRunTracker {
         if let tracker = runTrackers[hostID] { return tracker }
-        let tracker = PhoneRunTracker(hub: self, hostID: hostID)
+        let key = "pendingRuns.\(hostID.uuidString)"
+        let tracker = PhoneRunTracker(
+            pending: Set(UserDefaults.standard.stringArray(forKey: key) ?? []),
+            nextRequestID: { [weak self] in
+                guard let self, state(of: hostID) == .online else { return nil }
+                return nextHostRequestId()
+            },
+            send: { [weak self] in self?.send($0, to: hostID) },
+            save: { UserDefaults.standard.set($0.isEmpty ? nil : Array($0), forKey: key) },
+            notify: { AppDelegate.postRunResult(hostID: hostID, runID: $0, name: $1, exitCode: $2) }
+        )
         runTrackers[hostID] = tracker
         return tracker
     }

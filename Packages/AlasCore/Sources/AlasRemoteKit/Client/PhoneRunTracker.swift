@@ -1,15 +1,17 @@
-import AlasRemoteKit
 import Foundation
 
 /// Follows only runs this phone launched. The host owns their lifetime; the screen that launched
 /// one may be gone by the time it finishes, and the link may come back on a new socket.
 @MainActor
-final class PhoneRunTracker {
-    typealias OpenConsole = (PeerConsoleSummary) -> Void
+public final class PhoneRunTracker {
+    public typealias OpenConsole = @MainActor (PeerConsoleSummary) -> Void
+    public typealias ClientMessage = RemoteClientMessageOf<OpaqueHostMessage, OpaqueHostMessage>
+    public typealias ServerMessage = RemoteServerMessageOf<OpaqueHostMessage, OpaqueHostMessage>
 
-    private weak var hub: HostHub?
-    private let hostID: UUID
-    private let storageKey: String
+    private let nextRequestID: @MainActor () -> Int?
+    private let send: @MainActor (ClientMessage) -> Void
+    private let save: @MainActor (Set<String>) -> Void
+    private let notify: @MainActor (String, String, Int32) -> Void
     private var pending: Set<String>
     private var openers: [String: OpenConsole] = [:]
     private var snapshotID: Int?
@@ -17,31 +19,35 @@ final class PhoneRunTracker {
     private var consoleQueries: [String: (deadline: ContinuousClock.Instant, open: OpenConsole)] = [:]
     private var consoleTask: Task<Void, Never>?
 
-    init(hub: HostHub, hostID: UUID) {
-        self.hub = hub
-        self.hostID = hostID
-        storageKey = "pendingRuns.\(hostID.uuidString)"
-        pending = Set(UserDefaults.standard.stringArray(forKey: storageKey) ?? [])
+    /// `nextRequestID` returns nil while offline; `save` persists pending IDs for the next connection.
+    public init(
+        pending: Set<String>,
+        nextRequestID: @escaping @MainActor () -> Int?,
+        send: @escaping @MainActor (ClientMessage) -> Void,
+        save: @escaping @MainActor (Set<String>) -> Void,
+        notify: @escaping @MainActor (_ runID: String, _ name: String, _ exitCode: Int32) -> Void
+    ) {
+        self.pending = pending
+        self.nextRequestID = nextRequestID
+        self.send = send
+        self.save = save
+        self.notify = notify
     }
 
-    func follow(_ runID: String, openConsole: @escaping OpenConsole) {
+    public func follow(_ runID: String, openConsole: OpenConsole? = nil) {
         pending.insert(runID)
-        if hub?.supports(PeerConsoleCapability.phoneV1, on: hostID) == true {
-            openers[runID] = openConsole
-        }
-        save()
-        AppDelegate.prepareRunNotifications()
+        openers[runID] = openConsole
+        save(pending)
         refresh()
     }
 
-    func refresh() {
-        guard !pending.isEmpty, let hub, hub.state(of: hostID) == .online else { return }
-        let id = hub.nextHostRequestId()
+    public func refresh() {
+        guard !pending.isEmpty, let id = nextRequestID() else { return }
         snapshotID = id
-        hub.send(.host(RemoteRunFeed.snapshot(id: id)), to: hostID)
+        send(.host(RemoteRunFeed.snapshot(id: id)))
     }
 
-    func disconnect() {
+    public func disconnect() {
         snapshotID = nil
         subscribed = false
         openers.removeAll()
@@ -50,13 +56,13 @@ final class PhoneRunTracker {
         consoleTask = nil
     }
 
-    func forget() {
+    public func forget() {
         disconnect()
         pending.removeAll()
-        save()
+        save(pending)
     }
 
-    func receive(_ message: PhoneServerMessage) {
+    public func receive(_ message: ServerMessage) {
         switch message {
         case .host(let raw) where !pending.isEmpty:
             switch RemoteRunFeed.update(in: raw) {
@@ -67,8 +73,8 @@ final class PhoneRunTracker {
                 let missing = pending.subtracting(runs.lazy.map(\.id))
                 for run in runs { observe(run) }
                 finish(missing)
-                if !pending.isEmpty, let hub {
-                    hub.send(.host(RemoteRunFeed.subscribe(id: hub.nextHostRequestId(), after: cursor)), to: hostID)
+                if !pending.isEmpty, let id = nextRequestID() {
+                    send(.host(RemoteRunFeed.subscribe(id: id, after: cursor)))
                     subscribed = true
                 }
             case .events(let changed, let removed, let resync) where subscribed:
@@ -98,7 +104,7 @@ final class PhoneRunTracker {
             findConsole(consoleID, open: open)
         }
         if case .finished(let exitCode) = run.status {
-            if let exitCode { AppDelegate.postRunResult(hostID: hostID, runID: run.id, name: run.name, exitCode: exitCode) }
+            if let exitCode { notify(run.id, run.name, exitCode) }
             finish(CollectionOfOne(run.id))
         }
     }
@@ -108,15 +114,11 @@ final class PhoneRunTracker {
         pending.subtract(ids)
         guard pending.count != count else { return }
         openers = openers.filter { pending.contains($0.key) }
-        save()
-        if pending.isEmpty, subscribed, let hub {
-            hub.send(.host(RemoteRunFeed.unsubscribe(id: hub.nextHostRequestId())), to: hostID)
+        save(pending)
+        if pending.isEmpty, subscribed {
             subscribed = false
+            if let id = nextRequestID() { send(.host(RemoteRunFeed.unsubscribe(id: id))) }
         }
-    }
-
-    private func save() {
-        UserDefaults.standard.set(pending.isEmpty ? nil : Array(pending), forKey: storageKey)
     }
 
     private func findConsole(_ id: String, open: @escaping OpenConsole) {
@@ -127,8 +129,11 @@ final class PhoneRunTracker {
             while let self, !Task.isCancelled {
                 let now = ContinuousClock.now
                 consoleQueries = consoleQueries.filter { now < $0.value.deadline }
-                guard !consoleQueries.isEmpty else { consoleTask = nil; return }
-                hub?.send(.console(.list), to: hostID)
+                guard !consoleQueries.isEmpty else {
+                    consoleTask = nil
+                    return
+                }
+                send(.console(.list))
                 do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
             }
         }
