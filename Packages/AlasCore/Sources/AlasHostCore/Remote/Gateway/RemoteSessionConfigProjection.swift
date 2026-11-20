@@ -33,6 +33,9 @@ public enum RemoteSessionConfigProjection: Sendable {
         config.supportsQueueReorder = true
         config.supportsMentions = true
         config.agentIssue = agentIssue(session: session)
+        config.goal = session.currentGoal.map {
+            RemoteSessionGoal(objective: $0.objective, status: $0.status, tokenBudget: $0.tokenBudget, tokensUsed: $0.tokensUsed)
+        }
         return config
     }
 

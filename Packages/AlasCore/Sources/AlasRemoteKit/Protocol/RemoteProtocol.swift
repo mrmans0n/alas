@@ -129,6 +129,8 @@ public struct RemoteSessionConfig: Codable, Equatable, Sendable {
     /// hit, as the host's own banner words it. Nil when nothing is wrong,
     /// and on older hosts.
     public var agentIssue: RemoteAgentIssue? = nil
+    /// The session's goal, as the Mac's goal pill shows it. Nil without one, and on older hosts.
+    public var goal: RemoteSessionGoal? = nil
 
     public init(sessionId: String, models: [RemoteModelInfo], modes: [RemoteModelInfo], currentModel: String? = nil, currentMode: String? = nil, autoRunEnabled: Bool, acceptsImages: Bool, chips: RemoteChipState? = nil, supportsSteering: Bool? = nil, availableCommands: [RemoteSlashCommand]? = nil, usage: RemoteUsage? = nil, supportsQueueReorder: Bool? = nil, supportsMentions: Bool? = nil, agentIssue: RemoteAgentIssue? = nil) {
         self.sessionId = sessionId

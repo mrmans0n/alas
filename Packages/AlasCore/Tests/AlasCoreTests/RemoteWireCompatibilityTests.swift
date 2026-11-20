@@ -136,6 +136,16 @@ import Testing
         #expect(RemoteAttentionRequest.items(replying: 9, in: reply) == nil)
     }
 
+    @Test(arguments: [
+        (12_345, 50_000, "12.3k / 50k"),
+        (nil, 50_000, "50k budget"),
+        (999, nil, "999 used"),
+        (nil, nil, nil),
+    ] as [(Int?, Int?, String?)])
+    func goalPillTokens(used: Int?, budget: Int?, expected: String?) {
+        #expect(RemoteSessionGoal(objective: "o", status: nil, tokenBudget: budget, tokensUsed: used).tokenText == expected)
+    }
+
     @Test func phoneReadsWhatACommitMessageIsSuggestedFrom() throws {
         let request = RemoteGitRequest.commitMessageInput(id: 3, projectID: "p", path: "/r").json
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: request)
