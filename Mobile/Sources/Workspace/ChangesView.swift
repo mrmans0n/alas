@@ -43,7 +43,7 @@ struct ChangesView: View {
             }
         }
         .onAppear {
-            if case .idle = workspace.changes { workspace.refreshChanges() }
+            if case .idle = workspace.changes { workspace.refreshChanges() } else { workspace.refreshIfComparisonChanged() }
         }
     }
 }

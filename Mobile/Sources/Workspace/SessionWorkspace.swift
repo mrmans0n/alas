@@ -53,16 +53,24 @@ final class SessionWorkspace {
     private(set) var changes: Load<ChangeListReply> = .idle
     /// What Branch Changes and Commits compare against; nil follows the Mac's setting. Shared by every workspace.
     /// ponytail: a reply to the previous mode still in flight can land after the new one; refresh fixes it.
-    var comparisonMode: ChangesComparisonMode? = UserDefaults.standard.string(forKey: SessionWorkspace.comparisonModeKey)
-        .flatMap(ChangesComparisonMode.init(rawValue:)) {
-        didSet {
-            guard comparisonMode != oldValue else { return }
-            UserDefaults.standard.set(comparisonMode?.rawValue, forKey: Self.comparisonModeKey)
-            refreshChanges()
-            if let diff, diff.key.sha == nil { requestDiff(diff.key) }
+    var comparisonMode: ChangesComparisonMode? {
+        get { ChangesComparison.shared.mode }
+        set {
+            guard newValue != ChangesComparison.shared.mode else { return }
+            ChangesComparison.shared.mode = newValue
+            refreshIfComparisonChanged()
         }
     }
-    private static let comparisonModeKey = "changesComparisonMode"
+    /// The mode the loaded changes were asked with.
+    @ObservationIgnored private var changesMode: ChangesComparisonMode?
+
+    /// Reloads the changes, and an open working-tree diff, when another workspace changed the mode.
+    func refreshIfComparisonChanged() {
+        if case .idle = changes { return }
+        guard changesMode != comparisonMode else { return }
+        refreshChanges()
+        if let diff, diff.key.sha == nil { requestDiff(diff.key) }
+    }
     private(set) var diff: (key: DiffKey, Load<DiffReply>)?
     /// The commit whose files are open, pushed from the Commits section.
     private(set) var commit: (commit: RemoteCommit, Load<CommitFilesReply>)?
@@ -173,6 +181,7 @@ final class SessionWorkspace {
 
     func refreshChanges() {
         if case .loaded = changes {} else { changes = .loading }
+        changesMode = comparisonMode
         send(.listChanges(sessionId: sessionId, comparisonMode: comparisonMode))
         refreshPullRequest()
     }
@@ -560,5 +569,16 @@ final class SessionWorkspace {
         default:
             break
         }
+    }
+}
+
+/// The phone-wide Compare Against choice.
+@MainActor @Observable
+final class ChangesComparison {
+    static let shared = ChangesComparison()
+    private static let key = "changesComparisonMode"
+
+    var mode: ChangesComparisonMode? = UserDefaults.standard.string(forKey: key).flatMap(ChangesComparisonMode.init(rawValue:)) {
+        didSet { UserDefaults.standard.set(mode?.rawValue, forKey: Self.key) }
     }
 }
