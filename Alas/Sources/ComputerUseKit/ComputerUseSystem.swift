@@ -1879,11 +1879,6 @@ public enum ComputerUseUserInput {
         lastInput() != nil
     }
 
-    /// Asks macOS for Input Monitoring, which the tap needs when Accessibility alone doesn't do.
-    public static func requestListenAccess() {
-        _ = CGRequestListenEventAccess()
-    }
-
     private static let monitored: [CGEventType] = [
         .keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown,
         .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .mouseMoved, .scrollWheel,

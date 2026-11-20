@@ -114,8 +114,9 @@ struct ComputerUsePane: View {
                 }
             } else {
                 AlasButton(title: "Grant…") {
-                    ComputerUsePlatform.shared.request(permission)
-                    URLOpening.shared.open(permission.settingsURL)
+                    PermissionGuide.show(name: permission.displayName, settingsURL: permission.settingsURL) {
+                        ComputerUsePlatform.shared.isGranted(permission)
+                    }
                     if permission == .screenRecording {
                         AppRelaunch.screenRecordingRequested = true
                         requestedScreenRecording = true
@@ -140,10 +141,12 @@ struct ComputerUsePane: View {
                     Text("Off — Alas can't tell when you're using an app")
                         .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
-                    AlasButton(title: "Grant…") {
-                        ComputerUseUserInput.requestListenAccess()
-                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
-                            URLOpening.shared.open(url)
+                    // With Input Monitoring granted, the watcher still waits for Accessibility.
+                    if !CGPreflightListenEventAccess() {
+                        AlasButton(title: "Grant…") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+                                PermissionGuide.show(name: "Input Monitoring", settingsURL: url) { CGPreflightListenEventAccess() }
+                            }
                         }
                     }
                 }

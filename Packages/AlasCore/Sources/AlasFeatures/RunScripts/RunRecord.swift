@@ -271,16 +271,3 @@ public struct RunRecordStore: Equatable, Sendable {
         self.byWorktree = byWorktree
     }
 }
-
-extension URL {
-    /// Explicit port, else the scheme's default. `nil` when neither applies,
-    /// which is exactly when a port collision can't be reasoned about.
-    public var runEndpointPort: Int? {
-        if let port { return port }
-        switch scheme?.lowercased() {
-        case "http":  return 80
-        case "https": return 443
-        default:      return nil
-        }
-    }
-}

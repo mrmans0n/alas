@@ -105,6 +105,37 @@ import Testing
         #expect(RemoteGitRequest.pullRequest(replying: 4, in: found) == nil)
     }
 
+    /// The phone lists the Mac's open inbox items but for agent waits, which it shows as sessions.
+    @Test func phoneReadsAndDismissesTheMacsInbox() throws {
+        let owner = AttentionWorktreeIdentity(projectID: "p", location: .local, lineageID: "l", legacyPath: nil)
+        let display = AttentionWorktreeDisplaySnapshot(projectName: "Alas", branch: "main", path: "/r", host: nil)
+        func event(_ kind: AttentionKind, _ target: AttentionJumpTarget = .none) -> AttentionEvent {
+            AttentionEvent(id: UUID(), sourceKey: AttentionSourceKey(rawValue: UUID().uuidString), fingerprint: "f",
+                           owner: owner, kind: kind, title: "\(kind)", body: "out", jumpTarget: target, display: display,
+                           occurredAt: Date(timeIntervalSinceReferenceDate: 1_000), requiresAction: true)
+        }
+        let failure = event(.runScriptFailure), failed = event(.agentFailed, .session(sessionID: "s1"))
+        let acknowledged = event(.conflicts), waiting = event(.agentAwaiting, .session(sessionID: "s2"))
+        let events = [failure, failed, acknowledged, waiting]
+        var document = AttentionDocument(events: events)
+        for event in events {
+            document.observations[event.sourceKey] = .init(isActive: true, fingerprint: "f", eventID: event.id)
+        }
+        document.acknowledgments[acknowledged.id] = .init(eventID: acknowledged.id, acknowledgedAt: .now)
+
+        let items = AttentionSignalAggregator.phoneInbox(document)
+        #expect(Set(items.map(\.id)) == [failure.id, failed.id])
+        #expect(items.first { $0.id == failed.id }?.sessionID == "s1")
+
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: RemoteAttentionRequest.list(id: 4).json)
+            == HostClientMessage(id: 4, request: .attention))
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: RemoteAttentionRequest.dismiss(id: 5, eventIDs: [failure.id]).json)
+            == HostClientMessage(id: 5, request: .dismissAttention(eventIDs: [failure.id])))
+        let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 4, result: .attention(items: items))))
+        #expect(RemoteAttentionRequest.items(replying: 4, in: reply) == items)
+        #expect(RemoteAttentionRequest.items(replying: 9, in: reply) == nil)
+    }
+
     @Test func phoneReadsWhatACommitMessageIsSuggestedFrom() throws {
         let request = RemoteGitRequest.commitMessageInput(id: 3, projectID: "p", path: "/r").json
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: request)
@@ -185,6 +216,36 @@ import Testing
         #expect(observed.visibleConsoleID == (hidden ? nil : "terminal-42"))
         #expect(observed.status == .finished(exitCode: 17))
         #expect(removed == ["older-run"] && !resync)
+    }
+
+    @Test func previewLinkMatchesOnlyRunningLocalEndpointsInItsWorktree() throws {
+        let request = RemoteRunPreview.snapshotRequest(id: 7)
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: request.json)
+            == HostClientMessage(id: 7, request: .snapshot))
+
+        let url = try #require(RemoteRunPreview.inlineURL("localhost:3000/settings?tab=account"))
+        let endpoint = try #require(URL(string: "http://127.0.0.1:3000"))
+        func run(_ id: String, worktree: String = "here", host: String? = nil, status: RunStatus = .running,
+                 at overrideEndpoint: URL? = nil) -> RunRecord {
+            RunRecord(id: id, scriptKey: "dev", scriptName: "Dev", worktreeID: worktree, branch: "main",
+                      target: RunExecutionTarget(host: host, workingDirectory: "/r"),
+                      endpoint: overrideEndpoint ?? endpoint, status: status, startedAt: .distantPast)
+        }
+        let runs = [
+            run("matching"),
+            run("other-worktree", worktree: "there"),
+            run("ssh", host: "other-host"),
+            run("stopped", status: .finished(.stopped)),
+            run("other-port", at: try #require(URL(string: "http://localhost:3001"))),
+            run("other-scheme", at: try #require(URL(string: "https://localhost:3000"))),
+            run("other-host", at: try #require(URL(string: "http://example.com:3000"))),
+        ]
+        let snapshot = HostSnapshot(cursor: .init(generation: UUID(), sequence: 0), projects: [], worktrees: [],
+                                    workspaceCheckouts: [], runs: runs, sessions: [])
+        let message = OpaqueHostMessage(json: try JSONEncoder().encode(
+            HostServerMessage.response(id: 7, result: .snapshot(snapshot: snapshot))))
+        #expect(RemoteRunPreview.matchingRunIDs(replying: 7, in: message, worktreeID: "here", url: url) == ["matching"])
+        #expect(RemoteRunPreview.matchingRunIDs(replying: 8, in: message, worktreeID: "here", url: url) == nil)
     }
 
     @Test(arguments: [

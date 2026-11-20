@@ -44,6 +44,9 @@ targets:
       - path: ../Alas/Sources/Icons/CodeHostGlyphs.swift
       - path: ../Alas/Sources/Remote/Native/PeerDeviceSession.swift
       - path: ../Alas/Sources/Remote/Native/PeerDevicePlayback.swift
+      - path: ../Packages/AlasCore/Sources/AlasHostCore/Remote/Forward/PeerPortForwarder.swift
+      - path: ../Packages/AlasCore/Sources/AlasHostCore/Remote/Transport/TCP.swift
+      - path: ../Packages/AlasCore/Sources/AlasHostCore/Remote/Transport/TCP+Network.swift
       - path: Resources/Assets.xcassets
       # Shared with the Mac: the frame visual aid fragments are wrapped in.
       - path: ../Alas/Resources/VisualAid/frame.html

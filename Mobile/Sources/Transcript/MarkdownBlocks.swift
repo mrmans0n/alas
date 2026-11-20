@@ -1,4 +1,5 @@
 import AlasHighlight
+import AlasRemoteKit
 import Foundation
 import Markdown
 import SwiftUI
@@ -159,7 +160,10 @@ enum MarkdownBlock: Equatable {
         case let t as Markdown.Text: return styled(t.string, intent)
         case is SoftBreak: return AttributedString(" ")
         case is LineBreak: return AttributedString("\n")
-        case let c as InlineCode: return styled(c.code, intent.union(.code))
+        case let c as InlineCode:
+            var text = styled(c.code, intent.union(.code))
+            text.link = RemoteRunPreview.inlineURL(c.code)
+            return text
         case let l as Markdown.Link:
             var s = markup.children.reduce(into: AttributedString()) { $0 += run($1, intent) }
             if let d = l.destination, let url = URL(string: d) { s.link = url }

@@ -10,6 +10,7 @@ struct AlasMobileApp: App {
     @State private var hub: HostHub
     @State private var registry: SessionRegistry
     @State private var worktrees = WorktreesModel()
+    @State private var attention: AttentionFeed
     @State private var selection = AppTab.worktrees
     @State private var openRoute: SessionRoute?
     private let registrar: PushRegistrar
@@ -20,6 +21,7 @@ struct AlasMobileApp: App {
         _hub = State(initialValue: hub)
         let registry = SessionRegistry(hub: hub)
         _registry = State(initialValue: registry)
+        _attention = State(initialValue: AttentionFeed(hub: hub))
         AppDelegate.registry = registry
         let registrar = PushRegistrar(hub: hub)
         hub.registrar = registrar
@@ -35,9 +37,9 @@ struct AlasMobileApp: App {
                     WorktreesView(hub: hub, model: worktrees) { selection = .peers }
                 }
                 Tab("Inbox", systemImage: "tray", value: AppTab.inbox) {
-                    InboxView(hub: hub, openRoute: $openRoute)
+                    InboxView(hub: hub, attention: attention, openRoute: $openRoute)
                 }
-                .badge(InboxModel.entries(in: hub).count)
+                .badge(InboxModel.entries(in: hub).count + attention.entries.count)
                 Tab("Peers", systemImage: "laptopcomputer", value: AppTab.peers) {
                     PeersView(hub: hub)
                 }
@@ -48,6 +50,15 @@ struct AlasMobileApp: App {
             // A sidebar on the iPad, the tab bar on the iPhone.
             .tabViewStyle(.sidebarAdaptable)
             .environment(registry)
+            // A Mac sends no word when its inbox changes; ask whenever a host comes online, and
+            // every 30 s while the app is open. ponytail: polling; a pushed list if it ever lags.
+            .onChange(of: hub.hosts.map { hub.onlineCount(of: $0.id) }) { attention.refresh() }
+            .task {
+                while !Task.isCancelled {
+                    attention.refresh()
+                    try? await Task.sleep(for: .seconds(30))
+                }
+            }
             .onAppear {
                 AppDelegate.open = { route in
                     selection = .inbox
