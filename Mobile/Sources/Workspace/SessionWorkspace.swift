@@ -52,7 +52,6 @@ struct FileReply {
 final class SessionWorkspace {
     private(set) var changes: Load<ChangeListReply> = .idle
     /// What Branch Changes and Commits compare against; nil follows the Mac's setting. Shared by every workspace.
-    /// ponytail: a reply to the previous mode still in flight can land after the new one; refresh fixes it.
     var comparisonMode: ChangesComparisonMode? {
         get { ChangesComparison.shared.mode }
         set {
@@ -63,6 +62,21 @@ final class SessionWorkspace {
     }
     /// The mode the loaded changes were asked with.
     @ObservationIgnored private var changesMode: ChangesComparisonMode?
+    /// When the change-list request in flight was sent. One at a time: replies don't name their mode, and the
+    /// host drops a repeat of a request still queued, so overlapping ones could leave another mode's list showing.
+    @ObservationIgnored private var changesSentAt: ContinuousClock.Instant?
+    /// A refresh asked for while one was in flight; sent when its reply lands.
+    @ObservationIgnored private var changesAgain = false
+
+    /// Notes the in-flight change list answered; true when a newer refresh was waiting, which is sent
+    /// instead of showing this reply, possibly asked with an older mode.
+    private func changeListLanded() -> Bool {
+        changesSentAt = nil
+        guard changesAgain else { return false }
+        changesAgain = false
+        refreshChanges()
+        return true
+    }
 
     /// Reloads the changes, and an open working-tree diff, when another workspace changed the mode.
     func refreshIfComparisonChanged() {
@@ -165,6 +179,8 @@ final class SessionWorkspace {
 
     /// Asks again for whatever is open; the host forgot everything it was asked while away.
     private func replay() {
+        changesSentAt = nil
+        changesAgain = false
         if case .idle = changes {} else { refreshChanges() }
         if let commit { send(.listCommitFiles(sessionId: sessionId, sha: commit.commit.revision)) }
         if let diff { requestDiff(diff.key) }
@@ -181,6 +197,12 @@ final class SessionWorkspace {
 
     func refreshChanges() {
         if case .loaded = changes {} else { changes = .loading }
+        // A reply lost without a disconnect would otherwise hold every later refresh.
+        if let sent = changesSentAt, ContinuousClock.now - sent < .seconds(30) {
+            changesAgain = true
+            return
+        }
+        changesSentAt = .now
         changesMode = comparisonMode
         send(.listChanges(sessionId: sessionId, comparisonMode: comparisonMode))
         refreshPullRequest()
@@ -526,10 +548,12 @@ final class SessionWorkspace {
             }
         case .changeList(let id, let ref, let metrics, let files, let staged, let unstaged, let commits,
                          let truncated, let commitsTruncated, _, _) where id == sessionId:
+            if changeListLanded() { return }
             changes = .loaded(ChangeListReply(
                 comparisonRef: ref, metricsAvailable: metrics, files: files, staged: staged, unstaged: unstaged,
                 commits: commits, truncated: truncated, commitsTruncated: commitsTruncated))
         case .changeListFailed(let id, let reason, let message) where id == sessionId:
+            if changeListLanded() { return }
             changes = .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil))
         case .fileDiffResult(let id, let path, let stage, let hunks, let truncated, let note) where id == sessionId:
             guard diff?.key == DiffKey(path: path, stage: stage) else { return }
@@ -578,7 +602,9 @@ final class ChangesComparison {
     static let shared = ChangesComparison()
     private static let key = "changesComparisonMode"
 
-    var mode: ChangesComparisonMode? = UserDefaults.standard.string(forKey: key).flatMap(ChangesComparisonMode.init(rawValue:)) {
+    var mode: ChangesComparisonMode? = UserDefaults.standard.string(forKey: key).flatMap(ChangesComparisonMode.init(rawValue:))
+        // Manual compares against the Mac's per-worktree pick, which the host doesn't forward; it isn't offered.
+        .flatMap { $0 == .manual ? nil : $0 } {
         didSet { UserDefaults.standard.set(mode?.rawValue, forKey: Self.key) }
     }
 }

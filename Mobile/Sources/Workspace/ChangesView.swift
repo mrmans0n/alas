@@ -34,7 +34,6 @@ struct ChangesView: View {
                         Text("Mac's Setting").tag(ChangesComparisonMode?.none)
                         Text("Base Branch").tag(ChangesComparisonMode?.some(.auto))
                         Text("Branch Upstream").tag(ChangesComparisonMode?.some(.branchUpstream))
-                        Text("Base Picked on the Mac").tag(ChangesComparisonMode?.some(.manual))
                     }
                 }
             }
