@@ -17,9 +17,11 @@ struct InboxView: View {
     var body: some View {
         let entries = InboxModel.entries(in: hub)
         // An answered request leaves at once; the summary only catches up with the next list.
+        let answeredHere = Set(model.sessions.filter { !$0.value.answered.isEmpty }.keys)
+        // The rest stay, the badge counts them: a session can wait on a typed reply with no request.
         let shown = entries.filter { entry in
             guard let session = model.sessions[entry.route], session.hasSnapshot else { return true }
-            return session.hasPendingRequest
+            return session.hasPendingRequest || !answeredHere.union(model.answered).contains(entry.route)
         }
         Group {
             if sizeClass == .regular {
@@ -69,6 +71,7 @@ struct InboxView: View {
             model.sync(entries, registry: registry)
         }
         .onChange(of: entries) { _, new in if visible { model.sync(new, registry: registry) } }
+        .onChange(of: answeredHere) { _, routes in model.answered.formUnion(routes) }
         .onDisappear {
             visible = false
             model.releaseAll()
@@ -120,6 +123,10 @@ struct InboxView: View {
             .buttonStyle(.plain)
             if let session = model.sessions[entry.route], session.hasPendingRequest {
                 RequestCard(session: session)
+            } else if model.sessions[entry.route]?.hasSnapshot == true {
+                CardChrome(icon: "text.bubble.fill", tint: .orange, kind: "Waiting", title: "The agent is waiting for your reply") {
+                    CardButton(title: "Open Session", primary: true) { open(entry.route) }
+                }
             } else {
                 Text("Waiting for the request…")
                     .font(.subheadline).foregroundStyle(.secondary)

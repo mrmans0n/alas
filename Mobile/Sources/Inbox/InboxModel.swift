@@ -13,6 +13,8 @@ final class InboxModel {
     }
 
     private(set) var sessions: [SessionRoute: TranscriptSession] = [:]
+    /// Sessions whose request was answered here, hidden until their summary stops listing them.
+    var answered: Set<SessionRoute> = []
     @ObservationIgnored private var tokens: [SessionRoute: ListenerToken] = [:]
 
     /// Active sessions awaiting permission or input, across every host. Summaries only, so the
@@ -27,6 +29,7 @@ final class InboxModel {
     /// Holds exactly the sessions in `entries`.
     func sync(_ entries: [Entry], registry: SessionRegistry) {
         let wanted = Set(entries.map(\.route))
+        answered.formIntersection(wanted)
         for route in tokens.keys where !wanted.contains(route) {
             tokens[route] = nil
             sessions[route] = nil
