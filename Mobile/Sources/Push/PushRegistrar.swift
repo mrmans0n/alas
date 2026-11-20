@@ -121,8 +121,11 @@ final class PushRegistrar {
         let center = UNUserNotificationCenter.current()
         let stale = await center.deliveredNotifications().compactMap { note -> String? in
             let id = note.request.identifier
-            // A finished turn's alert is news, not a wait: it stays until the user clears it.
-            guard (note.request.content.userInfo["alas"] as? [String: Any])?["status"] as? String != "finished" else { return nil }
+            // A finished turn's alert is news, not a wait: it stays until the user clears it. An inbox
+            // alert names an inbox item, not a session; the Mac's clear ping removes it.
+            // ponytail: a clear missed while offline leaves it; reconcile against the inbox list if that bites.
+            let status = (note.request.content.userInfo["alas"] as? [String: Any])?["status"] as? String
+            guard status != "finished", status != "inbox" else { return nil }
             let origin = (note.request.content.userInfo["alas"] as? [String: Any])?["serverId"] as? String
             return (listed.contains(id) || origin.map(origins.contains) == true) && !waiting.contains(id) ? id : nil
         }
