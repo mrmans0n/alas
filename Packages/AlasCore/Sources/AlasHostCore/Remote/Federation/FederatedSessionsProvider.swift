@@ -331,6 +331,12 @@ public final class FederatedSessionsProvider {
                     downstream.send(.subagentTranscript(sessionId: namespaced, subagentId: subagentId, found: false, state: nil, messages: []))
                     return true
                 }
+            case .suggestNextPrompt:
+                // An older peer, or one that runs no suggestions, can't answer it.
+                guard links.peerSupports(HostProtocolCapability.sessionsNextPromptV1, serverId: target.serverId) else {
+                    downstream.send(.nextPromptSuggestion(sessionId: namespaced, text: nil))
+                    return true
+                }
             case .queueEdit(_, let itemId):
                 queueEditRequesters.append((namespaced, itemId, downstream.id))
                 if queueEditRequesters.count > Self.queueEditRequesterLimit {

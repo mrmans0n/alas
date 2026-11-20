@@ -141,6 +141,11 @@ final class NewSessionModel {
         return nil
     }
 
+    /// Left empty, the branch is named from the session's first prompt.
+    var namesBranchFromFirstPrompt: Bool {
+        branch.isEmpty && hostID.map { hub.supports(HostProtocolCapability.worktreesAutoBranchNameV1, on: $0) } == true
+    }
+
     var canCreate: Bool {
         guard hostIsOnline, !isCreating, !outcomeUnknown, agentId != nil else { return false }
         switch mode {
@@ -149,7 +154,7 @@ final class NewSessionModel {
         case .new:
             guard projectId != nil, let base, branchNames.contains(base)
             else { return false }
-            return !branch.isEmpty && branchError == nil
+            return namesBranchFromFirstPrompt || (!branch.isEmpty && branchError == nil)
         }
     }
 
@@ -255,7 +260,7 @@ final class NewSessionModel {
         guard let projectId, let base, let agentId else { return }
         send(.createWorktreeSession(projectId: projectId, base: base, branch: branch, agentId: agentId,
                                     modelId: modelId, effortId: effortId, repoHook: consent,
-                                    useBranchNaming: branchNaming?.appliesRule == true && !useBranchNaming ? false : nil),
+                                    useBranchNaming: branchNaming?.appliesRule == true && !useBranchNaming && !branch.isEmpty ? false : nil),
              creating: true)
     }
 

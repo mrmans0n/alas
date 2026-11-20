@@ -232,6 +232,13 @@ final class AppState {
     @ObservationIgnored var nextPromptSessionID: String?
     @ObservationIgnored var nextPromptActiveIncarnation: UUID?
     @ObservationIgnored var nextPromptComposerEnvironment = NextPromptEligibilitySnapshot.Environment()
+    /// Each live session's last completed turn, which a Remote client's
+    /// suggestion is for.
+    @ObservationIgnored var nextPromptCompletedTurns: [String: NextPromptCompletedTurn] = [:]
+    /// The suggestion a Remote client got for a session, by the request it
+    /// answered, so asking again with nothing changed does not run the model
+    /// again, and a settings or model change asks anew.
+    @ObservationIgnored var remoteNextPromptSuggestions: [String: (id: NextPromptRequestID, text: String)] = [:]
     var config: AppConfig
     var themeStore: ThemeStore
     /// The headless core: projects, worktrees and session managers.
@@ -1149,7 +1156,10 @@ final class AppState {
             name: remoteDisplayName,
             // Only reach for the lazy manager when a server is up, for the
             // same reason `syncRemotePeers` does.
-            peers: remoteServer != nil ? remotePeers.helloPeers : []
+            peers: remoteServer != nil ? remotePeers.helloPeers : [],
+            consoleCapabilities: PeerConsoleCapability.appHost,
+            hostCapabilities: HostProtocolCapability.served
+                + [HostProtocolCapability.worktreesAutoBranchNameV1, HostProtocolCapability.sessionsNextPromptV1]
         )
     }
 
@@ -1240,6 +1250,9 @@ final class AppState {
             let root = (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
                 .appendingPathComponent("RemoteWeb")
             let assets = RemoteWebAssets(root: root)
+            host.nextPromptSuggester = { [weak self] sessionID in
+                await self?.remoteNextPromptSuggestion(sessionID: sessionID)
+            }
             let server = RemoteServer(
                 pairing: remotePairing,
                 assets: assets,

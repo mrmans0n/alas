@@ -29,7 +29,7 @@ extension RemoteClientMessage {
              .queueForceSend(let id, _), .queueRemove(let id, _), .queueRetry(let id, _), .queueEdit(let id, _),
              .queueMove(let id, _, _), .queuePromote(let id, _),
              .listCommitFiles(let id, _), .commitFileDiff(let id, _, _), .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _, _), .readFile(let id, _), .readTranscriptImage(let id, _),
-             .readToolTerminal(let id, _), .readSubagent(let id, _),
+             .readToolTerminal(let id, _), .readSubagent(let id, _), .suggestNextPrompt(let id),
              .visualAidResponse(let id, _, _, _, _, _):
             return id
         }
@@ -92,6 +92,7 @@ extension RemoteClientMessage {
         case .readFile(_, let path): return .readFile(sessionId: new, path: path)
         case .readToolTerminal(_, let terminalId): return .readToolTerminal(sessionId: new, terminalId: terminalId)
         case .readSubagent(_, let subagentId): return .readSubagent(sessionId: new, subagentId: subagentId)
+        case .suggestNextPrompt: return .suggestNextPrompt(sessionId: new)
         }
     }
 }
@@ -120,7 +121,7 @@ extension RemoteServerMessage {
              .commitDiffResult(let id, _, _, _, _, _), .commitDiffFailed(let id, _, _, _, _),
              .fileTree(let id, _, _, _), .fileTreeFailed(let id, _, _, _), .fileContents(let id, _, _, _, _),
              .fileUnavailable(let id, _, _, _, _), .fileBytes(let id, _, _, _), .transcriptImage(let id, _, _), .mentionCandidates(let id, _, _),
-             .toolTerminal(let id, _, _, _, _, _, _), .subagentTranscript(let id, _, _, _, _),
+             .toolTerminal(let id, _, _, _, _, _, _), .subagentTranscript(let id, _, _, _, _), .nextPromptSuggestion(let id, _),
              .fileHistory(let id, _, _, _), .fileHistoryFailed(let id, _, _, _):
             return id
         case .sessionConfig(let cfg):
@@ -211,6 +212,8 @@ extension RemoteServerMessage {
                                  exitCode: exitCode, signal: signal, retained: retained)
         case .subagentTranscript(_, let subagentId, let found, let state, let messages):
             return .subagentTranscript(sessionId: new, subagentId: subagentId, found: found, state: state, messages: messages)
+        case .nextPromptSuggestion(_, let text):
+            return .nextPromptSuggestion(sessionId: new, text: text)
         case .fileBytes(_, let path, let data, let byteSize):
             return .fileBytes(sessionId: new, path: path, data: data, byteSize: byteSize)
         case .fileHistory(_, let path, let entries, let truncated):

@@ -40,6 +40,8 @@ import AlasSessions
     public var toolTerminal: @MainActor (_ sessionID: String, _ terminalID: String) -> ACPTerminalOutputResult?
     /// A live session's subagent, or nil when the session has no such child.
     public var subagentRun: @MainActor (_ sessionID: String, _ subagentID: String) -> ACPSubagentRun?
+    /// A suggestion for the session's next prompt, or nil when there is none.
+    public var nextPromptSuggestion: @MainActor (_ sessionID: String) async -> String?
 
     public init(
         sessionSummaries: @escaping @MainActor (_ tabIndex: @MainActor (_ sessionID: String, _ owner: SessionOwnerID) -> Int?) async
@@ -63,7 +65,8 @@ import AlasSessions
         fullToolCallContent: @escaping @MainActor (_ sessionID: String, _ toolCallID: String) async -> String? = { _, _ in nil },
         spillToolImage: @escaping @MainActor (_ sessionID: String, _ data: Data) async -> String? = { _, _ in nil },
         toolTerminal: @escaping @MainActor (_ sessionID: String, _ terminalID: String) -> ACPTerminalOutputResult? = { _, _ in nil },
-        subagentRun: @escaping @MainActor (_ sessionID: String, _ subagentID: String) -> ACPSubagentRun? = { _, _ in nil }
+        subagentRun: @escaping @MainActor (_ sessionID: String, _ subagentID: String) -> ACPSubagentRun? = { _, _ in nil },
+        nextPromptSuggestion: @escaping @MainActor (_ sessionID: String) async -> String? = { _ in nil }
     ) {
         self.sessionSummaries = sessionSummaries
         self.worktrees = worktrees
@@ -79,6 +82,7 @@ import AlasSessions
         self.spillToolImage = spillToolImage
         self.toolTerminal = toolTerminal
         self.subagentRun = subagentRun
+        self.nextPromptSuggestion = nextPromptSuggestion
     }
 
     /// The host's lists and creations; empty and refused without a host.
@@ -126,6 +130,9 @@ import AlasSessions
             },
             subagentRun: { [weak host] sessionID, subagentID in
                 host?.sessions.subagentRun(sessionID, subagentID: subagentID)
+            },
+            nextPromptSuggestion: { [weak host] sessionID in
+                await host?.nextPromptSuggester?(sessionID)
             }
         )
     }
