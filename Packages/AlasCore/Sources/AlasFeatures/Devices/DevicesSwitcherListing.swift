@@ -59,7 +59,7 @@ extension DevicesTabState {
         var folded = 0
         if !filtering, !showsOlderRuntimes, groups.count > 1 {
             let kept = groups.enumerated().filter { index, group in
-                index == 0 || group.rows.contains { $0.target == selected }
+                index == 0 || group.rows.contains { $0.target == lastUsed }
             }.map(\.element)
             folded = groups.count - kept.count
             groups = kept

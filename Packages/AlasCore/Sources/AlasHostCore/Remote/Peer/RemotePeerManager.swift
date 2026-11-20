@@ -93,6 +93,12 @@ public final class RemotePeerManager {
     /// Peer console events, kept off the federation fan-out: they belong to
     /// one attachment on this Mac, never to ACP subscribers.
     @ObservationIgnored public var onConsoleEvent: (@MainActor (_ serverId: String, PeerConsoleEvent) -> Void)?
+    public enum DeviceUpdate: Sendable {
+        case connectionChanged
+        case message(PeerDeviceEvent)
+    }
+
+    @ObservationIgnored private var deviceListeners: [String: [UUID: @MainActor (DeviceUpdate) -> Void]] = [:]
     /// Run endpoint forward events, kept off the federation fan-out like
     /// console events: they belong to this Mac's own forwards to that peer.
     @ObservationIgnored public var onPortForwardEvent: (@MainActor (_ serverId: String, PeerPortForwardEvent) -> Void)?
@@ -1079,6 +1085,7 @@ public final class RemotePeerManager {
         let peer = peers.remove(at: index)
         connections[peerId]?.disconnect()
         connections[peerId] = nil
+        notifyDeviceListeners(.connectionChanged, serverId: peer.serverId)
         states[peerId] = nil
         durableStateByServerId[peer.serverId] = nil
         // Bumped so any addPeer/handleInboundPeer exchange for this same
@@ -1263,6 +1270,46 @@ public final class RemotePeerManager {
 
     // MARK: - Links
 
+    /// A known capability remains visible while the link reconnects. Traffic
+    /// itself still requires the current authenticated HTTPS socket.
+    public func supportsPeerDevices(serverId: String) -> Bool {
+        capabilities[serverId]?.contains(PeerDeviceCapability.v1) == true
+            && peers.contains { $0.serverId == serverId && Self.mayUsePeerDevices($0) }
+            && !isProvisional(serverId)
+    }
+
+    public func verifiedDeviceOrigin(serverId: String) -> URL? {
+        guard supportsPeerDevices(serverId: serverId), let peer = peers.first(where: { $0.serverId == serverId }),
+              let connection = connections[peer.id] as? RemotePeerConnection else { return nil }
+        return connection.verifiedHTTPSOrigin
+    }
+
+    public func sendPeerDevice(_ request: PeerDeviceRequest, serverId: String) {
+        guard verifiedDeviceOrigin(serverId: serverId) != nil,
+              let peer = peers.first(where: { $0.serverId == serverId }) else { return }
+        connections[peer.id]?.send(.device(request))
+    }
+
+    public func observePeerDevices(serverId: String, receive: @escaping @MainActor (DeviceUpdate) -> Void) -> UUID {
+        let observer = UUID()
+        deviceListeners[serverId, default: [:]][observer] = receive
+        return observer
+    }
+
+    public func removePeerDeviceObserver(_ observer: UUID, serverId: String) {
+        deviceListeners[serverId]?[observer] = nil
+        if deviceListeners[serverId]?.isEmpty == true { deviceListeners[serverId] = nil }
+    }
+
+    private func notifyDeviceListeners(_ update: DeviceUpdate, serverId: String) {
+        guard let listeners = deviceListeners[serverId] else { return }
+        for listener in listeners.values { listener(update) }
+    }
+
+    private static func mayUsePeerDevices(_ peer: RemotePeer) -> Bool {
+        peer.isVerified && !peer.isInboundOnly && (peer.tokenScope ?? .full) == .full
+    }
+
     public func connectAll() {
         isActive = true
         for peer in peers where connections[peer.id] == nil {
@@ -1290,9 +1337,12 @@ public final class RemotePeerManager {
         let id = peer.id
         let connection = makeConnection(peer) { [weak self] event in self?.handle(event, peerId: id) }
         connections[id] = connection
+        var acknowledged: [String] = []
         if onPeerHostRequest != nil, Self.mayServePeerHost(peer) {
-            connection.acknowledge([HostProtocolCapability.delegationReverseV1])
+            acknowledged.append(HostProtocolCapability.delegationReverseV1)
         }
+        if Self.mayUsePeerDevices(peer) { acknowledged.append(PeerDeviceCapability.v1) }
+        if !acknowledged.isEmpty { connection.acknowledge(acknowledged) }
         connection.connect()
     }
 
@@ -1310,6 +1360,7 @@ public final class RemotePeerManager {
                 }
                 onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
                 onLinkChanged?(peerId)
+                notifyDeviceListeners(.connectionChanged, serverId: peer.serverId)
             }
         case .hello(_, let name, let protocolVersion, _, let advertised, let hostVersion):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
@@ -1354,6 +1405,25 @@ public final class RemotePeerManager {
             // very socket.
             guard carriesSessions(peerId: peerId),
                   let peer = peers.first(where: { $0.id == peerId }) else { return }
+            if case .device(let event) = message {
+                if verifiedDeviceOrigin(serverId: peer.serverId) != nil {
+                    notifyDeviceListeners(.message(event), serverId: peer.serverId)
+                }
+                return
+            }
+            if case .hello(_, _, _, _, _, let advertised, _) = message {
+                // Policy can change while this authenticated control socket is up.
+                let capability = PeerDeviceCapability.v1
+                let hadDevices = capabilities[peer.serverId]?.contains(capability) == true
+                if advertised.contains(capability) != hadDevices {
+                    if hadDevices {
+                        capabilities[peer.serverId]?.remove(capability)
+                    } else {
+                        capabilities[peer.serverId, default: []].insert(capability)
+                    }
+                    notifyDeviceListeners(.connectionChanged, serverId: peer.serverId)
+                }
+            }
             if case .console(let event) = message {
                 onConsoleEvent?(peer.serverId, event)
                 return

@@ -18,6 +18,10 @@ import Testing
         (.push, .push(forceWithLease: false)),
         (.pull, .pull),
         (.fetch, .fetch),
+        (.hunk(path: "a", index: 1, header: "@@ -1 +1 @@", linesHash: "h", action: .unstage),
+         .hunk(path: "a", stage: .staged, index: 1, header: "@@ -1 +1 @@", linesHash: "h", action: .unstage)),
+        (.hunk(path: "a", index: 0, header: "@@", linesHash: "h", action: .discard),
+         .hunk(path: "a", stage: .unstaged, index: 0, header: "@@", linesHash: "h", action: .discard)),
     ] as [(RemoteGitChange, HostWorktreeChange)])
     func phoneGitRequestsDecodeOnTheMac(change: RemoteGitChange, expected: HostWorktreeChange) throws {
         let json = RemoteGitRequest.message(id: 7, projectID: "p", path: "/r", branch: "main", change: change).json
@@ -29,7 +33,7 @@ import Testing
         (HostResponse.done, nil),
         (.failure(error: .failed(message: "Nothing is staged to commit.")), "Nothing is staged to commit."),
         (.failure(error: .operationInProgress), "Another operation is running in this worktree. Try again when it finishes."),
-        (.failure(error: .session(refusal: .notWriter)), "Another device is driving this session."),
+        (.failure(error: .session(refusal: .notWriter)), "Take over this session first."),
     ] as [(HostResponse, String?)])
     func phoneReadsTheMacsGitReply(result: HostResponse, failure: String?) throws {
         let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 7, result: result)))
@@ -38,6 +42,24 @@ import Testing
         case .success: #expect(failure == nil)
         case .failure(let error): #expect(error.message == failure)
         }
+    }
+
+    @Test func sessionDetailRoundTripsAndStaysOffTheWireWhenAbsent() throws {
+        let detail = RemoteSessionDetail(model: "Opus 5.5", contextPercent: 63, planCompleted: 2, planTotal: 5,
+                                         planStep: "Write tests", preview: "Done.", previewKind: .reply)
+        let full = RemoteSessionSummary(id: "s", title: "T", agentId: "claude", status: "idle", canDrive: false, detail: detail)
+        #expect(try JSONDecoder().decode(RemoteSessionSummary.self, from: JSONEncoder().encode(full)) == full)
+
+        let legacy = Data(#"{"id":"s","title":"T","agentId":"claude","status":"idle","canDrive":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(RemoteSessionSummary.self, from: legacy)
+        #expect(decoded.detail == nil)
+        #expect(!String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self).contains("\"detail\""))
+    }
+
+    @Test func anUnknownPreviewKindDropsOnlyTheKind() throws {
+        let json = Data(#"{"id":"s","title":"T","agentId":"claude","status":"idle","canDrive":false,"detail":{"model":"Opus","previewKind":"future","preview":"p"}}"#.utf8)
+        let detail = try #require(JSONDecoder().decode(RemoteSessionSummary.self, from: json).detail)
+        #expect(detail == RemoteSessionDetail(model: "Opus", preview: "p"))
     }
 
     @Test func phoneShepherdRequestsDecodeOnTheMac() throws {
@@ -81,6 +103,17 @@ import Testing
         #expect(pr.checks.first?.detailURL?.absoluteString == "https://ci.example/unit-tests")
         #expect(RemoteGitRequest.pullRequest(replying: 3, in: try reply(ShepherdFixtures.snapshot(nil))) == .some(nil))
         #expect(RemoteGitRequest.pullRequest(replying: 4, in: found) == nil)
+    }
+
+    @Test func phoneReadsWhatACommitMessageIsSuggestedFrom() throws {
+        let request = RemoteGitRequest.commitMessageInput(id: 3, projectID: "p", path: "/r").json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: request)
+            == HostClientMessage(id: 3, request: .commitMessageInput(worktree: WorktreeRef(projectID: "p", path: "/r"))))
+        let input = CommitMessageSuggestionInput(stat: " a | 1 +", diff: "diff --git a/a b/a", branch: nil,
+                                                 ticketTitle: "Login", recentSubjects: ["fix: x"])
+        let reply = OpaqueHostMessage(json: try JSONEncoder().encode(
+            HostServerMessage.response(id: 3, result: .commitMessageInput(input: input))))
+        #expect(RemoteGitRequest.commitMessageInput(in: reply) == input)
     }
 
     @Test func phoneRunsTheMacsScripts() throws {

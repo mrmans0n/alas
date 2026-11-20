@@ -17,13 +17,18 @@ public struct AndroidDevice: Equatable, Sendable {
     public var avdName: String?
     /// The Android version, such as "16", once read.
     public var release: String?
+    public let isUSBConnected: Bool
 
-    public init(serial: String, state: State, model: String?, avdName: String? = nil, release: String? = nil) {
+    public init(
+        serial: String, state: State, model: String?, avdName: String? = nil, release: String? = nil,
+        isUSBConnected: Bool = false
+    ) {
         self.serial = serial
         self.state = state
         self.model = model
         self.avdName = avdName
         self.release = release
+        self.isUSBConnected = isUSBConnected
     }
 
     public var isEmulator: Bool { serial.hasPrefix("emulator-") }
@@ -44,7 +49,8 @@ public struct AndroidDevice: Equatable, Sendable {
             default: .offline
             }
             let model = fields.dropFirst(2).first { $0.hasPrefix("model:") }.map { String($0.dropFirst("model:".count)) }
-            return AndroidDevice(serial: fields[0], state: state, model: model)
+            let usb = fields.dropFirst(2).contains { $0.hasPrefix("usb:") && $0.count > 4 }
+            return AndroidDevice(serial: fields[0], state: state, model: model, isUSBConnected: usb)
         }
     }
 

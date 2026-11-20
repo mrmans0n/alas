@@ -201,6 +201,8 @@ Agents (phase 2 and after):
 - [x] Hide `device_*` from `tools/list` while the setting is off, for
   sessions started then (`ALAS_MCP_DEVICES=0`).
 - [x] Type non-ASCII text: `device_type` pastes words the US layout lacks.
+- [x] Several devices at once: the Devices tab stacks every running device,
+  and any of them opens in a center tab (`2026-11-19-devices-rail-stack-design.md`).
 
 Expensive, not planned: network traffic capture (serve-sim uses mitmproxy),
 camera feed injection, and streaming to another machine over WebRTC.

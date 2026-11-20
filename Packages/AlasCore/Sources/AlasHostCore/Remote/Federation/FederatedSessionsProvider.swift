@@ -694,7 +694,8 @@ private extension RemoteSessionSummary {
             title: title, agentId: agentId, status: status, canDrive: canDrive, isActive: isActive,
             tabIndex: tabIndex, projectId: projectId, worktreeId: worktreeId, updatedAt: updatedAt, worktree: worktree,
             serverId: peer.serverId, serverName: peer.name,
-            parentSessionId: parentSessionId.map { RemoteFederatedSessionID.compose(serverId: peer.serverId, sessionId: $0) })
+            parentSessionId: parentSessionId.map { RemoteFederatedSessionID.compose(serverId: peer.serverId, sessionId: $0) },
+            detail: detail)
     }
 
     /// An already-namespaced row with a refreshed owner name.
@@ -702,6 +703,6 @@ private extension RemoteSessionSummary {
         RemoteSessionSummary(
             id: id, title: title, agentId: agentId, status: status, canDrive: canDrive, isActive: isActive,
             tabIndex: tabIndex, projectId: projectId, worktreeId: worktreeId, updatedAt: updatedAt, worktree: worktree,
-            serverId: peer.serverId, serverName: peer.name, parentSessionId: parentSessionId)
+            serverId: peer.serverId, serverName: peer.name, parentSessionId: parentSessionId, detail: detail)
     }
 }

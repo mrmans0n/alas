@@ -359,6 +359,9 @@ struct NativePeerRightPaneView: View {
     private func tabContent(_ shownTab: RightPaneTab) -> some View {
         if shownTab == .agent {
             agentTab
+        } else if shownTab == .device, let deviceHost {
+            NativePeerDevicesView(manager: state.remotePeers, serverId: deviceHost)
+                .id(deviceHost)
         } else if shownTab == .run, let runTarget, let hosts = client.hosts {
             // Runs come from the host channel, so they need no session.
             NativePeerRunTabView(
@@ -1418,7 +1421,15 @@ struct NativePeerRightPaneView: View {
         return local
     }
 
-    private var tabs: [RightPaneTab] { RightPaneTab.peerAvailable(isFolder: isFolder, servesRuns: runTarget != nil) }
+    private var deviceHost: String? {
+        guard let serverId = client.selectedWorktree?.serverId,
+              state.remotePeers.supportsPeerDevices(serverId: serverId) else { return nil }
+        return serverId
+    }
+
+    private var tabs: [RightPaneTab] {
+        RightPaneTab.peerAvailable(isFolder: isFolder, servesRuns: runTarget != nil, servesDevices: deviceHost != nil)
+    }
 
     /// Keeps the folder rule (Files in place of Changes) and drops a Run tab
     /// the host no longer serves.

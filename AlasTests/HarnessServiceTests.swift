@@ -1190,6 +1190,30 @@ struct HarnessServiceTests {
         await waitForMainQueue()
         #expect(service.activityBySession["session-1"] == nil)
     }
+
+    @Test func badgeSessionsListActiveByRankThenIdleInTabOrder() {
+        let (service, _) = makeService()
+        service.setExternalActivity(sessionId: "run", agent: .codex, state: .busy)
+        service.setExternalActivity(sessionId: "wait", agent: .claude, state: .awaitingInput)
+        service.setExternalActivity(sessionId: "termIdle", agent: .claude, state: .idle)
+        service.recordHarnessDetection(sessionId: "termIdle", kind: .claudeCode)
+        let badges = service.badgeSessions(
+            forSessionIds: ["acpIdleA", "run", "termIdle", "wait", "acpIdleB", "shell"],
+            idleAgents: ["acpIdleA": .claude, "acpIdleB": .codex])
+        #expect(badges.map(\.id) == ["wait", "run", "acpIdleA", "termIdle", "acpIdleB"])
+        #expect(badges.map(\.state) == [.awaiting, .running, nil, nil, nil])
+        #expect(badges[3].agent == .claude)
+    }
+
+    @Test func idleOnlySessionsProduceBadgesButNoSummary() {
+        let (service, _) = makeService()
+        service.setExternalActivity(sessionId: "t", agent: .claude, state: .idle)
+        service.recordHarnessDetection(sessionId: "t", kind: .claudeCode)
+        service.setExternalActivity(sessionId: "ghost", agent: .claude, state: .idle)
+        #expect(service.summary(forSessionIds: ["t", "a", "ghost"]) == nil)
+        // "ghost" has idle activity but no live harness process: no badge.
+        #expect(service.badgeSessions(forSessionIds: ["t", "a", "ghost"], idleAgents: ["a": .codex]).map(\.id) == ["t", "a"])
+    }
 }
 
 private final class InvalidationCounter: @unchecked Sendable {

@@ -128,7 +128,8 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
                                       guard let self else { return }
                                       input.expanded.wrappedValue.formSymmetricDifference([Self.key(id, part: $0)])
                                       sync()
-                                  }, openSubagent: { [unowned self] in input.openSubagent($0) })
+                                  }, openSubagent: { [unowned self] in input.openSubagent($0) },
+                                  selectText: { [weak self] in self?.presentSelection($0, quote: $1) })
                                   .environment(\.openURL, input.openURL)
             }
             .margins(.all, 0)
@@ -306,6 +307,13 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
             .flatMap { collectionView.layoutAttributesForItem(at: $0)?.frame.minY }
     }
 
+    private func presentSelection(_ text: String, quote: ((String) -> Void)?) {
+        let sheet = UINavigationController(rootViewController: MessageTextController(text: text, quote: quote))
+        sheet.sheetPresentationController?.detents = [.medium(), .large()]
+        sheet.sheetPresentationController?.prefersGrabberVisible = true
+        present(sheet, animated: true)
+    }
+
     /// Bounded: each pass measures the rows that scrolled in, which can grow the content again.
     private func scrollToBottom() {
         for _ in 0 ..< 8 {
@@ -324,5 +332,48 @@ final class PinningCollectionView: UICollectionView {
     override func layoutSubviews() {
         super.layoutSubviews()
         didLayout?()
+    }
+}
+
+/// A message's text in a sheet, to select part of it. Its edit menu leads with Quote where the
+/// transcript has a composer, as the Mac's selection menu offers Copy and Quote.
+private final class MessageTextController: UIViewController, UITextViewDelegate {
+    private let text: String
+    private let quote: ((String) -> Void)?
+
+    init(text: String, quote: ((String) -> Void)?) {
+        self.text = text
+        self.quote = quote
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func loadView() {
+        let textView = UITextView()
+        textView.text = text
+        textView.isEditable = false
+        textView.font = .preferredFont(forTextStyle: .body)
+        textView.adjustsFontForContentSizeCategory = true
+        textView.textContainerInset = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        textView.alwaysBounceVertical = true
+        textView.delegate = self
+        view = textView
+        title = "Select Text"
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+    }
+
+    func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
+                  suggestedActions: [UIMenuElement]) -> UIMenu? {
+        guard let quote else { return nil }
+        let selected = (textView.text as NSString).substring(with: range)
+        guard ACPMessageQuote.canQuote(selected) else { return nil }
+        let action = UIAction(title: "Quote", image: UIImage(systemName: "text.quote")) { [weak self] _ in
+            // Once the sheet is gone, so the composer can take the keyboard.
+            self?.dismiss(animated: true) { quote(selected) }
+        }
+        return UIMenu(children: [action] + suggestedActions)
     }
 }

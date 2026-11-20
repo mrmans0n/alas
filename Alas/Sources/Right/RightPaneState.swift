@@ -16,9 +16,10 @@ enum RightPaneTab: String {
     /// A peer worktree exposes read-only changes and files, and its sessions;
     /// schedules belong to this Mac; Run needs a host that serves
     /// `host.runs.scripts.v1`.
-    static func peerAvailable(isFolder: Bool = false, servesRuns: Bool = false) -> [Self] {
+    /// Devices are shared by the host, independent of the selected session.
+    static func peerAvailable(isFolder: Bool = false, servesRuns: Bool = false, servesDevices: Bool = false) -> [Self] {
         let tabs: [Self] = isFolder ? [.files, .agent] : [.changes, .files, .agent]
-        return servesRuns ? tabs + [.run] : tabs
+        return tabs + (servesRuns ? [.run] : []) + (servesDevices ? [.device] : [])
     }
 }
 
@@ -248,8 +249,12 @@ final class RightPaneState: GGSplitCommitServicing {
     }
     /// A plugin panel shown instead of `activeTab` while it is set and still offered.
     var activePluginPanel: PluginPanelRef?
-    /// The device this worktree's Devices tab shows; nil picks a default.
-    var devicesSelection: DevicesTarget?
+    /// The device last used in this worktree: where run-script apps go and what the empty rail offers.
+    var devicesLastUsed: DevicesTarget?
+    /// Devices collapsed to their header in this worktree's Devices rail.
+    var devicesCollapsed: Set<DevicesTarget> = []
+    /// A device the rail scrolls to once, then clears.
+    var devicesScrollRequest: DevicesTarget?
     var attentionScrollRequest: AppKitDiffScrollRequest?
     private(set) var attentionRevealedTarget: AttentionJumpTarget?
     private var attentionRevealGeneration = 0

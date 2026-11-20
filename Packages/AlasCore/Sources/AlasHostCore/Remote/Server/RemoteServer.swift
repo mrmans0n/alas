@@ -11,7 +11,8 @@ import AlasAgents
 
 /// In-process HTTP + WebSocket server. Listens on a loopback TCP port, serves
 /// the static web client and `POST /pair` over HTTP, and upgrades authorized
-/// `/ws` requests to WebSocket, bridging each to a `RemoteSessionGateway`.
+/// `/ws` requests to a session gateway and ticketed `/ws/device-media` requests
+/// to a binary video stream.
 ///
 /// `@MainActor`-confined for its public surface (start/stop/port and the
 /// connection table); listener and connection callbacks arrive on the
@@ -26,6 +27,18 @@ public final class RemoteServer {
     /// connection's `onAuthenticated` hop (MainActor), never by reading
     /// queue-confined connection state cross-queue.
     private var connectionDevice: [ObjectIdentifier: String] = [:]
+    private struct DeviceControlLink {
+        let pairingID: String
+        let host: PeerDeviceHost
+        let id: UUID
+    }
+    private struct DeviceMediaLink {
+        let host: PeerDeviceHost
+        let session: PeerDeviceHost.MediaSession
+    }
+    private var deviceControlLinks: [ObjectIdentifier: DeviceControlLink] = [:]
+    private var deviceMediaLinks: [ObjectIdentifier: DeviceMediaLink] = [:]
+    private var advertisedPeerDevices = false
     /// What each authenticated socket's `helloAck` said its client serves
     /// back, and when it said so, which orders a device's sockets.
     private var acknowledged: [ObjectIdentifier: (order: Int, capabilities: Set<String>)] = [:]
@@ -152,7 +165,8 @@ public final class RemoteServer {
         if desired != 0 { didFallback = false }
         self.loopbackOnly = loopbackOnly
         let listener = try TCP.listener(host: loopbackOnly ? .loopbackV4 : .any, port: desired)
-        let onState: @Sendable (TCPListenerState) -> Void = { [weak self] state in
+        let onState: @Sendable (TCPListenerState) -> Void = { [weak self, weak listener] state in
+            guard let listener else { return }
             switch state {
             case .ready(let assigned):
                 Task { @MainActor in
@@ -162,6 +176,7 @@ public final class RemoteServer {
                     guard let self, self.listener === listener else { return }
                     self.port = assigned
                     self.onPortChange?(assigned)
+                    self.refreshPeerDevicePolicy()
                 }
             case .failed:
                 Task { @MainActor in
@@ -172,6 +187,7 @@ public final class RemoteServer {
                     } else {
                         self.port = nil
                         self.onPortChange?(nil)
+                        self.refreshPeerDevicePolicy()
                     }
                 }
             case .cancelled:
@@ -179,13 +195,24 @@ public final class RemoteServer {
                     guard let self, self.listener === listener else { return }
                     self.port = nil
                     self.onPortChange?(nil)
+                    self.refreshPeerDevicePolicy()
                 }
             }
         }
         self.listener = listener
         setService(advertisement)
-        listener.start(queue: queue, onState: onState) { [weak self] stream in
-            Task { @MainActor in self?.accept(stream) }
+        listener.start(queue: queue, onState: onState) { [weak self, weak listener] stream in
+            guard let listener else {
+                stream.cancel()
+                return
+            }
+            Task { @MainActor in
+                guard let self, self.listener === listener else {
+                    stream.cancel()
+                    return
+                }
+                self.accept(stream)
+            }
         }
         let serverId = identityProvider().serverId
         if !serverId.isEmpty {
@@ -203,13 +230,14 @@ public final class RemoteServer {
         }
     }
 
-    /// Pings every socket a paired Alas instance holds, closing those that
-    /// stayed silent since the last round. Browsers are left alone: a
-    /// suspended tab cannot answer, and nothing routes through it.
+    /// Probe Alas peers and active device links. Browsers are left alone:
+    /// a suspended tab cannot answer, and nothing routes through it.
     public func probeConnections() {
-        for (oid, deviceId) in connectionDevice where pairing.device(id: deviceId)?.kind == .alasInstance {
+        for (oid, deviceId) in connectionDevice
+        where deviceControlLinks[oid] != nil || pairing.device(id: deviceId)?.kind == .alasInstance {
             connections[oid]?.probe()
         }
+        for oid in deviceMediaLinks.keys { connections[oid]?.probe() }
     }
 
     public func stop() {
@@ -230,6 +258,10 @@ public final class RemoteServer {
         // the queue and is harmless on an already-cancelled connection.
         for conn in connections.values { conn.forceClose() }
         for conn in connections.values { conn.cancel() }
+        for link in deviceControlLinks.values { link.host.disconnect(link.id) }
+        deviceControlLinks.removeAll()
+        deviceMediaLinks.removeAll()
+        advertisedPeerDevices = false
         let acknowledging = Set(acknowledged.keys.compactMap { connectionDevice[$0] })
         connections.removeAll()
         connectionDevice.removeAll()
@@ -277,6 +309,10 @@ public final class RemoteServer {
     /// Immediately closes every live connection authenticated as `deviceId`.
     /// `cancel()` tears the connection down, whose `onClose` clears both maps.
     public func disconnectDevice(_ deviceId: String) {
+        for (oid, link) in deviceControlLinks where link.pairingID == deviceId {
+            connections[oid]?.cancel()
+            closeDeviceLink(oid)
+        }
         for (oid, did) in connectionDevice where did == deviceId {
             connections[oid]?.cancel()
         }
@@ -315,6 +351,87 @@ public final class RemoteServer {
     /// Open sockets that have not authenticated as a device.
     @_spi(Testing) public var unauthenticatedConnectionCount: Int {
         connections.keys.filter { connectionDevice[$0] == nil }.count
+    }
+
+    /// Call after a serving-policy change, including Serve starting or
+    /// exiting. Device access and capability advertisement share that gate.
+    public func refreshPeerDevicePolicy() {
+        let activeHost = servingDeviceHost
+        presenter?.peerDeviceHost?.refresh()
+        for (oid, link) in deviceControlLinks where link.host !== activeHost { closeDeviceLink(oid) }
+        let available = activeHost != nil
+        guard advertisedPeerDevices != available else { return }
+        advertisedPeerDevices = available
+        broadcastHello()
+    }
+
+    private var servingDeviceHost: PeerDeviceHost? {
+        guard loopbackOnly, port != nil, let host = presenter?.peerDeviceHost, host.isEligible else { return nil }
+        return host
+    }
+
+    private func nativeFullDevice(_ pairingID: String) -> RemoteDevice? {
+        guard let device = pairing.device(id: pairingID), device.scope == .full,
+              device.kind == .alasInstance || device.kind == .phone else { return nil }
+        return device
+    }
+
+    private func hello(identity: RemoteServerIdentity, pairingID: String) -> RemoteServerMessage {
+        let current = pairing.device(id: pairingID)?.scope == .full ? identity : identity.withoutPeers
+        let capability = PeerDeviceCapability.v1
+        let advertise = servingDeviceHost != nil && nativeFullDevice(pairingID) != nil
+        if !current.consoleCapabilities.contains(capability), current.hostCapabilities.contains(capability) == advertise {
+            return .hello(current)
+        }
+        var capabilities = current.hostCapabilities.filter { $0 != capability }
+        if advertise { capabilities.append(capability) }
+        return .hello(RemoteServerIdentity(
+            serverId: current.serverId, name: current.name, peers: current.peers,
+            consoleCapabilities: current.consoleCapabilities.filter { $0 != capability },
+            hostCapabilities: capabilities, hostVersion: current.hostVersion
+        ))
+    }
+
+    private func handleDeviceRequest(_ request: PeerDeviceRequest, channel: RemoteGatewayChannel) -> Bool {
+        guard let socket = channel.socket, connections[socket]?.isOpenForDeviceMedia == true,
+              let host = servingDeviceHost, let device = nativeFullDevice(channel.deviceId) else { return false }
+        if let link = deviceControlLinks[socket], link.host === host {
+            host.handle(request, from: link.id)
+        } else {
+            closeDeviceLink(socket)
+            let id = host.connect(pairingID: device.id, name: device.name, authorized: { [weak self, weak host] in
+                guard let self, let host else { return false }
+                return self.connections[socket]?.isOpenForDeviceMedia == true &&
+                    self.servingDeviceHost === host && self.nativeFullDevice(device.id) != nil
+            }, send: { channel.send(.device($0)) })
+            deviceControlLinks[socket] = DeviceControlLink(pairingID: device.id, host: host, id: id)
+            host.handle(request, from: id)
+        }
+        return true
+    }
+
+    private func closeDeviceLink(_ socket: ObjectIdentifier) {
+        if let link = deviceControlLinks.removeValue(forKey: socket) {
+            link.host.disconnect(link.id)
+        }
+    }
+
+    private func claimDeviceMedia(_ ticket: String, connection: RemoteConnection) -> (@MainActor () -> Void)? {
+        let socket = ObjectIdentifier(connection)
+        guard connection.isOpenForDeviceMedia, connections[socket] === connection, let host = servingDeviceHost,
+              let session = host.claimMedia(ticket: ticket, write: { [weak connection] data, onWritten in
+                  connection?.sendDeviceMedia(data, onWritten: onWritten)
+              }, close: { [weak connection] in connection?.cancel() },
+              isOpen: { [weak connection] in connection?.isOpenForDeviceMedia == true }) else { return nil }
+        deviceMediaLinks[socket] = DeviceMediaLink(host: host, session: session)
+        return { [weak self, weak connection] in
+            guard let self, let connection, self.connections[socket] === connection,
+                  let link = self.deviceMediaLinks[socket], self.servingDeviceHost === link.host else {
+                connection?.cancel()
+                return
+            }
+            link.host.startMedia(link.session)
+        }
     }
 
     private func accept(_ stream: any TCPStream) {
@@ -387,6 +504,11 @@ public final class RemoteServer {
                     caller: .remotePeer(deviceID: channel.deviceId), scope: scope, sendTracked: channel.sendTracked,
                     send: channel.send)
                 if scope == .full { gateway.presenter = self?.presenter }
+                if device?.kind == .alasInstance || device?.kind == .phone {
+                    gateway.receivePeerDeviceRequest = { [weak self] request in
+                        self?.handleDeviceRequest(request, channel: channel) ?? false
+                    }
+                }
                 gateway.delegationPairing = self?.pairing
                 let deviceId = channel.deviceId
                 let socket = channel.socket
@@ -400,16 +522,12 @@ public final class RemoteServer {
             // A delegation-only device is not told which other Macs are
             // paired here.
             makeHello: { [weak self] deviceId in
-                let current = identity()
-                guard self?.pairing.device(id: deviceId)?.scope == .full else {
-                    return .hello(current.withoutPeers)
-                }
-                return .hello(current)
+                self?.hello(identity: identity(), pairingID: deviceId)
             },
             identityProof: proveIdentity,
             onAuthenticated: { [weak self] conn, did in
                 Task { @MainActor in
-                    guard let self else { return }
+                    guard let self, self.connections[ObjectIdentifier(conn)] === conn, conn.isOpenForDeviceMedia else { return }
                     self.connectionDevice[ObjectIdentifier(conn)] = did
                     self.onConnectionDeviceCountsChange?(self.connectedDeviceCounts())
                     // `authorize` can pass while the device is still valid,
@@ -436,6 +554,9 @@ public final class RemoteServer {
                 Task { @MainActor in
                     guard let self else { return }
                     let oid = ObjectIdentifier(conn)
+                    guard self.connections[oid] === conn else { return }
+                    self.closeDeviceLink(oid)
+                    if let media = self.deviceMediaLinks.removeValue(forKey: oid) { media.host.mediaClosed(media.session) }
                     let deviceId = self.connectionDevice[oid]
                     self.connections[oid] = nil
                     self.connectionDevice[oid] = nil
@@ -444,6 +565,9 @@ public final class RemoteServer {
                     if hadAcknowledged, let deviceId { self.onAcknowledgedCapabilitiesChange?(deviceId) }
                 }
             })
+        conn.authorizeDeviceMedia = { [weak self] ticket, connection in
+            self?.claimDeviceMedia(ticket, connection: connection)
+        }
         connections[ObjectIdentifier(conn)] = conn
         conn.start()
     }

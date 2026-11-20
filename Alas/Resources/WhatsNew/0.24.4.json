@@ -1,0 +1,16 @@
+{
+  "version": "0.24.4",
+  "headline": {
+    "title": "One rail, every device",
+    "body": "Keep running simulators, Android devices and worktree VMs together, then move any screen into a center tab.",
+    "media": "media/0.24.4-devices-rail.png"
+  },
+  "also": [
+    {
+      "title": "Agent details on hover"
+    },
+    {
+      "title": "Find and preview worktree files"
+    }
+  ]
+}
