@@ -56,6 +56,8 @@ final class SessionWorkspace {
     private(set) var commit: (commit: RemoteCommit, Load<CommitFilesReply>)?
     private(set) var tree = RemoteFileTree()
     private(set) var file: (path: String, Load<FileReply>)?
+    /// The open file is a skill's `SKILL.md`, named by its command.
+    @ObservationIgnored private var fileIsSkill = false
     /// The screen that pushed the open diff or file. The session can be open in several tabs at once;
     /// only that screen's stack shows it.
     private(set) var pushedBy: UUID?
@@ -153,7 +155,9 @@ final class SessionWorkspace {
         refreshRunScripts()
         if let file {
             self.file = (file.path, .loading)
-            send(.readFile(sessionId: sessionId, path: file.path))
+            // A skill's path is its command, which only `readSkill` reads.
+            send(fileIsSkill ? .readSkill(sessionId: sessionId, command: file.path)
+                : .readFile(sessionId: sessionId, path: file.path))
         }
     }
 
@@ -246,6 +250,7 @@ final class SessionWorkspace {
     func openFile(_ path: String, by owner: UUID) {
         pushedBy = owner
         file = (path, .loading)
+        fileIsSkill = false
         send(.readFile(sessionId: sessionId, path: path))
     }
 
@@ -253,6 +258,7 @@ final class SessionWorkspace {
     func openSkill(_ command: String, by owner: UUID) {
         pushedBy = owner
         file = (command, .loading)
+        fileIsSkill = true
         send(.readSkill(sessionId: sessionId, command: command))
     }
 
@@ -272,6 +278,7 @@ final class SessionWorkspace {
 
     func closeFile() {
         file = nil
+        fileIsSkill = false
     }
 
     // MARK: Replies
