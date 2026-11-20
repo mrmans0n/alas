@@ -51,6 +51,18 @@ struct FileReply {
 @MainActor @Observable
 final class SessionWorkspace {
     private(set) var changes: Load<ChangeListReply> = .idle
+    /// What Branch Changes and Commits compare against; nil follows the Mac's setting. Shared by every workspace.
+    /// ponytail: a reply to the previous mode still in flight can land after the new one; refresh fixes it.
+    var comparisonMode: ChangesComparisonMode? = UserDefaults.standard.string(forKey: SessionWorkspace.comparisonModeKey)
+        .flatMap(ChangesComparisonMode.init(rawValue:)) {
+        didSet {
+            guard comparisonMode != oldValue else { return }
+            UserDefaults.standard.set(comparisonMode?.rawValue, forKey: Self.comparisonModeKey)
+            refreshChanges()
+            if let diff, diff.key.sha == nil { requestDiff(diff.key) }
+        }
+    }
+    private static let comparisonModeKey = "changesComparisonMode"
     private(set) var diff: (key: DiffKey, Load<DiffReply>)?
     /// The commit whose files are open, pushed from the Commits section.
     private(set) var commit: (commit: RemoteCommit, Load<CommitFilesReply>)?
@@ -161,7 +173,7 @@ final class SessionWorkspace {
 
     func refreshChanges() {
         if case .loaded = changes {} else { changes = .loading }
-        send(.listChanges(sessionId: sessionId))
+        send(.listChanges(sessionId: sessionId, comparisonMode: comparisonMode))
         refreshPullRequest()
     }
 
@@ -184,7 +196,7 @@ final class SessionWorkspace {
         if let sha = key.sha {
             send(.commitFileDiff(sessionId: sessionId, sha: sha, path: key.path))
         } else {
-            send(.fileDiff(sessionId: sessionId, path: key.path, stage: key.stage))
+            send(.fileDiff(sessionId: sessionId, path: key.path, stage: key.stage, comparisonMode: comparisonMode))
         }
     }
 

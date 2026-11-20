@@ -26,6 +26,19 @@ struct ChangesView: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Menu("Compare Against", systemImage: "arrow.left.arrow.right") {
+                    Picker("Compare Against", selection: Binding(
+                        get: { workspace.comparisonMode },
+                        set: { workspace.comparisonMode = $0 }
+                    )) {
+                        Text("Mac's Setting").tag(ChangesComparisonMode?.none)
+                        Text("Base Branch").tag(ChangesComparisonMode?.some(.auto))
+                        Text("Branch Upstream").tag(ChangesComparisonMode?.some(.branchUpstream))
+                        Text("Base Picked on the Mac").tag(ChangesComparisonMode?.some(.manual))
+                    }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button("Refresh Changes", systemImage: "arrow.clockwise") { workspace.refreshChanges() }
             }
         }
