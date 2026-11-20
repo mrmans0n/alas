@@ -184,8 +184,10 @@ struct NewSessionSheet: View {
             }
 
             Section {
-                BranchNameField(text: $model.branch)
-                if let naming = model.branchNaming, naming.appliesRule {
+                BranchNameField(text: $model.branch,
+                                placeholder: model.namesBranchFromFirstPrompt ? "Name from first prompt" : "New branch")
+                // A name the first prompt picks always follows the rule, as on the Mac.
+                if let naming = model.branchNaming, naming.appliesRule, !model.namesBranchFromFirstPrompt {
                     Toggle(isOn: $model.useBranchNaming) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(naming.template == nil ? "Use branch prefix" : "Use branch template")
@@ -197,7 +199,9 @@ struct NewSessionSheet: View {
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
-                    if let preview = model.branchPreview {
+                    if model.namesBranchFromFirstPrompt {
+                        Text("The first prompt names the branch. Type a name to choose one yourself.")
+                    } else if let preview = model.branchPreview {
                         Text("Branch to create: \(preview)").font(.footnote.monospaced())
                             .textSelection(.enabled)
                     } else if model.branchNaming == nil {
@@ -256,7 +260,7 @@ struct NewSessionSheet: View {
             Section("Review") {
                 LabeledContent("Repository", value: model.projects?.first { $0.id == model.projectId }?.name ?? "Not selected")
                 LabeledContent("Base", value: model.base ?? "Not selected")
-                LabeledContent("Branch", value: model.branchPreview ?? (model.branch.isEmpty ? "Not entered" : model.branch))
+                LabeledContent("Branch", value: model.branchPreview ?? (model.namesBranchFromFirstPrompt ? "From first prompt" : model.branch.isEmpty ? "Not entered" : model.branch))
             }
         }
     }

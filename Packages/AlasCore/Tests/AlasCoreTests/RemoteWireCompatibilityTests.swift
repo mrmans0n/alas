@@ -105,6 +105,17 @@ import Testing
         #expect(RemoteGitRequest.pullRequest(replying: 4, in: found) == nil)
     }
 
+    @Test func phoneReadsWhatACommitMessageIsSuggestedFrom() throws {
+        let request = RemoteGitRequest.commitMessageInput(id: 3, projectID: "p", path: "/r").json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: request)
+            == HostClientMessage(id: 3, request: .commitMessageInput(worktree: WorktreeRef(projectID: "p", path: "/r"))))
+        let input = CommitMessageSuggestionInput(stat: " a | 1 +", diff: "diff --git a/a b/a", branch: nil,
+                                                 ticketTitle: "Login", recentSubjects: ["fix: x"])
+        let reply = OpaqueHostMessage(json: try JSONEncoder().encode(
+            HostServerMessage.response(id: 3, result: .commitMessageInput(input: input))))
+        #expect(RemoteGitRequest.commitMessageInput(in: reply) == input)
+    }
+
     @Test func phoneRunsTheMacsScripts() throws {
         let ref = WorktreeRef(projectID: "p", path: "/r")
         let decode = { (m: OpaqueHostMessage) in try JSONDecoder().decode(HostClientMessage.self, from: m.json).request }
@@ -128,6 +139,52 @@ import Testing
             return
         }
         #expect(refused.message == "Approve the hook first.")
+        #expect(RemoteGitRequest.startedRunID(in: try reply(.runStart(start: .started(runID: "run-42")))) == "run-42")
+    }
+
+    @Test(arguments: [
+        (RunOutcome.succeeded, Int32?.some(0)),
+        (.stopped, nil),
+        (.unknown, nil),
+    ])
+    func phoneRecoversARunsOutcomeAndResumesAfterTheSnapshot(outcome: RunOutcome, exitCode: Int32?) throws {
+        let run = RunRecord(
+            id: "run-42", scriptKey: "repo:build.sh", scriptName: "Build", worktreeID: "w", branch: "main",
+            target: RunExecutionTarget(host: nil, workingDirectory: "/r"), status: .finished(outcome),
+            startedAt: .now, sessionID: "terminal-42")
+        let cursor = HostCursor(generation: UUID(), sequence: 7)
+        let snapshot = HostSnapshot(cursor: cursor, projects: [], worktrees: [], workspaceCheckouts: [], runs: [run], sessions: [])
+        let message = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(
+            id: 5, result: .snapshot(snapshot: snapshot))))
+        guard case .snapshot(id: 5, let phoneCursor, let runs) = RemoteRunFeed.update(in: message) else {
+            Issue.record("the phone missed the run snapshot")
+            return
+        }
+        let observed = try #require(runs.first)
+        #expect(observed.status == .finished(exitCode: exitCode))
+        #expect(observed.visibleConsoleID == nil)
+        let follow = try JSONDecoder().decode(HostClientMessage.self, from: RemoteRunFeed.subscribe(id: 6, after: phoneCursor).json)
+        #expect(follow == HostClientMessage(id: 6, request: .subscribe(after: cursor)))
+    }
+
+    @Test(arguments: [false, true])
+    func phoneReadsOnlyTheVisibleConsoleAndTheActualExitStatus(hidden: Bool) throws {
+        let run = RunRecord(
+            id: "run-42", scriptKey: "repo:build.sh", scriptName: "Build", worktreeID: "w", branch: "main",
+            target: RunExecutionTarget(host: nil, workingDirectory: "/r"), status: .finished(.failed(exitCode: 17)),
+            startedAt: .now, sessionID: "terminal-42", consoleIsHidden: hidden)
+        let cursor = HostCursor(generation: UUID(), sequence: 7)
+        let message = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.events(
+            events: [.runChanged(run), .runRemoved(id: "older-run")], cursor: cursor)))
+        guard case .events(let changed, let removed, let resync) = RemoteRunFeed.update(in: message) else {
+            Issue.record("the phone missed the run event")
+            return
+        }
+        let observed = try #require(changed.first)
+        #expect(observed.id == "run-42")
+        #expect(observed.visibleConsoleID == (hidden ? nil : "terminal-42"))
+        #expect(observed.status == .finished(exitCode: 17))
+        #expect(removed == ["older-run"] && !resync)
     }
 
     @Test func previewLinkMatchesOnlyRunningLocalEndpointsInItsWorktree() throws {
@@ -440,6 +497,8 @@ enum RemoteWireSamples {
                 subagent: .init(id: "c2", name: "Explorer", task: "Look around", state: "failed", lastError: "boom")),
         ]),
         .subagentTranscript(sessionId: "s1", subagentId: "gone", found: false, state: nil, messages: []),
+        .nextPromptSuggestion(sessionId: "s1", text: "Run the tests"),
+        .nextPromptSuggestion(sessionId: "s1", text: nil),
     ]
 
     static let clientMessages: [RemoteClientMessage] = [
@@ -459,5 +518,6 @@ enum RemoteWireSamples {
         .host(HostClientMessage(id: 5, request: .listSessions)),
         .readToolTerminal(sessionId: "s1", terminalId: "t1"),
         .readSubagent(sessionId: "s1", subagentId: "c1"),
+        .suggestNextPrompt(sessionId: "s1"),
     ]
 }

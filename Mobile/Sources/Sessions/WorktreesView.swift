@@ -313,7 +313,8 @@ struct WorktreesView: View {
                         Section {
                             ForEach(RemoteSessionDirectory.attentionFirst(RemoteSessionDirectory.sorted(section.worktrees, by: model.sort))) { entry in
                                 WorktreeRow(entry: entry,
-                                            isSelected: selectedSessionID(in: entry, on: group.host) != nil,
+                                            selectedSessionId: selectedSessionID(in: entry, on: group.host),
+                                            showsAllSessions: !query.trimmingCharacters(in: .whitespaces).isEmpty,
                                             caption: { WorktreeRow.delegationCaption($0, in: group.host) }) { session in
                                     guard let target = group.host.route(for: session.id) else { return }
                                     open(SessionRoute(hostID: target.hostID, sessionId: target.sessionId))
@@ -343,7 +344,8 @@ struct WorktreesView: View {
                         let host = hosts[row.hostID]
                         WorktreeRow(entry: row.worktree,
                                     machine: spansMachines ? row.hostName : nil,
-                                    isSelected: host.flatMap { selectedSessionID(in: row.worktree, on: $0) } != nil,
+                                    selectedSessionId: host.flatMap { selectedSessionID(in: row.worktree, on: $0) },
+                                    showsAllSessions: !query.trimmingCharacters(in: .whitespaces).isEmpty,
                                     caption: { WorktreeRow.delegationCaption($0, in: host) }) { session in
                             guard let target = host?.route(for: session.id) else { return }
                             open(SessionRoute(hostID: target.hostID, sessionId: target.sessionId))

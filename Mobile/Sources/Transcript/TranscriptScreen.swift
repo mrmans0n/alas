@@ -33,6 +33,9 @@ struct TranscriptScreen: View {
     /// The worktree whose terminals are pushed from this screen.
     @State private var terminalsWorktree: String?
     @State private var preview: RunPreviewSession?
+    @State private var runTerminal: PeerConsoleSummary?
+    /// Only the latest Run or Restart from this screen may push a terminal.
+    @State private var runNavigation: UUID?
     /// The subagent whose transcript is pushed from this screen; it reads through this screen's session.
     @State private var openedSubagent: RemoteWireMessage.Subagent?
     /// The delegated child, or the delegating parent, pushed from this screen.
@@ -50,6 +53,12 @@ struct TranscriptScreen: View {
         // with it.
         .navigationDestination(item: $terminalsWorktree) { worktreeId in
             TerminalsList(hub: registry.hub, hostID: hostID, worktreeId: worktreeId)
+        }
+        .navigationDestination(isPresented: Binding(
+            get: { runTerminal != nil }, set: { if !$0 { runTerminal = nil } })) {
+            if let runTerminal {
+                TerminalScreen(hub: registry.hub, hostID: hostID, console: runTerminal)
+            }
         }
         .navigationDestination(isPresented: Binding(
             get: { openedSubagent != nil }, set: { if !$0 { openedSubagent = nil } })) {
@@ -70,14 +79,15 @@ struct TranscriptScreen: View {
         }
         .onDisappear {
             visible = false
+            runNavigation = nil
             // A view pushed from this screen (a diff, a file) covers it and fires this too; keep
             // the session and workspace alive until the screen itself leaves the stack.
             // Checked a turn later so a pushed view popped along with this screen has cleared
             // its state first (DiffView's own onDisappear), and so a screen that came straight
             // back keeps what it holds.
             Task { @MainActor in
-                if visible || terminalsWorktree != nil || openedSubagent != nil || delegated != nil || preview != nil
-                    || workspace?.hasPushedChild(screenID) == true { return }
+                if visible || terminalsWorktree != nil || runTerminal != nil || openedSubagent != nil || delegated != nil
+                    || preview != nil || workspace?.hasPushedChild(screenID) == true { return }
                 held = nil
                 workspaceToken = nil
             }
@@ -243,8 +253,6 @@ struct TranscriptScreen: View {
                     }
                 }
                 if workspace.canRun, !workspace.runScripts.isEmpty {
-                    // ponytail: no run state, since the host only pushes it as events; a run's output
-                    // shows in its console under Terminals.
                     ToolbarItem(placement: .primaryAction) {
                         Menu("Run", systemImage: "play") {
                             ForEach(workspace.runScripts, id: \.key) { script in
@@ -347,7 +355,15 @@ struct TranscriptScreen: View {
     }
 
     private func run(_ workspace: SessionWorkspace, _ action: RemoteRunAction, _ script: RemoteRunScript) {
-        Task { if let error = await workspace.run(action, script) { actionError = error } }
+        let navigation = UUID()
+        runNavigation = navigation
+        Task {
+            let error = await workspace.run(action, script) { console in
+                guard visible, runNavigation == navigation else { return }
+                runTerminal = console
+            }
+            if let error { actionError = error }
+        }
     }
 
     /// Sends the removal; a refusal the user may overrule asks again, any other shows.
@@ -392,10 +408,13 @@ private struct TranscriptContent: View {
     let openSubagent: (RemoteWireMessage.Subagent) -> Void
 
     var body: some View {
-        TranscriptCollectionView(
-            items: session.items, expanded: $session.expanded, canLoadOlder: session.canLoadOlder,
-            loadOlder: session.loadOlder, image: session.image(for:), session: session,
-            sendCount: session.sendCount, openSubagent: openSubagent)
+        // Rows scroll on under the glass tab picker and composer.
+        ScrollsUnderBars { insets in
+            TranscriptCollectionView(
+                items: session.items, expanded: $session.expanded, canLoadOlder: session.canLoadOlder,
+                loadOlder: session.loadOlder, image: session.image(for:), session: session,
+                sendCount: session.sendCount, openSubagent: openSubagent, insets: insets)
+        }
         .overlay {
             if session.items.isEmpty, !session.hasEnded {
                 if session.hasSnapshot {

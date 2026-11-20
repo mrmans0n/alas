@@ -24,6 +24,9 @@ public final class AlasHost {
     /// Test hook that replaces the session step of a Remote client's
     /// worktree-and-session creation.
     @_spi(Testing) public var remoteSessionCreator: (@MainActor (RemoteSessionCreation) async -> RemoteCreateSessionResult)?
+    /// Suggests a session's next prompt for a Remote client. The app installs
+    /// it: the suggestions run on its local model and settings.
+    public var nextPromptSuggester: (@MainActor (_ sessionID: String) async -> String?)?
 
     public init(core: AlasCoreContext) {
         self.core = core

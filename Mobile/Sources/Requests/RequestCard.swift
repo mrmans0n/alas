@@ -116,6 +116,54 @@ struct CardButton: View {
     }
 }
 
+/// Request prose capped to a few lines, with a "Read more" sheet holding all of it when the
+/// card (floating above the composer, or the line cap) cuts it short.
+struct ReadMoreText: View {
+    let text: String
+    let title: String
+    var lineLimit = 6
+    @State private var shownHeight: CGFloat = 0
+    @State private var fullHeight: CGFloat = 0
+    @State private var reading = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(text)
+                .lineLimit(lineLimit)
+                .onGeometryChange(for: CGFloat.self, of: \.size.height) { shownHeight = $0 }
+                // The same text at its natural height, to tell whether the shown one is cut.
+                .background(alignment: .topLeading) {
+                    Text(text)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .hidden()
+                        .onGeometryChange(for: CGFloat.self, of: \.size.height) { fullHeight = $0 }
+                }
+            if fullHeight > shownHeight + 1 {
+                Button("Read more") { reading = true }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .buttonStyle(.plain)
+            }
+        }
+        .sheet(isPresented: $reading) {
+            NavigationStack {
+                ScrollView {
+                    AgentMarkdown(id: "read-more-\(text.hashValue)", text: text)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                }
+                .navigationTitle(title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { reading = false } }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+    }
+}
+
 // MARK: Permission
 
 private struct PermissionCard: View {
@@ -175,7 +223,8 @@ private struct QuestionCard: View {
                    title: payload.title ?? (payload.questions.count == 1 ? "The agent has a question" : "The agent has questions")) {
             ForEach(payload.questions, id: \.id) { question in
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(question.prompt).font(.subheadline.weight(.semibold))
+                    ReadMoreText(text: question.prompt, title: payload.title ?? "Question")
+                        .font(.subheadline.weight(.semibold))
                     ForEach(question.options, id: \.id) { option in
                         optionRow(question, option)
                     }
@@ -301,7 +350,8 @@ private struct ElicitationCard: View {
 
     var body: some View {
         CardChrome(icon: "text.badge.checkmark", tint: .teal, kind: "Request", title: payload.title ?? "The agent needs input") {
-            Text(payload.message).font(.subheadline).foregroundStyle(.secondary)
+            ReadMoreText(text: payload.message, title: payload.title ?? "Request")
+                .font(.subheadline).foregroundStyle(.secondary)
             if payload.mode == "url" {
                 if let url = webURL {
                     Label(url.absoluteString, systemImage: "globe")

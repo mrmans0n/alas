@@ -18,6 +18,8 @@ struct ComposerBar: View {
 
     private var config: RemoteSessionConfig? { session.config }
     private var text: String { session.draft.text }
+    /// The host's suggestion, while the composer is empty.
+    private var suggestion: String? { text.isEmpty && session.draft.images.isEmpty ? session.nextPromptSuggestion : nil }
     private var hasContent: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !session.draft.images.isEmpty
     }
@@ -83,7 +85,8 @@ struct ComposerBar: View {
             if !session.draft.images.isEmpty { tiles }
             ZStack(alignment: .topLeading) {
                 if text.isEmpty {
-                    Text("Message").foregroundStyle(.tertiary).padding(.horizontal, 4).padding(.vertical, 8)
+                    Text(suggestion ?? "Message").foregroundStyle(.tertiary).lineLimit(4)
+                        .padding(.horizontal, 4).padding(.vertical, 8)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
@@ -96,6 +99,13 @@ struct ComposerBar: View {
                 if config?.acceptsImages == true { attachButton }
                 chips
                 QueueBadge(session: session, open: $queueOpen)
+                if let suggestion {
+                    Button("Use suggestion", systemImage: "text.insert") { session.acceptNextPromptSuggestion() }
+                        .font(.footnote.weight(.medium))
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .accessibilityValue(suggestion)
+                }
                 Spacer(minLength: 0)
                 if let usage = config?.usage, usage.context != nil || !usage.lastTurn.isEmpty || !usage.cumulative.isEmpty {
                     UsageRing(usage: usage)

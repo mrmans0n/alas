@@ -506,6 +506,17 @@ public final class RemoteSessionGateway {
             } else {
                 send(.subagentTranscript(sessionId: id, subagentId: subagentId, found: false, state: nil, messages: []))
             }
+        case .suggestNextPrompt(let id):
+            // An agent's prediction can take a minute. The connection runs its
+            // messages in order, so answering here would hold up the client's
+            // next prompt; answer from a task of its own instead. Not
+            // de-duplicated: a client asks once per finished turn, and a newer
+            // turn's request must run even while an older one's does.
+            let suggest = hostCalls.nextPromptSuggestion
+            Task { [weak self] in
+                let text = await suggest(id)
+                self?.send(.nextPromptSuggestion(sessionId: id, text: text))
+            }
         case .readFile(let id, let path):
             let key = "readFile\u{0}\(id)\u{0}\(path)"
             guard inFlightFileRequests.insert(key).inserted else { return }

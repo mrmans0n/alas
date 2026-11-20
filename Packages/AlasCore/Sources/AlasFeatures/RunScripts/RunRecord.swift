@@ -75,6 +75,8 @@ public struct RunRecord: Codable, Identifiable, Equatable, Sendable {
     public var finishedAt: Date?
     /// Terminal leaf hosting the run, once one exists.
     public var sessionID: String?
+    /// Whether the launch requested a hidden console. Nil in records from older hosts.
+    public var consoleIsHidden: Bool?
     /// `RunScriptFailure.id` holding the captured output of a failed run.
     public var failureID: String?
     public var portConflict: RunPortConflict?
@@ -92,7 +94,8 @@ public struct RunRecord: Codable, Identifiable, Equatable, Sendable {
         finishedAt: Date? = nil,
         sessionID: String? = nil,
         failureID: String? = nil,
-        portConflict: RunPortConflict? = nil
+        portConflict: RunPortConflict? = nil,
+        consoleIsHidden: Bool? = nil
     ) {
         self.id = id
         self.scriptKey = scriptKey
@@ -104,6 +107,7 @@ public struct RunRecord: Codable, Identifiable, Equatable, Sendable {
         self.status = status
         self.startedAt = startedAt
         self.finishedAt = finishedAt
+        self.consoleIsHidden = consoleIsHidden
         self.sessionID = sessionID
         self.failureID = failureID
         self.portConflict = portConflict

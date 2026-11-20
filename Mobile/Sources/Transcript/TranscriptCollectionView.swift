@@ -18,11 +18,15 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
     var openSubagent: (RemoteWireMessage.Subagent) -> Void = { _ in }
     /// False for a read-only transcript, such as a subagent's: its rows offer no answers or navigation.
     var interactive = true
+    /// The bars this view scrolls under, when it extends past the safe area: SwiftUI does not
+    /// pass a `safeAreaInset` on to UIKit, so the scroller would rest its last rows beneath them.
+    var insets: EdgeInsets?
 
     init(items: [TranscriptItem], expanded: Binding<Set<String>>, canLoadOlder: Bool,
          loadOlder: @escaping () -> Void, image: @escaping (String) -> UIImage? = { _ in nil },
          session: TranscriptSession? = nil, sendCount: Int = 0, onFirstLayout: @escaping () -> Void = {},
-         openSubagent: @escaping (RemoteWireMessage.Subagent) -> Void = { _ in }, interactive: Bool = true)
+         openSubagent: @escaping (RemoteWireMessage.Subagent) -> Void = { _ in }, interactive: Bool = true,
+         insets: EdgeInsets? = nil)
     {
         self.items = items
         _expanded = expanded
@@ -34,6 +38,7 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
         self.onFirstLayout = onFirstLayout
         self.openSubagent = openSubagent
         self.interactive = interactive
+        self.insets = insets
     }
 
     func makeUIViewController(context: Context) -> TranscriptCollectionController {
@@ -49,7 +54,8 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
     private func input(_ context: Context) -> TranscriptCollectionController.Input {
         .init(items: items, expanded: $expanded, canLoadOlder: canLoadOlder, loadOlder: loadOlder,
               image: image, session: session, sendCount: sendCount, onFirstLayout: onFirstLayout,
-              openSubagent: openSubagent, interactive: interactive, openURL: context.environment.openURL)
+              openSubagent: openSubagent, interactive: interactive, insets: insets,
+              openURL: context.environment.openURL)
     }
 }
 
@@ -65,6 +71,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         var onFirstLayout: () -> Void
         var openSubagent: (RemoteWireMessage.Subagent) -> Void
         var interactive: Bool
+        var insets: EdgeInsets?
         var openURL: OpenURLAction
     }
 
@@ -163,6 +170,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
     /// compensation lands in the same layout pass as the change; the later SwiftUI update then
     /// finds nothing to do. Only items that changed are reconfigured.
     func sync() {
+        applyInsets()
         let items = input.items
         let expanded = input.expanded.wrappedValue
         let newIDs = items.map(\.id)
@@ -239,6 +247,18 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         collectionView.layoutIfNeeded()
         // A prepend lands mid-scroll; holding it past this pass would fight the reader's finger.
         if prepended { anchor = nil }
+    }
+
+    /// Explicit insets replace UIKit's safe-area adjustment. A reader at the tail stays there
+    /// when they change, so a composer that grows or a keyboard that rises never covers the end.
+    private func applyInsets() {
+        guard let insets = input.insets else { return }
+        let inset = UIEdgeInsets(top: insets.top, left: 0, bottom: insets.bottom, right: 0)
+        guard collectionView.contentInset != inset else { return }
+        collectionView.contentInsetAdjustmentBehavior = .never
+        collectionView.contentInset = inset
+        collectionView.verticalScrollIndicatorInsets = inset
+        if pinned, followsTail, anchor == nil { scrollToBottom() }
     }
 
     /// A part of a row kept in `expanded` beside the rows, such as a diff showing all its lines.
@@ -321,6 +341,26 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
             let target = max(-collectionView.adjustedContentInset.top, collectionView.contentOffset.y + distanceFromBottom)
             if abs(collectionView.contentOffset.y - target) < 0.5 { return }
             collectionView.contentOffset.y = target
+        }
+    }
+}
+
+/// Lays a scroller out under the bars around it (a tab picker, a composer, the navigation bar),
+/// handing it the height they cover so its first and last rows can still rest clear of them.
+/// Measured as the gap between the safe frame and the full one: SwiftUI hands a UIKit view only
+/// the device's own safe area, never what a `safeAreaInset` adds.
+struct ScrollsUnderBars<Content: View>: View {
+    @ViewBuilder let content: (EdgeInsets) -> Content
+    @State private var safe = CGRect.zero
+    @State private var full = CGRect.zero
+
+    var body: some View {
+        ZStack {
+            Color.clear.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { safe = $0 }
+            content(EdgeInsets(top: max(0, safe.minY - full.minY), leading: 0,
+                               bottom: max(0, full.maxY - safe.maxY), trailing: 0))
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { full = $0 }
+                .ignoresSafeArea(edges: .vertical)
         }
     }
 }
