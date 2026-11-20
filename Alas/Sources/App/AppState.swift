@@ -235,9 +235,10 @@ final class AppState {
     /// Each live session's last completed turn, which a Remote client's
     /// suggestion is for.
     @ObservationIgnored var nextPromptCompletedTurns: [String: NextPromptCompletedTurn] = [:]
-    /// The suggestion a Remote client got for a session's turn, so asking
-    /// again for the same turn does not run the model again.
-    @ObservationIgnored var remoteNextPromptSuggestions: [String: (turn: NextPromptCompletedTurn, text: String)] = [:]
+    /// The suggestion a Remote client got for a session, by the request it
+    /// answered, so asking again with nothing changed does not run the model
+    /// again, and a settings or model change asks anew.
+    @ObservationIgnored var remoteNextPromptSuggestions: [String: (id: NextPromptRequestID, text: String)] = [:]
     var config: AppConfig
     var themeStore: ThemeStore
     /// The headless core: projects, worktrees and session managers.

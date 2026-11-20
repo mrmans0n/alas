@@ -329,15 +329,19 @@ struct NextPromptSettingsTests {
     }
 
     /// A Remote client gets the suggestion without this Mac's composer, even
-    /// when it asks before the turn is recorded, and none once the turn it was
-    /// for has moved on.
+    /// when it asks before the turn is recorded. Asking again reuses it until
+    /// the settings change, and none comes once the turn has moved on.
     @Test func remoteSuggestionAnswersOnlyTheLastCompletedTurn() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
+        let generations = Mutex(0)
         let inference = NextPromptInference(acquireLease: { try await fixture.store.acquireVerifiedLease() }, load: { _ in
-            { _ in #"{"suggestion":"Show an example."}"# }
+            { _ in
+                generations.withLock { $0 += 1 }
+                return #"{"suggestion":"Show an example."}"#
+            }
         })
         let state = makeState(fixture, SettingsStore(), inference: inference)
         await state.enableNextPromptSuggestions()
@@ -354,6 +358,11 @@ struct NextPromptSettingsTests {
         state.nextPromptCompleted(turn, owner: .worktree("w"))
 
         #expect(await early.value == "Show an example.")
+        #expect(await state.remoteNextPromptSuggestion(sessionID: session.id) { session } == "Show an example.")
+        #expect(generations.withLock { $0 } == 1)
+        state.nextPromptSettingsGeneration &+= 1
+        #expect(await state.remoteNextPromptSuggestion(sessionID: session.id) { session } == "Show an example.")
+        #expect(generations.withLock { $0 } == 2)
         session.transcript.appendMessage(.agent(id: UUID(), StreamingText("And builds a tree.")))
         #expect(await state.remoteNextPromptSuggestion(sessionID: session.id) { session } == nil)
         await state.shutdownLocalTextFeatures()

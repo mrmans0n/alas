@@ -248,7 +248,7 @@ extension AppState {
             return nextPromptSnapshot(session: session, turn: turn, environment: environment)
         }
         guard let current = snapshot() else { return nil }
-        if let cached = remoteNextPromptSuggestions[sessionID], cached.turn == turn { return cached.text }
+        if let cached = remoteNextPromptSuggestions[sessionID], cached.id == current.id { return cached.text }
         let engine = NextPromptSourceRouter(
             onDevice: nextPromptInference,
             agent: NextPromptAgentEngine { [weak self] id in self?.agentPrediction(for: id) }
@@ -267,7 +267,7 @@ extension AppState {
         }
         // The turn moved on while it ran: the suggestion answers an old one.
         guard let text, snapshot()?.id == current.id else { return nil }
-        remoteNextPromptSuggestions[sessionID] = (turn, text)
+        remoteNextPromptSuggestions[sessionID] = (current.id, text)
         return text
     }
 
