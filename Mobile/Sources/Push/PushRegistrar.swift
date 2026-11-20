@@ -39,7 +39,7 @@ final class PushRegistrar {
     init(hub: HostHub) {
         self.hub = hub
         relayToken = defaults.string(forKey: Self.tokenKey)
-        kinds = (defaults.stringArray(forKey: Self.kindsKey)).map(Set.init) ?? RemotePushKind.defaults
+        kinds = (defaults.stringArray(forKey: Self.kindsKey)).map(Set.init) ?? RemotePushKind.defaults.union([RemotePushKind.inbox])
     }
 
     /// Asks for permission and registers, once a host is paired. Call again
@@ -49,6 +49,9 @@ final class PushRegistrar {
         let center = UNUserNotificationCenter.current()
         center.setNotificationCategories([
             UNNotificationCategory(identifier: "attention", actions: [], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "inbox", actions: [
+                UNNotificationAction(identifier: "dismiss", title: "Dismiss", options: []),
+            ], intentIdentifiers: []),
             UNNotificationCategory(identifier: "permission", actions: [
                 UNNotificationAction(identifier: "allow", title: "Allow", options: [.authenticationRequired]),
                 UNNotificationAction(identifier: "deny", title: "Deny", options: [.destructive, .authenticationRequired]),

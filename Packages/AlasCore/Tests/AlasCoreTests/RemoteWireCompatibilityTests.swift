@@ -441,11 +441,11 @@ import Testing
         (nil, ["permission", "input"]),
         ([], []),
         // Unknown kinds are dropped.
-        (["finished", "everything"], ["finished"]),
+        (["finished", "inbox", "everything"], ["finished", "inbox"]),
     ] as [([String]?, Set<String>)])
     func relayWantsTheKindsThePhoneNamed(kinds: [String]?, wanted: Set<String>) throws {
         let relay = try #require(RemotePushRelay.validated(url: "https://r.example/push", token: "t", kinds: kinds))
-        #expect(Set(["permission", "input", "finished"].filter(relay.wants)) == wanted)
+        #expect(Set(["permission", "input", "finished", "inbox"].filter(relay.wants)) == wanted)
     }
 
     @Test func deviceWithoutPushRelayDecodesNil() throws {
