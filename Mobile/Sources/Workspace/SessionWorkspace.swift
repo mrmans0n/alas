@@ -310,6 +310,54 @@ final class SessionWorkspace {
         return RemoteGitRequest.commitMessageInput(in: reply)
     }
 
+    // MARK: Reviews
+
+    /// The Mac's draft reviews of this worktree, its comments readable and changeable from here.
+    var canReview: Bool {
+        gitTarget != nil && (hub.supports(HostProtocolCapability.reviewsPhoneV1, on: hostID)
+            || hub.supports(HostProtocolCapability.reviewsV1, on: hostID))
+    }
+
+    func reviews() async -> Result<[RemoteReviewSummary], RemoteGitFailure> {
+        guard let target = gitTarget else { return .failure(RemoteGitFailure("This worktree's reviews can't be read from here.")) }
+        return await hostReply { RemoteReviewRequest.list(id: $0, projectID: target.projectID, path: target.worktree.path) }
+            .flatMap { Self.readable(RemoteReviewRequest.reviews(in: $0)) }
+    }
+
+    func review(_ sessionID: String) async -> Result<RemoteReview, RemoteGitFailure> {
+        guard let target = gitTarget else { return .failure(RemoteGitFailure("This worktree's reviews can't be read from here.")) }
+        return await hostReply {
+            RemoteReviewRequest.read(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID)
+        }
+        .flatMap { Self.readable(RemoteReviewRequest.review(in: $0)) }
+    }
+
+    private static func readable<T>(_ value: T?) -> Result<T, RemoteGitFailure> {
+        value.map(Result.success) ?? .failure(RemoteGitFailure("The machine's answer couldn't be read."))
+    }
+
+    /// Returns the host's refusal, worded for the user, or nil once the comment changed.
+    func changeReview(_ sessionID: String, _ mutation: RemoteReviewMutation) async -> String? {
+        guard let target = gitTarget else { return "This worktree's reviews can't be changed from here." }
+        return await hostRequest {
+            RemoteReviewRequest.mutate(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID, mutation)
+        }
+    }
+
+    /// Whether the open diff takes comments: a working-tree one, which the local-changes review covers.
+    var canCommentOnDiff: Bool { canReview && diff?.key.sha == nil && diff?.key.stage != nil }
+
+    /// Comments on the open working-tree diff, in the worktree's local-changes review, as the Mac's
+    /// Review workspace files it. Returns the host's refusal, or nil.
+    func commentOnDiff(_ anchor: RemoteReviewAnchor, body: String) async -> String? {
+        guard let key = diff?.key, key.sha == nil, let stage = key.stage, let target = gitTarget,
+              let worktreeID = hub.sessions(of: hostID).first(where: { $0.id == sessionId })?.worktreeId
+        else { return "This diff can't be commented on from here." }
+        let session = RemoteReviewRequest.localChangesSessionID(worktreeID: worktreeID, worktreePath: target.worktree.path)
+        return await changeReview(session, .add(fileID: RemoteReviewFileID(namespace: stage, path: key.path), path: key.path,
+                                                anchor: anchor, body: body))
+    }
+
     // MARK: Lifecycle
 
     /// The branch the session's worktree is on, when the host lets the phone rename it.

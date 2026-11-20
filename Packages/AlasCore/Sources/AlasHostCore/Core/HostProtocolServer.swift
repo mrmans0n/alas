@@ -705,9 +705,10 @@ public final class HostProtocolConnection {
         try servedWorktree(ref, capability: HostProtocolCapability.worktreesCheckpointsV1)
     }
 
-    /// A visible worktree, on a host that serves reviews.
+    /// A visible worktree, on a host that serves reviews. An app host still
+    /// serves the user's own phone its draft reviews.
     private func reviewWorktree(_ ref: WorktreeRef) throws -> Worktree {
-        guard host.servedCapabilities.contains(HostProtocolCapability.reviewsV1) else {
+        guard host.servedCapabilities.contains(HostProtocolCapability.reviewsV1) || callerIsPhone else {
             throw HostError.invalidRequest(reason: "This host does not serve reviews.")
         }
         return try visibleWorktree(ref)

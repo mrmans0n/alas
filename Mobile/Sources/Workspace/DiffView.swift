@@ -7,6 +7,13 @@ struct DiffView: View {
     let workspace: SessionWorkspace
     @State private var discarding: (index: Int, hunk: RemoteDiffHunk)?
     @State private var error: String?
+    /// What a comment being written will sit on.
+    @State private var commenting: CommentTarget?
+
+    private struct CommentTarget: Identifiable {
+        let id = UUID()
+        let anchor: RemoteReviewAnchor
+    }
 
     var body: some View {
         Group {
@@ -14,7 +21,8 @@ struct DiffView: View {
             case .loaded(let reply):
                 DiffContent(reply: reply, path: workspace.diff?.key.path ?? "",
                             actions: workspace.canChangeHunks ? hunkActions(workspace.diff?.key.stage) : [],
-                            busy: workspace.gitRunning != nil) { action, index, hunk in
+                            busy: workspace.gitRunning != nil,
+                            comment: workspace.canCommentOnDiff ? { commenting = CommentTarget(anchor: Self.anchor($0)) } : nil) { action, index, hunk in
                     if action == .discard { discarding = (index, hunk) } else { change(action, index, hunk) }
                 }
             case .failed(let message):
@@ -27,6 +35,18 @@ struct DiffView: View {
         .navigationSubtitle(workspace.diff.map { $0.key.sha.map { String($0.prefix(7)) } ?? $0.key.stage?.capitalized ?? "" } ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
+        .toolbar {
+            if workspace.canCommentOnDiff {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Comment on File", systemImage: "plus.bubble") { commenting = CommentTarget(anchor: .file) }
+                }
+            }
+        }
+        .sheet(item: $commenting) { target in
+            CommentSheet(title: target.anchor == .file ? "Comment on File" : "Comment on Hunk", text: "") { body in
+                Task { error = await workspace.commentOnDiff(target.anchor, body: body) }
+            }
+        }
         .confirmationDialog("Discard this hunk?", isPresented: Binding { discarding != nil } set: { if !$0 { discarding = nil } },
                             titleVisibility: .visible, presenting: discarding) { held in
             Button("Discard", role: .destructive) { change(.discard, held.index, held.hunk) }
@@ -51,6 +71,16 @@ struct DiffView: View {
         }
     }
 
+    /// The hunk's changed lines on the side they were added, else removed, from; its context lines
+    /// when it changed none.
+    private static func anchor(_ hunk: RemoteDiffHunk) -> RemoteReviewAnchor {
+        let added = hunk.lines.filter { $0.kind == "add" }.compactMap(\.newNumber)
+        let removed = hunk.lines.filter { $0.kind == "delete" }.compactMap(\.oldNumber)
+        let (side, lines) = !added.isEmpty ? ("new", added) : !removed.isEmpty ? ("old", removed) : ("new", hunk.lines.compactMap(\.newNumber))
+        guard let first = lines.min(), let last = lines.max() else { return .file }
+        return .line(side: side, startLine: first, endLine: last)
+    }
+
     private func change(_ action: RemoteHunkAction, _ index: Int, _ hunk: RemoteDiffHunk) {
         Task { error = await workspace.changeHunk(action, index: index, hunk) }
     }
@@ -62,6 +92,8 @@ private struct DiffContent: View {
     /// What each hunk's menu offers; empty for none.
     let actions: [RemoteHunkAction]
     let busy: Bool
+    /// Comments on a hunk; nil when this diff takes no comments.
+    let comment: ((RemoteDiffHunk) -> Void)?
     let act: (RemoteHunkAction, Int, RemoteDiffHunk) -> Void
     /// Each line's syntax spans, counted across hunks; empty until tokenized, or without a grammar.
     @State private var spans: [[HighlightSpan]] = []
@@ -92,7 +124,7 @@ private struct DiffContent: View {
                         switch block {
                         case .header(_, let index, let hunk):
                             HStack(spacing: 8) {
-                                if !actions.isEmpty { menu(index, hunk) }
+                                if !actions.isEmpty || comment != nil { menu(index, hunk) }
                                 Text(hunk.header).foregroundStyle(.secondary).fixedSize(horizontal: true, vertical: false)
                             }
                             .padding(.vertical, 6).padding(.horizontal, 8)
@@ -126,6 +158,7 @@ private struct DiffContent: View {
 
     private func menu(_ index: Int, _ hunk: RemoteDiffHunk) -> some View {
         Menu {
+            if let comment { Button("Comment on Hunk…", systemImage: "plus.bubble") { comment(hunk) } }
             ForEach(actions, id: \.self) { action in
                 switch action {
                 case .stage: Button("Stage Hunk", systemImage: "plus.circle") { act(.stage, index, hunk) }
