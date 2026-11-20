@@ -74,11 +74,22 @@ public struct RemoteComposerDraft: Equatable, Sendable {
     }
 
     /// `other` after this draft, on a new line when both have content: how a
-    /// refused prompt comes back ahead of what was typed since.
+    /// refused prompt comes back ahead of what was typed since. A paste in
+    /// `other` whose number this draft already uses takes the next free one,
+    /// so every paste keeps its own chip when the result is sent.
     public func appending(_ other: RemoteComposerDraft) -> RemoteComposerDraft {
         guard !isEmpty else { return other }
         guard !other.isEmpty else { return self }
-        return RemoteComposerDraft(segments: segments + [.text("\n")] + other.segments).merged
+        var used = pastedOrdinals
+        var next = (used.union(other.pastedOrdinals).max() ?? 0) + 1
+        let renumbered = other.segments.map { segment -> RemoteDraftSegment in
+            guard case .chip(.pasted(let ordinal, let text)) = segment else { return segment }
+            guard !used.insert(ordinal).inserted else { return segment }
+            defer { next += 1 }
+            used.insert(next)
+            return .chip(.pasted(ordinal: next, text: text))
+        }
+        return RemoteComposerDraft(segments: segments + [.text("\n")] + renumbered).merged
     }
 
     /// Adjacent text runs joined and empty ones dropped.

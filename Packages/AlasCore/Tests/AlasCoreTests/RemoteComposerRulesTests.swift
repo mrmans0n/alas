@@ -156,6 +156,15 @@ struct RemoteComposerRulesTests {
         #expect(draft.spelled(NSRange(location: 4, length: 5)) == "👍 @B.swift ")
     }
 
+    /// A refused prompt comes back ahead of a paste made since; both were `#1`, so the later one moves on.
+    @Test func appendingRenumbersAPasteWhoseNumberIsTaken() {
+        let refused = RemoteComposerDraft(segments: [.text("see "), .chip(.pasted(ordinal: 1, text: "a"))])
+        let typed = RemoteComposerDraft(segments: [.chip(.pasted(ordinal: 1, text: "b")), .chip(.pasted(ordinal: 2, text: "c"))])
+        let joined = refused.appending(typed)
+        #expect(joined.segments.map(Self.describe) == ["txt:see ", "pst:1", "txt:\n", "pst:3", "pst:2"])
+        #expect(Set(joined.pastedSpans.map(\.ordinal)).count == 3)
+    }
+
     private static func describe(_ segment: RemoteDraftSegment) -> String {
         switch segment {
         case .text(let text): "txt:" + text
