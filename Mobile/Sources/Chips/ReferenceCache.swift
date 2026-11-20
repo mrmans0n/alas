@@ -14,17 +14,54 @@ final class ReferenceCache {
     }
 
     private(set) var entries: [CodeHostReference: Entry] = [:]
+    /// Which ask each loading entry waits on, so an earlier ask's deadline
+    /// never expires a later one.
+    @ObservationIgnored private var pending: [CodeHostReference: Int] = [:]
+    @ObservationIgnored private var asks = 0
 
-    /// Asks `send` for the references not asked for yet; with no lookup
-    /// support they are marked unsupported instead.
+    /// What an unanswered lookup shows. The host leaves out a lookup it
+    /// didn't finish in time, so this marks it to be asked again.
+    static let noAnswer = CodeHostReferenceFailure.other("The host did not answer.")
+    /// Past the host's own 10 s lookup deadline, with room for the trip.
+    private static let answerDeadline = Duration.seconds(15)
+
+    /// Asks `send` for the references not asked for yet, or not answered;
+    /// with no lookup support they are marked unsupported instead.
     func ensure(_ references: [CodeHostReference], supported: Bool, send: ([String]) -> Void) {
-        let wanted = references.filter { entries[$0] == nil || entries[$0] == .unsupported && supported }
+        let wanted = references.filter { Self.needsAsking(entries[$0], supported: supported) }
         guard !wanted.isEmpty else { return }
-        for reference in wanted { entries[reference] = supported ? .loading : .unsupported }
-        if supported {
-            for batch in stride(from: 0, to: wanted.count, by: RemoteChipLimits.maxReferences) {
-                send(wanted[batch ..< min(batch + RemoteChipLimits.maxReferences, wanted.count)].map(\.spelling))
-            }
+        guard supported else {
+            for reference in wanted { entries[reference] = .unsupported }
+            return
+        }
+        asks += 1
+        let ask = asks
+        for reference in wanted {
+            entries[reference] = .loading
+            pending[reference] = ask
+        }
+        for batch in stride(from: 0, to: wanted.count, by: RemoteChipLimits.maxReferences) {
+            send(wanted[batch ..< min(batch + RemoteChipLimits.maxReferences, wanted.count)].map(\.spelling))
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.answerDeadline)
+            self?.expire(wanted, ask: ask)
+        }
+    }
+
+    private static func needsAsking(_ entry: Entry?, supported: Bool) -> Bool {
+        switch entry {
+        case nil: true
+        case .unsupported: supported
+        case .failed(let failure): failure == noAnswer
+        case .loading, .loaded: false
+        }
+    }
+
+    private func expire(_ references: [CodeHostReference], ask: Int) {
+        for reference in references where pending[reference] == ask {
+            pending[reference] = nil
+            if entries[reference] == .loading { entries[reference] = .failed(Self.noAnswer) }
         }
     }
 
@@ -33,8 +70,10 @@ final class ReferenceCache {
             guard let reference = CodeHostReference(spelling: answer.spelling) else { continue }
             if let summary = answer.summary {
                 entries[reference] = .loaded(summary)
+                pending[reference] = nil
             } else if let failure = answer.failure {
                 entries[reference] = .failed(failure)
+                pending[reference] = nil
             }
         }
     }
@@ -42,6 +81,7 @@ final class ReferenceCache {
     /// A reply never came (a reconnect dropped it): ask again next time.
     func forgetPending() {
         entries = entries.filter { $0.value != .loading }
+        pending = [:]
     }
 
     /// The loaded kind, or on GitLab the kind the sigil implies; nil draws gray.
