@@ -333,6 +333,20 @@ struct ACPMCPPromptPreambleTests {
         #expect(text.contains("computer_"))
     }
 
+    @Test("a tool group left out of the MCP list is pointed at alas tool call, and only that group")
+    func hiddenToolGroupsRouteThroughTheCLI() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInTools: .full, isDelegated: false, userServerNames: [], hiddenToolGroups: [.device, .vm]))
+        let line = { (prefix: String) in
+            try #require(text.split(separator: "\n").first { $0.hasPrefix(prefix) })
+        }
+        let route = "as MCP tools: run them with `alas tool call"
+        #expect(try line("Device tools").contains(route))
+        #expect(try line("In a worktree with a VM").contains("does not load vm_status and vm_run \(route)"))
+        #expect(try !line("Computer tools").contains(route))
+        #expect(try !line("Preview tools").contains(route))
+    }
+
     @Test("cli mode swaps MCP wording for alas CLI commands")
     func cliMode() throws {
         let text = try #require(ACPMCPPromptPreamble.text(

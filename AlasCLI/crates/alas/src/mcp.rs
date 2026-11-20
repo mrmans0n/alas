@@ -28,6 +28,11 @@ pub struct McpEnv {
     /// False when `ALAS_MCP_DEVICES=0`: the user hasn't let agents use iOS
     /// simulators, so `device_*` tools are hidden.
     pub devices: bool,
+    /// From `ALAS_MCP_HIDDEN_TOOL_GROUPS`: the tool groups the agent's
+    /// settings leave out of `tools/list`, as the name prefixes they share,
+    /// like `device_`. Their calls still work; the agent reaches them with
+    /// `alas tool call`.
+    pub hidden_tool_prefixes: Vec<String>,
     /// Set by `alas mcp --visual-only` or `--remote`: the backend of the
     /// remote-session relay, which lists and accepts only that relay's tools,
     /// whatever the other restrictions say.
@@ -120,6 +125,7 @@ impl Clone for McpEnv {
             workspace_only: self.workspace_only,
             headless: self.headless,
             devices: self.devices,
+            hidden_tool_prefixes: self.hidden_tool_prefixes.clone(),
             relay: self.relay,
             transport: self.transport,
         }
@@ -173,9 +179,50 @@ pub fn env_from(get: impl Fn(&str) -> Option<String>) -> Result<McpEnv, String> 
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
         devices: get("ALAS_MCP_DEVICES").is_none_or(|value| value != "0"),
+        hidden_tool_prefixes: hidden_tool_prefixes(get("ALAS_MCP_HIDDEN_TOOL_GROUPS").as_deref()),
         relay: None,
         transport: "stdio",
     })
+}
+
+/// The groups an agent's settings may hide, named like their tools' prefix.
+const HIDEABLE_TOOL_GROUPS: [&str; 4] = ["preview", "computer", "vm", "device"];
+
+/// Comma-separated group names to tool-name prefixes. Names this build does
+/// not know are ignored, so a newer app cannot break an older server.
+fn hidden_tool_prefixes(value: Option<&str>) -> Vec<String> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|group| HIDEABLE_TOOL_GROUPS.contains(group))
+        .map(|group| format!("{group}_"))
+        .collect()
+}
+
+/// `handle_line_with_parent` for a running server: its tool list also
+/// leaves out the hidden groups. Hiding only shortens what the agent loads,
+/// for harnesses that cap MCP tools, so calls to hidden tools still run.
+fn handle_env_line(
+    env: &McpEnv,
+    line: &str,
+    dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
+) -> Option<Value> {
+    let mut reply = handle_line_with_parent(
+        line,
+        &env.worktree_dir,
+        env.parent_session_id.as_deref(),
+        env.tool_scope(),
+        dispatch,
+    )?;
+    if let Some(tools) = reply.pointer_mut("/result/tools").and_then(Value::as_array_mut) {
+        tools.retain(|tool| {
+            tool["name"].as_str().is_none_or(|name| {
+                !env.hidden_tool_prefixes.iter().any(|prefix| name.starts_with(prefix.as_str()))
+            })
+        });
+    }
+    Some(reply)
 }
 
 /// Handle one raw input line. Returns the JSON-RPC reply to write, or None
@@ -3792,13 +3839,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                 }
             }
             Ok(None) => {
-                if let Some(reply) = handle_line_with_parent(
-                    &line,
-                    &env.worktree_dir,
-                    env.parent_session_id.as_deref(),
-                    env.tool_scope(),
-                    |cmd| dispatch(env, cmd),
-                ) {
+                if let Some(reply) = handle_env_line(env, &line, |cmd| dispatch(env, cmd)) {
                     let _ = reply_tx.send(reply);
                 }
             }
@@ -4183,13 +4224,7 @@ fn build_http_response(
         }
     }
 
-    match handle_line_with_parent(
-        &req.body,
-        &env.worktree_dir,
-        env.parent_session_id.as_deref(),
-        env.tool_scope(),
-        |cmd| dispatch(env, cmd),
-    ) {
+    match handle_env_line(env, &req.body, |cmd| dispatch(env, cmd)) {
         Some(reply) => http_response(200, "application/json", &reply.to_string()),
         // Notifications (e.g. notifications/initialized) get no JSON-RPC reply.
         None => http_response(202, "application/json", ""),
@@ -4201,7 +4236,7 @@ mod tests {
     use super::{
         CHILD_ONLY_TOOLS, HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, RelayScope, ToolScope,
         build_http_response, cancellation_command_for_message, command_for_tool, dispatch,
-        env_from, handle_line, handle_line_with_parent, http_response, initialize_result, is_peer_child,
+        env_from, handle_env_line, handle_line, handle_line_with_parent, http_response, initialize_result, is_peer_child,
         parse_http_request, register_pending_call, runs_on_worker, session_wait_timed_out,
         session_tool_definitions, tool_definitions_for_session, tool_result, tools_call_command, transport_error_result,
     };
@@ -4462,6 +4497,43 @@ mod tests {
             ]))
             .is_err()
         );
+    }
+
+    #[test]
+    fn hidden_tool_groups_leave_the_list_but_stay_callable() {
+        let env = env_from(env(&[
+            ("ALAS_SOCKET_PATH", "/tmp/s"),
+            ("ALAS_WORKTREE_DIR", "/wt"),
+            ("ALAS_SESSION_ID", "s1"),
+            ("ALAS_MCP_HIDDEN_TOOL_GROUPS", "device, vm,session,bogus"),
+        ]))
+        .unwrap();
+        let list = handle_env_line(&env, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#, |_| {
+            unreachable!()
+        })
+        .unwrap();
+        let names: Vec<&str> = list["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert!(!names.iter().any(|name| name.starts_with("device_") || name.starts_with("vm_")));
+        // Only hideable groups go: a core or unknown name hides nothing.
+        assert!(names.contains(&"session_list") && names.contains(&"computer_click"));
+
+        let mut dispatched = None;
+        let call = handle_env_line(
+            &env,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vm_status","arguments":{}}}"#,
+            |command| {
+                dispatched = Some(command.clone());
+                ok_dispatch(command)
+            },
+        )
+        .unwrap();
+        assert_eq!(dispatched, Some(Command::VmStatus { vm: None }));
+        assert_eq!(call["result"]["isError"], json!(false));
     }
 
     #[test]
@@ -4981,6 +5053,7 @@ mod tests {
                 workspace_only: true,
                 headless: false,
                 devices: true,
+                hidden_tool_prefixes: Vec::new(),
                 relay: Some(relay),
                 transport: "stdio",
             };
@@ -5449,6 +5522,7 @@ mod tests {
             workspace_only: false,
             headless: false,
             devices: true,
+            hidden_tool_prefixes: Vec::new(),
             relay: None,
             transport: "stdio",
         };
@@ -7172,6 +7246,7 @@ mod tests {
             workspace_only: false,
             headless: false,
             devices: true,
+            hidden_tool_prefixes: Vec::new(),
             relay: None,
             transport: "stdio",
         };

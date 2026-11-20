@@ -8583,7 +8583,8 @@ extension ACPSessionManager {
                     isPeerChild: preambleMode == .mcp
                         ? (builtInMCP?.isPeerChild == true)
                         : (cliParentSessionId.flatMap(ACPPeerParent.serverId(from:)) != nil),
-                    delegationPeerNames: delegationPeerNamesProvider()
+                    delegationPeerNames: delegationPeerNamesProvider(),
+                    hiddenToolGroups: preambleMode == .mcp ? (builtInMCP?.hiddenToolGroups ?? []) : []
                 )
                 if isWriter(for: sessionId) {
                     session.pendingMCPPreamble = preamble
