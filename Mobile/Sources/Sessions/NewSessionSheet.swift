@@ -186,7 +186,8 @@ struct NewSessionSheet: View {
             Section {
                 BranchNameField(text: $model.branch,
                                 placeholder: model.namesBranchFromFirstPrompt ? "Name from first prompt" : "New branch")
-                if let naming = model.branchNaming, naming.appliesRule {
+                // A name the first prompt picks always follows the rule, as on the Mac.
+                if let naming = model.branchNaming, naming.appliesRule, !model.namesBranchFromFirstPrompt {
                     Toggle(isOn: $model.useBranchNaming) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(naming.template == nil ? "Use branch prefix" : "Use branch template")

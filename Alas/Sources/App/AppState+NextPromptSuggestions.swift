@@ -229,6 +229,14 @@ extension AppState {
     }
 
     func remoteNextPromptSuggestion(sessionID: String, session liveSession: @MainActor () -> ACPSession?) async -> String? {
+        // The transcript goes idle, and the client asks, before the runner
+        // records the completed turn; wait briefly for the latest prompt's.
+        let recordDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !nextPromptShuttingDown, ContinuousClock.now < recordDeadline, let session = liveSession(),
+              session.nextPromptID > 0, nextPromptCompletedTurns[sessionID]?.promptID != session.nextPromptID - 1 {
+            // ponytail: polls instead of a per-session waiter; fine at one request per finished turn.
+            try? await Task.sleep(for: .milliseconds(100))
+        }
         guard !nextPromptShuttingDown, let turn = nextPromptCompletedTurns[sessionID] else { return nil }
         func snapshot() -> NextPromptEligibilitySnapshot? {
             guard let session = liveSession() else { return nil }

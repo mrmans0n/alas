@@ -106,10 +106,11 @@ extension AlasHost {
         // Clients send the typed name; the branch follows this Mac's naming
         // settings, as it does in its own New Worktree dialog.
         let naming = AlasCoreContext.remoteBranchNaming(for: project, settings: core.environment.configuration().worktrees)
-        let useNaming = request.useBranchNaming != false
         // No name: a temporary one the first prompt replaces, as the Mac's
-        // New Worktree dialog does.
+        // New Worktree dialog does. That rename always follows the naming
+        // rule, so the temporary name does too; the opt-out is for typed names.
         let namesBranchFromFirstPrompt = request.branch.isEmpty
+        let useNaming = namesBranchFromFirstPrompt || request.useBranchNaming != false
         var branch = naming.compose(name: request.branch, enabled: useNaming)
         if !namesBranchFromFirstPrompt {
             guard case .valid = GitNameValidator.validateBranchName(branch) else { return refused() }

@@ -328,8 +328,9 @@ struct NextPromptSettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
-    /// A Remote client gets the suggestion without this Mac's composer, and
-    /// none once the turn it was for has moved on.
+    /// A Remote client gets the suggestion without this Mac's composer, even
+    /// when it asks before the turn is recorded, and none once the turn it was
+    /// for has moved on.
     @Test func remoteSuggestionAnswersOnlyTheLastCompletedTurn() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
@@ -344,12 +345,15 @@ struct NextPromptSettingsTests {
         session.agentState = .ready
         let userID = session.recordUserPrompt(text: "Explain the parser.", attachments: [])
         session.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
-        state.nextPromptCompleted(NextPromptCompletedTurn(
+        let turn = NextPromptCompletedTurn(
             sessionID: session.id, incarnation: session.incarnation, promptID: session.allocatePromptID(),
             userMessageID: userID, transcriptRevision: session.transcript.conversationRevision
-        ), owner: .worktree("w"))
+        )
+        let early = Task { await state.remoteNextPromptSuggestion(sessionID: session.id) { session } }
+        await Task.yield()
+        state.nextPromptCompleted(turn, owner: .worktree("w"))
 
-        #expect(await state.remoteNextPromptSuggestion(sessionID: session.id) { session } == "Show an example.")
+        #expect(await early.value == "Show an example.")
         session.transcript.appendMessage(.agent(id: UUID(), StreamingText("And builds a tree.")))
         #expect(await state.remoteNextPromptSuggestion(sessionID: session.id) { session } == nil)
         await state.shutdownLocalTextFeatures()

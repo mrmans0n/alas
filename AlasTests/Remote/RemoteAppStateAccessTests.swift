@@ -1269,8 +1269,10 @@ struct RemoteAppStateAccessTests {
     }
 
     /// An empty `typed` asks the host for a temporary name, recorded as
-    /// pending so the first prompt renames it.
-    @Test(arguments: [(nil, "phone", "feature/phone"), (false, "phone", "phone"), (nil, "", "feature/")] as [(Bool?, String, String)])
+    /// pending so the first prompt renames it. Like that rename, it follows
+    /// the naming rule even when the client opts out.
+    @Test(arguments: [(nil, "phone", "feature/phone"), (false, "phone", "phone"), (nil, "", "feature/"), (false, "", "feature/")]
+          as [(Bool?, String, String)])
     func remoteSessionsProviderCreatesWorktreeSessionAndFocusesIt(useBranchNaming: Bool?, typed: String, expectedBranch: String) async throws {
         let repository = try await makeRemoteBranchesRepository()
         let worktreeRoot = FileManager.default.temporaryDirectory

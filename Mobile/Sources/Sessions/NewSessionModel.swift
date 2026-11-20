@@ -260,7 +260,7 @@ final class NewSessionModel {
         guard let projectId, let base, let agentId else { return }
         send(.createWorktreeSession(projectId: projectId, base: base, branch: branch, agentId: agentId,
                                     modelId: modelId, effortId: effortId, repoHook: consent,
-                                    useBranchNaming: branchNaming?.appliesRule == true && !useBranchNaming ? false : nil),
+                                    useBranchNaming: branchNaming?.appliesRule == true && !useBranchNaming && !branch.isEmpty ? false : nil),
              creating: true)
     }
 
