@@ -53,6 +53,7 @@
 		065F1A7FCF81FF29BAEF5A86 /* ScopeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D131C3F1E4BE68A850097A4 /* ScopeRow.swift */; };
 		06722BF4548E641F08942519 /* RunHistoryStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F65002F2380E8C73268D9B7 /* RunHistoryStoreTests.swift */; };
 		06AD46194E45984A1297D928 /* CommitHeaderViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E43F9F04AF6A6FF0A4D328F4 /* CommitHeaderViewTests.swift */; };
+		0710390C83B43DFC711B0DD5 /* CodeHostGlyphs.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB0D5153A4DB2948166E542C /* CodeHostGlyphs.swift */; };
 		07385C7266A0694AB7F4E872 /* AppStateSpacesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFDB90A7F9E58F4C1A258D23 /* AppStateSpacesTests.swift */; };
 		074B2BB17D428AE20AB482AA /* ACPThumbnailImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45952C734DFE7E7F02B047E7 /* ACPThumbnailImageCache.swift */; };
 		0789F98721389570E0C3F942 /* ACPTranscriptRowHostingPoolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4DF2130E463B27C55A72437 /* ACPTranscriptRowHostingPoolTests.swift */; };
@@ -3691,6 +3692,7 @@
 		DAEA85D97F821CFD2C4B1DF2 /* ProjectsManagerFileBookmarksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManagerFileBookmarksTests.swift; sourceTree = "<group>"; };
 		DAF210BB635C30114579701D /* AppState+UsageHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+UsageHistory.swift"; sourceTree = "<group>"; };
 		DB06768157EC73872B1CC677 /* WorkspaceCheckoutDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceCheckoutDetailView.swift; sourceTree = "<group>"; };
+		DB0D5153A4DB2948166E542C /* CodeHostGlyphs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeHostGlyphs.swift; sourceTree = "<group>"; };
 		DB1415E5F17DB2DF2038EE54 /* GitServiceStackCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceStackCommitTests.swift; sourceTree = "<group>"; };
 		DB3A201BB87075FB20E88FBC /* NewRunScriptDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewRunScriptDialog.swift; sourceTree = "<group>"; };
 		DB5A2BDAA7ABD74C42BC51F8 /* CommitDetailsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitDetailsTests.swift; sourceTree = "<group>"; };
@@ -7136,6 +7138,7 @@
 			isa = PBXGroup;
 			children = (
 				D5BAC2BE2CEAFDD462D9116F /* .gitkeep */,
+				DB0D5153A4DB2948166E542C /* CodeHostGlyphs.swift */,
 				29313DDC46A0CCA2FA42CDE9 /* Icon.swift */,
 			);
 			path = Icons;
@@ -8011,6 +8014,7 @@
 				7324AD398C5F4168C067F4B0 /* CodeEditorLineNumberRulerView.swift in Sources */,
 				595006B141A5C6357DB9772C /* CodeEditorMinimap.swift in Sources */,
 				A9D0D8D94E1D46F35D17DDBA /* CodeEditorView.swift in Sources */,
+				0710390C83B43DFC711B0DD5 /* CodeHostGlyphs.swift in Sources */,
 				0C54356D0ACEDD5275FFB6EB /* CodeLanguageDetailView.swift in Sources */,
 				49DDF4352B14FD7898808399 /* CodePalette.swift in Sources */,
 				28BFB7C825FE3CFD8999A988 /* CodePane.swift in Sources */,

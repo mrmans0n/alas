@@ -80,6 +80,8 @@ final class SessionWorkspace {
     private(set) var gitRunning: RemoteGitChange?
     /// Host requests awaiting their answer, by request id.
     @ObservationIgnored private var hostWaiters: [Int: CheckedContinuation<Result<Void, RemoteGitFailure>, Never>] = [:]
+    /// Cards waiting on a file's text, by path.
+    @ObservationIgnored private var peekWaiters: [String: [CheckedContinuation<String?, Never>]] = [:]
     /// The session's PR shepherd, once the host's session list said; nil without one.
     private(set) var shepherd: RemoteShepherd?
     private(set) var shepherdLoaded = false
@@ -245,6 +247,27 @@ final class SessionWorkspace {
         pushedBy = owner
         file = (path, .loading)
         send(.readFile(sessionId: sessionId, path: path))
+    }
+
+    /// Opens a skill command's `SKILL.md`, which the host reads by command.
+    func openSkill(_ command: String, by owner: UUID) {
+        pushedBy = owner
+        file = (command, .loading)
+        send(.readSkill(sessionId: sessionId, command: command))
+    }
+
+    /// A file's text without opening it, for a card that shows part of it;
+    /// nil when the host can't read it or doesn't answer within 10 s.
+    func peekFile(_ path: String) async -> String? {
+        guard hub.state(of: hostID) == .online else { return nil }
+        if peekWaiters[path] == nil { send(.readFile(sessionId: sessionId, path: path)) }
+        let timeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled else { return }
+            self?.peekWaiters.removeValue(forKey: path)?.forEach { $0.resume(returning: nil) }
+        }
+        defer { timeout.cancel() }
+        return await withCheckedContinuation { peekWaiters[path, default: []].append($0) }
     }
 
     func closeFile() {
@@ -500,9 +523,11 @@ final class SessionWorkspace {
             if let path, tree.children[path] == nil { tree.expanded.remove(path) }
             treeError = RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)
         case .fileContents(let id, let path, let text, let truncated, _) where id == sessionId:
+            peekWaiters.removeValue(forKey: path)?.forEach { $0.resume(returning: text) }
             guard file?.path == path else { return }
             file = (path, .loaded(FileReply(text: text, truncated: truncated)))
         case .fileUnavailable(let id, let path, let reason, let byteSize, let message) where id == sessionId:
+            peekWaiters.removeValue(forKey: path)?.forEach { $0.resume(returning: nil) }
             guard file?.path == path else { return }
             file = (path, .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: byteSize)))
         default:

@@ -10,6 +10,8 @@ struct ComposerBar: View {
     /// Runs the session's Ship for `/ship`, as the Mac's peer composer does; returns why it can't.
     /// Nil where `/ship` isn't offered, and the text goes to the agent.
     var onShip: (() -> String?)?
+    /// Opens chip cards; nil shows none.
+    var actions: ChipActions?
 
     @State private var selection = NSRange(location: 0, length: 0)
     @State private var picked: [PhotosPickerItem] = []
@@ -18,25 +20,31 @@ struct ComposerBar: View {
 
     private var config: RemoteSessionConfig? { session.config }
     private var text: String { session.draft.text }
-    private var hasContent: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !session.draft.images.isEmpty
+    /// What the editor shows, chips as one character each: the `/` and `@` tokens are read from it.
+    private var display: String { session.draft.content.displayText }
+    private var hasContent: Bool { session.draft.hasContent }
+
+    /// The commands the picker offers. Alas intercepts /ship before the agent
+    /// could see it, so the agent's own is hidden.
+    private var commands: [RemoteSlashCommand] {
+        let agent = config?.availableCommands ?? []
+        guard onShip != nil else { return agent }
+        return [ChipActions.ship] + agent.filter { !["ship", "/ship"].contains($0.command) }
     }
 
-    private static let ship = RemoteSlashCommand(
-        command: "/ship", description: "Have this session open a PR for the branch, or shepherd the open one.")
+    private var rules: ChipRules {
+        ChipRules(commands: commands.map(\.command), codeHost: config?.codeHost)
+    }
 
     private var slash: [RemoteSlashCommand]? {
-        guard let token = RemoteComposerText.slashToken(in: text as NSString, caret: selection.location) else { return nil }
-        var commands = config?.availableCommands ?? []
-        // Alas intercepts /ship before the agent could see it, so the agent's own is hidden.
-        if onShip != nil { commands = [Self.ship] + commands.filter { !["ship", "/ship"].contains($0.command) } }
+        guard let token = RemoteComposerText.slashToken(in: display as NSString, caret: selection.location) else { return nil }
         let matches = RemoteComposerText.filterSlashCommands(commands, query: token.query)
         return matches.isEmpty ? nil : matches
     }
 
     private var mentionToken: (start: Int, query: String)? {
         guard config?.supportsMentions == true else { return nil }
-        return RemoteComposerText.activeMentionToken(in: text as NSString, caret: selection.location)
+        return RemoteComposerText.activeMentionToken(in: display as NSString, caret: selection.location)
     }
 
     var body: some View {
@@ -50,15 +58,16 @@ struct ComposerBar: View {
             if let slash {
                 SlashPicker(commands: slash) { command in
                     let name = command.command.hasPrefix("/") ? command.command : "/" + command.command
-                    replaceToken(from: RemoteComposerText.slashToken(in: text as NSString, caret: selection.location)?.start,
-                                 with: name + " ")
+                    let start = RemoteComposerText.slashToken(in: display as NSString, caret: selection.location)?.start
+                    // Inside code a command stays text, as on the Mac.
+                    let inCode = start.map { SlashCommandText.isInCode($0, in: display as NSString) } ?? false
+                    replaceToken(from: start, with: inCode ? [.text(name + " ")] : [.chip(.command(name)), .text(" ")])
                 }
             } else if let token = mentionToken, token.query.count <= RemoteAttachmentLimits.maxMentionQueryLength {
                 // Rows from an earlier query stay up, dimmed and inert, until this one is answered.
                 MentionPicker(candidates: session.mentionCandidates,
                               searching: token.query != session.mentionCandidatesQuery) { mention in
-                    replaceToken(from: mentionToken?.start, with: "@" + mention.name + " ")
-                    if !session.draft.mentions.contains(mention) { session.draft.mentions.append(mention) }
+                    replaceToken(from: mentionToken?.start, with: [.chip(.mention(mention)), .text(" ")])
                 }
             }
             if queueOpen { QueueTray(session: session).transition(.move(edge: .bottom).combined(with: .opacity)) }
@@ -81,12 +90,13 @@ struct ComposerBar: View {
         VStack(alignment: .leading, spacing: 6) {
             if !session.draft.images.isEmpty { tiles }
             ZStack(alignment: .topLeading) {
-                if text.isEmpty {
+                if session.draft.content.isEmpty {
                     Text("Message").foregroundStyle(.tertiary).padding(.horizontal, 4).padding(.vertical, 8)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
-                ComposerTextView(text: $session.draft.text, selection: $selection,
+                ComposerTextView(draft: $session.draft.content, selection: $selection, rules: rules,
+                                 references: session.references, actions: actions,
                                  onPasteImages: config?.acceptsImages == true ? { images in
                                      Task { for data in images { await ImageStaging.stage(data, into: session) } }
                                  } : nil)
@@ -296,12 +306,15 @@ struct ComposerBar: View {
 
     // MARK: Behaviour
 
-    private func replaceToken(from start: Int?, with replacement: String) {
-        let ns = text as NSString
-        guard let start, selection.location <= ns.length, start <= selection.location else { return }
+    /// Replaces the `/` or `@` token from `start` to the caret, in display units.
+    private func replaceToken(from start: Int?, with replacement: [RemoteDraftSegment]) {
+        guard let start, selection.location <= (display as NSString).length, start <= selection.location else { return }
         let range = NSRange(location: start, length: selection.location - start)
-        session.draft.text = ns.replacingCharacters(in: range, with: replacement)
-        selection = NSRange(location: start + (replacement as NSString).length, length: 0)
+        session.draft.content = session.draft.content.replacing(range, with: replacement)
+        let length = replacement.reduce(0) { sum, segment in
+            if case .text(let value) = segment { sum + value.utf16.count } else { sum + 1 }
+        }
+        selection = NSRange(location: start + length, length: 0)
     }
 
     /// First query goes out at once; later keystrokes wait for 120 ms of quiet.
@@ -315,88 +328,5 @@ struct ComposerBar: View {
             }
             session.searchMentions(query)
         }
-    }
-}
-
-/// A `UITextView` so the caret is readable. Grows to six lines, then scrolls.
-struct ComposerTextView: UIViewRepresentable {
-    @Binding var text: String
-    @Binding var selection: NSRange
-    /// Takes pasted images; nil leaves Paste to text only.
-    var onPasteImages: (([Data]) -> Void)?
-    private static let maxLines: CGFloat = 6
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    func makeUIView(context: Context) -> UITextView {
-        let view = PastingTextView()
-        view.delegate = context.coordinator
-        view.font = .preferredFont(forTextStyle: .body)
-        view.adjustsFontForContentSizeCategory = true
-        view.backgroundColor = .clear
-        view.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
-        view.textContainer.lineFragmentPadding = 4
-        view.isScrollEnabled = false
-        view.accessibilityLabel = "Message"
-        return view
-    }
-
-    func updateUIView(_ view: UITextView, context: Context) {
-        context.coordinator.parent = self
-        (view as? PastingTextView)?.onPasteImages = onPasteImages
-        context.coordinator.updating = true
-        defer { context.coordinator.updating = false }
-        if view.text != text { view.text = text }
-        let length = (view.text as NSString).length
-        let wanted = NSRange(location: min(selection.location, length), length: min(selection.length, max(0, length - selection.location)))
-        if view.selectedRange != wanted, view.markedTextRange == nil { view.selectedRange = wanted }
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
-        let width = proposal.width ?? 300
-        let fit = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-        let cap = (uiView.font?.lineHeight ?? 20) * Self.maxLines + 16
-        let scrolls = fit > cap
-        if uiView.isScrollEnabled != scrolls { uiView.isScrollEnabled = scrolls }
-        return CGSize(width: width, height: min(fit, cap))
-    }
-
-    final class Coordinator: NSObject, UITextViewDelegate {
-        var parent: ComposerTextView
-        var updating = false
-
-        init(_ parent: ComposerTextView) { self.parent = parent }
-
-        func textViewDidChange(_ view: UITextView) {
-            guard !updating else { return }
-            if parent.text != view.text { parent.text = view.text }
-            if parent.selection != view.selectedRange { parent.selection = view.selectedRange }
-        }
-
-        func textViewDidChangeSelection(_ view: UITextView) {
-            guard !updating, parent.selection != view.selectedRange else { return }
-            parent.selection = view.selectedRange
-        }
-    }
-}
-
-/// A text view whose Paste also takes images, as the Mac composer does.
-private final class PastingTextView: UITextView {
-    var onPasteImages: (([Data]) -> Void)?
-
-    private var pastedImages: [Data] {
-        guard onPasteImages != nil, UIPasteboard.general.hasImages else { return [] }
-        return (UIPasteboard.general.images ?? []).compactMap { $0.pngData() }
-    }
-
-    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
-        if action == #selector(paste(_:)), onPasteImages != nil, UIPasteboard.general.hasImages { return true }
-        return super.canPerformAction(action, withSender: sender)
-    }
-
-    override func paste(_ sender: Any?) {
-        let images = pastedImages
-        guard !images.isEmpty else { return super.paste(sender) }
-        onPasteImages?(images)
     }
 }

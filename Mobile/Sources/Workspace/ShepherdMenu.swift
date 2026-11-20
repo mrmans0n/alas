@@ -71,7 +71,7 @@ struct ShepherdMenu: View {
     }
 
     /// The Mac pill's symbols and colors, by `ShepherdBadgeState` raw value.
-    private static func badgeSymbol(_ badge: String) -> String {
+    static func badgeSymbol(_ badge: String) -> String {
         switch badge {
         case "unshepherded": "arrow.triangle.pull"
         case "waiting": "clock.fill"
@@ -85,7 +85,7 @@ struct ShepherdMenu: View {
         }
     }
 
-    private static func color(_ badge: String) -> Color {
+    static func color(_ badge: String) -> Color {
         switch badge {
         case "waiting": .yellow
         case "fixing": .accentColor

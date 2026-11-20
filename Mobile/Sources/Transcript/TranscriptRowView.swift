@@ -44,7 +44,10 @@ struct TranscriptRowView: View {
     @ViewBuilder
     private var message: some View {
         switch item.row {
-        case .user(let text, _, let images, _, _, _):
+        case .user(_, _, _, let card?, _, _) where Self.promptCard(card) != nil:
+            // A turn Alas sent (Ship, a shepherd, review feedback), as its card.
+            OutcomeCard(id: item.id, card: Self.promptCard(card)!)
+        case .user(let text, _, let images, _, let mentions, let pastedSpans):
             VStack(alignment: .trailing, spacing: 6) {
                 if !images.isEmpty {
                     HStack(spacing: 6) {
@@ -59,7 +62,7 @@ struct TranscriptRowView: View {
                         }
                     }
                 }
-                if !text.isEmpty { bubble(text) }
+                UserMessageBody(id: item.id, text: text, mentions: mentions, pastedSpans: pastedSpans, session: session)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 48)
@@ -108,6 +111,10 @@ struct TranscriptRowView: View {
         case .systemNotice(let text):
             notice(text)
         }
+    }
+
+    static func promptCard(_ json: String) -> RemotePromptCard? {
+        try? JSONDecoder().decode(RemotePromptCard.self, from: Data(json.utf8))
     }
 
     private func notice(_ text: String) -> some View {
@@ -188,14 +195,17 @@ struct AgentMarkdown: View {
     let id: String
     let text: String
     var session: TranscriptSession?
+    /// Set for a user message: its text gets the Mac's inline chips.
+    var chips: UserMessageChips?
 
     var body: some View {
         let blocks = MarkdownBlockCache.shared.blocks(id: id, text: text)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 switch block {
-                case .paragraph(let s): Text(s)
-                case .heading(let level, let s): Text(s).font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
+                case .paragraph(let s): inline(s)
+                case .heading(let level, let s):
+                    inline(s).font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
                 case .code(let language, let chunks): CodeBlockView(language: language, chunks: chunks)
                 case .mermaid(let source): MermaidBlockView(source: source)
                 case .list(let entries):
@@ -205,7 +215,7 @@ struct AgentMarkdown: View {
                         ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
                             HStack(alignment: .firstTextBaseline, spacing: 6) {
                                 ListMarker(marker: entry.marker, widest: widest)
-                                Text(entry.text)
+                                inline(entry.text)
                             }
                             // One element per item, so VoiceOver reads a task's state and text once.
                             .accessibilityElement(children: .combine)
@@ -213,7 +223,7 @@ struct AgentMarkdown: View {
                         }
                     }
                 case .quote(let s):
-                    Text(s).foregroundStyle(.secondary)
+                    inline(s).foregroundStyle(.secondary)
                         .padding(.leading, 10)
                         .overlay(alignment: .leading) { Rectangle().fill(.tertiary).frame(width: 3) }
                 case .image(let source, let alt):
@@ -228,6 +238,15 @@ struct AgentMarkdown: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func inline(_ string: AttributedString) -> some View {
+        if let chips {
+            ChipText(text: string, chips: chips)
+        } else {
+            Text(string)
         }
     }
 }

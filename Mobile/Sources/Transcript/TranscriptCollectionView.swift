@@ -45,11 +45,12 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
         controller.sync()
     }
 
-    /// Hosted cells do not inherit this view's environment, so its link handler is handed to them.
+    /// Hosted cells do not inherit this view's environment, so its link handler and chip cards are handed to them.
     private func input(_ context: Context) -> TranscriptCollectionController.Input {
         .init(items: items, expanded: $expanded, canLoadOlder: canLoadOlder, loadOlder: loadOlder,
               image: image, session: session, sendCount: sendCount, onFirstLayout: onFirstLayout,
-              openSubagent: openSubagent, interactive: interactive, openURL: context.environment.openURL)
+              openSubagent: openSubagent, interactive: interactive, openURL: context.environment.openURL,
+              chipActions: context.environment.chipActions)
     }
 }
 
@@ -66,6 +67,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         var openSubagent: (RemoteWireMessage.Subagent) -> Void
         var interactive: Bool
         var openURL: OpenURLAction
+        var chipActions: ChipActions?
     }
 
     /// The latest values from SwiftUI; `sync()` brings the collection view in line with them.
@@ -130,6 +132,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
                                       sync()
                                   }, openSubagent: { [unowned self] in input.openSubagent($0) })
                                   .environment(\.openURL, input.openURL)
+                                  .environment(\.chipActions, input.chipActions)
             }
             .margins(.all, 0)
         }
