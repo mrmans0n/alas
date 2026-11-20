@@ -46,7 +46,8 @@ struct TranscriptRowView: View {
     @ViewBuilder
     private var message: some View {
         switch item.row {
-        case .user(let text, _, let images, let card):
+        case .user(let text, _, let images, let json):
+            let card = json.flatMap { try? JSONDecoder().decode(RemotePromptCard.self, from: Data($0.utf8)) }
             VStack(alignment: .trailing, spacing: 6) {
                 if !images.isEmpty {
                     HStack(spacing: 6) {
@@ -61,7 +62,7 @@ struct TranscriptRowView: View {
                         }
                     }
                 }
-                if let card = card.flatMap({ try? JSONDecoder().decode(RemotePromptCard.self, from: Data($0.utf8)) }) {
+                if let card {
                     // A turn Alas injected reads as a card, not as something the user typed.
                     OutcomeCard(id: item.id, card: card, instruction: text, isExpanded: isExpanded, toggle: toggle)
                         .frame(maxWidth: .infinity, alignment: .leading)
