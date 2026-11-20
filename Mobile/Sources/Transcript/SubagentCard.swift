@@ -122,6 +122,7 @@ struct SubagentScreen: View {
     var body: some View {
         TranscriptCollectionView(items: transcript?.items ?? [], expanded: $expanded, canLoadOlder: false, loadOlder: {},
                                  session: session, interactive: false)
+            .ignoresSafeArea(edges: .vertical)
             .overlay {
                 if let transcript, !transcript.found {
                     Text("Subagent transcript not available.").font(.footnote).foregroundStyle(.secondary)
