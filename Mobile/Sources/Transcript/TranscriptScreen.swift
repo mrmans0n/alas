@@ -392,13 +392,13 @@ private struct TranscriptContent: View {
     let openSubagent: (RemoteWireMessage.Subagent) -> Void
 
     var body: some View {
-        TranscriptCollectionView(
-            items: session.items, expanded: $session.expanded, canLoadOlder: session.canLoadOlder,
-            loadOlder: session.loadOlder, image: session.image(for:), session: session,
-            sendCount: session.sendCount, openSubagent: openSubagent)
-        // Rows scroll on under the glass tab picker and composer; the collection view's
-        // safe-area content insets still let the first and last rows rest clear of them.
-        .ignoresSafeArea(edges: .vertical)
+        // Rows scroll on under the glass tab picker and composer.
+        ScrollsUnderBars { insets in
+            TranscriptCollectionView(
+                items: session.items, expanded: $session.expanded, canLoadOlder: session.canLoadOlder,
+                loadOlder: session.loadOlder, image: session.image(for:), session: session,
+                sendCount: session.sendCount, openSubagent: openSubagent, insets: insets)
+        }
         .overlay {
             if session.items.isEmpty, !session.hasEnded {
                 if session.hasSnapshot {
