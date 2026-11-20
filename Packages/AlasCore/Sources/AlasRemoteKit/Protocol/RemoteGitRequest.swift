@@ -122,6 +122,20 @@ public enum RemoteGitRequest {
         return .some(try? JSONDecoder().decode(RemotePullRequest.self, from: data))
     }
 
+    /// What the worktree's staged change suggests a commit message from (`HostRequest.commitMessageInput`).
+    public static func commitMessageInput(id: Int, projectID: String, path: String) -> OpaqueHostMessage {
+        envelope(id: id, ["commitMessageInput": ["worktree": ["projectID": projectID, "path": path]]])
+    }
+
+    /// The input in a `commitMessageInput` reply; nil for any other message.
+    public static func commitMessageInput(in message: OpaqueHostMessage) -> CommitMessageSuggestionInput? {
+        guard let object = try? JSONSerialization.jsonObject(with: message.json) as? [String: Any],
+              let result = (object["response"] as? [String: Any])?["result"] as? [String: Any],
+              let raw = (result["commitMessageInput"] as? [String: Any])?["input"],
+              let data = try? JSONSerialization.data(withJSONObject: raw) else { return nil }
+        return try? JSONDecoder().decode(CommitMessageSuggestionInput.self, from: data)
+    }
+
     /// The worktree's run scripts (`HostRequest.listRunScripts`).
     public static func listRunScripts(id: Int, projectID: String, path: String) -> OpaqueHostMessage {
         envelope(id: id, ["listRunScripts": ["worktree": ["projectID": projectID, "path": path]]])
