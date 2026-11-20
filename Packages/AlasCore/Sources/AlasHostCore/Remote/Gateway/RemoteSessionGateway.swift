@@ -1524,29 +1524,34 @@ public final class RemoteSessionGateway {
 
     /// The draft a local composer would have produced for a viewer's prompt
     /// with collapsed pastes, so the recorded row shows their badges. `spans`
-    /// are UTF-16 ranges of `text`; the session gets `trimmedText`, so they
-    /// shift by what the trim dropped. Spans that are empty, out of range,
-    /// overlapping or reuse an ordinal are dropped; nil when none is left.
+    /// are UTF-16 ranges of `text`; the session gets `trimmedText`, so each
+    /// is cut to what the trim kept and shifted by what it dropped. Spans that
+    /// are empty, out of range, overlapping, reuse an ordinal or lie wholly in
+    /// the trimmed whitespace are dropped; nil when none is left.
     public nonisolated static func pastedDraft(
         text: String, trimmedText: String, spans: [ACPPastedTextSpan]
     ) -> ACPComposerDraft? {
         guard !spans.isEmpty, !trimmedText.isEmpty else { return nil }
+        let source = text as NSString
         let trimmed = trimmedText as NSString
-        let lead = (text as NSString).range(of: trimmedText, options: .literal).location
+        let lead = source.range(of: trimmedText, options: .literal).location
         guard lead != NSNotFound else { return nil }
-        // Filtered before shifting: an untrusted offset near `Int.min` must not overflow.
-        let shifted = spans.filter { $0.utf16Offset >= 0 }.map {
-            ACPPastedTextSpan(ordinal: $0.ordinal, utf16Offset: $0.utf16Offset - lead, utf16Length: $0.utf16Length)
-        }
+        let retained = NSRange(location: lead, length: trimmed.length)
         var kept: [ACPPastedTextSpan] = []
+        var end = 0
         var ordinals = Set<Int>()
-        for span in shifted.sorted(by: { $0.utf16Offset < $1.utf16Offset }) {
-            guard span.utf16Offset >= (kept.last.map { $0.utf16Offset + $0.utf16Length } ?? 0),
+        // Checked against `text` first (an untrusted offset near `Int.min` must not overflow),
+        // then cut to what the trim kept: a paste ending in a newline keeps its chip.
+        for span in spans.filter({ $0.utf16Offset >= 0 }).sorted(by: { $0.utf16Offset < $1.utf16Offset }) {
+            guard span.utf16Offset >= end,
                   span.utf16Length > 0,
-                  span.utf16Length <= trimmed.length - span.utf16Offset,
+                  span.utf16Length <= source.length - span.utf16Offset,
                   ordinals.insert(span.ordinal).inserted
             else { continue }
-            kept.append(span)
+            end = span.utf16Offset + span.utf16Length
+            let clipped = NSIntersectionRange(span.utf16Range, retained)
+            guard clipped.length > 0 else { continue }
+            kept.append(ACPPastedTextSpan(ordinal: span.ordinal, utf16Offset: clipped.location - lead, utf16Length: clipped.length))
         }
         guard !kept.isEmpty else { return nil }
         var segments: [ACPComposerDraft.Segment] = []

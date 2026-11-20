@@ -1656,6 +1656,16 @@ struct RemoteSessionGatewayTests {
         ]) == nil)
     }
 
+    /// A paste at either end keeps its chip when the trim cuts the whitespace it starts or ends with.
+    @Test func pastedSpansAtTheEdgesAreCutToTheTrimmedText() {
+        let text = "\n  log 1\nlog 2\n"
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let draft = RemoteSessionGateway.pastedDraft(text: text, trimmedText: trimmed, spans: [
+            ACPPastedTextSpan(ordinal: 1, utf16Offset: 0, utf16Length: (text as NSString).length),
+        ])
+        #expect(draft?.segments == [.pastedText(ordinal: 1, content: "log 1\nlog 2")])
+    }
+
     /// A setting the host refuses changes nothing, so no new config arrives;
     /// the gateway re-sends the last one, so the viewer reverts.
     @Test(arguments: [true, false])
