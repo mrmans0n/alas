@@ -379,6 +379,23 @@ import Testing
         }
     }
 
+    @Test(arguments: [
+        (ACPPromptCard.Action.reviewChanges(worktreeID: "wt"), true, nil as URL?),
+        (.url(URL(string: "https://x/1")!), false, URL(string: "https://x/1")),
+    ])
+    func promptCardReadsTheActionsAPhoneCanRun(action: ACPPromptCard.Action, opensChanges: Bool, url: URL?) throws {
+        let json = try JSONEncoder().encode(ACPPromptCard(origin: .review, title: "t", action: action))
+        let card = try JSONDecoder().decode(RemotePromptCard.self, from: json)
+        #expect(card.opensChanges == opensChanges)
+        #expect(card.actionURL == url)
+    }
+
+    @Test func promptCardDecodesUnknownActionWithoutOne() throws {
+        let json = #"{"origin":"fromTheFuture","title":"t","facts":[],"sections":[],"action":{"somethingNew":{}}}"#
+        let card = try JSONDecoder().decode(RemotePromptCard.self, from: Data(json.utf8))
+        #expect(!card.opensChanges && card.actionURL == nil)
+    }
+
     @Test(arguments: ["questionAnswer", "outcomeCard", "failureIncident", "system"], [nil, "{"] as [String?])
     func unreadableStructuredRowsShowTheirCaption(kind: String, json: String?) {
         let wire = RemoteWireMessage(stableId: "s", kind: kind, text: "Caption", json: json, index: 0)

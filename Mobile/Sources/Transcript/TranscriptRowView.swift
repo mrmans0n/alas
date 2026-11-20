@@ -46,7 +46,7 @@ struct TranscriptRowView: View {
     @ViewBuilder
     private var message: some View {
         switch item.row {
-        case .user(let text, _, let images, _):
+        case .user(let text, _, let images, let card):
             VStack(alignment: .trailing, spacing: 6) {
                 if !images.isEmpty {
                     HStack(spacing: 6) {
@@ -61,14 +61,18 @@ struct TranscriptRowView: View {
                         }
                     }
                 }
-                if !text.isEmpty {
+                if let card = card.flatMap({ try? JSONDecoder().decode(RemotePromptCard.self, from: Data($0.utf8)) }) {
+                    // A turn Alas injected reads as a card, not as something the user typed.
+                    OutcomeCard(id: item.id, card: card, instruction: text, isExpanded: isExpanded, toggle: toggle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if !text.isEmpty {
                     bubble(text)
                         .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 18))
                         .contextMenu { messageMenu(text) }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.leading, 48)
+            .padding(.leading, card == nil ? 48 : 0)
         case .agent(let text):
             AgentMarkdown(id: item.id, text: text, session: session)
                 .contextMenu { messageMenu(text) }
