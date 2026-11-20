@@ -3514,34 +3514,43 @@ public final class ACPSessionManager: ChangeTracking {
         if effectiveRemoteHost() != nil {
             guard isWriter(for: id), await confirmedWriterLease(for: id) else { return false }
         }
-        let fence: ACPSessionLeaseFence
-        var claimedToken: String?
-        if let owned = leaseFence(sessionId: id) {
-            fence = owned
-        } else {
-            let token = UUID().uuidString
-            guard let lease = try await persistence.claimLease(
-                sessionId: id, instanceId: instanceId, pid: pid,
-                now: Int64(Date().timeIntervalSince1970), staleAfter: Self.leaseStaleAfter, leaseToken: token
-            ) else { return false }
-            // An attachment of this instance may hold the lease already, with
-            // its own token: the fence is whatever the store holds, and only a
-            // lease this call created is released after.
-            fence = ACPSessionLeaseFence(sessionId: id, ownerInstance: instanceId, token: lease.token)
-            claimedToken = lease.token == token ? token : nil
-        }
-        let archived: Bool
-        do {
-            archived = try await persistence.setArchived(id: id, archived: true, fence: fence)
-        } catch {
-            // Nobody heartbeats a lease claimed only for this write.
+        // An attachment of this instance, such as the one a session created a
+        // moment ago is still starting, can replace or drop the lease between
+        // the claim and the fenced write. That fence is lost to this instance,
+        // not to another one, so the write is fenced again with a fresh claim,
+        // which still refuses a lease another live instance holds. A remote
+        // session's authority was confirmed for the fence it started with.
+        let attempts = effectiveRemoteHost() == nil ? 3 : 1
+        var archived = false
+        for attempt in 0..<attempts where !archived {
+            let fence: ACPSessionLeaseFence
+            var claimedToken: String?
+            if attempt == 0, let owned = leaseFence(sessionId: id) {
+                fence = owned
+            } else {
+                let token = UUID().uuidString
+                guard let lease = try await persistence.claimLease(
+                    sessionId: id, instanceId: instanceId, pid: pid,
+                    now: Int64(Date().timeIntervalSince1970), staleAfter: Self.leaseStaleAfter, leaseToken: token
+                ) else { return false }
+                // An attachment of this instance may hold the lease already, with
+                // its own token: the fence is whatever the store holds, and only a
+                // lease this call created is released after.
+                fence = ACPSessionLeaseFence(sessionId: id, ownerInstance: instanceId, token: lease.token)
+                claimedToken = lease.token == token ? token : nil
+            }
+            do {
+                archived = try await persistence.setArchived(id: id, archived: true, fence: fence)
+            } catch {
+                // Nobody heartbeats a lease claimed only for this write.
+                if let claimedToken {
+                    try? await persistence.releaseLease(sessionId: id, instanceId: instanceId, leaseToken: claimedToken)
+                }
+                throw error
+            }
             if let claimedToken {
                 try? await persistence.releaseLease(sessionId: id, instanceId: instanceId, leaseToken: claimedToken)
             }
-            throw error
-        }
-        if let claimedToken {
-            try? await persistence.releaseLease(sessionId: id, instanceId: instanceId, leaseToken: claimedToken)
         }
         guard archived else { return false }
         if var row = persistedRows[id] {
