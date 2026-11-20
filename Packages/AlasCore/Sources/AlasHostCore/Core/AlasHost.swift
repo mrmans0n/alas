@@ -537,6 +537,22 @@ public struct SessionsAPI {
         }
     }
 
+    /// The list a `listSessions` request answers: `list()` plus `shipsStack`
+    /// for sessions without a shepherd. Worktree context can scan the disk,
+    /// so it is not part of `list()`, which runs on every event refresh.
+    public func listForClient() -> [HostSessionSummary] {
+        list().map { summary in
+            guard summary.shepherd == nil else { return summary }
+            var summary = summary
+            summary.shipsStack = Self.shipsStack(
+                owner: summary.owner,
+                hasLiveStackRecord: core.stackShepherd.record(forSession: summary.id).map { !$0.isFinished } ?? false,
+                stackName: { core.stackShepherd.effects?.worktreeContext($0)?.stackName }
+            )
+            return summary
+        }
+    }
+
     static func summary(of row: ACPSessionRow, in manager: ACPSessionManager, core: AlasCoreContext) -> HostSessionSummary {
         let liveRemoteID = manager.liveSession(for: row.id)?.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
         return HostSessionSummary(
@@ -552,12 +568,7 @@ public struct SessionsAPI {
             isWriter: manager.isWriter(for: row.id),
             parentID: core.delegatedSessionParents[row.id],
             shepherd: HostSessionShepherd.make(sessionID: row.id, review: core.reviewShepherd, stack: core.stackShepherd),
-            delegatedFromName: core.delegatedFromName(of: row.id),
-            shipsStack: shipsStack(
-                owner: manager.owner,
-                hasLiveStackRecord: core.stackShepherd.record(forSession: row.id).map { !$0.isFinished } ?? false,
-                stackName: { core.stackShepherd.effects?.worktreeContext($0)?.stackName }
-            )
+            delegatedFromName: core.delegatedFromName(of: row.id)
         )
     }
 
