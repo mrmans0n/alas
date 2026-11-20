@@ -10,8 +10,10 @@ final class AttentionFeed {
         let hostID: UUID
         let hostName: String
         let item: RemoteAttentionItem
+        /// The item's session, only when the host lists it to the phone: a terminal-hosted
+        /// agent's id names nothing the phone can open, and its item expands instead.
+        let route: SessionRoute?
         var id: UUID { item.id }
-        var route: SessionRoute? { item.sessionID.map { SessionRoute(hostID: hostID, sessionId: $0) } }
     }
 
     private let hub: HostHub
@@ -26,10 +28,17 @@ final class AttentionFeed {
 
     /// Items from the hosts online now, newest first.
     var entries: [Entry] {
-        hub.hosts.filter { hub.state(of: $0.id) == .online }.flatMap { host in
-            (items[host.id] ?? []).map { Entry(hostID: host.id, hostName: host.name, item: $0) }
+        let online = hub.hosts.filter { hub.state(of: $0.id) == .online }
+        return online.flatMap(entries(of:)).sorted { $0.item.occurredAt > $1.item.occurredAt }
+    }
+
+    private func entries(of host: PairedHost) -> [Entry] {
+        let listed = Set(hub.sessions(of: host.id).map(\.id))
+        return (items[host.id] ?? []).map { item in
+            var route: SessionRoute?
+            if let id = item.sessionID, listed.contains(id) { route = SessionRoute(hostID: host.id, sessionId: id) }
+            return Entry(hostID: host.id, hostName: host.name, item: item, route: route)
         }
-        .sorted { $0.item.occurredAt > $1.item.occurredAt }
     }
 
     /// Asks every online host that serves it for its items again.
