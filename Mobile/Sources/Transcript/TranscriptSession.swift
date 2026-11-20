@@ -191,6 +191,8 @@ final class TranscriptSession {
     /// The query `mentionCandidates` answers; nil while a new query is in flight.
     private(set) var mentionCandidatesQuery: String?
     var draft = ComposerDraft()
+    /// Bumped to raise the keyboard on the composer, with the caret at the end of the draft.
+    private(set) var composerFocusRequest = 0
     var visualAids: [UUID: VisualAidCardState] = [:]
 
     let hostID: UUID
@@ -296,6 +298,13 @@ final class TranscriptSession {
     /// Closed by the host, gone from its session list, or listed as no longer open.
     var hasEnded: Bool {
         isClosed || hub.sessions(of: hostID).first { $0.id == sessionId }?.isActive != true
+    }
+
+    /// Quotes a transcript message, or part of one, under the draft and focuses the composer, as the Mac's Quote does.
+    func quote(_ message: String) {
+        guard ACPMessageQuote.canQuote(message) else { return }
+        draft.text = ACPMessageQuote.appending(message, to: draft.text)
+        composerFocusRequest += 1
     }
 
     func open() {
@@ -606,6 +615,14 @@ final class TranscriptSession {
     }
 
     private static let hostKeyPrefix = "host:"
+
+    /// Drops a worktree image read from the host, so the next display reads it again.
+    func forgetHostImage(_ path: String) {
+        let key = Self.hostKeyPrefix + path
+        displayImages.removeObject(forKey: key as NSString)
+        displayLoads[key] = nil
+        displayGeneration += 1
+    }
 
     private func inlineImage(
         _ string: String, key place: String, resolve: @escaping @Sendable (String) -> RemoteTranscriptImageSource

@@ -183,6 +183,9 @@ struct WorktreeRowView: View {
     var landingStatus: GGLandingPresentation.SidebarStatus? = nil
     var onOpenGGLanding: (() -> Void)? = nil
     let harnessSummary: HarnessService.WorktreeHarnessSummary?
+    var harnessBadges: [HarnessService.WorktreeBadgeSession] = []
+    /// The hover card of a badge, by session id; built only when it opens.
+    var badgePopoverModel: (String) -> AgentBadgePopoverModel? = { _ in nil }
     let ggMenuModel: GGWorktreeMenuModel
     let onTap: () -> Void
     let onOpenTerminal: () -> Void
@@ -421,7 +424,7 @@ struct WorktreeRowView: View {
         .accessibilityLabel(accessibilityLabel(status: status, worktreeStatus: worktreeStatus, showsExplanation: explanationEvidence != nil))
         // The tiles are not mounted at rest, so each session stays reachable.
         .accessibilityActions {
-            ForEach(harnessSummary?.sessions ?? []) { session in
+            ForEach(harnessBadges) { session in
                 Button("Open \(session.agent.displayName) session") { onActivateHarness(session.id) }
             }
         }
@@ -503,8 +506,8 @@ struct WorktreeRowView: View {
             // At most one per kind, so the position is a stable identity.
             ForEach(liveActivity.glyphs.indices, id: \.self) { resourceGlyph(liveActivity.glyphs[$0]) }
             // On the name line, which can truncate; line 2's facts are fixed-size.
-            if let summary = harnessSummary {
-                agentBadges(summary: summary)
+            if !harnessBadges.isEmpty {
+                agentBadges(badges: harnessBadges)
             }
         }
         .frame(minHeight: HarnessSessionBadge.diameter)
@@ -1033,18 +1036,19 @@ struct WorktreeRowView: View {
     }
 
     private func agentBadges(
-        summary: HarnessService.WorktreeHarnessSummary
+        badges: [HarnessService.WorktreeBadgeSession]
     ) -> some View {
         HStack(spacing: Self.agentBadgeSpacing) {
-            let visibleSessionCount = Self.visibleHarnessSessionCount(for: summary.sessions.count)
-            ForEach(summary.sessions.prefix(visibleSessionCount)) { session in
+            let visibleSessionCount = Self.visibleHarnessSessionCount(for: badges.count)
+            ForEach(badges.prefix(visibleSessionCount)) { session in
                 HarnessSessionBadge(
                     session: session,
-                    onActivate: { onActivateHarness(session.id) }
+                    onActivate: { onActivateHarness(session.id) },
+                    popoverModel: { badgePopoverModel(session.id) }
                 )
             }
-            if summary.sessions.count > visibleSessionCount {
-                let hiddenSessions = Array(summary.sessions.dropFirst(visibleSessionCount))
+            if badges.count > visibleSessionCount {
+                let hiddenSessions = Array(badges.dropFirst(visibleSessionCount))
                 HarnessSessionOverflowBadge(
                     sessions: hiddenSessions,
                     onActivate: onActivateHarness
@@ -1052,7 +1056,7 @@ struct WorktreeRowView: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Active agent sessions")
+        .accessibilityLabel("Agent sessions")
     }
 
     @ViewBuilder
@@ -1093,8 +1097,8 @@ struct WorktreeRowView: View {
     private var availableWorktreeContextMenuContent: some View {
         // The session tiles are not mounted at rest, so the menu, which Full
         // Keyboard Access reaches, offers each session too.
-        if let sessions = harnessSummary?.sessions, !sessions.isEmpty {
-            ForEach(sessions) { session in
+        if !harnessBadges.isEmpty {
+            ForEach(harnessBadges) { session in
                 Button("Open \(session.agent.displayName) Session") { onActivateHarness(session.id) }
             }
             Divider()

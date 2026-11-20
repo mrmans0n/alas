@@ -8,6 +8,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Open a run's visible terminal from the iPhone and iPad Run menu, and show local notifications for confirmed successes and failures.
 
+## [0.24.4] - 2026-11-20
+
+### ✨ Features
+
+- Bring more iPhone session parity with sorting, reconnect banners, delegated-session links, mention scopes, `/ship`, auto-run controls, and path and branch copy actions (#2610).
+- Stack running simulators, Android devices, and worktree VMs in the Devices rail, with per-device controls and center-tab transfer (#2613).
+- Stage, unstage, and discard individual hunks from the iPhone app (#2616).
+- Add initial support for sharing physical USB Android devices over paired Tailscale connections, with per-pairing View or Control grants, ticketed H.264 transport, takeover, and agent hand-back (#2618).
+- Copy, quote, and select text from transcript messages on iPhone (#2619).
+- Add file search, image and Markdown previews, syntax-coloured source, and larger non-wrapping hunk controls to iPhone Files (#2621).
+- Show idle agent badges on worktree rows and add hover cards with session status and details (#2622).
+
+### 🐛 Fixes
+
+- Restore iPhone control after reopening a session and preserve the first prompt queued during takeover (#2611, #2612).
+- Keep the first characters visible when opening files with line numbers enabled (#2614).
+- Show progress for slow iPhone session actions and avoid implying that another device holds the session (#2615).
+- Release removed iPhone host listeners only after listener-map access ends, addressing a suspected exclusivity crash (#2620).
+
+### 🏗️ Internal
+
+- Update `tree-sitter-php` from 0.25.1 to 0.25.2 (#2617).
+
 ## [0.24.3] - 2026-11-19
 
 ### ✨ Features

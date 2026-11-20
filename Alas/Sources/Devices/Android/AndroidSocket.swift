@@ -76,10 +76,10 @@ final class AndroidSocket: @unchecked Sendable {
         }
     }
 
-    /// `onError` runs on the socket's queue when the write fails.
-    func write(_ data: Data, onError: @escaping @Sendable (String) -> Void) {
+    /// Sends in stream order. Completion on the socket queue reports a transport error, if any.
+    func write(_ data: Data, completion: @escaping @Sendable (String?) -> Void) {
         connection.send(content: data, completion: .contentProcessed { error in
-            if let error { onError("The screen stopped taking input: \(error.localizedDescription)") }
+            completion(error.map { "The screen stopped taking input: \($0.localizedDescription)" })
         })
     }
 

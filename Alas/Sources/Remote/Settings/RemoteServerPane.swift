@@ -209,6 +209,10 @@ struct RemoteServerPane: View {
                     tailscaleGroup(state.remoteTailscale)
                 }
 
+                if state.config.remote.enabled, state.androidPane.control != nil {
+                    RemoteDeviceSharingSettings(state: state)
+                }
+
                 SettingsGroup(title: "Paired devices") {
                     if state.remotePairing.devices.isEmpty {
                         SettingsRow(name: "No devices", desc: "Pair a device to see it here.") {

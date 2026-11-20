@@ -26,7 +26,8 @@ extension RemoteServerMessage {
             federationEnabled: true,
             peers: identity.peers,
             capabilities: identity.consoleCapabilities + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1, PushRelayCapability.v1,
-                                                           HostProtocolCapability.worktreesGitPhoneV1, HostProtocolCapability.shepherdsPhoneV1,
+                                                           HostProtocolCapability.worktreesGitPhoneV1, HostProtocolCapability.worktreesHunksPhoneV1,
+                                                           HostProtocolCapability.shepherdsPhoneV1,
                                                            PeerToolTerminalCapability.v1, PeerSubagentCapability.v1]
                 + identity.hostCapabilities,
             hostVersion: identity.hostVersion)

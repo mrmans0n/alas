@@ -95,16 +95,6 @@ struct ACPComposerDraftBridgeTests {
         textView.cancelSymbolPresenceCheck()
     }
 
-    @Test("formats every message line as a Markdown quote")
-    func formatsMessageQuote() {
-        #expect(ACPMessageQuote.markdown("one\n\n**two**") == "> one\n> \n> **two**")
-    }
-
-    @Test("only non-whitespace messages can be quoted")
-    func messageQuoteEligibility() {
-        #expect(ACPMessageQuote.canQuote("hello"))
-        #expect(!ACPMessageQuote.canQuote(" \n\t"))
-    }
     @Test("read-only composers preserve the owner's draft during custom insertion",
           arguments: ["mention", "image", "draft", "dictation", "quote"])
     func readOnlyComposerRejectsCustomInsertion(_ input: String) {

@@ -46,6 +46,7 @@ final class FakeRemoteApp: RemoteSessionPresenter, RemoteWorktreeInspecting {
     var sessionListChanges: ChangeSignal<Void>?
     var peerConsoleHost: PeerConsoleHost? { nil }
     var peerPortForwardHost: PeerPortForwardHost?
+    var peerDeviceHost: PeerDeviceHost?
     func sessionTabIndex(_ id: String, owner: SessionOwnerID) -> Int? { nil }
     var fullToolCallContents: [String: String] = [:]
     var fullToolCallContentCallCount = 0

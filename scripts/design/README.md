@@ -90,18 +90,24 @@ the real updater over a `/bin/sh` script that exits with the app, and the What's
 version is never written. Sheets are composited like the editor popups.
 
 Set `ALAS_CAPTURE_CENTER` to `devices`, `devices-empty`, `devices-settings` or `devices-switcher` to capture galleries of the Devices
-tab (`DesignCaptureDevices`): a simulator an agent drives, one you drive with an agent waiting and a failed app
-install, a running and a paused VM; the empty states (loading, no Xcode, no simulators, shut down, booting, VM not set
-up); and the simulator settings popover. They run the tab's own views over scripted devices and an in-memory
-`DeviceAgentControl`; a simulator's screen is a painted placeholder and nothing talks to `simctl`, the simulator
-service or a VM. `devices-switcher` shows the switcher's popover open: as it opens, filtered, and hovering a
-shut-down simulator.
+tab (`DesignCaptureDevices`): the Devices rail with one, two and three devices, at 300 and 420 pt, a collapsed one and
+a VM in a tab; the empty states (loading, no Xcode, no simulators, nothing running, booting, a VM starting); and the
+simulator settings popover. They run the tab's own views over scripted devices and an in-memory
+`DeviceAgentControl`; a simulator's screen is a painted placeholder, a VM's a gradient, and nothing talks to
+`simctl`, the simulator service or a VM. `devices-switcher` shows + Add's popover: as it opens, filtered, and
+hovering a shut-down simulator.
 
 Set `ALAS_CAPTURE_CENTER` to `run-report` (a failed run's report tab with a scripted on-device failure brief),
 `web-preview` (the web preview on a demo page served from this Mac's loopback), `computer-use-badge` (the badge in
 the agent toolbar, "Using the VM") or `space-pager` (two demo spaces added, so the pager shows), and
 `ALAS_CAPTURE_DIALOG` to `run-script-help`, `new-run-script` or `repo-hook-approval` (a demo hook; nothing runs) to
 capture those views (`DesignCaptureLeftovers`). `Sidebar/RepoDot.swift` is not used anywhere, so it has no capture.
+
+Set `ALAS_CAPTURE_CENTER` to `agent-badge-popovers` to capture a gallery of the sidebar agent badge hover card
+(`DesignCaptureAgentBadges`) for scripted sessions (running with a plan, a permission, awaiting input, idle, a
+terminal pane, a bare one) next to worktree-row badge strips; no session or harness is read.
+Set `ALAS_CAPTURE_SIDEBAR=badge-hover` to hold the selected row's first agent badge hovered, so the real card opens
+in its own panel and is composited onto `window.png` (also written as `window-extra-<n>.png`).
 
 ## How it works
 

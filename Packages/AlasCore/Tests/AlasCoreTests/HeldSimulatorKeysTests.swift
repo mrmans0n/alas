@@ -18,6 +18,17 @@ struct HeldSimulatorKeysTests {
         #expect(held.keyUp(Self.delete) == nil)
     }
 
+    @Test func repeatsOnlyForwardForAnAlreadyHeldKeyAndReleaseItOnce() {
+        var held = HeldSimulatorKeys()
+        let down = HeldSimulatorKeys.Event(usage: 0x2A, down: true)
+        #expect(held.repeatedKeyDown(Self.delete) == nil)
+        #expect(held.keyDown(Self.delete, command: false) == down)
+        #expect(held.repeatedKeyDown(Self.delete) == down)
+        #expect(held.repeatedKeyDown(Self.delete) == down)
+        #expect(held.releaseAll() == [.init(usage: 0x2A, down: false)])
+        #expect(held.repeatedKeyDown(Self.delete) == nil)
+    }
+
     @Test func aKeyReleasedAfterCommandWasPressedStillLiftsInTheSimulator() {
         var held = HeldSimulatorKeys()
         #expect(held.keyDown(0x00, command: true) == nil)

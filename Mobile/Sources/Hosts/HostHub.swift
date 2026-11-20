@@ -36,13 +36,14 @@ final class HostHub {
     /// Hosts whose list arrived on the live connection, not from the cache.
     private var listedLive: Set<UUID> = []
     /// What each host's hello advertised, for this connection.
-    @ObservationIgnored private var capabilities: [UUID: Set<String>] = [:]
+    private var capabilities: [UUID: Set<String>] = [:]
 
     @ObservationIgnored private var connections: [UUID: PhoneConnection] = [:]
     /// Forgotten hosts still to be told to stop pushing, and their connections.
     @ObservationIgnored private var pendingUnregister: [PairedHost]
     @ObservationIgnored private var unregisterConnections: [UUID: PhoneConnection] = [:]
     @ObservationIgnored private var listeners: [UUID: [UUID: @MainActor (PhoneServerMessage) -> Void]] = [:]
+    @ObservationIgnored private var deviceListeners: [UUID: [UUID: @MainActor (DeviceLinkEvent) -> Void]] = [:]
     /// Holders per session per host. The host keeps one follow per socket, so
     /// only the last holder's release may unsubscribe.
     @ObservationIgnored private var subscriptions: [UUID: [String: Int]] = [:]
@@ -85,6 +86,11 @@ final class HostHub {
     /// Whether the host's hello on this connection advertised `capability`.
     func supports(_ capability: String, on id: UUID) -> Bool {
         capabilities[id]?.contains(capability) == true
+    }
+
+    func verifiedDeviceOrigin(of id: UUID) -> URL? {
+        guard state(of: id) == .online, supports(PeerDeviceCapability.v1, on: id) else { return nil }
+        return connections[id]?.verifiedHTTPSOrigin
     }
 
     func sessions(of id: UUID) -> [RemoteSessionSummary] {
@@ -150,7 +156,9 @@ final class HostHub {
         listedLive.remove(id)
         capabilities[id] = nil
         sessionLists[id] = nil
-        listeners[id] = nil
+        // Released after the access ends, as in `addListener`.
+        let handlers = (listeners.removeValue(forKey: id), deviceListeners.removeValue(forKey: id))
+        withExtendedLifetime(handlers) {}
         subscriptions[id] = nil
         runTracker(for: id).forget()
         runTrackers[id] = nil
@@ -243,8 +251,31 @@ final class HostHub {
         let key = UUID()
         listeners[id, default: [:]][key] = handler
         return ListenerToken { [weak self] in
-            self?.listeners[id]?[key] = nil
+            // Released only once the access to `listeners` has ended: the handler can hold the last
+            // reference to something owning another token, whose deinit edits `listeners` too.
+            let handler = self?.listeners[id]?.removeValue(forKey: key)
+            withExtendedLifetime(handler) {}
         }
+    }
+
+    enum DeviceLinkEvent {
+        case connectionChanged
+        case message(PeerDeviceEvent)
+    }
+
+    func addDeviceListener(_ id: UUID, _ handler: @escaping @MainActor (DeviceLinkEvent) -> Void) -> ListenerToken {
+        let key = UUID()
+        deviceListeners[id, default: [:]][key] = handler
+        return ListenerToken { [weak self] in
+            // Released after the access ends, as in `addListener`.
+            let handler = self?.deviceListeners[id]?.removeValue(forKey: key)
+            withExtendedLifetime(handler) {}
+        }
+    }
+
+    private func notifyDeviceListeners(_ event: DeviceLinkEvent, on id: UUID) {
+        guard let listeners = deviceListeners[id] else { return }
+        for handler in listeners.values { handler(event) }
     }
 
     /// Follows `sessionId` until the token is released. Every holder asks for
@@ -287,12 +318,14 @@ final class HostHub {
 
     private func makeConnection(for host: PairedHost, token: String) -> PhoneConnection {
         let id = host.id
-        return PhoneConnection(
+        let connection = PhoneConnection(
             origins: host.origins, lastOrigin: host.lastOrigin, token: token,
             expectedServerId: host.serverId, expectedPublicKey: host.publicKey
         ) { [weak self] event in
             self?.handle(event, from: id)
         }
+        connection.acknowledge([PeerDeviceCapability.v1])
+        return connection
     }
 
     private func handle(_ event: PhoneConnection.Event, from id: UUID) {
@@ -309,6 +342,8 @@ final class HostHub {
                 sendPushRegistration(to: id)
                 if supports(HostProtocolCapability.runsScriptsV1, on: id) { runTracker(for: id).refresh() }
             }
+            // Do not depend on a SwiftUI render between losing one socket and adopting the next.
+            notifyDeviceListeners(.connectionChanged, on: id)
         case .hello(_, _, _, _, let capabilities, _):
             // Arrives just before `.online`, while `send` is still a no-op;
             // the state change above asks for the list and registers push.
@@ -319,6 +354,9 @@ final class HostHub {
             store.save(hosts)
         case .message(let message):
             switch message {
+            case .device(let event):
+                if verifiedDeviceOrigin(of: id) != nil { notifyDeviceListeners(.message(event), on: id) }
+                return
             case .sessionList(let sessions):
                 sessionLists[id] = sessions
                 listedLive.insert(id)
@@ -334,8 +372,13 @@ final class HostHub {
                 sessions.removeAll { $0.id == session.id }
                 sessions.append(session)
                 sessionLists[id] = sessions
-            case .hello:
+            case .hello(_, _, _, _, _, let offeredCapabilities, _):
                 // A re-broadcast hello on a live socket: the host's state changed.
+                let hadDevices = supports(PeerDeviceCapability.v1, on: id)
+                capabilities[id] = Set(offeredCapabilities)
+                if hadDevices != supports(PeerDeviceCapability.v1, on: id) {
+                    notifyDeviceListeners(.connectionChanged, on: id)
+                }
                 send(.listSessions, to: id)
             default:
                 break

@@ -231,7 +231,7 @@ struct AgentSidebarRollupBuilder {
     /// id-shortening heuristic can reliably reconstruct — falling back to
     /// `AgentSidebarModelDisplay.shortName` only when the id isn't found in
     /// the advertised list (unknown/stale id, or no list yet).
-    private static func modelDisplay(currentModel: String?, availableModels: [ACPModelInfo]) -> String? {
+    static func modelDisplay(currentModel: String?, availableModels: [ACPModelInfo]) -> String? {
         guard let currentModel else { return nil }
         if let declared = availableModels.first(where: { $0.id == currentModel })?.name {
             return declared
@@ -307,7 +307,7 @@ struct AgentSidebarRollupBuilder {
         }
     }
 
-    private static func planProgress(for plan: [ACPMessage.PlanItem]?) -> AgentSidebarPlanProgress? {
+    static func planProgress(for plan: [ACPMessage.PlanItem]?) -> AgentSidebarPlanProgress? {
         guard let state = ACPPlanPillState(items: plan) else { return nil }
         return AgentSidebarPlanProgress(
             completed: state.done,

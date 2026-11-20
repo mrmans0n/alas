@@ -3,8 +3,8 @@ import Foundation
 
 extension AppState {
     /// Installs and launches the app a run script declares (`# alas-app:`)
-    /// after a successful run: on the worktree's simulator, which its Devices
-    /// tab then shows. Remote worktrees are skipped; their simulators would be
+    /// after a successful run: on the worktree's simulator, which the Devices
+    /// rail or its tab then shows. Remote worktrees are skipped; their simulators would be
     /// on another Mac.
     func installRunScriptApp(_ appPath: String, worktree: Worktree) async {
         guard !RemotePath.isReserved(worktree.id), webPreviewRemoteHost(for: worktree) == nil else { return }
@@ -15,20 +15,12 @@ extension AppState {
             ? URL(fileURLWithPath: appPath)
             : worktree.path.appendingPathComponent(appPath)
         let pane = rightPaneStore.activeState(worktreeId: worktree.id)
-        guard let device = SimulatorTarget.choose(selection: pane?.devicesSelection, simulators: devicePane.devices ?? []) else {
+        guard let device = SimulatorTarget.choose(lastUsed: pane?.devicesLastUsed, simulators: devicePane.devices ?? []) else {
             let appName = app.deletingPathExtension().lastPathComponent
             inAppNotifications.post("No iOS simulator to open \(appName) on", severity: .error, worktreeID: worktree.id)
             return
         }
-        noteDeviceUse(device.udid, worktreeID: worktree.id)
-        if let pane {
-            pane.devicesSelection = .simulator(device.udid)
-            pane.activeTab = .device
-        }
-        if !config.rightPaneVisible {
-            config.rightPaneVisible = true
-            saveConfig()
-        }
+        revealDevice(.simulator(device.udid), worktreeID: worktree.id)
         await installAppForUser(app, on: device)
     }
 
