@@ -442,6 +442,8 @@ struct HostProtocolServerTests {
         #expect(environment.launcher.requests.map(\.isHidden) == [hidden])
         #expect(environment.launcher.requests.map(\.activatesConsole) == [activates])
         #expect(environment.launcher.requests.map(\.promptsForRepoHooks) == [caller == .localUser(uid: 501)])
+        let record = try #require(fixture.host.runs.list(worktreeID: fixture.worktree.id).first)
+        #expect(record.consoleIsHidden == hidden)
     }
 
     nonisolated static func devScript(
@@ -983,7 +985,7 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["rev-list", "--count", "HEAD"], cwd: repo).stdout == "2\n")
     }
 
-    /// An app host keeps git to the user at it, and to the user's own phone;
+    /// An app host keeps git, hunks included, to the user at it, and to the user's own phone;
     /// another paired Mac stays refused.
     @Test(arguments: [(RemoteDeviceKind.phone, true), (.alasInstance, false)])
     func anAppHostServesGitOnlyToThePhone(kind: RemoteDeviceKind, served: Bool) async throws {
@@ -1003,7 +1005,18 @@ struct HostProtocolServerTests {
             Issue.record("no response")
             return
         }
-        #expect(result == (served ? .done : .failure(error: .invalidRequest(reason: "This host does not serve git actions."))))
+        let refused = HostResponse.failure(error: .invalidRequest(reason: "This host does not serve git actions."))
+        #expect(result == (served ? .done : refused))
+
+        // Hunks too, which an app host otherwise doesn't serve: this one is past the gate, and stale.
+        await connection.receive(HostClientMessage(id: 2, request: .mutateWorktree(worktree: ref, branch: "main", change: .hunk(
+            path: "new.txt", stage: .unstaged, index: 0, header: "@@", linesHash: "", action: .stage))))
+        guard case .response(2, let hunk) = client.messages.last else {
+            Issue.record("no hunk response")
+            return
+        }
+        let unserved = HostResponse.failure(error: .invalidRequest(reason: "This host does not serve this git action."))
+        #expect(served ? hunk != unserved && hunk != refused : hunk == refused)
     }
 
     enum Refusal: CaseIterable {
@@ -3902,7 +3915,7 @@ struct HostProtocolServerTests {
         ), fixture: fixture)
         defer { routeHost.stop() }
 
-        #expect(link.acknowledged == (route == .twoWay ? [] : [HostProtocolCapability.delegationReverseV1]))
+        #expect(link.acknowledged.contains(HostProtocolCapability.delegationReverseV1) == (route != .twoWay))
         let request: HostRequest = route == .beyondDelegation ? .listSessions : .delegation(.discover(repository: nil))
         link.emit(.message(.peerHost(HostClientMessage(id: 4, request: request))))
         try await eventually { await MainActor.run { !link.sent.isEmpty } }

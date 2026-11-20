@@ -13,6 +13,8 @@ struct DeviceScreenView: NSViewRepresentable {
     var onStopped: (String) -> Void
     /// False while an agent drives: clicks and keys stay off the simulator.
     var allowsInput = true
+    /// Android also checks the current reservation before handling each AppKit event.
+    var remoteInputGate: DeviceAgentControl?
     var onBlockedClick: () -> Void = {}
     /// A dropped `.app` the simulator can run.
     var onDropApp: (URL) -> Void = { _ in }
@@ -53,7 +55,7 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onText = onText
         view.onScroll = onScroll
         view.allowsInput = allowsInput
-        view.attach(udid: udid, client: client)
+        view.attach(udid: udid, client: client, remoteInputGate: remoteInputGate)
         return view
     }
 
@@ -72,7 +74,7 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onText = onText
         view.onScroll = onScroll
         view.allowsInput = allowsInput
-        if view.udid != udid { view.attach(udid: udid, client: client) }
+        if view.udid != udid { view.attach(udid: udid, client: client, remoteInputGate: remoteInputGate) }
     }
 
     static func dismantleNSView(_ view: DeviceScreenNSView, coordinator: ()) {
@@ -85,6 +87,8 @@ final class DeviceScreenNSView: NSView {
     private(set) var udid: String?
     private weak var client: (any DeviceScreenSource)?
     private var token: UUID?
+    private weak var remoteInputGate: DeviceAgentControl?
+    private var localInputToken: UUID?
     /// The portrait panel's size in pixels.
     private var screenSize = CGSize.zero
     /// Which way the frames' interface is turned.
@@ -111,6 +115,11 @@ final class DeviceScreenNSView: NSView {
         didSet { if oldValue, !allowsInput { releaseHeldInput() } }
     }
 
+    private var acceptsInput: Bool {
+        guard allowsInput, let udid else { return false }
+        return remoteInputGate?.remoteInputOwner(udid: udid) == nil
+    }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
@@ -126,8 +135,8 @@ final class DeviceScreenNSView: NSView {
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    @objc func paste(_ sender: Any?) { onPaste() }
-    @objc func copy(_ sender: Any?) { onCopy() }
+    @objc func paste(_ sender: Any?) { if acceptsInput { onPaste() } }
+    @objc func copy(_ sender: Any?) { if acceptsInput { onCopy() } }
 
     /// One file this device can run; anything else isn't offered a drop.
     private func droppedApp(_ info: NSDraggingInfo) -> URL? {
@@ -140,7 +149,7 @@ final class DeviceScreenNSView: NSView {
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard droppedApp(sender) != nil else { return [] }
-        guard allowsInput else {
+        guard acceptsInput else {
             onBlockedClick()
             return []
         }
@@ -154,7 +163,7 @@ final class DeviceScreenNSView: NSView {
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         onDropTargeted(false)
-        guard allowsInput, let app = droppedApp(sender) else { return false }
+        guard acceptsInput, let app = droppedApp(sender) else { return false }
         onDropApp(app)
         return true
     }
@@ -175,7 +184,7 @@ final class DeviceScreenNSView: NSView {
         CATransaction.commit()
     }
 
-    func attach(udid: String, client: any DeviceScreenSource) {
+    func attach(udid: String, client: any DeviceScreenSource, remoteInputGate: DeviceAgentControl?) {
         detach()
         self.udid = udid
 #if DEBUG
@@ -186,6 +195,11 @@ final class DeviceScreenNSView: NSView {
             return
         }
 #endif
+        self.remoteInputGate = remoteInputGate
+        localInputToken = remoteInputGate?.registerLocalInputStop(udid: udid) { [weak self] in
+            self?.releaseHeldInput()
+            self?.onDropTargeted(false)
+        }
         self.client = client
         token = client.subscribe(
             udid: udid,
@@ -197,6 +211,9 @@ final class DeviceScreenNSView: NSView {
     func detach() {
         releaseHeldInput()
         if let udid, let token { client?.unsubscribe(udid: udid, token: token) }
+        if let udid, let localInputToken { remoteInputGate?.unregisterLocalInputStop(udid: udid, token: localInputToken) }
+        localInputToken = nil
+        remoteInputGate = nil
         udid = nil
         token = nil
         screenSize = .zero
@@ -259,7 +276,7 @@ final class DeviceScreenNSView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard allowsInput else {
+        guard acceptsInput else {
             onBlockedClick()
             return
         }
@@ -271,14 +288,14 @@ final class DeviceScreenNSView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard lastTouch != nil else { return }
+        guard acceptsInput, lastTouch != nil else { return }
         let point = location(event)
         guard let touch = geometry.clamped(x: point.x, y: point.y) else { return }
         send("move", touch)
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard let last = lastTouch else { return }
+        guard acceptsInput, let last = lastTouch else { return }
         let point = location(event)
         send("end", geometry.clamped(x: point.x, y: point.y) ?? last)
         if let start = gestureStart, let end = geometry.uprightClamped(x: point.x, y: point.y) { onGesture?(start, end) }
@@ -288,7 +305,7 @@ final class DeviceScreenNSView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         let point = location(event)
-        guard allowsInput, let udid, let at = geometry.normalized(x: point.x, y: point.y) else {
+        guard acceptsInput, let udid, let at = geometry.normalized(x: point.x, y: point.y) else {
             super.scrollWheel(with: event)
             return
         }
@@ -325,7 +342,7 @@ final class DeviceScreenNSView: NSView {
     // MARK: Keys
 
     override func keyDown(with event: NSEvent) {
-        guard allowsInput, !event.modifierFlags.contains(.command),
+        guard acceptsInput, !event.modifierFlags.contains(.command),
               HIDKeyboardUsage.usage(forKeyCode: event.keyCode) != nil else {
             super.keyDown(with: event)
             return
@@ -342,7 +359,7 @@ final class DeviceScreenNSView: NSView {
     }
 
     override func keyUp(with event: NSEvent) {
-        guard let key = heldKeys.keyUp(event.keyCode) else {
+        guard acceptsInput, let key = heldKeys.keyUp(event.keyCode) else {
             super.keyUp(with: event)
             return
         }
@@ -350,7 +367,7 @@ final class DeviceScreenNSView: NSView {
     }
 
     override func flagsChanged(with event: NSEvent) {
-        guard allowsInput, HIDKeyboardUsage.usage(forModifierKeyCode: event.keyCode) != nil else {
+        guard acceptsInput, HIDKeyboardUsage.usage(forModifierKeyCode: event.keyCode) != nil else {
             super.flagsChanged(with: event)
             return
         }
@@ -373,6 +390,7 @@ final class DeviceScreenNSView: NSView {
     /// Lifts a touch, key or modifier still down, so none stays stuck in the simulator.
     private func releaseHeldInput() {
         if let last = lastTouch { send("end", last) }
+        gestureStart = nil
         heldKeys.releaseAll().forEach(sendKey)
     }
 }
@@ -380,7 +398,7 @@ final class DeviceScreenNSView: NSView {
 extension DeviceScreenNSView: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
-        case #selector(paste(_:)), #selector(copy(_:)): allowsInput && udid != nil
+        case #selector(paste(_:)), #selector(copy(_:)): acceptsInput
         default: true
         }
     }

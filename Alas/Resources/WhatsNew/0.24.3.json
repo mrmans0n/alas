@@ -1,0 +1,16 @@
+{
+  "version": "0.24.3",
+  "headline": {
+    "title": "Subagents on iPhone",
+    "body": "The iPhone beta shows delegated work as subagent cards, lets you follow each child transcript live, and keeps delegated sessions tied to their parent.",
+    "media": "media/0.24.3-subagents-on-iphone.png"
+  },
+  "also": [
+    {
+      "title": "See live command output"
+    },
+    {
+      "title": "Streamlined worktree creation"
+    }
+  ]
+}

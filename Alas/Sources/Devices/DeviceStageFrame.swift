@@ -1,6 +1,14 @@
 import AlasCore
 import SwiftUI
 
+/// The space a device's stage puts around its screen; `DevicesRailList`
+/// sizes stages with it.
+enum DeviceStageMetrics {
+    static let margin: CGFloat = 12
+    static let gutterWidth: CGFloat = 44
+    static let bezel: CGFloat = 4
+}
+
 /// A device's screen framed at its shape, turned for landscape, with a
 /// gutter of hardware buttons on its right.
 struct DeviceStageFrame<Screen: View, Gutter: View>: View {
@@ -12,9 +20,9 @@ struct DeviceStageFrame<Screen: View, Gutter: View>: View {
     @ViewBuilder let gutter: () -> Gutter
     @Environment(\.theme) private var theme
 
-    private static var margin: CGFloat { 12 }
-    private static var gutterWidth: CGFloat { 44 }
-    private static var bezel: CGFloat { 4 }
+    private static var margin: CGFloat { DeviceStageMetrics.margin }
+    private static var gutterWidth: CGFloat { DeviceStageMetrics.gutterWidth }
+    private static var bezel: CGFloat { DeviceStageMetrics.bezel }
 
     var body: some View {
         GeometryReader { geometry in
@@ -174,7 +182,7 @@ struct DeviceDriverPill: View {
         let status = HStack(spacing: 6) {
             switch driver {
             case .agent(let sessionID, _, _):
-                Circle().fill(theme.color(DevicesSwitcher.colorToken(.busy))).frame(width: 6, height: 6)
+                Circle().fill(theme.color(DeviceStyle.colorToken(.busy))).frame(width: 6, height: 6)
                 Text(flow.map { "Running \($0.name) · step \($0.step) of \($0.total)" } ?? "\(agentName(sessionID)) is driving")
                     .foregroundStyle(theme.color("fg"))
                     .fixedSize()

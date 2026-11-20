@@ -65,45 +65,52 @@ struct RepoTile: View {
 
 /// One worktree, read like a row of the Mac sidebar: the branch with its
 /// prefix faint, then what needs you (or what runs), the session it opens and
-/// its line counts. A tap opens that session; the others are a long press away.
+/// its line counts. With one session, a tap opens it; with several, each gets
+/// its own row under the branch.
 struct WorktreeRow: View {
     /// "Delegated by <parent>" for a delegated session, or "Delegated" when its parent is not listed.
     static func delegationCaption(_ session: RemoteSessionSummary, in host: RemoteSessionCatalog.Host?) -> String? {
         guard let parentId = session.parentSessionId else { return nil }
-        let parent = host?.sections.lazy.flatMap(\.worktrees).flatMap { $0.activeSessions + $0.closedSessions }
-            .first { $0.id == parentId }
+        let worktrees: [RemoteWorktreeEntry] = host?.sections.flatMap(\.worktrees) ?? []
+        let parent = worktrees.lazy.flatMap { $0.activeSessions + $0.closedSessions }.first { $0.id == parentId }
         guard let title = parent?.title, !title.isEmpty else { return "Delegated" }
         return "Delegated by \(title)"
     }
 
+    /// Session rows shown before "N more sessions" reveals the rest.
+    private static let collapsedRowLimit = 3
+
     let entry: RemoteWorktreeEntry
     /// The machine holding it, named when its list mixes machines.
     var machine: String? = nil
-    /// The worktree holds the session shown beside the list (iPad).
-    var isSelected = false
+    /// The session shown beside the list (iPad), when this worktree holds it.
+    var selectedSessionId: String? = nil
+    /// Lists every session, as a search does so the one it matched is in view.
+    var showsAllSessions = false
     /// A session's caption, such as who delegated it.
     var caption: (RemoteSessionSummary) -> String? = { _ in nil }
     let open: (RemoteSessionSummary) -> Void
 
+    @State private var expanded = false
+
     var body: some View {
+        if entry.activeSessions.count < 2 {
+            compactBody
+        } else {
+            sessionsBody
+        }
+    }
+
+    private var compactBody: some View {
         let lead = entry.leadSession
-        Button { if let lead { open(lead) } } label: {
+        return Button { if let lead { open(lead) } } label: {
             HStack(alignment: .top, spacing: 10) {
                 Circle().fill(dotColor).frame(width: 8, height: 8).padding(.top, 7)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline) {
                         branchName
-                        if let machine {
-                            Text(machine)
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .padding(.horizontal, 6).padding(.vertical, 1)
-                                .background(.quaternary, in: Capsule())
-                                .layoutPriority(-1)
-                                .accessibilityLabel("on \(machine)")
-                        }
+                        machineCapsule
                         Spacer(minLength: 6)
                         if let lead {
                             Text(RepoDisplay.relativeTime(lead.updatedAt))
@@ -121,17 +128,129 @@ struct WorktreeRow: View {
         }
         .buttonStyle(.plain)
         .disabled(lead == nil)
-        .listRowBackground(isSelected ? Color.accentColor.opacity(0.18) : nil)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .contextMenu {
-            if entry.activeSessions.count > 1 {
-                ForEach(entry.activeSessions, id: \.id) { session in
-                    Button { open(session) } label: {
-                        Text(session.title)
-                        if let caption = caption(session) { Text(caption) }
+        .listRowBackground(selectedSessionId != nil ? Color.accentColor.opacity(0.18) : nil)
+        .accessibilityAddTraits(selectedSessionId != nil ? .isSelected : [])
+    }
+
+    /// Two or more sessions: the branch line is not a button, each session
+    /// below it is, so a tap opens exactly the one you meant.
+    private var sessionsBody: some View {
+        let rows = entry.sessionRows
+        // The open session (iPad) never hides under "more".
+        let selectedHidden = rows.dropFirst(Self.collapsedRowLimit).contains { $0.id == selectedSessionId }
+        let all = expanded || showsAllSessions || selectedHidden
+        let shown = all ? rows : Array(rows.prefix(Self.collapsedRowLimit))
+        return HStack(alignment: .top, spacing: 10) {
+            Circle().fill(dotColor).frame(width: 8, height: 8).padding(.top, 7)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
+                    branchName
+                    machineCapsule
+                    Spacer(minLength: 6)
+                    if let s = entry.summary, s.conflictCount > 0 {
+                        Text("\(s.conflictCount) conflict\(s.conflictCount == 1 ? "" : "s")")
+                            .font(.footnote.weight(.semibold)).foregroundStyle(.red)
+                            .lineLimit(1).fixedSize()
+                    }
+                    lineCounts.font(.footnote.monospacedDigit())
+                }
+                ForEach(shown) { row in sessionRow(row) }
+                if !all, rows.count > Self.collapsedRowLimit {
+                    Button(rows.count - Self.collapsedRowLimit == 1 ? "1 more session" : "\(rows.count - Self.collapsedRowLimit) more sessions") { expanded = true }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .foregroundStyle(.tint)
+                        .padding(.leading, 22)
+                }
+            }
+            // Closed sessions open read-only, with Reopen, as the Mac's session history does.
+            if !entry.closedSessions.isEmpty {
+                Menu("Closed Sessions", systemImage: "clock.arrow.circlepath") {
+                    ForEach(entry.closedSessions, id: \.id) { session in
+                        Button { open(session) } label: {
+                            Text(session.title)
+                            Text(RepoDisplay.relativeTime(session.updatedAt))
+                        }
                     }
                 }
             }
+            if let summary = entry.summary {
+                Section { CopyWorktreeButtons(summary: summary) }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func sessionRow(_ row: RemoteSessionRow) -> some View {
+        let session = row.session
+        return Button { open(session) } label: {
+            HStack(spacing: 6) {
+                if row.depth == 1 {
+                    Text("\u{21B3}").foregroundStyle(.tertiary).accessibilityHidden(true)
+                }
+                Circle().fill(sessionDotColor(session)).frame(width: 6, height: 6)
+                    .accessibilityHidden(true)
+                AgentLogo(agentId: session.agentId, size: 16).accessibilityHidden(true)
+                Text(session.title).lineLimit(1)
+                Spacer(minLength: 6)
+                switch session.status {
+                case "awaitingPermission": Text("Approval").fontWeight(.semibold).foregroundStyle(.orange)
+                case "awaitingInput": Text("Input").fontWeight(.semibold).foregroundStyle(.orange)
+                default: Text(RepoDisplay.relativeTime(session.updatedAt)).foregroundStyle(.secondary)
+                }
+            }
+            .font(.footnote)
+            .padding(.leading, row.depth == 1 ? 16 : 0)
+            .padding(.vertical, 3).padding(.horizontal, 4)
+            .background(row.id == selectedSessionId ? Color.accentColor.opacity(0.18) : .clear,
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        // Plain, not borderless: borderless tints the label. Either keeps each row its own tap target in a List.
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(session.title), \(statusCaption(session))")
+        .accessibilityHint(caption(session) ?? "")
+        .accessibilityAddTraits(row.id == selectedSessionId ? .isSelected : [])
+    }
+
+    private func sessionDotColor(_ session: RemoteSessionSummary) -> Color {
+        switch session.status {
+        case "awaitingPermission", "awaitingInput": return .orange
+        case "idle": return Color.secondary.opacity(0.35)
+        default: return .blue
+        }
+    }
+
+    private func statusCaption(_ session: RemoteSessionSummary) -> String {
+        switch session.status {
+        case "awaitingPermission": return "Needs approval"
+        case "awaitingInput": return "Waiting for you"
+        case "idle": return "Idle"
+        default: return "Working"
+        }
+    }
+
+    @ViewBuilder private var machineCapsule: some View {
+        if let machine {
+            Text(machine)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.horizontal, 6).padding(.vertical, 1)
+                .background(.quaternary, in: Capsule())
+                .layoutPriority(-1)
+                .accessibilityLabel("on \(machine)")
+        }
+    }
+
+    @ViewBuilder private var lineCounts: some View {
+        if let s = entry.summary, s.addedLines + s.deletedLines > 0 {
+            HStack(spacing: 4) {
+                Text("+\(RepoDisplay.shortCount(s.addedLines))").foregroundStyle(.green)
+                Text("\u{2212}\(RepoDisplay.shortCount(s.deletedLines))").foregroundStyle(.red)
+            }
+            .fixedSize()
         }
     }
 
@@ -158,6 +277,7 @@ struct WorktreeRow: View {
 
     private func detailLine(_ lead: RemoteSessionSummary?) -> some View {
         HStack(spacing: 6) {
+            if let lead { AgentLogo(agentId: lead.agentId, size: 16).accessibilityHidden(true) }
             if let note = note(lead) {
                 Text(note.text)
                     .fontWeight(note.leads ? .semibold : .regular)
@@ -167,21 +287,8 @@ struct WorktreeRow: View {
             }
             Text(lead?.title ?? statusText)
                 .foregroundStyle(.secondary).lineLimit(1)
-            if entry.activeSessions.count > 1 {
-                Text("+\(entry.activeSessions.count - 1)")
-                    .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(.quaternary, in: Capsule())
-                    .accessibilityLabel("\(entry.activeSessions.count - 1) more sessions")
-            }
             Spacer(minLength: 6)
-            if let s = entry.summary, s.addedLines + s.deletedLines > 0 {
-                HStack(spacing: 4) {
-                    Text("+\(RepoDisplay.shortCount(s.addedLines))").foregroundStyle(.green)
-                    Text("\u{2212}\(RepoDisplay.shortCount(s.deletedLines))").foregroundStyle(.red)
-                }
-                .fixedSize()
-            }
+            lineCounts
         }
         .font(.footnote.monospacedDigit())
     }
@@ -209,5 +316,19 @@ struct WorktreeRow: View {
         if entry.needsAttention { return .orange }
         if entry.isRunning { return .blue }
         return Color.secondary.opacity(entry.isDirty ? 0.8 : 0.35)
+    }
+}
+
+/// The Mac worktree row's Copy Path and Copy Branch Name; a folder project has no branch.
+struct CopyWorktreeButtons: View {
+    let summary: RemoteWorktreeSummary
+
+    var body: some View {
+        if !summary.path.isEmpty {
+            Button("Copy Path", systemImage: "doc.on.doc") { UIPasteboard.general.string = summary.path }
+        }
+        if !summary.branch.isEmpty {
+            Button("Copy Branch Name", systemImage: "arrow.triangle.branch") { UIPasteboard.general.string = summary.branch }
+        }
     }
 }

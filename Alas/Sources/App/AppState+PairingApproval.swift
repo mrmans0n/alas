@@ -98,6 +98,7 @@ extension AppState {
         remotePairing.onDeviceRevoked = { [weak self] deviceID in
             self?.remotePairingApprovals.invalidate(deviceID: deviceID)
             self?.remoteServer?.disconnectDevice(deviceID)
+            self?.removePeerDeviceGrants(pairingID: deviceID)
         }
     }
 

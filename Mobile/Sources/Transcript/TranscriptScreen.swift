@@ -17,12 +17,28 @@ struct TranscriptScreen: View {
     @State private var showSettings = false
     @State private var renaming = false
     @State private var newTitle = ""
+    @State private var renamingBranch = false
+    @State private var newBranch = ""
+    /// The branch the Rename Branch dialog opened on.
+    @State private var renamedBranch = ""
+    @State private var confirmingArchive = false
+    @State private var actionError: String?
+    /// What a slow worktree or session action is doing, shown until the host answers.
+    @State private var progress: String?
+    /// The worktree a Delete awaits confirmation for, as it was when the user asked.
+    @State private var deleting: SessionWorkspace.RemovalTarget?
+    /// A worktree removal the host refused in a way the user may overrule.
+    @State private var overruling: Overruling?
+    @Environment(\.dismiss) private var dismiss
     /// The worktree whose terminals are pushed from this screen.
     @State private var terminalsWorktree: String?
+    @State private var runTerminal: PeerConsoleSummary?
+    /// Only the latest Run or Restart from this screen may push a terminal.
+    @State private var runNavigation: UUID?
     /// The subagent whose transcript is pushed from this screen; it reads through this screen's session.
     @State private var openedSubagent: RemoteWireMessage.Subagent?
-    /// The delegated session pushed from this screen.
-    @State private var delegatedChild: String?
+    /// The delegated child, or the delegating parent, pushed from this screen.
+    @State private var delegated: String?
 
     var body: some View {
         Group {
@@ -38,13 +54,19 @@ struct TranscriptScreen: View {
             TerminalsList(hub: registry.hub, hostID: hostID, worktreeId: worktreeId)
         }
         .navigationDestination(isPresented: Binding(
+            get: { runTerminal != nil }, set: { if !$0 { runTerminal = nil } })) {
+            if let runTerminal {
+                TerminalScreen(hub: registry.hub, hostID: hostID, console: runTerminal)
+            }
+        }
+        .navigationDestination(isPresented: Binding(
             get: { openedSubagent != nil }, set: { if !$0 { openedSubagent = nil } })) {
             if let openedSubagent, let session = held?.session {
                 SubagentScreen(session: session, subagent: openedSubagent)
             }
         }
-        .navigationDestination(item: $delegatedChild) { childId in
-            TranscriptScreen(hostID: hostID, sessionId: childId)
+        .navigationDestination(item: $delegated) { id in
+            TranscriptScreen(hostID: hostID, sessionId: id)
         }
         .onAppear {
             visible = true
@@ -52,13 +74,15 @@ struct TranscriptScreen: View {
         }
         .onDisappear {
             visible = false
+            runNavigation = nil
             // A view pushed from this screen (a diff, a file) covers it and fires this too; keep
             // the session and workspace alive until the screen itself leaves the stack.
             // Checked a turn later so a pushed view popped along with this screen has cleared
             // its state first (DiffView's own onDisappear), and so a screen that came straight
             // back keeps what it holds.
             Task { @MainActor in
-                if visible || terminalsWorktree != nil || openedSubagent != nil || delegatedChild != nil || workspace?.hasPushedChild(screenID) == true { return }
+                if visible || terminalsWorktree != nil || runTerminal != nil || openedSubagent != nil || delegated != nil
+                    || workspace?.hasPushedChild(screenID) == true { return }
                 held = nil
                 workspaceToken = nil
             }
@@ -84,7 +108,7 @@ struct TranscriptScreen: View {
 
     private func content(_ session: TranscriptSession, _ workspace: SessionWorkspace) -> some View {
         let available = modes(session)
-        return TranscriptContent(session: session, openSubagent: { openedSubagent = $0 })
+        let base = TranscriptContent(session: session, openSubagent: { openedSubagent = $0 })
             // Kept alive under the other tabs so the scroll position survives a switch.
             .opacity(mode == .transcript ? 1 : 0)
             .allowsHitTesting(mode == .transcript)
@@ -93,17 +117,20 @@ struct TranscriptScreen: View {
                 switch mode {
                 case .transcript: EmptyView()
                 case .changes: ChangesView(workspace: workspace, owner: screenID).background(Color(.systemBackground))
-                case .files: FilesView(workspace: workspace, owner: screenID).background(Color(.systemBackground))
+                case .files: FilesView(workspace: workspace, session: session, owner: screenID).background(Color(.systemBackground))
                 }
             }
             .safeAreaInset(edge: .top) {
-                Picker("View", selection: $mode) {
-                    ForEach(available, id: \.self) { Text(label($0, session, workspace)) }
+                VStack(spacing: 0) {
+                    Picker("View", selection: $mode) {
+                        ForEach(available, id: \.self) { Text(label($0, session, workspace)) }
+                    }
+                    .pickerStyle(.segmented)
+                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 4)
+                    ConnectionBanner(hub: registry.hub, hostID: hostID)
                 }
-                .pickerStyle(.segmented)
-                .glassEffect(.regular.interactive(), in: .capsule)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 4)
             }
             // Destinations for views pushed from the tabs live here, on a view that stays mounted.
             .navigationDestination(isPresented: Binding(
@@ -120,7 +147,7 @@ struct TranscriptScreen: View {
             .navigationDestination(isPresented: Binding(
                 get: { workspace.file != nil && workspace.pushedBy == screenID },
                 set: { if !$0 { workspace.closeFile() } })) {
-                FileViewer(workspace: workspace)
+                FileViewer(workspace: workspace, session: session)
             }
             .onChange(of: session.streamingState, initial: true) { workspace.noteStreaming(session.streamingState) }
             .onChange(of: available) { if !available.contains(mode) { mode = .transcript } }
@@ -132,17 +159,13 @@ struct TranscriptScreen: View {
                             // On every tab, so a request that arrives while reading a diff isn't missed.
                             RequestCard(session: session).environment(\.cardFloats, true).padding(.horizontal, 12).padding(.bottom, 4)
                             if mode == .transcript {
-                                ComposerBar(session: session, onOpenSettings: { showSettings = true })
+                                ComposerBar(session: session, onOpenSettings: { showSettings = true },
+                                            onShip: session.canDrive && workspace.canShepherd ? { ship(workspace) } : nil)
                             }
                         }
                     }
                 } else if mode == .transcript {
-                    Text("This session has ended.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(.bar)
+                    EndedBar(session: session)
                 }
             }
             // Below the request cards, so links in a plan under review route too. A file link opens in the
@@ -170,6 +193,33 @@ struct TranscriptScreen: View {
                         renaming = true
                     }
                     Button("Session Settings", systemImage: "slider.horizontal.3") { showSettings = true }
+                    if let branch = workspace.renamableBranch {
+                        Button("Rename Branch…", systemImage: "arrow.triangle.branch") {
+                            newBranch = branch
+                            renamedBranch = branch
+                            renamingBranch = true
+                        }
+                    }
+                    if session.supportsSessionTabs {
+                        Button("Close Session", systemImage: "xmark.circle") { session.closeTab() }
+                            .disabled(session.tabAction != nil)
+                    }
+                }
+                if let parentId = session.summary?.parentSessionId,
+                   let parent = registry.hub.sessions(of: hostID).first(where: { $0.id == parentId }) {
+                    Button("Delegated by \(parent.title)", systemImage: "arrow.turn.left.up") { delegated = parent.id }
+                }
+                if let worktree = session.summary?.worktree {
+                    CopyWorktreeButtons(summary: worktree)
+                }
+                if workspace.canArchive {
+                    Button("Archive Session", systemImage: "archivebox", role: .destructive) { confirmingArchive = true }
+                }
+                if let target = workspace.removalTarget {
+                    Section {
+                        Button("Archive Worktree", systemImage: "archivebox") { removeWorktree(workspace, .archive, of: target) }
+                        Button("Delete Worktree…", systemImage: "trash", role: .destructive) { deleting = target }
+                    }
                 }
             }
             .toolbar {
@@ -181,7 +231,20 @@ struct TranscriptScreen: View {
                     ToolbarItem(placement: .primaryAction) {
                         Menu("Delegated Sessions", systemImage: "arrow.triangle.branch") {
                             ForEach(children, id: \.id) { child in
-                                Button(child.title) { delegatedChild = child.id }
+                                Button(child.title) { delegated = child.id }
+                            }
+                        }
+                    }
+                }
+                if workspace.canRun, !workspace.runScripts.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        Menu("Run", systemImage: "play") {
+                            ForEach(workspace.runScripts, id: \.key) { script in
+                                Menu(script.name) {
+                                    Button("Run", systemImage: "play") { run(workspace, .start, script) }
+                                    Button("Restart", systemImage: "arrow.clockwise") { run(workspace, .restart, script) }
+                                    Button("Stop", systemImage: "stop", role: .destructive) { run(workspace, .stop, script) }
+                                }
                             }
                         }
                     }
@@ -193,12 +256,113 @@ struct TranscriptScreen: View {
                     }
                 }
             }
+            .overlay {
+                if let busy = progress ?? (session.tabAction == .close ? "Closing session…" : nil) {
+                    ProgressView(busy)
+                        .padding(20)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+            }
+            .disabled(progress != nil)
             .sheet(isPresented: $showSettings) { SessionSettingsSheet(session: session) }
+            .alert("Couldn't do that", isPresented: Binding { session.tabActionError != nil } set: { if !$0 { session.tabActionError = nil } }) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(session.tabActionError ?? "")
+            }
             .alert("Rename Session", isPresented: $renaming) {
                 TextField("Title", text: $newTitle)
                 Button("Cancel", role: .cancel) {}
                 Button("Rename") { session.rename(newTitle) }
             }
+        return lifecycleDialogs(base, workspace)
+    }
+
+    /// The title menu's lifecycle prompts, apart so the screen's modifier chain type-checks in time.
+    private func lifecycleDialogs(_ view: some View, _ workspace: SessionWorkspace) -> some View {
+        view
+            .alert("Rename Branch", isPresented: $renamingBranch) {
+                TextField("Branch", text: $newBranch).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("Cancel", role: .cancel) {}
+                Button("Rename") {
+                    let branch = newBranch.trimmingCharacters(in: .whitespaces)
+                    guard !branch.isEmpty, branch != renamedBranch else { return }
+                    Task { actionError = await workspace.renameBranch(from: renamedBranch, to: branch) }
+                }
+            }
+            .confirmationDialog("Archive this session?", isPresented: $confirmingArchive, titleVisibility: .visible) {
+                Button("Archive", role: .destructive) {
+                    Task {
+                        progress = "Archiving session…"
+                        defer { progress = nil }
+                        if let error = await workspace.archiveSession() { actionError = error } else { dismiss() }
+                    }
+                }
+            } message: {
+                Text("The session stops and leaves the session list.")
+            }
+            .confirmationDialog("Delete this worktree?", isPresented: Binding { deleting != nil } set: { if !$0 { deleting = nil } },
+                                titleVisibility: .visible, presenting: deleting) { target in
+                Button("Delete", role: .destructive) { removeWorktree(workspace, .delete, of: target) }
+            } message: { _ in
+                Text("Its folder is removed from the machine. The branch is deleted too once it's merged.")
+            }
+            .confirmationDialog(overruling?.failure.message ?? "", isPresented: Binding { overruling != nil } set: { if !$0 { overruling = nil } },
+                                titleVisibility: .visible, presenting: overruling) { held in
+                Button(held.failure.overrule == .force ? "Delete Anyway" : "Discard Changes", role: .destructive) {
+                    removeWorktree(workspace, held.removal, of: held.target, force: held.force || held.failure.overrule == .force,
+                                   discard: held.discard || held.failure.overrule == .discardUnsavedEdits)
+                }
+            }
+            .alert("Couldn't do that", isPresented: Binding { actionError != nil } set: { if !$0 { actionError = nil } }) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(actionError ?? "")
+            }
+    }
+
+    private struct Overruling {
+        let removal: SessionWorkspace.WorktreeRemoval
+        let target: SessionWorkspace.RemovalTarget
+        let failure: RemoteGitFailure
+        let force: Bool
+        let discard: Bool
+    }
+
+    /// `/ship` from the composer: the Ship menu's action, refused while the session already shepherds a PR.
+    private func ship(_ workspace: SessionWorkspace) -> String? {
+        if let shepherd = workspace.shepherd {
+            return shepherd.number.map { "This session already shepherds \($0)." } ?? "This session already shepherds a pull request."
+        }
+        Task { if let error = await workspace.shepherd(.ship) { actionError = error } }
+        return nil
+    }
+
+    private func run(_ workspace: SessionWorkspace, _ action: RemoteRunAction, _ script: RemoteRunScript) {
+        let navigation = UUID()
+        runNavigation = navigation
+        Task {
+            let error = await workspace.run(action, script) { console in
+                guard visible, runNavigation == navigation else { return }
+                runTerminal = console
+            }
+            if let error { actionError = error }
+        }
+    }
+
+    /// Sends the removal; a refusal the user may overrule asks again, any other shows.
+    private func removeWorktree(_ workspace: SessionWorkspace, _ removal: SessionWorkspace.WorktreeRemoval,
+                                of target: SessionWorkspace.RemovalTarget, force: Bool = false, discard: Bool = false) {
+        Task {
+            progress = removal == .delete ? "Deleting worktree…" : "Archiving worktree…"
+            defer { progress = nil }
+            guard let failure = await workspace.removeWorktree(removal, of: target, force: force, discard: discard) else { return dismiss() }
+            if failure.overrule != nil {
+                overruling = Overruling(removal: removal, target: target, failure: failure, force: force, discard: discard)
+            } else {
+                actionError = failure.message
+            }
+        }
     }
 
     /// Changes carries the web's tab badge: the loaded count, else the worktree summary's.
@@ -247,5 +411,26 @@ private struct TranscriptContent: View {
                 }
             }
         }
+    }
+}
+
+/// Under an ended session: says so, with Reopen where the host reopens session tabs.
+private struct EndedBar: View {
+    let session: TranscriptSession
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("This session has ended.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            if session.supportsSessionTabs {
+                Button(session.tabAction == .reopen ? "Reopening…" : "Reopen") { session.reopenTab() }
+                    .font(.footnote.weight(.semibold))
+                    .disabled(session.tabAction != nil)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(.bar)
     }
 }

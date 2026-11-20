@@ -172,4 +172,17 @@ struct ACPSessionTranscriptReaderTests {
         #expect(snippet.contains("Parser broke here"))
         #expect(matches.last?.snippet == "PARSER ok")
     }
+
+    private nonisolated static let longReply = String(repeating: "abcdefghij", count: 30)
+
+    @Test("replyExcerpt collapses whitespace, caps at the limit with an ellipsis, and drops blank text", arguments: [
+        ("Done.\n\n  The tab   now\tcolours…", 200, "Done. The tab now colours…"),
+        (longReply, 200, String(longReply.prefix(199)) + "…"),
+        (longReply + String(repeating: " z", count: 100_000), 200, String(longReply.prefix(199)) + "…"),
+        (String(repeating: "a", count: 50) + String(repeating: " ", count: 800) + String(repeating: "a", count: 50), 200, String(repeating: "a", count: 50) + "…"),
+        ("  \n ", 200, nil),
+    ] as [(String, Int, String?)])
+    func replyExcerpt(text: String, limit: Int, expected: String?) {
+        #expect(ACPSessionTranscriptReader.replyExcerpt(text, limit: limit) == expected)
+    }
 }

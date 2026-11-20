@@ -22,6 +22,8 @@ struct DeviceStage: View {
     /// Outline the screen's accessibility elements.
     let accessibilityOverlay: Bool
     let flowRecorder: DeviceFlowRecorder
+    /// The user clicked or typed into the screen.
+    var onUse: () -> Void = {}
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     @State private var streamError: String?
@@ -58,7 +60,10 @@ struct DeviceStage: View {
                     overlayReadKey += 1
                 },
                 onHover: accessibilityOverlay ? { hover = $0 } : nil,
-                onUserInput: { overlayReadKey += 1 },
+                onUserInput: {
+                    overlayReadKey += 1
+                    onUse()
+                },
                 onGesture: flowRecorder.isRecording(device.udid) ? { flowRecorder.gesture(device.udid, from: $0, to: $1) } : nil,
                 onText: flowRecorder.isRecording(device.udid) ? { flowRecorder.typed(device.udid, $0) } : nil,
                 onScroll: flowRecorder.isRecording(device.udid) ? { flowRecorder.scrolled(device.udid, dx: $0, dy: $1) } : nil

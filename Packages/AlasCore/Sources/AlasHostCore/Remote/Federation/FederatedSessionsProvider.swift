@@ -331,6 +331,12 @@ public final class FederatedSessionsProvider {
                     downstream.send(.subagentTranscript(sessionId: namespaced, subagentId: subagentId, found: false, state: nil, messages: []))
                     return true
                 }
+            case .suggestNextPrompt:
+                // An older peer, or one that runs no suggestions, can't answer it.
+                guard links.peerSupports(HostProtocolCapability.sessionsNextPromptV1, serverId: target.serverId) else {
+                    downstream.send(.nextPromptSuggestion(sessionId: namespaced, text: nil))
+                    return true
+                }
             case .queueEdit(_, let itemId):
                 queueEditRequesters.append((namespaced, itemId, downstream.id))
                 if queueEditRequesters.count > Self.queueEditRequesterLimit {
@@ -688,7 +694,8 @@ private extension RemoteSessionSummary {
             title: title, agentId: agentId, status: status, canDrive: canDrive, isActive: isActive,
             tabIndex: tabIndex, projectId: projectId, worktreeId: worktreeId, updatedAt: updatedAt, worktree: worktree,
             serverId: peer.serverId, serverName: peer.name,
-            parentSessionId: parentSessionId.map { RemoteFederatedSessionID.compose(serverId: peer.serverId, sessionId: $0) })
+            parentSessionId: parentSessionId.map { RemoteFederatedSessionID.compose(serverId: peer.serverId, sessionId: $0) },
+            detail: detail)
     }
 
     /// An already-namespaced row with a refreshed owner name.
@@ -696,6 +703,6 @@ private extension RemoteSessionSummary {
         RemoteSessionSummary(
             id: id, title: title, agentId: agentId, status: status, canDrive: canDrive, isActive: isActive,
             tabIndex: tabIndex, projectId: projectId, worktreeId: worktreeId, updatedAt: updatedAt, worktree: worktree,
-            serverId: peer.serverId, serverName: peer.name, parentSessionId: parentSessionId)
+            serverId: peer.serverId, serverName: peer.name, parentSessionId: parentSessionId, detail: detail)
     }
 }

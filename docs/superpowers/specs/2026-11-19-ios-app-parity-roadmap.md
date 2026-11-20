@@ -38,14 +38,25 @@ commit, push, pull, fetch; shepherd menu; plain unified diff; file tree.
 4. **Session and worktree lifecycle**: close / reopen sessions
    (`closeSessionTab`, `openSessionTab`), archive session, archive / delete /
    rename-branch worktrees over the host channel (`worktreesLifecycleV1`),
-   with the destructive confirmation the Mac uses.
+   with the destructive confirmation the Mac uses. Worktree actions sit in the
+   session's title menu, where the phone already talks to the host channel;
+   `RemoteWorktreeSummary.lineageID` lets the host refuse a replaced checkout.
 5. **Hunk actions**: stage / unstage / discard a single hunk.
 6. **PR and run**: PR status and checks with open-in-browser (`reviewStatus`);
    run scripts list with run / stop / rerun and output (`listRunScripts`,
-   `startRun`, `stopRun`, `restartRun`, `runOutput`).
+   `startRun`, `stopRun`, `restartRun`, `runOutput`). Shipped without run
+   state: the host pushes it only as events, which the phone doesn't
+   subscribe to; a run's output is its console under Terminals.
 7. **Smaller list items**: sort choice, connection banner with manual
    reconnect, "delegated from" back link, mention picker scope tabs and empty
-   state, `/ship` slash entry, auto-run chip, copy path / branch.
+   state, `/ship` slash entry, auto-run chip, copy path / branch. Sort omits
+   Manual (a peer never sees the Mac's drag order); the auto-run chip shows
+   only while on, and turning it on stays in Session Settings.
+8. **Copy and quote messages**: long-press a user or agent message for Copy,
+   Quote and Select Text, as the Mac's message menu offers. Quote appends to
+   the end of the draft (the phone's caret isn't visible from the transcript);
+   Select Text opens the raw Markdown in a sheet whose edit menu quotes a
+   partial selection, standing in for the Mac's in-row text selection.
 
 ## Parked (need host or protocol work, or low phone value)
 

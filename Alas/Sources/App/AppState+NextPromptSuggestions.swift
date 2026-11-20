@@ -197,6 +197,10 @@ extension AppState {
                     },
                     session.nextPromptTeardown.sink { [weak self] in
                         guard let self else { return }
+                        if self.nextPromptCompletedTurns[sessionID]?.incarnation == incarnation {
+                            self.nextPromptCompletedTurns[sessionID] = nil
+                            self.remoteNextPromptSuggestions[sessionID] = nil
+                        }
                         self.nextPromptCoordinator.sessionEnded(incarnation: incarnation)
                         self.nextPromptComposerEpochs[incarnation] = nil
                         self.localTextObservers.sessions[incarnation] = nil
@@ -210,7 +214,61 @@ extension AppState {
     }
 
     func nextPromptCompleted(_ turn: NextPromptCompletedTurn, owner: SessionOwnerID) {
+        nextPromptCompletedTurns[turn.sessionID] = turn
         nextPromptCoordinator.completed(turn)
+    }
+
+    /// A suggestion for the turn `sessionID` last completed, for a Remote
+    /// client's composer. The session's own gates apply as for this Mac's
+    /// composer; the client stands in for its focus and window. The engines
+    /// run one request at a time, so this can supersede one for this Mac.
+    func remoteNextPromptSuggestion(sessionID: String) async -> String? {
+        await remoteNextPromptSuggestion(sessionID: sessionID) { [weak self] in
+            self?.acpManager(forSession: sessionID)?.sessions[sessionID]
+        }
+    }
+
+    func remoteNextPromptSuggestion(sessionID: String, session liveSession: @MainActor () -> ACPSession?) async -> String? {
+        // The transcript goes idle, and the client asks, before the runner
+        // records the completed turn; wait briefly for the latest prompt's.
+        let recordDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !nextPromptShuttingDown, ContinuousClock.now < recordDeadline, let session = liveSession(),
+              session.nextPromptID > 0, nextPromptCompletedTurns[sessionID]?.promptID != session.nextPromptID - 1 {
+            // ponytail: polls instead of a per-session waiter; fine at one request per finished turn.
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard !nextPromptShuttingDown, let turn = nextPromptCompletedTurns[sessionID] else { return nil }
+        func snapshot() -> NextPromptEligibilitySnapshot? {
+            guard let session = liveSession() else { return nil }
+            var environment = NextPromptEligibilitySnapshot.Environment()
+            environment.isAppActive = true
+            environment.isActiveVisibleWriter = true
+            environment.hasComposerFocus = true
+            environment.hasKeyWindow = true
+            return nextPromptSnapshot(session: session, turn: turn, environment: environment)
+        }
+        guard let current = snapshot() else { return nil }
+        if let cached = remoteNextPromptSuggestions[sessionID], cached.id == current.id { return cached.text }
+        let engine = NextPromptSourceRouter(
+            onDevice: nextPromptInference,
+            agent: NextPromptAgentEngine { [weak self] id in self?.agentPrediction(for: id) }
+        )
+        let request = NextPromptRequest(id: current.id, turns: current.turns)
+        let deadline = current.id.source.suggestionDeadline
+        let text = await withTaskGroup(of: String?.self) { group in
+            group.addTask { (try? await engine.generate(request)) ?? nil }
+            group.addTask {
+                try? await Task.sleep(for: deadline)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+        // The turn moved on while it ran: the suggestion answers an old one.
+        guard let text, snapshot()?.id == current.id else { return nil }
+        remoteNextPromptSuggestions[sessionID] = (current.id, text)
+        return text
     }
 
     func nextPromptComposerChanged(_ environment: NextPromptEligibilitySnapshot.Environment,

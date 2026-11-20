@@ -3,6 +3,7 @@ import Foundation
 import Network
 #endif
 import Crypto
+import Synchronization
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -70,9 +71,18 @@ public final class RemoteConnection: @unchecked Sendable {
     private let onCapabilitiesAcknowledged: (@MainActor (RemoteConnection, [String]) -> Void)?
     private let onClose: (RemoteConnection) -> Void
 
+    static let deviceMediaPath = "/ws/device-media"
+    @MainActor var authorizeDeviceMedia: ((String, RemoteConnection) -> (@MainActor () -> Void)?)?
+    // Close and authorization cross executors. Mark closure before posting
+    // the actor callback so a ticket cannot use a parent already torn down.
+    private let deviceMediaClosed = Atomic(false)
+
+    var isOpenForDeviceMedia: Bool { !deviceMediaClosed.load(ordering: .relaxed) }
+
     // Queue-confined state.
     private var inbound = Data()
     private var isWebSocket = false
+    private var isDeviceMedia = false
     /// Set once hello (or, if there is none, nothing) has been sent and the
     /// connection is ready to process inbound client frames. `drain()` must
     /// not route to `drainFrames()` before this is true, or a pipelined
@@ -96,6 +106,9 @@ public final class RemoteConnection: @unchecked Sendable {
     /// arrival order — clients rely on this (e.g. a `takeOver` must land before
     /// the `sendPrompt` that follows it). Mutated only on `queue`.
     private var processingTail: MessageProcessingTask?
+    /// A separate FIFO for device requests and the hello acknowledgements
+    /// that precede them. A slow session read must not stall a lease renewal.
+    private var deviceProcessingTail: MessageProcessingTask?
     /// Task of the most recently dispatched `isDriveOrdering` message
     /// (sendPrompt/takeOver). A following `stop` awaits exactly this —
     /// narrower than the full `processingTail` — so it lands after a turn
@@ -169,6 +182,7 @@ public final class RemoteConnection: @unchecked Sendable {
     /// External request to close this connection (e.g. server `stop()`). Hops
     /// onto the serial queue so teardown touches queue-confined state safely.
     public func cancel() {
+        deviceMediaClosed.store(true, ordering: .relaxed)
         onQueue { [weak self] in self?.teardown() }
     }
 
@@ -181,6 +195,7 @@ public final class RemoteConnection: @unchecked Sendable {
     /// keep seeing it as online indefinitely. `NWConnection.cancel()` is
     /// thread-safe and idempotent; `teardown()` also cancels, harmlessly.
     public func forceClose() {
+        deviceMediaClosed.store(true, ordering: .relaxed)
         conn.cancel()
     }
 
@@ -221,6 +236,13 @@ public final class RemoteConnection: @unchecked Sendable {
     /// would filter: for frames the server itself originates.
     public func sendMessage(_ message: RemoteServerMessage) {
         sendServerMessage(message)
+    }
+
+    func sendDeviceMedia(_ data: Data, onWritten: @escaping @Sendable () -> Void) {
+        onQueue { [weak self] in
+            guard let self, self.isOpenForDeviceMedia, self.isDeviceMedia, self.framesEnabled else { return }
+            self.send(WebSocketFrame.encode(opcode: .binary, payload: data), completion: onWritten)
+        }
     }
 
     /// Pings the socket, or closes it if nothing came in since the last
@@ -267,7 +289,13 @@ public final class RemoteConnection: @unchecked Sendable {
 
     private func drain() {
         if isWebSocket {
-            if framesEnabled { drainFrames() }
+            if framesEnabled {
+                drainFrames()
+            } else if isDeviceMedia, inbound.count > 131 {
+                // Until the upgrade completes we can buffer one masked
+                // control frame (two byte header, four byte mask, 125 bytes).
+                teardown()
+            }
             return
         }
 
@@ -324,6 +352,15 @@ public final class RemoteConnection: @unchecked Sendable {
                 body: Data("forbidden origin".utf8),
                 extraHeaders: extraHeaders
             ))
+            return
+        }
+        if req.path == Self.deviceMediaPath {
+            guard isUpgrade, req.method == "GET" else {
+                sendAndClose(RemoteHTTPResponder.http(status: "404 Not Found", contentType: "text/plain", body: Data()))
+                return
+            }
+            inbound.removeFirst(headerByteCount)
+            handleDeviceMediaUpgrade(req)
             return
         }
         if isUpgrade {
@@ -405,20 +442,54 @@ public final class RemoteConnection: @unchecked Sendable {
         }
     }
 
+    private func handleDeviceMediaUpgrade(_ req: HTTPRequest) {
+        // A ticket is accepted only in the subprotocol header, never a query.
+        guard req.query.isEmpty, let ticket = req.headers["sec-websocket-protocol"], !ticket.isEmpty,
+              let key = req.headers["sec-websocket-key"] else {
+            sendAndClose(RemoteHTTPResponder.http(status: "401 Unauthorized", contentType: "text/plain", body: Data()))
+            return
+        }
+        guard inbound.count <= 131 else { return teardown() }
+        // Enter a pending frame state before hopping to the actor. A second
+        // read now cannot reenter HTTP processing or race another upgrade.
+        isWebSocket = true
+        isDeviceMedia = true
+        Task { @MainActor [weak self] in
+            guard let self, self.isOpenForDeviceMedia else { return }
+            let startMedia = self.authorizeDeviceMedia?(ticket, self)
+            self.onQueue { [weak self] in
+                guard let self, self.isOpenForDeviceMedia else { return }
+                guard let startMedia else {
+                    self.sendAndClose(RemoteHTTPResponder.http(status: "401 Unauthorized", contentType: "text/plain", body: Data()))
+                    return
+                }
+                // H.264 is already compressed. Omit extension negotiation.
+                self.send(Self.upgradeResponse(token: ticket, key: key, extensionResponse: nil)) { [weak self] in
+                    guard let self, self.isOpenForDeviceMedia else { return }
+                    self.framesEnabled = true
+                    self.drainFrames()
+                    Task { @MainActor [weak self] in
+                        guard self?.isOpenForDeviceMedia == true else { return }
+                        startMedia()
+                    }
+                }
+            }
+        }
+    }
+
+    private static func upgradeResponse(token: String, key: String, extensionResponse: String?) -> Data {
+        let accept = acceptKey(for: key)
+        let proto = token.isEmpty ? "" : "Sec-WebSocket-Protocol: \(token)\r\n"
+        let extensions = extensionResponse.map { "Sec-WebSocket-Extensions: \($0)\r\n" } ?? ""
+        return Data(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            + "Sec-WebSocket-Accept: \(accept)\r\n" + proto + extensions + "\r\n").utf8)
+    }
+
     /// Runs on `queue` after a successful `authorize`. Builds the gateway (on
     /// MainActor), sends the 101 handshake, then begins the frame loop.
     private func completeUpgrade(token: String, key: String, extensionResponse: String?) {
-        let accept = Self.acceptKey(for: key)
-        let proto = token.isEmpty ? "" : "Sec-WebSocket-Protocol: \(token)\r\n"
+        let head = Self.upgradeResponse(token: token, key: key, extensionResponse: extensionResponse)
         compressionEnabled = extensionResponse != nil
-        let extensions = extensionResponse.map { "Sec-WebSocket-Extensions: \($0)\r\n" } ?? ""
-        // Built as an immutable `let` so it can be captured into the @MainActor
-        // Task below without tripping strict-concurrency's "captured var" error.
-        let head = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-            + "Sec-WebSocket-Accept: \(accept)\r\n"
-            + proto
-            + extensions
-            + "\r\n"
         isWebSocket = true
         let deviceId = self.deviceId ?? ""
 
@@ -432,9 +503,12 @@ public final class RemoteConnection: @unchecked Sendable {
             ))
             let helloData = self.makeHello(deviceId).flatMap { try? JSONEncoder().encode($0) }
             self.onQueue { [weak self] in
-                guard let self else { return }
+                guard let self, !self.closed else {
+                    Task { @MainActor in gateway.close() }
+                    return
+                }
                 self.gateway = gateway
-                self.send(Data(head.utf8)) { [weak self] in
+                self.send(head) { [weak self] in
                     guard let self else { return }
                     // `hello` is the first frame on every socket: the gateway
                     // has not seen a client message yet, and its own sends hop
@@ -469,6 +543,12 @@ public final class RemoteConnection: @unchecked Sendable {
 
     private func drainFrames() {
         while true {
+            if isDeviceMedia, let first = inbound.first {
+                // Check the opcode before the generic decoder can buffer a
+                // declared data frame. Client control frames must be masked.
+                guard (0x8...0xa).contains(first & 0x0f) else { return teardown() }
+                if inbound.count >= 2, inbound[inbound.startIndex + 1] & 0x80 == 0 { return teardown() }
+            }
             var buffer = inbound
             let frame: WebSocketFrame?
             do {
@@ -521,17 +601,24 @@ public final class RemoteConnection: @unchecked Sendable {
         // megabytes while freezing UI work. A malformed challenge is simply
         // dropped, not answered: it could never have verified anyway.
         if case .helloAck(_, let challenge, let capabilities) = msg {
+            let proofChallenge: String?
             if let challenge, RemoteIdentityCrypto.isPlausibleChallenge(challenge) {
-                answerIdentityChallenge(challenge, thenAcknowledge: capabilities)
+                guard identityProofsSent < Self.maxIdentityProofs else { return }
+                identityProofsSent += 1
+                proofChallenge = challenge
             } else {
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    self.onCapabilitiesAcknowledged?(self, capabilities)
-                }
+                proofChallenge = nil
+            }
+            enqueueDeviceOperation { [weak self] in
+                self?.acknowledgeClient(challenge: proofChallenge, capabilities: capabilities)
             }
             return
         }
         guard let gateway else { return }
+        if case .device(let request) = msg {
+            enqueueDeviceOperation { gateway.handlePeerDeviceRequest(request) }
+            return
+        }
         // Control messages (stop) are idempotent and latency-critical: they
         // don't extend `processingTail`, so messages arriving AFTER stop are
         // never blocked behind it. They still await the most recent DRIVE
@@ -619,6 +706,22 @@ public final class RemoteConnection: @unchecked Sendable {
         }
     }
 
+    private func enqueueDeviceOperation(_ operation: @escaping @MainActor @Sendable () -> Void) {
+        // `dispatchMessage` only runs after the authenticated upgrade and
+        // its first hello. Recheck liveness after the hop to MainActor.
+        let task = MessageProcessingTask(previous: deviceProcessingTail)
+        task.start(operation: { [weak self] in
+            guard self?.isOpenForDeviceMedia == true else { return }
+            operation()
+        }, onFinish: { [weak self] id in
+            self?.onQueue { [weak self] in
+                guard let self else { return }
+                Self.pruneFinishedTask(id: id, tail: &self.deviceProcessingTail)
+            }
+        })
+        deviceProcessingTail = task
+    }
+
     /// Signs one peer-supplied challenge, at most `maxIdentityProofs` times
     /// per socket.
     ///
@@ -630,18 +733,17 @@ public final class RemoteConnection: @unchecked Sendable {
     /// dropped frame costs one more.
     private static let maxIdentityProofs = 8
 
-    private func answerIdentityChallenge(_ challenge: String, thenAcknowledge capabilities: [String]) {
-        guard identityProofsSent < Self.maxIdentityProofs else { return }
-        identityProofsSent += 1
-        Task { @MainActor [weak self] in
-            guard let self, let proof = self.identityProof(challenge) else { return }
-            self.sendServerMessage(.identityProof(challenge: proof.challenge,
-                                                  publicKey: proof.publicKey,
-                                                  signature: proof.signature))
-            // Queued behind the proof, so whatever this lets the server send
-            // reaches the client after it.
-            self.onCapabilitiesAcknowledged?(self, capabilities)
+    @MainActor
+    private func acknowledgeClient(challenge: String?, capabilities: [String]) {
+        if let challenge {
+            guard let proof = identityProof(challenge) else { return }
+            // Enqueue the proof before reporting capabilities or allowing the
+            // next device request to enqueue its reply on the socket queue.
+            sendServerMessage(.identityProof(challenge: proof.challenge,
+                                             publicKey: proof.publicKey,
+                                             signature: proof.signature))
         }
+        onCapabilitiesAcknowledged?(self, capabilities)
     }
 
     /// `onWritten` fires on `queue` once NWConnection has processed the
@@ -680,10 +782,13 @@ public final class RemoteConnection: @unchecked Sendable {
 
     private func teardown() {
         guard !closed else { return }
+        deviceMediaClosed.store(true, ordering: .relaxed)
         closed = true
         isClosing = true
         processingTail?.cancelForTeardown()
         processingTail = nil
+        deviceProcessingTail?.cancelForTeardown()
+        deviceProcessingTail = nil
         lastDriveActionTail = nil
         lastDriveActionID = nil
         if let gateway { Task { @MainActor in gateway.close() } }
@@ -693,16 +798,20 @@ public final class RemoteConnection: @unchecked Sendable {
     }
 
     private func finishProcessingTask(id: UUID) {
-        guard let tail = processingTail, let completed = tail.task(withID: id) else { return }
-        completed.markFinished()
-        if tail.isFinished {
-            processingTail = nil
-        } else {
-            tail.pruneFinishedPredecessors()
-        }
+        Self.pruneFinishedTask(id: id, tail: &processingTail)
         if lastDriveActionID == id {
             lastDriveActionTail = nil
             lastDriveActionID = nil
+        }
+    }
+
+    private static func pruneFinishedTask(id: UUID, tail pending: inout MessageProcessingTask?) {
+        guard let tail = pending, let completed = tail.task(withID: id) else { return }
+        completed.markFinished()
+        if tail.isFinished {
+            pending = nil
+        } else {
+            tail.pruneFinishedPredecessors()
         }
     }
 

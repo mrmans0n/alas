@@ -63,3 +63,27 @@ public enum RemoteTranscriptLink: Equatable, Sendable {
         return String(value[..<colon])
     }
 }
+
+public extension RemoteTranscriptLink {
+    /// A markdown image source from a document at worktree path `file`: a relative one, its URL
+    /// escapes decoded, taken from the document's folder; an absolute one or a URL left alone.
+    static func imageSource(_ source: String, besideFile file: String) -> String {
+        guard !source.hasPrefix("/"), URL(string: source)?.scheme == nil else { return source }
+        return worktreePath(source.removingPercentEncoding ?? source, besideFile: file)
+    }
+
+    /// `relative`, a decoded path from a document at worktree path `file`, as a worktree path taken
+    /// from the document's folder. `.` and `..` are folded; a path that climbs out of the worktree
+    /// keeps its leading `..`, for the host to refuse.
+    static func worktreePath(_ relative: String, besideFile file: String) -> String {
+        var parts: [Substring] = []
+        for part in (file.split(separator: "/").dropLast() + relative.split(separator: "/")) where part != "." {
+            if part == "..", let last = parts.last, last != ".." {
+                parts.removeLast()
+            } else {
+                parts.append(part)
+            }
+        }
+        return parts.joined(separator: "/")
+    }
+}

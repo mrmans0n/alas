@@ -328,6 +328,46 @@ struct NextPromptSettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
+    /// A Remote client gets the suggestion without this Mac's composer, even
+    /// when it asks before the turn is recorded. Asking again reuses it until
+    /// the settings change, and none comes once the turn has moved on.
+    @Test func remoteSuggestionAnswersOnlyTheLastCompletedTurn() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let generations = Mutex(0)
+        let inference = NextPromptInference(acquireLease: { try await fixture.store.acquireVerifiedLease() }, load: { _ in
+            { _ in
+                generations.withLock { $0 += 1 }
+                return #"{"suggestion":"Show an example."}"#
+            }
+        })
+        let state = makeState(fixture, SettingsStore(), inference: inference)
+        await state.enableNextPromptSuggestions()
+        let session = ACPSession(id: "s", agentId: "test", worktreeId: "w", title: "Test")
+        session.agentState = .ready
+        let userID = session.recordUserPrompt(text: "Explain the parser.", attachments: [])
+        session.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
+        let turn = NextPromptCompletedTurn(
+            sessionID: session.id, incarnation: session.incarnation, promptID: session.allocatePromptID(),
+            userMessageID: userID, transcriptRevision: session.transcript.conversationRevision
+        )
+        let early = Task { await state.remoteNextPromptSuggestion(sessionID: session.id) { session } }
+        await Task.yield()
+        state.nextPromptCompleted(turn, owner: .worktree("w"))
+
+        #expect(await early.value == "Show an example.")
+        #expect(await state.remoteNextPromptSuggestion(sessionID: session.id) { session } == "Show an example.")
+        #expect(generations.withLock { $0 } == 1)
+        state.nextPromptSettingsGeneration &+= 1
+        #expect(await state.remoteNextPromptSuggestion(sessionID: session.id) { session } == "Show an example.")
+        #expect(generations.withLock { $0 } == 2)
+        session.transcript.appendMessage(.agent(id: UUID(), StreamingText("And builds a tree.")))
+        #expect(await state.remoteNextPromptSuggestion(sessionID: session.id) { session } == nil)
+        await state.shutdownLocalTextFeatures()
+    }
+
     @Test func freshDownloadEnablesRequestedFeaturesAfterVerification() async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }

@@ -1,4 +1,5 @@
 import AlasRemoteKit
+import FoundationModels
 import SwiftUI
 
 /// The Changes tab: branch, staged, unstaged and commit sections as a flat list; a file opens its diff.
@@ -84,7 +85,9 @@ private struct ChangeList: View {
                 }
             }
             .sheet(isPresented: $committing) {
-                CommitSheet { subject, body in run(.commit(subject: subject, body: body)) }
+                CommitSheet(suggest: CommitMessageModel.isAvailable
+                    ? { await CommitMessageModel.suggest(from: workspace.commitMessageInput()) } : nil
+                ) { subject, body in run(.commit(subject: subject, body: body)) }
             }
             .confirmationDialog(
                 discarding?.count == 1 ? "Discard changes to this file?" : "Discard these changes?",
@@ -113,10 +116,12 @@ private struct ChangeList: View {
     @ViewBuilder private var content: some View {
         if !reply.metricsAvailable {
             ContentUnavailableView("Change metrics are unavailable for this worktree.", systemImage: "chart.bar.xaxis")
-        } else if sections.isEmpty {
+        } else if sections.isEmpty, workspace.pullRequest == nil {
+            // With a pull request, the list still shows it, as for a merged branch now level with its base.
             ContentUnavailableView("No changes yet.", systemImage: "checkmark.circle")
         } else {
             List {
+                if let pr = workspace.pullRequest { PullRequestSection(pr: pr) }
                 Text(summary).font(.footnote).foregroundStyle(.secondary).listRowSeparator(.hidden)
                 ForEach(sections) { section in
                     SwiftUI.Section {
@@ -172,6 +177,83 @@ private struct ChangeList: View {
                 }
             }
             .listStyle(.plain)
+        }
+    }
+}
+
+/// The branch's pull request: a tap opens it, and its checks fold out with links to their runs.
+private struct PullRequestSection: View {
+    let pr: RemotePullRequest
+
+    var body: some View {
+        SwiftUI.Section {
+            Link(destination: pr.url) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(pr.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(2)
+                    Text(["#\(pr.number)", status, review].compactMap { $0 }.joined(separator: " · "))
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            if !pr.checks.isEmpty {
+                DisclosureGroup {
+                    ForEach(Array(pr.checks.enumerated()), id: \.offset) { _, check in
+                        let row = Label(check.name, systemImage: Self.symbol(check.bucket))
+                            .font(.footnote).foregroundStyle(Self.tint(check.bucket))
+                        if let url = check.detailURL { Link(destination: url) { row } } else { row }
+                    }
+                } label: {
+                    Label(checksSummary, systemImage: Self.symbol(worstBucket)).font(.footnote).foregroundStyle(Self.tint(worstBucket))
+                }
+            }
+        } header: {
+            Text("Pull Request")
+        }
+    }
+
+    private var status: String {
+        switch pr.state {
+        case "merged": "Merged"
+        case "closed": "Closed"
+        default: pr.isDraft ? "Draft" : "Open"
+        }
+    }
+
+    private var review: String? {
+        switch pr.reviewDecision {
+        case "approved": "Approved"
+        case "changesRequested": "Changes requested"
+        case "reviewRequired": "Review required"
+        default: nil
+        }
+    }
+
+    /// `ReviewCheckBucket.severity`'s order: a failure outranks a pending check, which outranks a pass.
+    private var worstBucket: String {
+        ["fail", "pending", "cancel", "unknown", "pass", "skipping"].first { b in pr.checks.contains { $0.bucket == b } } ?? "unknown"
+    }
+
+    private var checksSummary: String {
+        let count = { (bucket: String) in pr.checks.filter { $0.bucket == bucket }.count }
+        let parts = [("failed", count("fail")), ("pending", count("pending")), ("passed", count("pass"))]
+            .filter { $0.1 > 0 }.map { "\($0.1) \($0.0)" }
+        return parts.isEmpty ? "\(pr.checks.count) checks" : parts.joined(separator: " · ")
+    }
+
+    private static func symbol(_ bucket: String) -> String {
+        switch bucket {
+        case "pass": "checkmark.circle.fill"
+        case "fail": "xmark.circle.fill"
+        case "pending": "clock.fill"
+        default: "minus.circle"
+        }
+    }
+
+    private static func tint(_ bucket: String) -> Color {
+        switch bucket {
+        case "pass": .green
+        case "fail": .red
+        case "pending": .orange
+        default: .secondary
         }
     }
 }
@@ -349,17 +431,34 @@ private struct GitBar: View {
 
 /// A commit message for what is staged.
 private struct CommitSheet: View {
+    /// Nil when this phone can't suggest a message.
+    let suggest: (@MainActor () async -> CommitMessageSuggestion?)?
     let commit: (_ subject: String, _ body: String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var subject = ""
     @State private var message = ""
+    @State private var suggesting = false
     @FocusState private var subjectFocused: Bool
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Summary", text: $subject).focused($subjectFocused)
-                TextField("Description (optional)", text: $message, axis: .vertical).lineLimit(3...10)
+                Section {
+                    TextField("Summary", text: $subject).focused($subjectFocused)
+                    TextField("Description (optional)", text: $message, axis: .vertical).lineLimit(3...10)
+                } footer: {
+                    if suggesting { Label("Suggesting a message…", systemImage: "sparkles") }
+                }
+            }
+            // As on the Mac, a suggestion fills only the fields still empty when it arrives.
+            .task {
+                guard let suggest else { return }
+                suggesting = true
+                let suggestion = await suggest()
+                suggesting = false
+                guard let suggestion, !Task.isCancelled else { return }
+                if subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { subject = suggestion.subject }
+                if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { message = suggestion.body ?? "" }
             }
             .navigationTitle("Commit")
             .navigationBarTitleDisplayMode(.inline)
@@ -377,5 +476,40 @@ private struct CommitSheet: View {
         }
         .presentationDetents([.medium])
         .onAppear { subjectFocused = true }
+    }
+}
+
+/// Apple's on-device model drafting a commit message from the host's view of the staged change,
+/// with the Mac's prompt and checks.
+enum CommitMessageModel {
+    /// Asked for as a structure: as plain text the model wraps its JSON in a code fence, which the
+    /// shared checks refuse.
+    @Generable struct Draft {
+        var subject: String
+        var body: String?
+    }
+
+    @MainActor static var isAvailable: Bool {
+        let model = SystemLanguageModel.default
+        return model.isAvailable && model.supportsLocale(.current)
+    }
+
+    @MainActor static func suggest(from input: CommitMessageSuggestionInput?) async -> CommitMessageSuggestion? {
+        typealias Policy = CommitMessageSuggestionPolicy
+        // UTF-8 bytes bound the tokens from above: the most detailed prompt that surely fits.
+        guard let input, isAvailable,
+              let messages = Policy.messageCandidates(for: input).first(where: { messages in
+                  messages.reduce(0) { $0 + $1.content.utf8.count } <= Policy.inputTokenLimit
+              }),
+              let instructions = messages.first(where: { $0.role == .system })?.content,
+              let prompt = messages.first(where: { $0.role == .user })?.content else { return nil }
+        let session = LanguageModelSession(instructions: instructions)
+        let options = GenerationOptions(temperature: 0, maximumResponseTokens: Policy.maxTokens)
+        guard let draft = try? await session.respond(to: prompt, generating: Draft.self, options: options).content,
+              !Task.isCancelled,
+              let json = try? JSONSerialization.data(withJSONObject: ["subject": draft.subject, "body": draft.body as Any? ?? NSNull()])
+        else { return nil }
+        return Policy.parse(String(decoding: json, as: UTF8.self),
+                            conventionalCommits: Policy.usesConventionalCommits(input.recentSubjects))
     }
 }

@@ -331,6 +331,64 @@ public enum RemoteSessionTabActionResult: Equatable, Sendable {
     case failure(String)
 }
 
+/// What a peer's sidebar badge popover shows about a live session. Captured
+/// when the session list is built, so the preview is a snapshot as of the last
+/// state change, never per token.
+public struct RemoteSessionDetail: Codable, Equatable, Sendable {
+    public enum PreviewKind: String, Codable, Sendable { case permission, reply }
+
+    public var model: String?
+    public var contextPercent: Int?
+    public var planCompleted: Int?
+    public var planTotal: Int?
+    public var planStep: String?
+    /// At most 200 characters.
+    public var preview: String?
+    public var previewKind: PreviewKind?
+
+    public init(
+        model: String? = nil, contextPercent: Int? = nil, planCompleted: Int? = nil, planTotal: Int? = nil,
+        planStep: String? = nil, preview: String? = nil, previewKind: PreviewKind? = nil
+    ) {
+        self.model = model
+        self.contextPercent = contextPercent
+        self.planCompleted = planCompleted
+        self.planTotal = planTotal
+        self.planStep = planStep
+        self.preview = preview
+        self.previewKind = previewKind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case model, contextPercent, planCompleted, planTotal, planStep, preview, previewKind
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            model: try c.decodeIfPresent(String.self, forKey: .model),
+            contextPercent: try c.decodeIfPresent(Int.self, forKey: .contextPercent),
+            planCompleted: try c.decodeIfPresent(Int.self, forKey: .planCompleted),
+            planTotal: try c.decodeIfPresent(Int.self, forKey: .planTotal),
+            planStep: try c.decodeIfPresent(String.self, forKey: .planStep),
+            preview: try c.decodeIfPresent(String.self, forKey: .preview),
+            // A kind from a newer host is dropped, not a decode failure.
+            previewKind: (try c.decodeIfPresent(String.self, forKey: .previewKind)).flatMap(PreviewKind.init(rawValue:))
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(model, forKey: .model)
+        try c.encodeIfPresent(contextPercent, forKey: .contextPercent)
+        try c.encodeIfPresent(planCompleted, forKey: .planCompleted)
+        try c.encodeIfPresent(planTotal, forKey: .planTotal)
+        try c.encodeIfPresent(planStep, forKey: .planStep)
+        try c.encodeIfPresent(preview, forKey: .preview)
+        try c.encodeIfPresent(previewKind, forKey: .previewKind)
+    }
+}
+
 public struct RemoteSessionSummary: Equatable, Sendable {
     public let id: String
     public let title: String
@@ -352,6 +410,9 @@ public struct RemoteSessionSummary: Equatable, Sendable {
     public let serverName: String?
     /// The session that delegated this one, in the same id space as `id`.
     public let parentSessionId: String?
+    /// Live-session detail for badge popovers. Nil for sessions without a
+    /// runner and from hosts that predate it.
+    public let detail: RemoteSessionDetail?
 
     public init(
         id: String,
@@ -367,7 +428,8 @@ public struct RemoteSessionSummary: Equatable, Sendable {
         worktree: RemoteWorktreeSummary? = nil,
         serverId: String? = nil,
         serverName: String? = nil,
-        parentSessionId: String? = nil
+        parentSessionId: String? = nil,
+        detail: RemoteSessionDetail? = nil
     ) {
         self.id = id
         self.title = title
@@ -383,13 +445,14 @@ public struct RemoteSessionSummary: Equatable, Sendable {
         self.serverId = serverId
         self.serverName = serverName
         self.parentSessionId = parentSessionId
+        self.detail = detail
     }
 }
 
 extension RemoteSessionSummary: Codable {
     private enum CodingKeys: String, CodingKey {
         case id, title, agentId, status, canDrive, isActive, tabIndex, projectId, worktreeId, updatedAt, worktree
-        case serverId, serverName, parentSessionId
+        case serverId, serverName, parentSessionId, detail
     }
 
     public init(from decoder: Decoder) throws {
@@ -408,7 +471,8 @@ extension RemoteSessionSummary: Codable {
             worktree: try c.decodeIfPresent(RemoteWorktreeSummary.self, forKey: .worktree),
             serverId: try c.decodeIfPresent(String.self, forKey: .serverId),
             serverName: try c.decodeIfPresent(String.self, forKey: .serverName),
-            parentSessionId: try c.decodeIfPresent(String.self, forKey: .parentSessionId)
+            parentSessionId: try c.decodeIfPresent(String.self, forKey: .parentSessionId),
+            detail: try c.decodeIfPresent(RemoteSessionDetail.self, forKey: .detail)
         )
     }
 
@@ -428,6 +492,7 @@ extension RemoteSessionSummary: Codable {
         try c.encodeIfPresent(serverId, forKey: .serverId)
         try c.encodeIfPresent(serverName, forKey: .serverName)
         try c.encodeIfPresent(parentSessionId, forKey: .parentSessionId)
+        try c.encodeIfPresent(detail, forKey: .detail)
     }
 }
 

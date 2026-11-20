@@ -553,6 +553,38 @@ struct HostSessionsTests {
         #expect(replies[1] == .subagentTranscript(sessionId: id, subagentId: "gone", found: false, state: nil, messages: []))
     }
 
+    /// A slow suggestion does not hold up the messages a peer sends after it,
+    /// and one asked for a newer turn while it runs is answered too.
+    @Test(.timeLimit(.minutes(5))) func aSlowNextPromptSuggestionAnswersWithoutBlockingThePeer() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let (replies, reply) = AsyncStream<RemoteServerMessage>.makeStream()
+        let gateway = RemoteSessionGateway(host: fixture.host) { reply.yield($0) }
+        defer { gateway.close() }
+        var held: [CheckedContinuation<Void, Never>] = []
+        gateway.hostCalls.nextPromptSuggestion = { _ in
+            await withCheckedContinuation { held.append($0) }
+            return "Run the tests"
+        }
+
+        // Each returns while its suggestion is still held: awaiting it here would hang.
+        await gateway.handle(.suggestNextPrompt(sessionId: "s"))
+        await gateway.handle(.suggestNextPrompt(sessionId: "s"))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        while held.count < 2 {
+            try #require(ContinuousClock.now < deadline)
+            await Task.yield()
+        }
+        held.forEach { $0.resume() }
+
+        var answers = 0
+        for await message in replies where message == .nextPromptSuggestion(sessionId: "s", text: "Run the tests") {
+            answers += 1
+            if answers == 2 { break }
+        }
+        #expect(answers == 2)
+    }
+
     /// An image that only the transcript holds inline reaches the phone with a file it can
     /// fetch, so one too large for the row is not lost.
     @Test(.timeLimit(.minutes(5))) func anInlineToolImageReachesAPeerAsASpilledFile() async throws {

@@ -127,7 +127,7 @@ public enum RemoteSessionCatalog {
                                         status: session.status, canDrive: session.canDrive, isActive: session.isActive,
                                         tabIndex: session.tabIndex, projectId: session.projectId,
                                         worktreeId: session.worktreeId, updatedAt: session.updatedAt, worktree: session.worktree,
-                                        parentSessionId: parentID)
+                                        parentSessionId: parentID, detail: session.detail)
         }
     }
 }

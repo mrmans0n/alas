@@ -1428,12 +1428,18 @@ struct EditorBufferTests {
         #expect(appState.tabs.buffer(worktreeId: "wt", tabId: "b", worktreeRoot: root, relativePath: "a.txt") === buffer)
         let theme = try ThemeStore().current
         let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 240, height: 120))
+        scrollView.hasHorizontalScroller = true
         scrollView.contentView = CodeEditorLeadingClipView(frame: .zero)
         let layoutManager = NSLayoutManager()
         let textContainer = NSTextContainer(size: NSSize(width: 1_200, height: 2_400))
         layoutManager.addTextContainer(textContainer)
         let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 1_200, height: 2_400), textContainer: textContainer)
         scrollView.documentView = textView
+        let ruler = CodeEditorLineNumberRulerView(scrollView: scrollView, textView: textView, theme: theme)
+        scrollView.verticalRulerView = ruler
+        scrollView.hasVerticalRuler = true
+        scrollView.rulersVisible = true
+        scrollView.tile()
         let coordinator = CodeEditorCoordinator(appState: appState)
         coordinator.attach(textView: textView, buffer: buffer, layoutManager: layoutManager, worktreeId: "wt", worktreeRoot: root, tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
 
@@ -1442,7 +1448,7 @@ struct EditorBufferTests {
         textView.setSelectedRanges(tabASelections, affinity: .downstream, stillSelecting: false)
         scrollView.contentView.scroll(to: NSPoint(x: 45, y: 160))
         coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "a.txt", tabId: "b", revealLine: nil, revealCharacter: nil, theme: theme)
-        #expect(scrollView.contentView.bounds.origin == .zero)
+        #expect(scrollView.contentView.bounds.origin == NSPoint(x: -ruler.requiredThickness, y: 0))
         textView.setSelectedRanges(tabBSelections, affinity: .downstream, stillSelecting: false)
         scrollView.contentView.scroll(to: NSPoint(x: 10, y: 20))
         coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "a.txt", tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)

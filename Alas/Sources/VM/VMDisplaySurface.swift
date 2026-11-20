@@ -20,6 +20,13 @@ struct VMDisplaySurface: NSViewRepresentable {
     let virtualMachine: VZVirtualMachine?
     var allowsInput = true
     var capturesSystemKeys = false
+    /// Resize the guest's display to the view. Off in the Devices rail, whose
+    /// narrow view would shrink the guest's desktop; the screen scales instead.
+    var reconfiguresDisplay = true
+    /// Take the keyboard when the screen appears. Off in the Devices rail, where
+    /// a screen scrolled into view must not pull typing away from the editor; a
+    /// click still gives it the keyboard.
+    var takesKeyboardOnShow = true
     var onBlockedClick: () -> Void = {}
     var onUserInput: (() -> Void)?
 
@@ -30,6 +37,7 @@ struct VMDisplaySurface: NSViewRepresentable {
         container.wantsLayer = true
         attach(container, shield: context.coordinator, mayStealFromOtherContainer: true)
         // Keyboard input goes to the guest once the screen is shown.
+        guard takesKeyboardOnShow else { return container }
         DispatchQueue.main.async { [weak container, weak shield = context.coordinator, view] in
             guard let container, let shield, view.superview === container,
                   container.window?.firstResponder !== view
@@ -78,6 +86,9 @@ struct VMDisplaySurface: NSViewRepresentable {
         guard view.superview === container else { return }
         if view.capturesSystemKeys != capturesSystemKeys {
             view.capturesSystemKeys = capturesSystemKeys
+        }
+        if view.automaticallyReconfiguresDisplay != reconfiguresDisplay {
+            view.automaticallyReconfiguresDisplay = reconfiguresDisplay
         }
         if shield.superview !== container {
             shield.translatesAutoresizingMaskIntoConstraints = false

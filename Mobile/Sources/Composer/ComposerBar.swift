@@ -7,6 +7,9 @@ struct ComposerBar: View {
     @Bindable var session: TranscriptSession
     /// Task 7 opens the session settings sheet from the chips.
     var onOpenSettings: () -> Void = {}
+    /// Runs the session's Ship for `/ship`, as the Mac's peer composer does; returns why it can't.
+    /// Nil where `/ship` isn't offered, and the text goes to the agent.
+    var onShip: (() -> String?)?
 
     @State private var selection = NSRange(location: 0, length: 0)
     @State private var picked: [PhotosPickerItem] = []
@@ -15,13 +18,20 @@ struct ComposerBar: View {
 
     private var config: RemoteSessionConfig? { session.config }
     private var text: String { session.draft.text }
+    /// The host's suggestion, while the composer is empty.
+    private var suggestion: String? { text.isEmpty && session.draft.images.isEmpty ? session.nextPromptSuggestion : nil }
     private var hasContent: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !session.draft.images.isEmpty
     }
 
+    private static let ship = RemoteSlashCommand(
+        command: "/ship", description: "Have this session open a PR for the branch, or shepherd the open one.")
+
     private var slash: [RemoteSlashCommand]? {
-        guard let token = RemoteComposerText.slashToken(in: text as NSString, caret: selection.location),
-              let commands = config?.availableCommands else { return nil }
+        guard let token = RemoteComposerText.slashToken(in: text as NSString, caret: selection.location) else { return nil }
+        var commands = config?.availableCommands ?? []
+        // Alas intercepts /ship before the agent could see it, so the agent's own is hidden.
+        if onShip != nil { commands = [Self.ship] + commands.filter { !["ship", "/ship"].contains($0.command) } }
         let matches = RemoteComposerText.filterSlashCommands(commands, query: token.query)
         return matches.isEmpty ? nil : matches
     }
@@ -45,15 +55,13 @@ struct ComposerBar: View {
                     replaceToken(from: RemoteComposerText.slashToken(in: text as NSString, caret: selection.location)?.start,
                                  with: name + " ")
                 }
-            } else if let token = mentionToken, !session.mentionCandidates.isEmpty {
+            } else if let token = mentionToken, token.query.count <= RemoteAttachmentLimits.maxMentionQueryLength {
                 // Rows from an earlier query stay up, dimmed and inert, until this one is answered.
-                let current = token.query == session.mentionCandidatesQuery
-                MentionPicker(candidates: session.mentionCandidates) { mention in
+                MentionPicker(candidates: session.mentionCandidates,
+                              searching: token.query != session.mentionCandidatesQuery) { mention in
                     replaceToken(from: mentionToken?.start, with: "@" + mention.name + " ")
                     if !session.draft.mentions.contains(mention) { session.draft.mentions.append(mention) }
                 }
-                .opacity(current ? 1 : 0.5)
-                .allowsHitTesting(current)
             }
             if queueOpen { QueueTray(session: session).transition(.move(edge: .bottom).combined(with: .opacity)) }
             field
@@ -62,6 +70,7 @@ struct ComposerBar: View {
         .padding(.bottom, 6)
         .onChange(of: mentionToken?.query) { _, query in searchMentions(query) }
         .onChange(of: RemoteQueueRules.waiting(session.queue).isEmpty) { _, empty in if empty { queueOpen = false } }
+        .onChange(of: session.composerFocusRequest) { selection = NSRange(location: (text as NSString).length, length: 0) }
         .onChange(of: picked) { _, items in
             guard !items.isEmpty else { return }
             picked = []
@@ -76,11 +85,12 @@ struct ComposerBar: View {
             if !session.draft.images.isEmpty { tiles }
             ZStack(alignment: .topLeading) {
                 if text.isEmpty {
-                    Text("Message").foregroundStyle(.tertiary).padding(.horizontal, 4).padding(.vertical, 8)
+                    Text(suggestion ?? "Message").foregroundStyle(.tertiary).lineLimit(4)
+                        .padding(.horizontal, 4).padding(.vertical, 8)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
-                ComposerTextView(text: $session.draft.text, selection: $selection,
+                ComposerTextView(text: $session.draft.text, selection: $selection, focusRequest: session.composerFocusRequest,
                                  onPasteImages: config?.acceptsImages == true ? { images in
                                      Task { for data in images { await ImageStaging.stage(data, into: session) } }
                                  } : nil)
@@ -89,6 +99,13 @@ struct ComposerBar: View {
                 if config?.acceptsImages == true { attachButton }
                 chips
                 QueueBadge(session: session, open: $queueOpen)
+                if let suggestion {
+                    Button("Use suggestion", systemImage: "text.insert") { session.acceptNextPromptSuggestion() }
+                        .font(.footnote.weight(.medium))
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .accessibilityValue(suggestion)
+                }
                 Spacer(minLength: 0)
                 if let usage = config?.usage, usage.context != nil || !usage.lastTurn.isEmpty || !usage.cumulative.isEmpty {
                     UsageRing(usage: usage)
@@ -140,6 +157,7 @@ struct ComposerBar: View {
     /// Scrolls sideways when the row is crowded, so no chip, the model above all, truncates.
     private var chips: some View {
         let row = HStack(spacing: 6) {
+            autoRunChip
             chip(name(config?.chips?.model, fallback: config?.currentModel, in: config?.models))
             chip(name(config?.chips?.thinking, fallback: nil, in: nil))
             chip(name(config?.chips?.mode, fallback: config?.currentMode, in: config?.modes))
@@ -149,6 +167,23 @@ struct ComposerBar: View {
         return ViewThatFits(in: .horizontal) {
             row
             ScrollView(.horizontal, showsIndicators: false) { row }
+        }
+    }
+
+    /// The Mac's auto-run toggle, shown only while on: turning it on stays in Session Settings, where
+    /// the row has room to say what it does.
+    @ViewBuilder
+    private var autoRunChip: some View {
+        if let config, config.autoRunEnabled, config.chips?.autoRun != "ignored" {
+            Button { session.setAutoRun(false) } label: {
+                Label("Auto-run", systemImage: "bolt.fill").font(.footnote.weight(.medium))
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .foregroundStyle(.orange)
+                    .background(.orange.opacity(0.18), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Auto-run is on")
+            .accessibilityHint("Turns auto-run off. The agent runs tools without asking while it is on.")
         }
     }
 
@@ -174,24 +209,44 @@ struct ComposerBar: View {
     private var actionButton: some View {
         switch (session.streamingState, hasContent) {
         case ("idle", true):
-            circle("arrow.up", label: "Send", tint: .accentColor) { session.send(intent: "auto") }
+            circle("arrow.up", label: "Send", tint: .accentColor) { send("auto") }
         case ("idle", false):
             if session.hasCancellableBackgroundWork { stopButton }
         case (_, true):
             Menu {
                 if config?.supportsSteering == true {
-                    Button("Steer now", systemImage: "arrow.turn.down.right") { session.send(intent: "steer") }
+                    Button("Steer now", systemImage: "arrow.turn.down.right") { send("steer") }
                 }
                 Button("Stop", systemImage: "stop.fill", role: .destructive) { session.stop() }
                     .disabled(session.isStopping)
             } label: {
                 glyph("text.line.last.and.arrowtriangle.forward", tint: .accentColor)
             } primaryAction: {
-                session.send(intent: "auto")
+                send("auto")
             }
             .accessibilityLabel("Queue message")
         default:
             stopButton
+        }
+    }
+
+    /// `/ship` alone ships; anything more is refused, as on the Mac.
+    private func send(_ intent: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let onShip, trimmed.hasPrefix("/ship"), trimmed.dropFirst(5).first?.isWhitespace ?? true else {
+            return session.send(intent: intent)
+        }
+        let refusal = if trimmed != "/ship" {
+            "/ship doesn't take arguments."
+        } else if !session.draft.images.isEmpty {
+            "/ship doesn't take attachments. Remove them to ship."
+        } else {
+            onShip()
+        }
+        if let refusal {
+            session.rejection = refusal
+        } else {
+            session.draft = ComposerDraft()
         }
     }
 
@@ -215,7 +270,7 @@ struct ComposerBar: View {
 
     private var takeOverPill: some View {
         Button { session.takeOver() } label: {
-            Label("Another device is driving. Take over", systemImage: "hand.raised")
+            Label("Take over to drive this session", systemImage: "hand.raised")
                 .font(.footnote.weight(.medium))
                 .padding(.horizontal, 14).padding(.vertical, 8)
         }
@@ -278,6 +333,8 @@ struct ComposerBar: View {
 struct ComposerTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var selection: NSRange
+    /// A change raises the keyboard on this view.
+    let focusRequest: Int
     /// Takes pasted images; nil leaves Paste to text only.
     var onPasteImages: (([Data]) -> Void)?
     private static let maxLines: CGFloat = 6
@@ -306,6 +363,11 @@ struct ComposerTextView: UIViewRepresentable {
         let length = (view.text as NSString).length
         let wanted = NSRange(location: min(selection.location, length), length: min(selection.length, max(0, length - selection.location)))
         if view.selectedRange != wanted, view.markedTextRange == nil { view.selectedRange = wanted }
+        if context.coordinator.focusRequest != focusRequest {
+            context.coordinator.focusRequest = focusRequest
+            // After this update: taking first responder inside it re-enters SwiftUI's graph, which cycles.
+            DispatchQueue.main.async { [weak view] in view?.becomeFirstResponder() }
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
@@ -320,8 +382,13 @@ struct ComposerTextView: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: ComposerTextView
         var updating = false
+        /// The request last acted on; the one the view appeared with is not a request.
+        var focusRequest: Int
 
-        init(_ parent: ComposerTextView) { self.parent = parent }
+        init(_ parent: ComposerTextView) {
+            self.parent = parent
+            focusRequest = parent.focusRequest
+        }
 
         func textViewDidChange(_ view: UITextView) {
             guard !updating else { return }

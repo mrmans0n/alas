@@ -10,14 +10,19 @@ struct ScrcpyTests {
         var data = Data("h264".utf8)
         data += bytes([0x80, 0, 0, 0, 0, 0, 0x02, 0xD0, 0, 0, 0x06, 0x40]) // session 720×1600
         data += bytes([0x40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3]) + bytes([1, 2, 3]) // config
-        data += bytes([0x20, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2]) + bytes([4, 5]) // key frame
-        data += bytes([0x00, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1]) + bytes([6]) // P frame
+        data += bytes([0x31, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0, 0, 0, 2]) + bytes([4, 5])
+        data += bytes([0x80, 0, 0, 0, 0, 0, 0x06, 0x40, 0, 0, 0x02, 0xD0]) // session 1600×720
+        data += bytes([0x40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]) + bytes([6])
+        data += bytes([0x20, 0, 0, 0, 0, 0x0F, 0x42, 0x40, 0, 0, 0, 1]) + bytes([7])
+        data += bytes([0, 0, 0, 0, 0, 0x0F, 0xC4, 0x75, 0, 0, 0, 1]) + bytes([8])
         return data
     }()
 
     private static let events: [ScrcpyVideoEvent] = [
         .session(width: 720, height: 1600), .config(bytes([1, 2, 3])),
-        .frame(bytes([4, 5]), keyFrame: true), .frame(bytes([6]), keyFrame: false),
+        .frame(bytes([4, 5]), pts: 0x1123_4567_89AB_CDEF, keyFrame: true),
+        .session(width: 1600, height: 720), .config(bytes([6])),
+        .frame(bytes([7]), pts: 1_000_000, keyFrame: true), .frame(bytes([8]), pts: 1_033_333, keyFrame: false),
     ]
 
     @Test(arguments: [1, 5, 1000])
@@ -36,6 +41,14 @@ struct ScrcpyTests {
     @Test func anotherCodecIsRefused() {
         var parser = ScrcpyVideoParser()
         #expect(throws: ScrcpyError.unsupportedCodec(0x6832_3635)) { try parser.feed(Data("h265".utf8)) }
+    }
+
+    @Test func anOversizedPacketIsRefusedBeforeThePayloadArrives() {
+        var parser = ScrcpyVideoParser()
+        let header = Self.bytes([0x20, 0, 0, 0, 0, 0, 0, 1, 0, 0x80, 0, 1])
+        #expect(throws: ScrcpyError.invalidVideoPayloadSize(8 * 1024 * 1024 + 1)) {
+            try parser.feed(Data("h264".utf8) + header)
+        }
     }
 
     // The expected bytes are scrcpy v5.0.1's app/tests/test_control_msg_serialize.c.
@@ -61,6 +74,16 @@ struct ScrcpyTests {
         #expect(ScrcpyControl.getClipboard(copy: true) == Self.bytes([0x08, 0x01]))
         #expect(ScrcpyControl.setClipboard(sequence: 0x0102_0304_0506_0708, text: "hello, world!", paste: true)
             == Self.bytes([0x09, 1, 2, 3, 4, 5, 6, 7, 8, 1, 0, 0, 0, 0x0D]) + Data("hello, world!".utf8))
+    }
+
+    @Test func cancelSendsAndroidCancelBeforeRetiringTheScrcpyFinger() {
+        let fingerAndPosition = Self.bytes([
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+            0, 0, 0, 10, 0, 0, 0, 20, 0x02, 0xD0, 0x06, 0x40,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ])
+        #expect(ScrcpyControl.cancelTouch(x: 10, y: 20, width: 720, height: 1600)
+            == Self.bytes([2, 3]) + fingerAndPosition + Self.bytes([2, 1]) + fingerAndPosition)
     }
 
     /// scrcpy refuses clipboard text over 262,130 UTF-8 bytes; longer text is

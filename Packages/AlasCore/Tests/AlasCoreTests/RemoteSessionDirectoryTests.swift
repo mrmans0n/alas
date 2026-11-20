@@ -7,12 +7,32 @@ import Testing
         RemoteWorktreeSummary(projectName: project, worktreeName: name, branch: branch, path: path, metricsAvailable: true, comparisonRef: nil, commitCount: 0, changedFileCount: changed, addedLines: 0, deletedLines: 0, conflictCount: 0)
     }
 
-    private func session(_ id: String, title: String = "t", status: String = "idle", active: Bool = true, project: String? = "p1", worktreeId: String? = "w1", at: Int64 = 1, worktree: RemoteWorktreeSummary? = nil, serverId: String? = nil, serverName: String? = nil) -> RemoteSessionSummary {
-        RemoteSessionSummary(id: id, title: title, agentId: "a", status: status, canDrive: false, isActive: active, projectId: project, worktreeId: worktreeId, updatedAt: at, worktree: worktree ?? wt(), serverId: serverId, serverName: serverName)
+    private func session(_ id: String, title: String = "t", status: String = "idle", active: Bool = true, project: String? = "p1", worktreeId: String? = "w1", at: Int64 = 1, worktree: RemoteWorktreeSummary? = nil, serverId: String? = nil, serverName: String? = nil, parent: String? = nil) -> RemoteSessionSummary {
+        RemoteSessionSummary(id: id, title: title, agentId: "a", status: status, canDrive: false, isActive: active, projectId: project, worktreeId: worktreeId, updatedAt: at, worktree: worktree ?? wt(), serverId: serverId, serverName: serverName, parentSessionId: parent)
     }
 
     private func sections(_ s: [RemoteSessionSummary]) -> [RemoteRepoSection] {
         RemoteSessionDirectory.sections(s, localHostName: "Mac")
+    }
+
+    @Test func sessionRowsNestChildrenUnderTheirParentAndRankGroupsByTheirNeediestSession() throws {
+        let list = [
+            session("idleNew", at: 9),
+            session("parent", at: 5),
+            session("child", status: "awaitingPermission", at: 4, parent: "parent"),
+            session("grandchild", at: 3, parent: "child"),
+            session("running", status: "streaming", at: 2),
+        ]
+        let w = try #require(sections(list).first?.worktrees.first)
+        #expect(w.sessionRows.map(\.id) == ["parent", "child", "grandchild", "running", "idleNew"])
+        #expect(w.sessionRows.map(\.depth) == [0, 1, 1, 0, 0])
+    }
+
+    @Test func sessionRowsListAChildWhoseParentIsNotOpenHereAtTopLevel() throws {
+        let list = [session("orphan", at: 2, parent: "elsewhere"), session("other", at: 1)]
+        let w = try #require(sections(list).first?.worktrees.first)
+        #expect(w.sessionRows.map(\.id) == ["orphan", "other"])
+        #expect(w.sessionRows.map(\.depth) == [0, 0])
     }
 
     @Test(arguments: [
@@ -111,6 +131,25 @@ import Testing
         ]
         let worktrees = try #require(sections(list).first?.worktrees)
         #expect(RemoteSessionDirectory.attentionFirst(worktrees).map(\.id) == ["waiting", "running", "idleNew", "idleOld"])
+    }
+
+    @Test(arguments: [
+        (RemoteWorktreeSort.lastUpdateDesc, true, ["b", "c", "a"]),
+        (.lastUpdateAsc, true, ["a", "c", "b"]),
+        (.creationDesc, true, ["a", "b", "c"]),
+        (.creationAsc, true, ["c", "b", "a"]),
+        (.creationAsc, false, ["b", "c", "a"]),  // a host without createdAt keeps recency
+        (.branchAsc, true, ["c", "b", "a"]),  // by branch, not directory
+    ])
+    func sortsWorktreesLikeTheMacSidebar(sort: RemoteWorktreeSort, hasCreatedAt: Bool, expected: [String]) throws {
+        // (worktree, updatedAt, createdAt, branch); "Y" pins the case-insensitive branch order.
+        let list = [("a", 1, 30.0, "z"), ("B", 9, 20.0, "Y"), ("c", 5, 10.0, "x")].map { name, at, created, branch in
+            var summary = wt("alas", name, branch: branch, path: "/r/\(name)")
+            if hasCreatedAt || name != "a" { summary.createdAt = created }
+            return session(name.lowercased(), worktreeId: name.lowercased(), at: Int64(at), worktree: summary)
+        }
+        let worktrees = try #require(sections(list).first?.worktrees)
+        #expect(RemoteSessionDirectory.sorted(worktrees, by: sort).map(\.id) == expected)
     }
 
     @Test func closedSessionsNeverCountAsRunning() {

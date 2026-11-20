@@ -27,6 +27,9 @@ public struct RemoteWorktreeSummary: Codable, Equatable, Sendable {
     /// client can group one repository's checkouts across machines. Nil for a
     /// folder, a repository without an origin, and an older host.
     public var repositoryKey: String? = nil
+    /// The checkout's lineage marker, which an archive or delete names so a
+    /// checkout replaced since is refused. Nil without one and from an older host.
+    public var lineageID: String? = nil
 
     public init(projectName: String, worktreeName: String, branch: String, path: String, metricsAvailable: Bool, comparisonRef: String?, commitCount: Int, changedFileCount: Int, addedLines: Int, deletedLines: Int, conflictCount: Int, isMain: Bool? = nil, createdAt: Double? = nil, lastActivity: Double? = nil, isFolder: Bool? = nil) {
         self.projectName = projectName

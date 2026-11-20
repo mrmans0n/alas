@@ -191,6 +191,12 @@ final class TranscriptSession {
     /// The query `mentionCandidates` answers; nil while a new query is in flight.
     private(set) var mentionCandidatesQuery: String?
     var draft = ComposerDraft()
+    /// The host's suggestion for the next prompt, for the transcript as it stands.
+    private(set) var nextPromptSuggestion: String?
+    /// The transcript the last suggestion request was for.
+    @ObservationIgnored private var suggestionGeneration: UInt64?
+    /// Bumped to raise the keyboard on the composer, with the caret at the end of the draft.
+    private(set) var composerFocusRequest = 0
     var visualAids: [UUID: VisualAidCardState] = [:]
 
     let hostID: UUID
@@ -298,6 +304,13 @@ final class TranscriptSession {
         isClosed || hub.sessions(of: hostID).first { $0.id == sessionId }?.isActive != true
     }
 
+    /// Quotes a transcript message, or part of one, under the draft and focuses the composer, as the Mac's Quote does.
+    func quote(_ message: String) {
+        guard ACPMessageQuote.canQuote(message) else { return }
+        draft.text = ACPMessageQuote.appending(message, to: draft.text)
+        composerFocusRequest += 1
+    }
+
     func open() {
         guard subscription == nil else { return }
         if listener == nil {
@@ -306,6 +319,7 @@ final class TranscriptSession {
             }
         }
         forgetTransientState()
+        state.expectNewTranscript()
         subscription = hub.subscribe(sessionId, on: hostID)
         hostWasOnline = hub.state(of: hostID) == .online
         watchGeneration += 1
@@ -315,6 +329,8 @@ final class TranscriptSession {
     func close() {
         guard subscription != nil else { return }
         subscription = nil
+        // An answer that never came (the link dropped) must not hold the buttons.
+        tabAction = nil
         // The host refuses a prompt over the connection, subscribed or not: keep listening
         // until every sent draft has an outcome, so a refusal still lands in the draft.
         if unsettled.isEmpty { listener = nil }
@@ -350,6 +366,25 @@ final class TranscriptSession {
     func stop() { hub.send(.stop(sessionId: sessionId), to: hostID) }
 
     func takeOver() { hub.send(.takeOver(sessionId: sessionId), to: hostID) }
+
+    /// The host closes and reopens its session tabs for this phone, as for a Mac peer.
+    var supportsSessionTabs: Bool { hub.supports(PeerSessionTabsCapability.v1, on: hostID) }
+    /// A close or reopen waiting for the host's answer.
+    private(set) var tabAction: TabAction?
+    /// The host's refusal of the last close or reopen.
+    var tabActionError: String?
+
+    enum TabAction { case close, reopen }
+
+    func closeTab() { requestTab(.close) }
+    func reopenTab() { requestTab(.reopen) }
+
+    private func requestTab(_ action: TabAction) {
+        guard tabAction == nil, supportsSessionTabs, hub.state(of: hostID) == .online else { return }
+        tabAction = action
+        tabActionError = nil
+        hub.send(action == .close ? .closeSessionTab(sessionId: sessionId) : .openSessionTab(sessionId: sessionId), to: hostID)
+    }
 
     /// The issue an Install was sent for; the button waits until the host replaces it.
     private(set) var adapterInstallRequested: RemoteAgentIssue?
@@ -585,6 +620,14 @@ final class TranscriptSession {
 
     private static let hostKeyPrefix = "host:"
 
+    /// Drops a worktree image read from the host, so the next display reads it again.
+    func forgetHostImage(_ path: String) {
+        let key = Self.hostKeyPrefix + path
+        displayImages.removeObject(forKey: key as NSString)
+        displayLoads[key] = nil
+        displayGeneration += 1
+    }
+
     private func inlineImage(
         _ string: String, key place: String, resolve: @escaping @Sendable (String) -> RemoteTranscriptImageSource
     ) -> ImageLoad {
@@ -642,6 +685,8 @@ final class TranscriptSession {
     /// The hold in `publish()` keeps a card through the host's re-send, so nothing flashes.
     private func forgetTransientState() {
         state.clearPendingRequests()
+        // A request sent on the old link has no answer coming.
+        suggestionGeneration = nil
         // A request answered but refused comes back identical; show it again. The hold restarts so
         // the re-send gets the full grace period.
         answered = []
@@ -650,6 +695,8 @@ final class TranscriptSession {
         holdTask?.cancel()
         holdTask = nil
         isStopping = false
+        // A close or reopen sent on the old link has no answer coming; let the user ask again.
+        tabAction = nil
         mentionCandidates = []
         mentionCandidatesQuery = nil
         // A final read whose reply never came, or came before the exit, is asked again.
@@ -711,6 +758,7 @@ final class TranscriptSession {
 
     private func resubscribe() {
         state.resetResubscribeRequest()
+        state.expectNewTranscript()
         // A page request or image read sent before a reconnect has no reply coming, and
         // rows whose messages are unchanged won't ask again, so resend the unanswered reads.
         fetchingOlder = false
@@ -731,6 +779,17 @@ final class TranscriptSession {
             guard case .promptRejected(let id, _) = message, id == sessionId else { return }
         }
         switch message {
+        case .sessionTabActionSucceeded(let id) where id == sessionId:
+            let reopened = tabAction == .reopen
+            tabAction = nil
+            // The host dropped the closed session's subscription; a new one brings its snapshot.
+            if reopened {
+                close()
+                open()
+            }
+        case .sessionTabActionFailed(let id, let message) where id == sessionId:
+            tabAction = nil
+            tabActionError = message
         case .transcriptImage(let id, let path, let data) where id == sessionId:
             if requestedImages.contains(path), images[path] == nil {
                 Task { [weak self] in
@@ -752,6 +811,12 @@ final class TranscriptSession {
             if toolTerminals[terminalId] != tail { toolTerminals[terminalId] = tail }
             // A call can end before its terminal exits; keep reading until the exit lands.
             if tail.isAwaitingExit { pollTerminals() }
+            return
+        case .nextPromptSuggestion(let id, let text) where id == sessionId:
+            // Every follower gets the reply; it counts only for the transcript it was asked for.
+            if let text, !text.isEmpty, streamingState == "idle", state.messagesGeneration == suggestionGeneration {
+                nextPromptSuggestion = text
+            }
             return
         case .subagentTranscript(let id, let subagentId, let found, let state, let messages) where id == sessionId:
             // Rows whose message is unchanged keep their item, so a poll does not re-highlight them.
@@ -880,6 +945,30 @@ final class TranscriptSession {
         }
         refreshCanLoadOlder()
         pollTerminals()
+        refreshNextPromptSuggestion()
+    }
+
+    /// Asks once per finished transcript for a suggestion, and drops one the
+    /// transcript has moved past.
+    private func refreshNextPromptSuggestion() {
+        let generation = state.messagesGeneration
+        if nextPromptSuggestion != nil, streamingState != "idle" || generation != suggestionGeneration {
+            nextPromptSuggestion = nil
+        }
+        guard generation != suggestionGeneration, streamingState == "idle", canDrive, hasSnapshot, isOpen,
+              permission == nil, question == nil, plan == nil, elicitation == nil,
+              hub.state(of: hostID) == .online,
+              hub.supports(HostProtocolCapability.sessionsNextPromptV1, on: hostID) else { return }
+        suggestionGeneration = generation
+        hub.send(.suggestNextPrompt(sessionId: sessionId), to: hostID)
+    }
+
+    /// Puts the suggestion in the composer, ready to edit.
+    func acceptNextPromptSuggestion() {
+        guard let nextPromptSuggestion, draft.text.isEmpty else { return }
+        draft.text = nextPromptSuggestion
+        self.nextPromptSuggestion = nil
+        composerFocusRequest += 1
     }
 
     /// Reads the terminals of expanded tool calls: once a second while their call runs, then once

@@ -401,6 +401,9 @@ public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, Se
     case readToolTerminal(sessionId: String, terminalId: String)
     /// A subagent's own transcript; see `PeerSubagentCapability`.
     case readSubagent(sessionId: String, subagentId: String)
+    /// A suggestion for the session's next prompt; see
+    /// `HostProtocolCapability.sessionsNextPromptV1`.
+    case suggestNextPrompt(sessionId: String)
     /// The phone's answer to a visual aid question. `action` is "answer" or
     /// "dismiss"; the gateway validates the choices against the question.
     /// `requestId` is an opaque correlation token echoed on any `visualAidRejected`, so one of several
@@ -408,6 +411,8 @@ public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, Se
     case visualAidResponse(sessionId: String, visualId: String, action: String, selectedOptionIds: [String], note: String?, requestId: String? = nil)
     /// Peer console traffic; see `PeerConsoleRequest`.
     case console(PeerConsoleRequest)
+    /// Direct peer device traffic; see `PeerDeviceRequest`.
+    case device(PeerDeviceRequest)
     /// Forwarded run endpoint traffic; see `PeerPortForwardRequest`.
     case portForward(PeerPortForwardRequest)
     /// A host protocol message; see `HostClientMessage`.
@@ -418,7 +423,7 @@ public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, Se
 }
 
 extension RemoteClientMessageOf: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, capabilities, sha, visualId, selectedOptionIds, note, console, portForward, host, peerHost, repoHook, useBranchNaming, relayURL, relayToken, pushKinds, terminalId, subagentId }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, capabilities, sha, visualId, selectedOptionIds, note, console, device, portForward, host, peerHost, repoHook, useBranchNaming, relayURL, relayToken, pushKinds, terminalId, subagentId }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -607,8 +612,12 @@ extension RemoteClientMessageOf: Codable {
         case "readSubagent":
             self = .readSubagent(sessionId: try c.decode(String.self, forKey: .sessionId),
                                  subagentId: try c.decode(String.self, forKey: .subagentId))
+        case "suggestNextPrompt":
+            self = .suggestNextPrompt(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "console":
             self = .console(try c.decode(PeerConsoleRequest.self, forKey: .console))
+        case "device":
+            self = .device(try c.decode(PeerDeviceRequest.self, forKey: .device))
         case "portForward":
             self = .portForward(try c.decode(PeerPortForwardRequest.self, forKey: .portForward))
         case "host":
@@ -814,9 +823,15 @@ extension RemoteClientMessageOf: Codable {
             try c.encode("readSubagent", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(subagentId, forKey: .subagentId)
+        case .suggestNextPrompt(let s):
+            try c.encode("suggestNextPrompt", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
         case .console(let request):
             try c.encode("console", forKey: .type)
             try c.encode(request, forKey: .console)
+        case .device(let request):
+            try c.encode("device", forKey: .type)
+            try c.encode(request, forKey: .device)
         case .portForward(let request):
             try c.encode("portForward", forKey: .type)
             try c.encode(request, forKey: .portForward)
@@ -1018,6 +1033,9 @@ public enum RemoteServerMessageOf<ServerHost: Codable & Equatable & Sendable, Cl
     /// transcript that fit a frame, and its `ACPSubagentState` raw value, or
     /// `found: false` with no state and no rows when the session has no such child.
     case subagentTranscript(sessionId: String, subagentId: String, found: Bool, state: String?, messages: [RemoteWireMessage])
+    /// The answer to `suggestNextPrompt`: nil when the host has none for the
+    /// session as it stands.
+    case nextPromptSuggestion(sessionId: String, text: String?)
     /// The answer to `HostWorktreeRead.fileHistory`: `truncated` when more commits touched it.
     case fileHistory(sessionId: String, path: String, entries: [HostFileHistoryEntry], truncated: Bool)
     case fileHistoryFailed(sessionId: String, path: String, reason: RemoteFileAccessReason, message: String?)
@@ -1026,6 +1044,8 @@ public enum RemoteServerMessageOf<ServerHost: Codable & Equatable & Sendable, Cl
     case mentionCandidates(sessionId: String, query: String, candidates: [RemoteMention])
     /// Peer console traffic; see `PeerConsoleEvent`.
     case console(PeerConsoleEvent)
+    /// Direct peer device traffic; see `PeerDeviceEvent`.
+    case device(PeerDeviceEvent)
     /// Forwarded run endpoint traffic; see `PeerPortForwardEvent`.
     case portForward(PeerPortForwardEvent)
     /// A host protocol message; see `HostServerMessage`.
@@ -1049,7 +1069,7 @@ extension RemoteServerMessageOf: Codable {
         case items, itemId, text
         case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
         case metadataNote, commitsTruncated, workingTreeTruncated, operation, sha
-        case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers, capabilities, hostVersion, console, portForward, host, peerHost
+        case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers, capabilities, hostVersion, console, device, portForward, host, peerHost
         case challenge, publicKey, signature
         case visualId
         case hook
@@ -1073,6 +1093,8 @@ extension RemoteServerMessageOf: Codable {
                 hostVersion: try c.decodeIfPresent(String.self, forKey: .hostVersion))
         case "console":
             self = .console(try c.decode(PeerConsoleEvent.self, forKey: .console))
+        case "device":
+            self = .device(try c.decode(PeerDeviceEvent.self, forKey: .device))
         case "portForward":
             self = .portForward(try c.decode(PeerPortForwardEvent.self, forKey: .portForward))
         case "host":
@@ -1326,6 +1348,9 @@ extension RemoteServerMessageOf: Codable {
                 exitCode: try c.decodeIfPresent(Int.self, forKey: .exitCode),
                 signal: try c.decodeIfPresent(String.self, forKey: .signal),
                 retained: try c.decode(Bool.self, forKey: .retained))
+        case "nextPromptSuggestion":
+            self = .nextPromptSuggestion(sessionId: try c.decode(String.self, forKey: .sessionId),
+                                         text: try c.decodeIfPresent(String.self, forKey: .text))
         case "subagentTranscript":
             self = .subagentTranscript(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -1373,6 +1398,9 @@ extension RemoteServerMessageOf: Codable {
         case .console(let event):
             try c.encode("console", forKey: .type)
             try c.encode(event, forKey: .console)
+        case .device(let event):
+            try c.encode("device", forKey: .type)
+            try c.encode(event, forKey: .device)
         case .portForward(let event):
             try c.encode("portForward", forKey: .type)
             try c.encode(event, forKey: .portForward)
@@ -1643,6 +1671,10 @@ extension RemoteServerMessageOf: Codable {
             try c.encodeIfPresent(exitCode, forKey: .exitCode)
             try c.encodeIfPresent(signal, forKey: .signal)
             try c.encode(retained, forKey: .retained)
+        case .nextPromptSuggestion(let s, let text):
+            try c.encode("nextPromptSuggestion", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encodeIfPresent(text, forKey: .text)
         case .subagentTranscript(let s, let subagentId, let found, let state, let messages):
             try c.encode("subagentTranscript", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -1717,6 +1749,9 @@ public enum HostProtocolCapability: Sendable {
     /// Hosts that serve those same verbs to a device paired as the native
     /// phone app, an app host included: the phone is its user.
     public static let worktreesGitPhoneV1 = "host.worktrees.git.phone.v1"
+    /// Hosts that serve `HostWorktreeChange.hunk` to the native phone app, an
+    /// app host included.
+    public static let worktreesHunksPhoneV1 = "host.worktrees.hunks.phone.v1"
     /// Hosts that serve `shepherdSession`, and list each session's shepherd,
     /// to a device paired as the native phone app, an app host included.
     public static let shepherdsPhoneV1 = "host.shepherds.phone.v1"
@@ -1755,6 +1790,13 @@ public enum HostProtocolCapability: Sendable {
     /// `worktreeSessionNeedsRepoHookApproval` for a hook the client's user
     /// must approve first.
     public static let repoHooksApprovalV1 = "host.repoHooks.approval.v1"
+    /// Hosts whose `createWorktreeSession` takes an empty branch: the
+    /// worktree starts on a temporary name and its first prompt names the
+    /// branch. Only a Mac, which runs the naming.
+    public static let worktreesAutoBranchNameV1 = "host.worktrees.autoBranchName.v1"
+    /// Hosts that serve `suggestNextPrompt`. Only a Mac, which runs the
+    /// suggestions.
+    public static let sessionsNextPromptV1 = "host.sessions.nextPrompt.v1"
     /// Hosts that serve `delegation`, and send `delegationOutboxChanged`.
     public static let delegationV1 = "host.delegation.v1"
     /// Delegation over a link the other side opened. A headless host offers it

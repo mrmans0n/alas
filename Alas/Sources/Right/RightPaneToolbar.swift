@@ -21,9 +21,7 @@ struct RightPaneToolbar: View {
     var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
     let onOpenPreview: () -> Void
     let onNewRunScript: (RunScriptScope) -> Void
-    /// The Devices tab's switcher, shown in place of the leading text.
-    var deviceSwitcher: AnyView?
-    /// The Devices tab's actions for the selected device.
+    /// The Devices tab's + Add.
     var deviceActions: AnyView?
 
     @Environment(\.theme) private var theme
@@ -38,15 +36,9 @@ struct RightPaneToolbar: View {
             // drag filler only claims what is left over. Without them the stack
             // splits the row evenly and the branch name ellipsizes while the
             // rest of the row sits empty.
-            if tab == .device, panelTitle == nil, let deviceSwitcher {
-                // A menu: a drag overlay would swallow its clicks.
-                deviceSwitcher
-                    .layoutPriority(1)
-            } else {
-                leading
-                    .overlay { WindowDragHandle() }
-                    .layoutPriority(1)
-            }
+            leading
+                .overlay { WindowDragHandle() }
+                .layoutPriority(1)
 
             // The leading row carries its own drag handle, so this filler can
             // collapse to nothing when the branch name needs the whole row.
