@@ -302,6 +302,29 @@ final class SessionWorkspace {
     }
 
     /// What the host suggests a message for the staged change from; nil when it couldn't say.
+    var canReadFileHistory: Bool {
+        gitTarget != nil && hub.supports(HostProtocolCapability.worktreesFileHistoryV1, on: hostID)
+    }
+
+    /// The commits that touched `path`, newest first.
+    func fileHistory(_ path: String) async -> Result<(entries: [HostFileHistoryEntry], truncated: Bool), RemoteGitFailure> {
+        guard let target = gitTarget else { return .failure(RemoteGitFailure("This worktree's history isn't available here.")) }
+        var id = 0
+        let reply = await hostReply(timeout: .seconds(30)) {
+            id = $0
+            return RemoteFileHistoryRequest.request(id: $0, projectID: target.projectID, worktreePath: target.worktree.path, path: path)
+        }
+        switch reply {
+        case .failure(let failure): return .failure(failure)
+        case .success(let message):
+            switch RemoteFileHistoryRequest.result(replying: id, in: message) {
+            case .success(let entries, let truncated)?: return .success((entries, truncated))
+            case .failure(_, let message)?: return .failure(RemoteGitFailure(message ?? "Couldn't read this file's history."))
+            case nil: return .failure(RemoteGitFailure("Couldn't read this file's history."))
+            }
+        }
+    }
+
     func commitMessageInput() async -> CommitMessageSuggestionInput? {
         guard canUseGit, let target = gitTarget,
               case .success(let reply) = await hostReply(timeout: .seconds(30), {

@@ -196,7 +196,7 @@ public enum RemoteGitRequest {
         return (start?["started"] as? [String: Any])?["runID"] as? String
     }
 
-    private static func responseResult(in message: OpaqueHostMessage, matching id: Int? = nil) -> [String: Any]? {
+    static func responseResult(in message: OpaqueHostMessage, matching id: Int? = nil) -> [String: Any]? {
         guard let object = try? JSONSerialization.jsonObject(with: message.json) as? [String: Any],
               let response = object["response"] as? [String: Any],
               id == nil || response["id"] as? Int == id else { return nil }

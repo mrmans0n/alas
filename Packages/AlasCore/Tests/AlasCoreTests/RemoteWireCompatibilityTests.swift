@@ -136,6 +136,25 @@ import Testing
         #expect(RemoteAttentionRequest.items(replying: 9, in: reply) == nil)
     }
 
+    @Test func phoneReadsAFilesHistory() throws {
+        let request = RemoteFileHistoryRequest.request(id: 3, projectID: "p", worktreePath: "/r", path: "a.swift")
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: request.json)
+            == HostClientMessage(id: 3, request: .readWorktree(worktree: WorktreeRef(projectID: "p", path: "/r"),
+                                                              read: .fileHistory(path: "a.swift"))))
+        let commit = CommitInfo(sha: String(repeating: "a", count: 40), shortSha: "aaaaaaa", author: "N", authorInitials: "N",
+                                date: Date(timeIntervalSince1970: 1_700_000_000), subject: "s", rawSubject: "feat: s", body: "",
+                                conventionalTag: "feat", filesChanged: 1, insertions: 2, deletions: 0)
+        let entries = [HostFileHistoryEntry(commit: commit, pathAtCommit: "old.swift")]
+        func reply(_ message: RemoteServerMessage) throws -> OpaqueHostMessage {
+            OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 3, result: .worktreeRead(reply: message))))
+        }
+        #expect(RemoteFileHistoryRequest.result(replying: 3, in: try reply(.fileHistory(sessionId: "s", path: "a.swift", entries: entries, truncated: true)))
+            == .success(entries: entries, truncated: true))
+        #expect(RemoteFileHistoryRequest.result(replying: 3, in: try reply(.fileHistoryFailed(sessionId: "s", path: "a.swift", reason: .notFound, message: nil)))
+            == .failure(reason: .notFound, message: nil))
+        #expect(RemoteFileHistoryRequest.result(replying: 4, in: try reply(.fileHistory(sessionId: "s", path: "a.swift", entries: [], truncated: false))) == nil)
+    }
+
     @Test func phoneReadsWhatACommitMessageIsSuggestedFrom() throws {
         let request = RemoteGitRequest.commitMessageInput(id: 3, projectID: "p", path: "/r").json
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: request)
