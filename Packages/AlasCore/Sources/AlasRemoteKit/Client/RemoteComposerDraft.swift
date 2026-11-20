@@ -209,12 +209,24 @@ public struct RemoteComposerDraft: Equatable, Sendable {
         let after: unichar? = NSMaxRange(range) < string.length ? string.character(at: NSMaxRange(range)) : nil
         var targets = SlashCommandText.chipTargets(inFragment: pasted, replacing: range, in: current, commands: commands)
             .map { (range: $0.range, chip: RemoteDraftChip.command($0.command)) }
-        if let codeHost {
+        if let codeHost, !isInCode(range.location, in: string) {
             let urls = UpstreamReferenceText.urlReferences(in: pasted, repository: codeHost, precededBy: before, followedBy: after)
             let tokens = UpstreamReferenceText.references(in: pasted, host: codeHost.kind, precededBy: before, followedBy: after)
             targets += (urls + tokens).map { (range: $0.range, chip: RemoteDraftChip.reference($0.reference)) }
         }
         return slice(pasted, at: targets)
+    }
+
+    /// Whether a paste at `location` lands in code: an inline span still open
+    /// there, as the Mac's paste checks, or a fenced block.
+    private static func isInCode(_ location: Int, in string: NSString) -> Bool {
+        let prefix = string.substring(to: location) as NSString
+        // A run left open through the caret shows up only in the scan that extends it.
+        if UpstreamReferenceText.codeRanges(in: prefix, unclosedRunsExtendToEnd: true).count
+            > UpstreamReferenceText.codeRanges(in: prefix, unclosedRunsExtendToEnd: false).count { return true }
+        return MarkdownFenceEditing.blocks(in: string as String).contains {
+            location > $0.outerRange.location && location < NSMaxRange($0.outerRange)
+        }
     }
 
     /// `text` cut into text runs and chips at `targets`, which may overlap:

@@ -131,6 +131,12 @@ struct RemoteComposerRulesTests {
         #expect(RemoteComposerDraft.pasteSegments("#9", replacing: NSRange(location: 3, length: 0),
                                                   in: "abc", commands: [], codeHost: repo, nextOrdinal: 1)
             == [.text("#9")])
+        // Inside code, a URL stays as pasted: between two backticks, or in a fenced block.
+        let url = "https://github.com/o/r/pull/9"
+        #expect(RemoteComposerDraft.pasteSegments(url, replacing: NSRange(location: 1, length: 0), in: "``",
+                                                  commands: [], codeHost: repo, nextOrdinal: 1) == [.text(url)])
+        #expect(RemoteComposerDraft.pasteSegments(url, replacing: NSRange(location: 4, length: 0), in: "```\n\n```",
+                                                  commands: [], codeHost: repo, nextOrdinal: 1) == [.text(url)])
     }
 
     /// Editor offsets count a chip as one character; a replace splits text runs and keeps chips whole.
