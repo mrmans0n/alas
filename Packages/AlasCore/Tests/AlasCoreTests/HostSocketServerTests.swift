@@ -130,6 +130,10 @@ private final class NoCheckpointsEnvironment: AlasHostEnvironment {
 /// that arrive meanwhile.
 @MainActor
 final class SocketClient {
+    // Use the deadline to catch hangs. Both ends can wait for the main actor
+    // while the package runs its tests in parallel.
+    private static let hangTimeout: Duration = .seconds(300)
+
     private let connection: ClientSocket
     private var nextID = 0
     private var responses: [Int: HostResponse] = [:]
@@ -186,14 +190,14 @@ final class SocketClient {
         line.append(UInt8(ascii: "\n"))
         let written = connection.write(line)
         try await reportingState(of: "request \(id), \(written) of \(line.count) bytes written", at: sourceLocation) {
-            try await eventually(within: .seconds(30), sourceLocation: sourceLocation) { await self.responses[id] != nil }
+            try await eventually(within: Self.hangTimeout, sourceLocation: sourceLocation) { await self.responses[id] != nil }
         }
         return try #require(responses[id])
     }
 
     func waitForEvent(sourceLocation: SourceLocation = #_sourceLocation, _ matches: @escaping @Sendable (HostEvent) -> Bool) async throws {
         try await reportingState(of: "an event", at: sourceLocation) {
-            try await eventually(within: .seconds(30), sourceLocation: sourceLocation) { await self.events.contains(where: matches) }
+            try await eventually(within: Self.hangTimeout, sourceLocation: sourceLocation) { await self.events.contains(where: matches) }
         }
     }
 
