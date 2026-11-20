@@ -2,32 +2,17 @@ import AlasRemoteKit
 import SwiftUI
 
 /// The session's pull request pill, as on the Mac: Ship with agent without a shepherd, else its
-/// number and state, with what the host lets the phone do about it.
+/// number and state. Tapping it opens the `ShepherdSheet`.
 struct ShepherdPill: View {
     let workspace: SessionWorkspace
     let isBusy: Bool
-    @State private var error: String?
+    @State private var showsSheet = false
 
     var body: some View {
         let shepherd = workspace.shepherd
         let badge = shepherd?.badge ?? "noRequest"
-        Menu {
-            if let shepherd {
-                Text(shepherd.tooltip)
-            }
-            ForEach(RemoteShepherd.offered(for: shepherd), id: \.self) { action in
-                Button(Self.title(action), systemImage: Self.symbol(action)) { run(action) }
-            }
-            if let shepherd, !shepherd.isFinished {
-                if let autoFix = shepherd.autoFix {
-                    Toggle("Auto-fix", systemImage: "wrench.and.screwdriver", isOn: Binding(
-                        get: { autoFix }, set: { run($0 ? .enableAutoFix : .disableAutoFix) }))
-                }
-                if let autoMerge = shepherd.autoMerge {
-                    Toggle("Auto-merge", systemImage: "arrow.triangle.merge", isOn: Binding(
-                        get: { autoMerge }, set: { run($0 ? .enableAutoMerge : .disableAutoMerge) }))
-                }
-            }
+        Button {
+            showsSheet = true
         } label: {
             if workspace.shepherdRunning != nil {
                 ProgressView()
@@ -38,10 +23,8 @@ struct ShepherdPill: View {
         .disabled(workspace.shepherdRunning != nil)
         .accessibilityLabel("Pull request")
         .accessibilityValue(accessibilityValue(shepherd))
-        .alert("Couldn't Do That", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(error ?? "")
+        .sheet(isPresented: $showsSheet) {
+            ShepherdSheet(workspace: workspace, isBusy: isBusy)
         }
     }
 
@@ -77,30 +60,6 @@ struct ShepherdPill: View {
     private func accessibilityValue(_ shepherd: RemoteShepherd?) -> String {
         if let shepherd { return shepherd.tooltip }
         return isBusy ? "Ship with agent after the current turn" : "Ship with agent"
-    }
-
-    private func run(_ action: RemoteShepherdAction) {
-        Task { error = await workspace.shepherd(action) }
-    }
-
-    private static func title(_ action: RemoteShepherdAction) -> String {
-        switch action {
-        case .ship: "Ship with Agent"
-        case .resume: "Resume"
-        case .stop: "Stop Shepherding"
-        case .enableAutoFix, .disableAutoFix: "Auto-fix"
-        case .enableAutoMerge, .disableAutoMerge: "Auto-merge"
-        }
-    }
-
-    private static func symbol(_ action: RemoteShepherdAction) -> String {
-        switch action {
-        case .ship: "paperplane"
-        case .resume: "play"
-        case .stop: "stop"
-        case .enableAutoFix, .disableAutoFix: "wrench.and.screwdriver"
-        case .enableAutoMerge, .disableAutoMerge: "arrow.triangle.merge"
-        }
     }
 
     /// The Mac pill's symbols and colors, by `ShepherdBadgeState` raw value.

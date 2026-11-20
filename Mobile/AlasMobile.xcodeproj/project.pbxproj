@@ -45,6 +45,7 @@
 		7DAFD28FE14392621FCDBF53 /* SessionListCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB90BAD33068D0FA5A49EE21 /* SessionListCache.swift */; };
 		82768FC0D800B66EDDFC9B99 /* MermaidBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3D6661CD737A1ADDE5B9897 /* MermaidBlockView.swift */; };
 		86D9AB9FE0BDDAC8209FCCA2 /* ImageStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21958EE58C9376495D96344 /* ImageStaging.swift */; };
+		8CC4E4A8EB4C471BF4525901 /* ShepherdSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02BAEE99CC723E41B717AD92 /* ShepherdSheet.swift */; };
 		90418683B56D8FDCE540EB72 /* WorktreesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFC88463B7E1083C886AC282 /* WorktreesView.swift */; };
 		90AE44675FE782B711960528 /* RequestCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06499964301D8FB5B30EB8B6 /* RequestCard.swift */; };
 		914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */; };
@@ -117,6 +118,7 @@
 		014513AD15C2212B8C007245 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		01778058ACE3C53D047B6348 /* TerminalConsole.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalConsole.swift; sourceTree = "<group>"; };
 		021BD9A2EF626EAA8E99C8E6 /* Boids.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Boids.swift; sourceTree = "<group>"; };
+		02BAEE99CC723E41B717AD92 /* ShepherdSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShepherdSheet.swift; sourceTree = "<group>"; };
 		03FA6AEA78D99344CAAD8095 /* DiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffView.swift; sourceTree = "<group>"; };
 		06499964301D8FB5B30EB8B6 /* RequestCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestCard.swift; sourceTree = "<group>"; };
 		0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlocks.swift; sourceTree = "<group>"; };
@@ -245,6 +247,7 @@
 				F11FB7A8BA65D28E96B7CFEB /* RunPreviewView.swift */,
 				1547D85F76565F3FE516B06A /* SessionWorkspace.swift */,
 				F56F68CCA7CB55635220C51E /* ShepherdPill.swift */,
+				02BAEE99CC723E41B717AD92 /* ShepherdSheet.swift */,
 			);
 			path = Workspace;
 			sourceTree = "<group>";
@@ -679,6 +682,7 @@
 				071E34299495A5835CCC2F75 /* SessionSettingsSheet.swift in Sources */,
 				422DAC40738CAE3A2226AE92 /* SessionWorkspace.swift in Sources */,
 				B42A9AEFF5C7B39EC665FEA8 /* ShepherdPill.swift in Sources */,
+				8CC4E4A8EB4C471BF4525901 /* ShepherdSheet.swift in Sources */,
 				C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */,
 				FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */,
 				144D4D88D96917B1FFFBEC15 /* SubagentCard.swift in Sources */,
