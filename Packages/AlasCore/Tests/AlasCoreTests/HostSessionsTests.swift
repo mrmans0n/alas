@@ -554,33 +554,35 @@ struct HostSessionsTests {
     }
 
     /// A slow suggestion does not hold up the messages a peer sends after it,
-    /// and asking again while it runs does not start another.
+    /// and one asked for a newer turn while it runs is answered too.
     @Test(.timeLimit(.minutes(5))) func aSlowNextPromptSuggestionAnswersWithoutBlockingThePeer() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let (replies, reply) = AsyncStream<RemoteServerMessage>.makeStream()
         let gateway = RemoteSessionGateway(host: fixture.host) { reply.yield($0) }
         defer { gateway.close() }
-        let (gate, release) = AsyncStream<Void>.makeStream()
-        var calls = 0
+        var held: [CheckedContinuation<Void, Never>] = []
         gateway.hostCalls.nextPromptSuggestion = { _ in
-            calls += 1
-            for await _ in gate { break }
+            await withCheckedContinuation { held.append($0) }
             return "Run the tests"
         }
 
-        // Each returns while the suggestion is still held: awaiting it here would hang.
+        // Each returns while its suggestion is still held: awaiting it here would hang.
         await gateway.handle(.suggestNextPrompt(sessionId: "s"))
         await gateway.handle(.suggestNextPrompt(sessionId: "s"))
-        release.yield()
-
-        for await message in replies {
-            if case .nextPromptSuggestion = message {
-                #expect(message == .nextPromptSuggestion(sessionId: "s", text: "Run the tests"))
-                break
-            }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        while held.count < 2 {
+            try #require(ContinuousClock.now < deadline)
+            await Task.yield()
         }
-        #expect(calls == 1)
+        held.forEach { $0.resume() }
+
+        var answers = 0
+        for await message in replies where message == .nextPromptSuggestion(sessionId: "s", text: "Run the tests") {
+            answers += 1
+            if answers == 2 { break }
+        }
+        #expect(answers == 2)
     }
 
     /// An image that only the transcript holds inline reaches the phone with a file it can

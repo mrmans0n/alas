@@ -900,8 +900,6 @@ extension RemoteClientMessageOf {
             return "readToolTerminal\u{0}\(sessionId)\u{0}\(terminalId)"
         case .readSubagent(let sessionId, let subagentId):
             return "readSubagent\u{0}\(sessionId)\u{0}\(subagentId)"
-        case .suggestNextPrompt(let sessionId):
-            return "suggestNextPrompt\u{0}\(sessionId)"
         default:
             return nil
         }
