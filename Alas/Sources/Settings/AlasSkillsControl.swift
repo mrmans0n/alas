@@ -27,10 +27,14 @@ struct AlasSkillsControl: View {
                 ProgressView().controlSize(.small)
             } else {
                 switch skills {
-                case .missing, .conflict:
+                case .missing:
                     AlasButton(title: "Install skills", style: .subtle) { run(state.installAlasSkills) }
-                case .outdated:
-                    AlasButton(title: "Update skills", style: .subtle) { run(state.installAlasSkills) }
+                case .outdated, .conflict:
+                    // A conflict hides how much of Alas's set is installed, and
+                    // removal leaves the other skill alone, so offer both.
+                    AlasButton(title: skills == .outdated ? "Update skills" : "Install skills", style: .subtle) {
+                        run(state.installAlasSkills)
+                    }
                     AlasButton(title: "Remove", style: .subtle) { run(state.removeAlasSkills) }
                 case .installed:
                     AlasButton(title: "Remove skills", style: .subtle) { run(state.removeAlasSkills) }
