@@ -120,6 +120,15 @@ struct NativePeerSessionsTests {
         #expect(older.candidates.map(\.sessionID) == ["new"])
     }
 
+    /// The sent prompt is trimmed; a paste at either end keeps its chip, cut to what the trim kept.
+    @Test func pastedSpansAreCutToTheTrimmedPrompt() {
+        let draft = ACPComposerDraft(segments: [.text("see "), .pastedText(ordinal: 1, content: "log 1\nlog 2\n")])
+        let text = draft.plainText
+        let sent = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(NativePeerSessions.pastedSpans(of: draft, draft: text, sent: sent)
+            == [ACPPastedTextSpan(ordinal: 1, utf16Offset: 4, utf16Length: 11)])
+    }
+
     @Test func remotePermissionMapsOntoTheNativeCard() {
         let described = RemotePermissionOption(
             optionId: "allow-once", name: "Allow", kind: "allow_once", description: "For this request only."

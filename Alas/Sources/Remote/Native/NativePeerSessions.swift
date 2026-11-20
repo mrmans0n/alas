@@ -1193,16 +1193,17 @@ final class NativePeerSessions {
     }
 
     /// The collapsed pastes' spans in `sent`, which is `draft` with its ends
-    /// trimmed; none when the composer's draft doesn't line up with `draft`.
+    /// trimmed: each cut to what the trim kept, so a paste ending in a newline
+    /// keeps its chip. None when the composer's draft doesn't line up with `draft`.
     nonisolated static func pastedSpans(of composerDraft: ACPComposerDraft, draft: String, sent: String) -> [ACPPastedTextSpan] {
         let spans = composerDraft.pastedTextSpans(matching: draft)
         guard !spans.isEmpty, let range = draft.range(of: sent) else { return [] }
-        let leading = range.lowerBound.utf16Offset(in: draft)
-        let length = sent.utf16.count
+        let retained = NSRange(location: range.lowerBound.utf16Offset(in: draft), length: sent.utf16.count)
         return spans.compactMap { span in
-            let offset = span.utf16Offset - leading
-            guard offset >= 0, offset + span.utf16Length <= length else { return nil }
-            return ACPPastedTextSpan(ordinal: span.ordinal, utf16Offset: offset, utf16Length: span.utf16Length)
+            let clipped = NSIntersectionRange(span.utf16Range, retained)
+            guard clipped.length > 0 else { return nil }
+            return ACPPastedTextSpan(ordinal: span.ordinal, utf16Offset: clipped.location - retained.location,
+                                     utf16Length: clipped.length)
         }
     }
 
