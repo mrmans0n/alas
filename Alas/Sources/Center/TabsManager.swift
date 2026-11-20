@@ -105,6 +105,9 @@ final class TabsManager {
     private var pendingExternalOpenGen: [TabID: Int] = [:]
     /// Runtime-only display titles for terminal pane leaves. Key = leafId.
     var terminalRuntimeTitles: [String: String] = [:]
+    /// Leaves whose tab the user renamed since their terminal last reported
+    /// a title. Runtime-only; the stored title wins over automatic ones.
+    private(set) var userTitledTerminalLeafIds: Set<String> = []
     private let lsp: WorkspaceLSPManager?
     private let workspaceEditJournal: WorkspaceEditJournal
 
@@ -558,15 +561,27 @@ final class TabsManager {
     func setTerminalRuntimeTitle(leafId: String, title: String) {
         guard !title.isEmpty else { return }
         terminalRuntimeTitles[leafId] = title
+        userTitledTerminalLeafIds.remove(leafId)
     }
 
+    /// After a user rename: drops runtime titles and keeps automatic app
+    /// titles off the tab until its terminal reports a new title.
     func clearTerminalRuntimeTitles(forLeavesInTabId tabId: TabID) {
         guard let file = byWorktree.values.first(where: { $0.tabs.contains(where: { $0.id == tabId }) }) else { return }
         guard let tab = file.tabs.first(where: { $0.id == tabId }),
               case .terminal(let state) = tab else { return }
         for leaf in state.root.leaves() {
             terminalRuntimeTitles.removeValue(forKey: leaf.id)
+            userTitledTerminalLeafIds.insert(leaf.id)
         }
+    }
+
+    /// Whether the user's stored title should win over an automatic app
+    /// title for a terminal tab's focused leaf.
+    func prefersStoredTerminalTitle(for tab: Tab) -> Bool {
+        guard case .terminal(let state) = tab,
+              let leafId = state.root.find(leafId: state.focusedLeafId)?.leaf.id else { return false }
+        return userTitledTerminalLeafIds.contains(leafId)
     }
 
     /// Returns the runtime display title for a terminal tab's focused leaf, if any.
@@ -2377,6 +2392,7 @@ final class TabsManager {
         if case .terminal(let state) = tab {
             for leaf in state.root.leaves() {
                 terminalRuntimeTitles.removeValue(forKey: leaf.id)
+                userTitledTerminalLeafIds.remove(leaf.id)
             }
         }
         clearCachedViews(for: [tab])

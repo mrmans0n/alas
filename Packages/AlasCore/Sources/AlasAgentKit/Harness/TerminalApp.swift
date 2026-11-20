@@ -53,7 +53,7 @@ public enum TerminalAppCatalog {
         case "java":
             names += jvmTool(arguments: arguments).map { [$0] } ?? []
         case let interpreter where scriptInterpreters.contains(interpreter):
-            names += scriptNames(arguments: Array(arguments.dropFirst()))
+            names += scriptNames(arguments: Array(arguments.dropFirst()), interpreter: interpreter)
         default:
             break
         }
@@ -93,15 +93,25 @@ public enum TerminalAppCatalog {
     }
 
     /// The script an interpreter runs: `-m module`, or the first operand,
-    /// named by its npm package and by its file stem.
-    private static func scriptNames(arguments: [String]) -> [String] {
+    /// named by its npm package and by its file stem. Inline code (`-c`,
+    /// `-e`) has no script.
+    private static func scriptNames(arguments: [String], interpreter: String) -> [String] {
+        let options = interpreterOptions[interpreter] ?? InterpreterOptions()
         var index = arguments.startIndex
         while index < arguments.endIndex {
             let argument = arguments[index]
-            if argument == "-m", index + 1 < arguments.endIndex {
-                let module = arguments[index + 1]
+            let next = index + 1 < arguments.endIndex ? arguments[index + 1] : nil
+            if argument == "--" {
+                return next.map(names(forScript:)) ?? []
+            }
+            if options.module.contains(argument), let module = next {
                 return [String(module.split(separator: ".").first ?? Substring(module))]
             }
+            if options.script.contains(argument) {
+                return next.map(names(forScript:)) ?? []
+            }
+            if options.inlineCode.contains(argument) { return [] }
+            if options.takingValue.contains(argument) { index += 2; continue }
             // Deno and Bun take a subcommand before the script.
             if ["run", "x", "exec"].contains(argument) { index += 1; continue }
             if argument.hasPrefix("-") { index += 1; continue }
@@ -109,6 +119,31 @@ public enum TerminalAppCatalog {
         }
         return []
     }
+
+    /// Options whose value is a separate argument. Attached forms
+    /// (`--require=x`, `-Wignore`) need no entry: they are one argument.
+    private struct InterpreterOptions {
+        var takingValue: Set<String> = []
+        var module: Set<String> = []
+        var script: Set<String> = []
+        var inlineCode: Set<String> = []
+    }
+
+    private static let interpreterOptions: [String: InterpreterOptions] = [
+        "python": InterpreterOptions(
+            takingValue: ["-W", "-X", "--check-hash-based-pycs"], module: ["-m"], inlineCode: ["-c"]),
+        "node": InterpreterOptions(
+            takingValue: ["-r", "--require", "--import", "--loader", "--experimental-loader", "-C",
+                          "--conditions", "--input-type", "--title", "--env-file", "--inspect-port"],
+            inlineCode: ["-e", "--eval", "-p", "--print"]),
+        "bun": InterpreterOptions(
+            takingValue: ["-r", "--preload", "--cwd", "--env-file", "--config", "-c"],
+            inlineCode: ["-e", "--eval", "-p", "--print"]),
+        "deno": InterpreterOptions(takingValue: ["--config", "-c", "--import-map", "--env-file"]),
+        "ruby": InterpreterOptions(takingValue: ["-I", "-r", "-C", "-E", "-F", "--encoding"], inlineCode: ["-e"]),
+        "perl": InterpreterOptions(takingValue: ["-I", "-M", "-m", "-C"], inlineCode: ["-e", "-E"]),
+        "php": InterpreterOptions(takingValue: ["-c", "-d", "-z"], script: ["-f"], inlineCode: ["-r"]),
+    ]
 
     private static func names(forScript script: String) -> [String] {
         var names: [String] = []
