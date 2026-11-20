@@ -441,6 +441,13 @@ public final class HostProtocolConnection {
             return .commitMessageInput(input: try await CommitMessageSuggestionInput.load(
                 worktreePath: listed.path, ticketTitle: ticketTitle
             ))
+        case .attention:
+            guard callerIsPhone else { throw HostError.invalidRequest(reason: "Only the phone app reads this host's inbox.") }
+            return .attention(items: AttentionSignalAggregator.phoneInbox(host.core.attention.store.document))
+        case .dismissAttention(let eventIDs):
+            guard callerIsPhone else { throw HostError.invalidRequest(reason: "Only the phone app reads this host's inbox.") }
+            host.core.attention.store.acknowledge(eventIDs: eventIDs, at: Date())
+            return .done
         case .reviewStatus(let ref):
             let listed = try gitWorktree(ref)
             await host.core.refreshFollowedReviewStatus(listed.id)

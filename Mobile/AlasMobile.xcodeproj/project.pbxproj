@@ -18,6 +18,7 @@
 		1B5C0283E882903921EC7AE9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 014513AD15C2212B8C007245 /* AppDelegate.swift */; };
 		1CC892A943E9499D5E01DEAD /* VisualAidCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C692134FC753BDB9AA2D24DB /* VisualAidCard.swift */; };
 		23849CE940217D28217E4F16 /* ShepherdMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEF6DC8B0A58927446DDA20F /* ShepherdMenu.swift */; };
+		24A4226EE8C1A5B7B5E449D2 /* AttentionFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76125E107DB96A4DC64944CB /* AttentionFeed.swift */; };
 		271977086F72799EB499DD8E /* TranscriptSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */; };
 		28905A744E97862B779D9BBB /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5675178FB5741806BEB65930 /* InboxView.swift */; };
 		2BE58B40021BA91708E27FAD /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 0A11D3E22001482E10DB6220 /* SwiftTerm */; };
@@ -144,6 +145,7 @@
 		69BE14FB4617210C8AB913F2 /* FilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesView.swift; sourceTree = "<group>"; };
 		703A93DEDFDC64715553851D /* AlasNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = AlasNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyStackTranscriptView.swift; sourceTree = "<group>"; };
+		76125E107DB96A4DC64944CB /* AttentionFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionFeed.swift; sourceTree = "<group>"; };
 		7728D27BA09D4A7193ABB64C /* TranscriptImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptImage.swift; sourceTree = "<group>"; };
 		79A243DE383BC28F89B667A6 /* PeerDeviceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerDeviceSession.swift; sourceTree = "<group>"; };
 		7BD5988CE50A901089331310 /* ToolCallCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallCard.swift; sourceTree = "<group>"; };
@@ -261,6 +263,7 @@
 		3532103143A737814C349FAA /* Inbox */ = {
 			isa = PBXGroup;
 			children = (
+				76125E107DB96A4DC64944CB /* AttentionFeed.swift */,
 				EEB4C7CE3F100F5656449A2C /* InboxModel.swift */,
 				5675178FB5741806BEB65930 /* InboxView.swift */,
 			);
@@ -605,6 +608,7 @@
 			files = (
 				0144E12D60D9B05A662DDE7C /* AlasMobileApp.swift in Sources */,
 				1B5C0283E882903921EC7AE9 /* AppDelegate.swift in Sources */,
+				24A4226EE8C1A5B7B5E449D2 /* AttentionFeed.swift in Sources */,
 				74C49FF28B28E186638B2164 /* Boids.swift in Sources */,
 				E933EBF392AE336776C2B2A9 /* BranchNameField.swift in Sources */,
 				B15AA036BD9AD1D8D0125304 /* ChangesView.swift in Sources */,

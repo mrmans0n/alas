@@ -230,3 +230,18 @@ public enum AttentionSignalAggregator: Sendable {
         return lhs.eventID.uuidString > rhs.eventID.uuidString
     }
 }
+
+extension AttentionSignalAggregator {
+    /// The inbox's open items for the phone, newest first, without the agent
+    /// waits it lists as sessions. Nothing here is checked live: the store's
+    /// record is the Mac's own until its producers say otherwise.
+    public static func phoneInbox(_ document: AttentionDocument) -> [RemoteAttentionItem] {
+        aggregate(liveSignals: [], document: document, worktrees: []).items.compactMap { item in
+            guard item.kind != .agentAwaiting, item.kind != .agentPermission else { return nil }
+            let sessionID: String? = if case .session(let id) = item.jumpTarget { id } else { nil }
+            return RemoteAttentionItem(id: item.eventID, kind: item.kind.rawValue, title: item.title, body: item.body,
+                                       project: item.display.projectName, branch: item.display.branch,
+                                       occurredAt: item.occurredAt, sessionID: sessionID)
+        }
+    }
+}
