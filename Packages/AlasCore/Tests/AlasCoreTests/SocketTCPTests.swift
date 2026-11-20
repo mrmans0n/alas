@@ -43,6 +43,10 @@ struct SocketTCPTests {
         defer { Foundation.close(fds[1]) }
         SocketTCPStream(fd: fds[0]).cancel()
         // Another parallel test can reuse the closed descriptor. Observe the peer instead.
+        // A process another test spawns meanwhile can inherit the socket (socketpair has
+        // no close-on-exec) and hold it open until it execs or exits, so wait for the EOF.
+        var peer = pollfd(fd: fds[1], events: Int16(POLLIN), revents: 0)
+        #expect(poll(&peer, 1, 60000) == 1)
         var byte: UInt8 = 0
         #expect(recv(fds[1], &byte, 1, Int32(MSG_DONTWAIT)) == 0)
     }
