@@ -85,6 +85,8 @@ struct WorktreeRow: View {
     var machine: String? = nil
     /// The session shown beside the list (iPad), when this worktree holds it.
     var selectedSessionId: String? = nil
+    /// Lists every session, as a search does so the one it matched is in view.
+    var showsAllSessions = false
     /// A session's caption, such as who delegated it.
     var caption: (RemoteSessionSummary) -> String? = { _ in nil }
     let open: (RemoteSessionSummary) -> Void
@@ -134,7 +136,10 @@ struct WorktreeRow: View {
     /// below it is, so a tap opens exactly the one you meant.
     private var sessionsBody: some View {
         let rows = entry.sessionRows
-        let shown = expanded ? rows : Array(rows.prefix(Self.collapsedRowLimit))
+        // The open session (iPad) never hides under "more".
+        let selectedHidden = rows.dropFirst(Self.collapsedRowLimit).contains { $0.id == selectedSessionId }
+        let all = expanded || showsAllSessions || selectedHidden
+        let shown = all ? rows : Array(rows.prefix(Self.collapsedRowLimit))
         return HStack(alignment: .top, spacing: 10) {
             Circle().fill(dotColor).frame(width: 8, height: 8).padding(.top, 7)
                 .accessibilityHidden(true)
@@ -151,8 +156,8 @@ struct WorktreeRow: View {
                     lineCounts.font(.footnote.monospacedDigit())
                 }
                 ForEach(shown) { row in sessionRow(row) }
-                if !expanded, rows.count > Self.collapsedRowLimit {
-                    Button("\(rows.count - Self.collapsedRowLimit) more sessions") { expanded = true }
+                if !all, rows.count > Self.collapsedRowLimit {
+                    Button(rows.count - Self.collapsedRowLimit == 1 ? "1 more session" : "\(rows.count - Self.collapsedRowLimit) more sessions") { expanded = true }
                         .buttonStyle(.borderless)
                         .font(.caption)
                         .foregroundStyle(.tint)
@@ -190,8 +195,8 @@ struct WorktreeRow: View {
         }
         // Plain, not borderless: borderless tints the label. Either keeps each row its own tap target in a List.
         .buttonStyle(.plain)
-        .accessibilityLabel("\(session.title), \(session.agentId)")
-        .accessibilityHint(caption(session) ?? statusCaption(session))
+        .accessibilityLabel("\(session.title), \(statusCaption(session))")
+        .accessibilityHint(caption(session) ?? "")
         .accessibilityAddTraits(row.id == selectedSessionId ? .isSelected : [])
     }
 
