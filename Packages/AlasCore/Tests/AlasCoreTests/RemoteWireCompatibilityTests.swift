@@ -105,6 +105,17 @@ import Testing
         #expect(RemoteGitRequest.pullRequest(replying: 4, in: found) == nil)
     }
 
+    @Test func phoneReadsWhatACommitMessageIsSuggestedFrom() throws {
+        let request = RemoteGitRequest.commitMessageInput(id: 3, projectID: "p", path: "/r").json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: request)
+            == HostClientMessage(id: 3, request: .commitMessageInput(worktree: WorktreeRef(projectID: "p", path: "/r"))))
+        let input = CommitMessageSuggestionInput(stat: " a | 1 +", diff: "diff --git a/a b/a", branch: nil,
+                                                 ticketTitle: "Login", recentSubjects: ["fix: x"])
+        let reply = OpaqueHostMessage(json: try JSONEncoder().encode(
+            HostServerMessage.response(id: 3, result: .commitMessageInput(input: input))))
+        #expect(RemoteGitRequest.commitMessageInput(in: reply) == input)
+    }
+
     @Test func phoneRunsTheMacsScripts() throws {
         let ref = WorktreeRef(projectID: "p", path: "/r")
         let decode = { (m: OpaqueHostMessage) in try JSONDecoder().decode(HostClientMessage.self, from: m.json).request }

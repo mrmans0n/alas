@@ -1,4 +1,5 @@
 import AlasRemoteKit
+import FoundationModels
 import SwiftUI
 
 /// The Changes tab: branch, staged, unstaged and commit sections as a flat list; a file opens its diff.
@@ -84,7 +85,9 @@ private struct ChangeList: View {
                 }
             }
             .sheet(isPresented: $committing) {
-                CommitSheet { subject, body in run(.commit(subject: subject, body: body)) }
+                CommitSheet(suggest: CommitMessageModel.isAvailable
+                    ? { await CommitMessageModel.suggest(from: workspace.commitMessageInput()) } : nil
+                ) { subject, body in run(.commit(subject: subject, body: body)) }
             }
             .confirmationDialog(
                 discarding?.count == 1 ? "Discard changes to this file?" : "Discard these changes?",
@@ -428,17 +431,34 @@ private struct GitBar: View {
 
 /// A commit message for what is staged.
 private struct CommitSheet: View {
+    /// Nil when this phone can't suggest a message.
+    let suggest: (@MainActor () async -> CommitMessageSuggestion?)?
     let commit: (_ subject: String, _ body: String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var subject = ""
     @State private var message = ""
+    @State private var suggesting = false
     @FocusState private var subjectFocused: Bool
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Summary", text: $subject).focused($subjectFocused)
-                TextField("Description (optional)", text: $message, axis: .vertical).lineLimit(3...10)
+                Section {
+                    TextField("Summary", text: $subject).focused($subjectFocused)
+                    TextField("Description (optional)", text: $message, axis: .vertical).lineLimit(3...10)
+                } footer: {
+                    if suggesting { Label("Suggesting a message…", systemImage: "sparkles") }
+                }
+            }
+            // As on the Mac, a suggestion fills only the fields still empty when it arrives.
+            .task {
+                guard let suggest else { return }
+                suggesting = true
+                let suggestion = await suggest()
+                suggesting = false
+                guard let suggestion, !Task.isCancelled else { return }
+                if subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { subject = suggestion.subject }
+                if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { message = suggestion.body ?? "" }
             }
             .navigationTitle("Commit")
             .navigationBarTitleDisplayMode(.inline)
@@ -456,5 +476,40 @@ private struct CommitSheet: View {
         }
         .presentationDetents([.medium])
         .onAppear { subjectFocused = true }
+    }
+}
+
+/// Apple's on-device model drafting a commit message from the host's view of the staged change,
+/// with the Mac's prompt and checks.
+enum CommitMessageModel {
+    /// Asked for as a structure: as plain text the model wraps its JSON in a code fence, which the
+    /// shared checks refuse.
+    @Generable struct Draft {
+        var subject: String
+        var body: String?
+    }
+
+    @MainActor static var isAvailable: Bool {
+        let model = SystemLanguageModel.default
+        return model.isAvailable && model.supportsLocale(.current)
+    }
+
+    @MainActor static func suggest(from input: CommitMessageSuggestionInput?) async -> CommitMessageSuggestion? {
+        typealias Policy = CommitMessageSuggestionPolicy
+        // UTF-8 bytes bound the tokens from above: the most detailed prompt that surely fits.
+        guard let input, isAvailable,
+              let messages = Policy.messageCandidates(for: input).first(where: { messages in
+                  messages.reduce(0) { $0 + $1.content.utf8.count } <= Policy.inputTokenLimit
+              }),
+              let instructions = messages.first(where: { $0.role == .system })?.content,
+              let prompt = messages.first(where: { $0.role == .user })?.content else { return nil }
+        let session = LanguageModelSession(instructions: instructions)
+        let options = GenerationOptions(temperature: 0, maximumResponseTokens: Policy.maxTokens)
+        guard let draft = try? await session.respond(to: prompt, generating: Draft.self, options: options).content,
+              !Task.isCancelled,
+              let json = try? JSONSerialization.data(withJSONObject: ["subject": draft.subject, "body": draft.body as Any? ?? NSNull()])
+        else { return nil }
+        return Policy.parse(String(decoding: json, as: UTF8.self),
+                            conventionalCommits: Policy.usesConventionalCommits(input.recentSubjects))
     }
 }
