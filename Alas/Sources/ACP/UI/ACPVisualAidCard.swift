@@ -9,6 +9,8 @@ struct ACPVisualAidActions {
     var answer: (UUID, ACPVisualAid.Answer) async -> Bool
     var popOut: (ACPVisualAid) -> Void
     var popOutLabel = "Open in a tab"
+    /// False for visuals the tab cannot look up, such as ```` ```visual ```` fences in a message.
+    var canPopOut = true
     /// True while this process may answer. Read live on every render and every action, never captured
     /// as a value: the rows that show a card are not re-created when writer ownership changes.
     var canAnswer: () -> Bool
@@ -20,6 +22,13 @@ struct ACPVisualAidActions {
         .init(
             answer: { _, _ in false }, popOut: { _ in }, canAnswer: { false },
             changes: Empty(completeImmediately: false).eraseToAnyPublisher())
+    }
+
+    /// For a ```` ```visual ```` fence drawn inside a message: it asks nothing and has no stored copy to pop out.
+    static var fenced: Self {
+        var actions = readOnly
+        actions.canPopOut = false
+        return actions
     }
 
     /// Answers go through `manager`, and only while this process drives `session` (the same
@@ -119,7 +128,9 @@ struct ACPVisualAidCard: View {
                 let visible = hovered || voiceOverEnabled || NSApp.isFullKeyboardAccessEnabled
                 HStack(spacing: scale.space[1]) {
                     overlayButton("doc.on.doc", help: "Copy HTML", action: copyHTML)
-                    overlayButton("arrow.up.forward.square", help: actions.popOutLabel) { actions.popOut(visual) }
+                    if actions.canPopOut {
+                        overlayButton("arrow.up.forward.square", help: actions.popOutLabel) { actions.popOut(visual) }
+                    }
                 }
                 .padding(scale.space[2])
                 .opacity(visible ? 1 : 0)
@@ -205,7 +216,7 @@ struct ACPVisualAidCard: View {
             Button(action: copyHTML) { Image(systemName: "doc.on.doc") }
                 .buttonStyle(.borderless)
                 .help("Copy HTML")
-            if !fillsHeight {
+            if !fillsHeight && actions.canPopOut {
                 Button { actions.popOut(visual) } label: { Image(systemName: "arrow.up.forward.square") }
                     .buttonStyle(.borderless)
                     .help(actions.popOutLabel)

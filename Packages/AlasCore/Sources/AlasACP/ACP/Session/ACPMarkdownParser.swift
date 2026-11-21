@@ -15,6 +15,8 @@ public enum ACPMarkdownParser: Sendable {
         case code(language: String?, body: String)
         case streamingCode(language: String?, body: String)
         case mermaid(source: String)
+        /// A closed ```` ```visual ```` fence: HTML drawn inline as an embedded visual aid.
+        case visual(title: String?, html: String)
         case image(alt: String, source: String)
         case table(header: [String], rows: [[String]])
     }
@@ -327,6 +329,8 @@ public enum ACPMarkdownParser: Sendable {
                         .isEmpty
                     if MermaidFence.isMermaid(language: fence.language), hasRenderableCode {
                         blocks.append(.mermaid(source: codeBody))
+                    } else if VisualFence.isVisual(language: fence.language), hasRenderableCode {
+                        blocks.append(.visual(title: VisualFence.title(language: fence.language), html: codeBody))
                     } else {
                         blocks.append(.code(language: fence.language, body: codeBody))
                     }

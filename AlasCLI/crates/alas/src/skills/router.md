@@ -23,11 +23,12 @@ The commands in these guides are shorter forms of the same tools.
   notification. Use it to reach the user when you are blocked on them.
 - `alas wt list | switch <name> | new <branch> [--base <ref>] | delete <name>`
   manages this project's worktrees.
-- `alas visual show --title <title> --html-file <path>` shows an HTML visual
-  inline in this session's transcript, before your final reply. Reach for it
-  when an explanation has shape: how parts connect, options compared on
+- When an explanation has shape (how parts connect, options compared on
   several dimensions, before/after layouts, or numbers that read better as a
-  chart. Keep it to one per reply, usually none. Add
+  chart), draw it: a ```` ```visual ```` fenced block of HTML in your reply,
+  with an optional title after the tag, renders inline in the user's theme.
+- `alas visual show --title <title> --html-file <path>` shows an HTML visual
+  through a tool call instead, for a mockup in a titled card or a question. Add
   `--question <prompt> --option <id>=<label>...` to let the user pick: put
   `data-choice="<id>"` on the matching elements, then end your turn, because
   the answer arrives as the user's next message.

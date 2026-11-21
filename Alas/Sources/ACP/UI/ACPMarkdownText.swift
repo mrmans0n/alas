@@ -137,6 +137,8 @@ struct ACPMarkdownText: View {
                 highlightsSyntax: true,
                 hangingIndent: codeHangingIndent
             )
+        case .streamingCode(let lang, _) where VisualFence.isVisual(language: lang):
+            ACPMarkdownVisualDrawingLabel(title: VisualFence.title(language: lang), typography: typography)
         case .streamingCode(let lang, let body):
             CodeBlockView(
                 language: lang,
@@ -148,6 +150,8 @@ struct ACPMarkdownText: View {
             )
         case .mermaid(let source):
             MermaidDiagramBlockView(source: source, profile: .transcript)
+        case .visual(let title, let html):
+            ACPMarkdownVisualBlock(visual: .fenced(title: title, html: html), typography: typography)
         case .image(let alt, let source):
             ACPMarkdownImageBlockView(alt: alt, source: source)
         case .table(let header, let rows):
@@ -326,11 +330,37 @@ struct ACPMarkdownText: View {
 private extension ACPMarkdownText.Block {
     var allowsNoninteractiveTapAction: Bool {
         switch self {
-        case .mermaid, .image:
+        case .mermaid, .image, .visual:
             false
         case .heading, .paragraph, .taskList, .quote, .code, .streamingCode, .table:
             true
         }
+    }
+}
+
+/// A ```` ```visual ```` fence: the same borderless page `visual_show` draws, without a question or a tab.
+private struct ACPMarkdownVisualBlock: View {
+    let visual: ACPVisualAid
+    let typography: ACPChatTypography
+    @State private var sendStatus = ACPVisualAidSendStatus()
+
+    var body: some View {
+        ACPVisualAidCard(visual: visual, form: nil, sendStatus: sendStatus, actions: .fenced, typography: typography)
+    }
+}
+
+/// Stands in for a ```` ```visual ```` fence until it closes, so the HTML never streams in as code.
+private struct ACPMarkdownVisualDrawingLabel: View {
+    let title: String?
+    let typography: ACPChatTypography
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Label(title.map { "Drawing \($0)…" } ?? "Drawing visual…", systemImage: "rectangle.on.rectangle")
+            .font(.system(size: typography.labelSize))
+            .foregroundStyle(theme.color("fg-muted"))
+            .acpNarrationShimmer(isActive: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

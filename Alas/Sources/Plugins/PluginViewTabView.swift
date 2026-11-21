@@ -273,7 +273,7 @@ private struct PluginMarkdownView: View {
                     }
                 }
             }
-        case .code(_, let body), .streamingCode(_, let body), .mermaid(let body):
+        case .code(_, let body), .streamingCode(_, let body), .mermaid(let body), .visual(_, let body):
             Text(body)
                 .font(scale.body.font(design: .monospaced))
                 .padding(scale.space[2])

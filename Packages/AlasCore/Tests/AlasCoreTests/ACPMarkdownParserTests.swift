@@ -74,4 +74,24 @@ struct ACPMarkdownParserTests {
         let source = "`before | text\n<!-- literal -->\nafter`"
         #expect(ACPMarkdownParser.hidingHTMLComments(source) == source)
     }
+
+    @Test(arguments: [
+        ("```visual\n<svg/>\n```", [.visual(title: nil, html: "<svg/>")]),
+        ("```Visual Auth flow\n<svg/>\n```", [.visual(title: "Auth flow", html: "<svg/>")]),
+        ("```visual\n<svg/>", [.streamingCode(language: "visual", body: "<svg/>")]),
+        ("```visual\n\n```", [.code(language: "visual", body: "")]),
+        ("```html\n<svg/>\n```", [.code(language: "html", body: "<svg/>")]),
+        ("```visualize\n<svg/>\n```", [.code(language: "visualize", body: "<svg/>")]),
+    ] as [(String, [ACPMarkdownParser.Block])])
+    func onlyClosedVisualFencesBecomeVisuals(source: String, expected: [ACPMarkdownParser.Block]) {
+        #expect(ACPMarkdownParser.parse(source) == expected)
+    }
+
+    @Test
+    func fencedVisualIdentityFollowsItsHTML() {
+        let visual = ACPVisualAid.fenced(title: nil, html: "<svg/>")
+        #expect(visual.id == ACPVisualAid.fenced(title: "Other", html: "<svg/>").id)
+        #expect(visual.id != ACPVisualAid.fenced(title: nil, html: "<svg></svg>").id)
+        #expect(visual.presentation == .embedded)
+    }
 }
