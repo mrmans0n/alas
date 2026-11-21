@@ -1,14 +1,14 @@
 # Alas
 
-**The workspace for the whole agent loop.**
+**Every agent. Every worktree. One window.**
 
-Run coding agents in a terminal or a native chat pane, across every worktree,
-on your Mac or over SSH. Review their work with comments they can actually
-answer, and merge without leaving the app. Then pick the whole thing up from
-your phone. Native macOS, terminals built on
-[libghostty](https://github.com/ghostty-org/ghostty).
+Alas is a native workspace for the whole agent loop. Run coding agents in a
+real terminal or a native chat pane, keep every worktree in context, review
+their work with comments they can answer, and ship, all from one window. Pick
+it up on any machine you pair, or from your iPhone. Native macOS, with terminals
+built on [libghostty](https://github.com/ghostty-org/ghostty).
 
-![Alas agent session with worktree sidebar and changes panel](art/alas-acp.png)
+![Alas with live agent, ship, and pull request activity in the worktree sidebar, an agent awaiting approval, and the changes panel](art/alas-hero.png)
 
 ## Install
 
@@ -19,126 +19,125 @@ brew install --cask mrmans0n/tap/alas
 ```
 
 Or grab the signed DMG from [Releases](https://github.com/mrmans0n/alas/releases/latest).
+The iPhone and iPad app is in [TestFlight beta](https://testflight.apple.com/join/npVHNyMD).
 
-To run Alas without its window, on a Mac that serves agents and runs to your
-phone, see the [headless host](docs/headless-host.md).
-
-## Why Alas
-
-Keep each task in its own worktree, with its terminals, agent conversations,
-files, and diffs together. Review changes and send feedback to the agent in the
-same window. When you step away, the phone client lets you follow the run and
-respond when it needs you.
+Install and authenticate the agents you want to use. GitHub and GitLab features
+use the `gh` and `glab` CLIs, with their existing authentication.
 
 ## Features
 
-- **Run agents two ways.** A long-lived Ghostty terminal or a native chat pane
-  over [ACP](https://agentclientprotocol.com). Tool
-  calls, plans, and permission prompts render inline, and past sessions can be
-  browsed and resumed. Works with Claude Code, Codex, Cursor, Gemini, Antigravity,
-  OpenCode, Pi, OMP, and Copilot, and installs more chat agents from the
-  official [ACP Registry](https://agentclientprotocol.com) in Settings → Agents.
+### Hand the work to an agent
 
+- **Every agent, two ways.** Run agents in a long-lived Ghostty terminal or a
+  native chat pane over [ACP](https://agentclientprotocol.com). Works with
+  Claude Code, Codex, Cursor, Gemini, Antigravity, OpenCode, Pi, OMP, and
+  Copilot, and installs more from the official ACP Registry.
+- **Steer every session.** Pick the model, thinking level, and permission mode
+  per session. Tool calls, plans, and permission prompts render inline; plans
+  get their own review cards. Alas checkpoints before every prompt, so you can
+  restore or fork from any earlier turn.
 - **Prepare the next turn.** Queue, edit, reorder, or schedule prompts while an
-  agent works. Attach issue context, dictate prompts, and configure external MCP
-  servers per project.
+  agent works. Attach issue context or dictate.
+- **Orchestrate agents.** Agents delegate to child sessions on other agents and
+  models, then wait on, read, and interrupt them. Alas can switch off an agent's
+  native subagents so delegation goes through visible Alas sessions instead
+  ([delegation](docs/agent-delegation.md)).
+- **Agents can drive the app.** The `alas` CLI and built-in MCP server let
+  agents open files at the right line, notify you, show HTML mockups inline in
+  the transcript and ask you to pick one, and work through your review comments.
 
-- **Configure on-device AI.** Settings → On-device AI controls built-in chat
-  titles, worktree names, failure briefs, and conflict explanations. Apple
-  Intelligence runs these helpers first when available. An optional shared Qwen3
-  model supplies local fallback, session summaries, and next-prompt suggestions
-  after explicit download and processing consent. Feature preferences remain
-  separate; switching them on never downloads a model. Built-in inference stays
-  on this Mac. Sending accepted text to an external agent follows that agent's
-  own data policy.
+![Agent session with a live plan, and paired machines in the sidebar](art/alas-peers.png)
+
+### Run a real terminal beside everything else
 
 - **Parallel worktrees, one window.** Every repo lives in the sidebar with its
-  linked worktrees underneath. Switching is instant; terminal sessions, tabs, and
-  scroll positions persist per worktree. Spaces organize repositories into
-  focused sidebar groups.
+  linked worktrees underneath. Terminals, tabs, and scroll positions persist per
+  worktree, across restarts. Spaces group repositories, and Workspaces check out
+  several repositories together.
+- **Terminals that behave.** Tabs built on libghostty, so TUIs render as they
+  should, with sessions that survive app restarts.
+- **Know who needs you.** Live sidebar badges show which agents are busy,
+  waiting for input, or asking for permission, and one inbox gathers everything
+  waiting on you.
+- **Schedules.** Run scripts or agents on an interval or at a time of day,
+  optionally in a fresh worktree, with run history and reports.
 
-  ![Persistent terminal pane alongside the worktree sidebar](art/alas-terminal.png)
+### Understand before you change
 
-- **Repo-defined MCP servers, shared through the repo.** Commit an
-  `.alas/config.json` to your repository and every teammate's Alas picks it
-  up: MCP servers, the repo's logo, and a default agent for new worktrees.
-  Repo servers merge with your personal ones by name and are gated behind a
-  one-time trust prompt, so a random repo can't attach commands without you
-  approving it.
+- **A real editor underneath.** Tree-sitter syntax for 40+ languages,
+  LSP-powered completion, hover docs, go-to-definition, and rename, plus fuzzy
+  file and content search across the workspace.
+- **Read it rendered.** Markdown source and preview side by side, with Mermaid
+  diagrams in documents and in chat. Image, binary, and LFS changes stay
+  reviewable.
 
-- **Remote machines, same workspace.** Add a project on an SSH host. A
-  connection assistant reads `~/.ssh/config` and bootstraps a helper on the
-  other side. Terminals, agents, file editing, search, and git all work over the
-  wire, and remote agent runs keep going in the helper even when you disconnect.
+![Editor with LSP code completion and inline documentation](art/alas-editor.png)
 
-- **Agents can drive the app.** A standalone `alas` CLI opens files, switches or
-  creates worktrees, and starts reviews from the terminal. It's also
-  auto-injected into every ACP session as an MCP server. Agents use it to open
-  files at the right line, send you notifications, spin up delegated sessions,
-  and work through your review comments. Before delegating, agents can list
-  which agents and models are available
-  ([delegation discovery](docs/agent-delegation.md)). For Claude, Codex,
-  OpenCode, OMP, Pi, Antigravity, and Copilot, **Settings → Agents → Disable native subagents** removes
-  the agent's own subagent tool (Claude's Agent/Task and Workflow tools, plus
-  SendMessage and ListAgents, which reach other Claude Code sessions; Codex's
-  multi-agent tools; OpenCode 1.x's task tool; OMP's task tool and eval `agent()`;
-  the tools of known Pi subagent extensions, starting with `pi-subagents`;
-  Antigravity's subagent tools; Copilot's task and agent tools;
-  Codex, OpenCode, OMP, and Pi in local sessions only) so it delegates through Alas
-  child sessions instead. It applies to sessions created after you change it,
-  does not stop subagents already running, and is not a sandbox
-  ([details](docs/agent-delegation.md#disabling-native-subagents)). Delegated
-  Claude children never get SendMessage or ListAgents, so they report back
-  through Alas.
+![Markdown preview rendering a Mermaid diagram](art/alas-markdown.png)
 
-- **A review loop agents can close.** Review a branch, commit, or range
-  from the ⇧⌘R palette, and drop inline comments anywhere, changed
-  lines or not. Agents read, reply to, and resolve those comments through the
-  built-in review tools, so feedback becomes fixes instead of copy-paste.
+### Review without the round-trip
 
-  ![Inline diff view with file list and per-hunk changes](art/alas-diff.png)
+- **A review loop agents can close.** Review local work or a hosted pull
+  request, and comment on any line, changed or not. Agents read, reply to, and
+  resolve your comments, so feedback becomes fixes instead of copy-paste.
+- **Evidence stays attached.** CI logs, check results, and test output sit next
+  to the diff, and revisions stay continuous through rebases.
 
-- **Ship without the round-trip.** GitHub PRs and GitLab MRs detected on your
-  branch, AI-drafted titles and descriptions, and a review-evidence inspector
-  that pulls CI logs, check results, and test output next to the diff. Merge
-  in-app, including through merge queues.
+![Review Changes with inline draft comments, an agent reply, and a comment rail](art/alas-review.png)
 
-- **Drive from your phone.** Pair by QR, watch any session live, and take over a
-  running desktop turn — send a prompt, stop a run, or answer a permission request
-  from the couch. Browse worktree files and changes, create worktrees, and manage
-  queued prompts in the web client. Push notifications fire when an agent needs you.
+### Ship with your agent
 
-  <p align="center">
-    <img src="art/alas-remote.png" width="360" alt="Phone client connected to a live agent session">
-  </p>
+- **One click to a pull request.** The agent writes the PR or MR, opens it, and
+  shepherds it through CI and review. Failed checks, review threads, and
+  conflicts come back as fix turns. Merge in-app, including through merge queues.
+- **Stacks included.** Publish a whole git-gud stack, or hold back the top, and let Alas shepherd every PR together.
+- **Git that gets out of the way.** File- and hunk-level staging, stashes,
+  per-file history, AI-drafted commit messages, and a 3-way merge editor.
 
-- **Harness-aware.** Detects Claude Code, Codex, Cursor, Gemini, and friends
-  running in your worktrees and shows live sidebar badges for busy agents,
-  permission requests, and agents waiting for input. One-click hook install.
+![Landing a four-PR stack, one entry at a time](art/alas-ship.png)
 
-- **Git that gets out of the way.** File- and hunk-level staging, inline diffs
-  with expandable context, stashes, per-file history, pull from upstream,
-  AI-drafted commit messages, and a 3-way merge editor for conflicts.
+### Pick up anywhere
 
-- **A real editor underneath.** Tree-sitter syntax for 40+ languages, LSP-powered
-  go-to-definition, hover docs, and completions, plus Markdown source-and-preview
-  side-by-side. Markdown and chat can render Mermaid diagrams, and language
-  servers can be installed from the code settings. Fuzzy file search and content
-  search work across the workspace.
+- **Every machine you own.** Alas instances find each other on the network and
+  pair, with no SSH or Remote Login. Another machine's worktrees and agents appear
+  in your sidebar; start sessions there, follow them live, or take over.
+- **SSH hosts and headless hosts.** Open a project on any SSH host and it works
+  like a local one, with agents that keep running when you disconnect. Keep
+  agents on an always-on machine with the [headless host](docs/headless-host.md).
+- **Alas on iPhone and iPad.** Pair by QR, follow every session under its
+  worktree, read rich transcripts and subagent cards, answer permission
+  requests, and take over a running turn. Push notifications tell you when an
+  agent needs you.
 
-  ![Markdown source and rendered preview side-by-side](art/alas-markdown.png)
+![Alas on iPhone showing sessions grouped under their worktrees](art/alas-ios.png)
 
-- **Preview web apps.** Open a web preview tab and run project scripts. Agents
-  can inspect pages, click, type, and capture screenshots through the built-in
-  browser tools.
+### Give the agent its own machine
 
-- **Tabs for everything.** Terminals, agent sessions, file viewers, diffs,
-  Markdown, and web previews open in tabs you can drag to reorder.
+- **Computer use.** Agents operate Mac apps in the background with their own
+  visible cursor. You approve apps one by one.
+- **Worktree VMs.** macOS and Linux VMs per worktree on Apple Silicon. Idle
+  VMs pause and resume, reset to a clean point, and you can take over anytime.
+- **Devices.** iOS simulators, Android devices, and VMs share one rail beside
+  the session, and agents can drive them ([devices](docs/devices.md)).
+- **Web previews.** Run project scripts and preview the app; agents can
+  inspect, click, type, and screenshot pages ([web previews](docs/web-previews.md)).
 
-- **Native macOS app.** SwiftUI and AppKit, with signed and notarized releases.
+![Devices tab with a booted iPhone simulator beside an agent session](art/alas-devices.png)
 
-Install and authenticate the agents you want to use. GitHub and GitLab features
-use the `gh` and `glab` CLIs respectively, with their existing authentication.
+### Make it yours
+
+- **Plugins.** Install plugins from the catalog or write your own in JavaScript.
+  They add tabs, panels, commands, and context, with permissions approved up
+  front ([plugins](docs/plugins/README.md)).
+- **On-device AI.** Apple Intelligence, or an optional local Qwen model, names
+  worktrees, titles chats, summarizes sessions, drafts commits, and explains
+  conflicts. Models download only with your consent, and inference stays on
+  your machine.
+- **Shared through the repo.** Commit `.alas/config.json` and every teammate's
+  Alas picks up its MCP servers, logo, default agent, run scripts, and hooks,
+  each gated behind a trust prompt ([below](#repo-local-configuration-alas)).
+
+![A plugin panel beside an agent session](art/alas-plugins.png)
 
 ## Repo-local configuration (`.alas/`)
 

@@ -6,7 +6,7 @@
 # Usage: capture.sh <profile-dir> <out-dir> <dark|light>
 #
 # ALAS_DEV_APP overrides the app; by default this checkout's Debug build is used.
-# ALAS_CAPTURE_RIGHT_TAB (files, agent, run, schedules) opens the right pane on
+# ALAS_CAPTURE_RIGHT_TAB (files, agent, run, schedules, device) opens the right pane on
 # that tab instead of Changes.
 # ALAS_CAPTURE_DIALOG (new-project, new-worktree, repo-selector, review-target,
 # run-script, agent-launcher, file-search, peer-new-session) opens that dialog before the capture.
