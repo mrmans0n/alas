@@ -231,10 +231,10 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         let wrapsChanged = wraps != self.wraps
         self.wraps = wraps
         entryIndex = Dictionary(entries.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
-        var restyled: [ReviewEntryID] = []
         var reshaped: [ReviewEntryID] = []
-        /// Rows are positional, so rows kept across a content change still show the old diff.
-        var rewritten: [ReviewEntryID] = []
+        // Drawn before: rows are positional, so rows a section keeps across a content, comment or
+        // selection change still show the old state.
+        var redrawn: [ReviewEntryID] = []
         for entry in entries {
             let id = entry.id
             let comments = byFile[RemoteReviewFileID(namespace: id.namespace, path: id.path)] ?? []
@@ -242,22 +242,22 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
                               hasSpans: document.spanKey(entry).map { document.spans[$0] != nil } ?? false,
                               comments: comments, selection: selection?.entry == id ? selection : nil)
             guard drawn[id] != state else { continue }
+            if drawn[id] != nil { redrawn.append(id) }
             if drawn[id]?.content != state.content {
-                if drawn[id] != nil { rewritten.append(id) }
                 widest[id] = nil
                 offsets[id] = nil
                 metrics[id] = Self.measure(entry.content)
             }
             drawn[id] = state
-            var placed: [ReviewPlacedComment] = []
-            if case .hunks(let hunks, _) = entry.content {
-                placed = ReviewCommentPlacement.place(comments.map(Self.placeable), in: hunks)
-                for (comment, place) in zip(comments, placed) {
-                    if place.row == nil, case .line = comment.anchor { outdated.insert(comment.id) } else { outdated.remove(comment.id) }
-                }
+            // Without hunks (a note in place of the diff) every comment is unplaced, so shown under the note.
+            var hunks: [RemoteDiffHunk] = []
+            if case .hunks(let found, _) = entry.content { hunks = found }
+            let placed = ReviewCommentPlacement.place(comments.map(Self.placeable), in: hunks)
+            for (comment, place) in zip(comments, placed) {
+                if place.row == nil, case .line = comment.anchor { outdated.insert(comment.id) } else { outdated.remove(comment.id) }
             }
             let rows = ReviewLayout.rows(for: entry, folded: state.folded, comments: placed)
-            if rows == sectionRows[id] { restyled.append(id) } else { reshaped.append(id) }
+            if rows != sectionRows[id] { reshaped.append(id) }
             sectionRows[id] = rows
         }
         let ids = entries.map(\.id)
@@ -275,7 +275,7 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             }
         }
         // After the shape is applied, so every row reconfigured is in the snapshot.
-        let stale = wrapsChanged ? ids : Array(Set(restyled + rewritten))
+        let stale = wrapsChanged ? ids : redrawn
         if !stale.isEmpty {
             var snapshot = dataSource.snapshot()
             snapshot.reconfigureItems(stale.flatMap { sectionRows[$0] ?? [] })

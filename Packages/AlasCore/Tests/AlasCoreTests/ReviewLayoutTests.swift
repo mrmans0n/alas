@@ -155,5 +155,7 @@ struct ReviewLayoutTests {
             .line(entry: id, hunk: 0, line: 2), .comment(entry: id, id: "y"), .comment(entry: id, id: "x"),
             .line(entry: id, hunk: 0, line: 3), .comment(entry: id, id: "late"),
         ])
+        let binary = ReviewLayout.rows(for: Self.entry(.note("Binary file")), folded: false, comments: Array(placed.prefix(2)))
+        #expect(binary == [.note(entry: id, text: "Binary file"), .comment(entry: id, id: "y"), .comment(entry: id, id: "x")])
     }
 }
