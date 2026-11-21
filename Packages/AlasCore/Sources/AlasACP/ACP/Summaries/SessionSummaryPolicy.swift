@@ -1,4 +1,5 @@
 import Foundation
+import AlasRemoteKit
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -16,7 +17,6 @@ public enum SessionSummaryPolicy: Sendable {
 
     private static let maximumOutputBytes = 16 * 1024
     private static let maximumItems = 5
-    private static let maximumCharacters = 280
 
     public static func parse(_ data: Data, isPartial: Bool) -> SessionSummary? {
         guard data.count <= maximumOutputBytes else { return nil }
@@ -73,58 +73,10 @@ public enum SessionSummaryPolicy: Sendable {
     }
 
     public static func permitsOutput(_ summary: SessionSummary) -> Bool {
-        let values = [summary.goal, summary.nextAction].compactMap { $0 }
-            + summary.completed + summary.blockers
-        guard summary.completed.count <= maximumItems,
-              summary.blockers.count <= maximumItems,
-              !values.isEmpty,
-              values.allSatisfy(validText),
-              !values.contains(where: LocalTextSafety.containsCredential) else { return false }
-
-        guard let nextAction = summary.nextAction else { return true }
-        return !LocalTextSafety.containsActiveAction(
-            nextAction,
-            pattern: #"(?i)\b(?:delete|remove|wipe|erase|destroy|drop|format)\b\s+(?:(?:the|a|my|our|all|entire|whole|old|local|protected|production)\s+){0,3}(?:projects?|repositories|repos?|backups?|databases?|data|disks?|volumes?)\b"#,
-            includingQuotedCommands: true
-        ) && !LocalTextSafety.containsActiveAction(
-            nextAction,
-            pattern: #"(?i)\brm\b\s+(?:--?[A-Za-z]+(?:=[^\s]+)?\s+)*(?:--\s+)?(?:(?:"/"|'/'|/)(?=["']?(?:\*|\s|$))|~(?:/|["']|\s|$))"#,
-            includingQuotedCommands: true
-        ) && !LocalTextSafety.containsActiveAction(
-            nextAction,
-            pattern: #"(?i)\b(?:git\s+)?(?:reset\s+--hard|push\b[^;\n]{0,80}\s+(?:-f\b|--force(?:-with-lease)?)|clean\b(?=[^;\n]{0,40}(?:-[A-Za-z]*f[A-Za-z]*|--force)\b))"#,
-            includingQuotedCommands: true
-        ) && !LocalTextSafety.containsActiveAction(
-            nextAction,
-            pattern: #"(?i)\b(?:(?:approve|authorize|confirm|accept|allow|grant|consent\s+to)\b\s+(?:(?:the|a|this|that)\s+)?(?:production\s+(?:deployment|release|access)|(?:deployment|release)\s+to\s+production|payments?|purchases?|transactions?|account\s+(?:deletion|closure)|data\s+deletion|(?:admin|root|privileged)\s+access|permission\s+request)\b|(?:answer|respond|reply|say)\b\s+(?:with\s+)?(?:yes|no|affirmatively|negatively)\s+to\s+(?:(?:the|a|this|that)\s+)?(?:permission|authorization|consent|approval)\s+(?:request|prompt|question)\b)"#,
-            includingQuotedCommands: true
-        ) && !LocalTextSafety.containsActiveAction(
-            nextAction,
-            pattern: #"(?i)\b(?:send|share|post|upload|paste|publish|disclose|reveal|provide|give|email|forward|mail|message|text|transmit)\b[^.;\n]{0,80}\b(?:\.env|credentials?|secrets?|api[_ -]?keys?|access[_ -]?keys?|passwords?|tokens?|private\s+keys?)\b"#,
-            includingQuotedCommands: true
+        RemoteSessionRecap.permits(
+            goal: summary.goal, completed: summary.completed,
+            blockers: summary.blockers, nextAction: summary.nextAction
         )
-    }
-
-    private static func validText(_ text: String) -> Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && text.count <= maximumCharacters
-            && !text.unicodeScalars.contains(where: {
-                $0.value < 0x20 || (0x7F...0x9F).contains($0.value)
-                    || $0.value == 0x2028 || $0.value == 0x2029
-            })
-            && text.range(
-                of: #"\b[A-Za-z][A-Za-z0-9+.-]*:[^\s]"#,
-                options: .regularExpression
-            ) == nil
-            && text.range(
-                of: #"(?i)\b(?:www\.[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/[^\s]*)"#,
-                options: .regularExpression
-            ) == nil
-            && text.range(of: #"</?[A-Za-z][^>]*>"#, options: .regularExpression) == nil
-            && text.range(
-                of: #"(?:^|\s)(?:#{1,6}\s|[-+*]\s|>\s|\d+[.)]\s)|[*_~`]|\[[^\]]*\]\([^)]*\)|<!--.*?-->"#,
-                options: .regularExpression
-            ) == nil
     }
 }
 

@@ -21,6 +21,7 @@
 		24A4226EE8C1A5B7B5E449D2 /* AttentionFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76125E107DB96A4DC64944CB /* AttentionFeed.swift */; };
 		271977086F72799EB499DD8E /* TranscriptSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */; };
 		28905A744E97862B779D9BBB /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5675178FB5741806BEB65930 /* InboxView.swift */; };
+		28DDA5893612F777C9742BC4 /* SessionRecapSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF772E4F32C9AC4C65EBE407 /* SessionRecapSheet.swift */; };
 		29DF74F7DC8B62784CDEBD5F /* ChipStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C34EB2373CC82122F5797EA6 /* ChipStyle.swift */; };
 		2BE58B40021BA91708E27FAD /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 0A11D3E22001482E10DB6220 /* SwiftTerm */; };
 		2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */; };
@@ -194,6 +195,7 @@
 		D1D5D2BB1BAC229CEC583231 /* CodeBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeBlockView.swift; sourceTree = "<group>"; };
 		D8C41B3901C2155F0CB451B1 /* PairHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairHostView.swift; sourceTree = "<group>"; };
 		DC497CD9E3E3ACCED5B931CD /* FileViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileViewer.swift; sourceTree = "<group>"; };
+		DF772E4F32C9AC4C65EBE407 /* SessionRecapSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRecapSheet.swift; sourceTree = "<group>"; };
 		E21958EE58C9376495D96344 /* ImageStaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageStaging.swift; sourceTree = "<group>"; };
 		E2591444903E4ABB996767C9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		E2DA16B72DDDC20B5F8B4137 /* CreatingWorktreeTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreatingWorktreeTranscript.swift; sourceTree = "<group>"; };
@@ -456,6 +458,7 @@
 				BC78E86F9CD60E848A8135C3 /* GrammarPack.swift */,
 				0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */,
 				F3D6661CD737A1ADDE5B9897 /* MermaidBlockView.swift */,
+				DF772E4F32C9AC4C65EBE407 /* SessionRecapSheet.swift */,
 				21408E08006F4C64E22701EE /* SessionRegistry.swift */,
 				F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */,
 				2B686F711B93C4B67C8D0CA0 /* SubagentCard.swift */,
@@ -730,6 +733,7 @@
 				87D190629E512CCFAFC1EBFC /* ReviewsView.swift in Sources */,
 				72049EBD4013BEA3EB39D753 /* RunPreviewView.swift in Sources */,
 				7DAFD28FE14392621FCDBF53 /* SessionListCache.swift in Sources */,
+				28DDA5893612F777C9742BC4 /* SessionRecapSheet.swift in Sources */,
 				CB152CF506A31464F04D172F /* SessionRegistry.swift in Sources */,
 				071E34299495A5835CCC2F75 /* SessionSettingsSheet.swift in Sources */,
 				422DAC40738CAE3A2226AE92 /* SessionWorkspace.swift in Sources */,

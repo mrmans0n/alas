@@ -129,6 +129,8 @@ public struct RemoteSessionConfig: Codable, Equatable, Sendable {
     /// hit, as the host's own banner words it. Nil when nothing is wrong,
     /// and on older hosts.
     public var agentIssue: RemoteAgentIssue? = nil
+    /// The session's goal, as the Mac's goal pill shows it. Nil without one, and on older hosts.
+    public var goal: RemoteSessionGoal? = nil
     /// The worktree's GitHub or GitLab repository, which references in its
     /// text point into and `resolveReferences` looks up. Nil without one,
     /// and on older hosts.
@@ -1103,7 +1105,7 @@ extension RemoteServerMessageOf: Codable {
         case type, sessions, sessionId, projectId, streamingState, canDrive, messages, upserts, payload, requestId, message
         case hasCancellableBackgroundWork
         case worktrees, agents, session, projects, branches, preferredBase, stage, worktreeId
-        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder, supportsMentions, agentIssue, codeHost
+        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder, supportsMentions, agentIssue, goal, codeHost
         case query, candidates
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
@@ -1273,6 +1275,7 @@ extension RemoteServerMessageOf: Codable {
             config.supportsQueueReorder = try? c.decodeIfPresent(Bool.self, forKey: .supportsQueueReorder) ?? nil
             config.supportsMentions = try? c.decodeIfPresent(Bool.self, forKey: .supportsMentions) ?? nil
             config.agentIssue = try? c.decodeIfPresent(RemoteAgentIssue.self, forKey: .agentIssue) ?? nil
+            config.goal = try? c.decodeIfPresent(RemoteSessionGoal.self, forKey: .goal) ?? nil
             config.codeHost = try? c.decodeIfPresent(RemoteCodeHost.self, forKey: .codeHost) ?? nil
             self = .sessionConfig(config)
         case "sessionRenamed":
@@ -1593,6 +1596,7 @@ extension RemoteServerMessageOf: Codable {
             try c.encodeIfPresent(cfg.supportsQueueReorder, forKey: .supportsQueueReorder)
             try c.encodeIfPresent(cfg.supportsMentions, forKey: .supportsMentions)
             try c.encodeIfPresent(cfg.agentIssue, forKey: .agentIssue)
+            try c.encodeIfPresent(cfg.goal, forKey: .goal)
             try c.encodeIfPresent(cfg.codeHost, forKey: .codeHost)
         case .sessionRenamed(let id, let title):
             try c.encode("sessionRenamed", forKey: .type)

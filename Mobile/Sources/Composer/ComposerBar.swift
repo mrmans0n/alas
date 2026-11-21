@@ -15,6 +15,7 @@ struct ComposerBar: View {
 
     @State private var selection = NSRange(location: 0, length: 0)
     @State private var picked: [PhotosPickerItem] = []
+    @State private var showingGoal = false
     @State private var pickingPhotos = false
     @State private var takingPhoto = false
     @State private var searchTask: Task<Void, Never>?
@@ -182,6 +183,7 @@ struct ComposerBar: View {
     /// Scrolls sideways when the row is crowded, so no chip, the model above all, truncates.
     private var chips: some View {
         let row = HStack(spacing: 6) {
+            if let goal = config?.goal { goalChip(goal) }
             autoRunChip
             chip(name(config?.chips?.model, fallback: config?.currentModel, in: config?.models))
             chip(name(config?.chips?.thinking, fallback: nil, in: nil))
@@ -209,6 +211,29 @@ struct ComposerBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Auto-run is on")
             .accessibilityHint("Turns auto-run off. The agent runs tools without asking while it is on.")
+        }
+    }
+
+    /// The Mac's goal pill: what the session is working towards and its token spend. Tapping shows it whole.
+    private func goalChip(_ goal: RemoteSessionGoal) -> some View {
+        Button { showingGoal = true } label: {
+            HStack(spacing: 4) {
+                Image(systemName: goal.isPaused ? "pause.fill" : "target").imageScale(.small)
+                Text(goal.objective).frame(maxWidth: 160, alignment: .leading)
+                if let tokens = goal.tokenText { Text(tokens).monospacedDigit().foregroundStyle(.secondary) }
+            }
+            .font(.footnote.weight(.medium)).lineLimit(1)
+            .foregroundStyle(goal.isRunning ? Color.accentColor : .secondary)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Color.accentColor.opacity(goal.isRunning ? 0.15 : 0.06), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Goal: \(goal.objective)")
+        .alert("Goal", isPresented: $showingGoal) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text([goal.objective, goal.status?.replacingOccurrences(of: "_", with: " "), goal.tokenText]
+                .compactMap { $0 }.joined(separator: "\n"))
         }
     }
 

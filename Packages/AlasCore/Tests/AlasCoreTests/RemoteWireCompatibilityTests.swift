@@ -185,6 +185,26 @@ import Testing
         #expect(try RemoteReviewRequest.reviews(replying: 9, in: encode(.reviews(reviews: [summary]))) == nil)
     }
 
+    @Test func sessionConfigCarriesTheGoal() throws {
+        var config = RemoteSessionConfig(sessionId: "s", models: [], modes: [], autoRunEnabled: false, acceptsImages: false)
+        config.goal = RemoteSessionGoal(objective: "Ship it", status: "active", tokenBudget: 50_000, tokensUsed: 1_200)
+        let data = try JSONEncoder().encode(RemoteServerMessage.sessionConfig(config))
+        guard case .sessionConfig(let decoded) = try JSONDecoder().decode(RemoteServerMessageOf<OpaqueHostMessage, OpaqueHostMessage>.self, from: data)
+        else { Issue.record("not a sessionConfig")
+        return }
+        #expect(decoded.goal == config.goal)
+    }
+
+    @Test(arguments: [
+        (12_345, 50_000, "12.3k / 50k"),
+        (nil, 50_000, "50k budget"),
+        (999, nil, "999 used"),
+        (nil, nil, nil),
+    ] as [(Int?, Int?, String?)])
+    func goalPillTokens(used: Int?, budget: Int?, expected: String?) {
+        #expect(RemoteSessionGoal(objective: "o", status: nil, tokenBudget: budget, tokensUsed: used).tokenText == expected)
+    }
+
     @Test func phoneReadsAFilesHistory() throws {
         let request = RemoteFileHistoryRequest.request(id: 3, projectID: "p", worktreePath: "/r", path: "a.swift")
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: request.json)
