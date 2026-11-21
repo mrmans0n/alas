@@ -70,8 +70,8 @@ enum MarkdownBlock: Equatable {
             }
         case let l as ListItemContainer: .list(entries(l, depth: 0, lines: lines))
         case let q as BlockQuote:
-            if let (kind, body) = MarkdownAlert.match(quotedLines(q, lines: lines)) {
-                .alert(kind, inline(Document(parsing: body)))
+            if let (kind, _) = MarkdownAlert.match(quotedLines(q, lines: lines)) {
+                .alert(kind, droppingAlertMarker(inline(q)))
             } else {
                 .quote(inline(q))
             }
@@ -94,6 +94,16 @@ enum MarkdownBlock: Equatable {
             if s.first == " " { s = s.dropFirst() }
             return String(s)
         }
+    }
+
+    /// The quote's text after its `[!KIND]` marker. Rendered from the quote as parsed, not re-parsed,
+    /// so reference links whose definitions sit elsewhere in the message still resolve.
+    private static func droppingAlertMarker(_ text: AttributedString) -> AttributedString {
+        let chars = text.characters
+        guard let close = chars.firstIndex(of: "]") else { return text }
+        var start = chars.index(after: close)
+        while start < chars.endIndex, chars[start].isWhitespace { start = chars.index(after: start) }
+        return AttributedString(text[start...])
     }
 
     private static func isClosed(_ block: CodeBlock, lines: [Substring]) -> Bool {
