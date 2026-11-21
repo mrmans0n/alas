@@ -88,7 +88,7 @@ final class RightPaneState: GGSplitCommitServicing {
         // Design captures open on another tab without clicking; see scripts/design/README.md.
         if let raw = ProcessInfo.processInfo.environment["ALAS_CAPTURE_RIGHT_TAB"],
            let tab = RightPaneTab(rawValue: raw),
-           RightPaneTab.available(isFolder: isFolder).contains(tab) {
+           RightPaneTab.available(isFolder: isFolder, devices: true).contains(tab) {
             return tab
         }
         #endif

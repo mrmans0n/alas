@@ -13,7 +13,7 @@ scripts/design/capture.sh /tmp/alas-design-demo <out-dir> light
 Each capture writes `window.png`, `sidebar.png`, `transcript.png` and `right-pane.png`. It uses
 this checkout's Debug build; set `ALAS_DEV_APP` to use another. Set
 `ALAS_CAPTURE_DENSITY=compact` to capture Compact. Set `ALAS_CAPTURE_RIGHT_TAB` to `files`,
-`agent`, `run` or `schedules` to open the right pane on that tab.
+`agent`, `run`, `schedules` or `device` (where the machine can show devices) to open the right pane on that tab.
 Set `ALAS_CAPTURE_DIALOG` to `new-project`, `new-worktree`, `repo-selector`,
 `review-target`, `run-script`, `agent-launcher` or `file-search` to capture with
 that dialog open. Set `ALAS_CAPTURE_SETTINGS` to comma-separated Settings sections

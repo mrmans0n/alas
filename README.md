@@ -122,7 +122,7 @@ use the `gh` and `glab` CLIs, with their existing authentication.
 - **Web previews.** Run project scripts and preview the app; agents can
   inspect, click, type, and screenshot pages ([web previews](docs/web-previews.md)).
 
-![Devices rail with an iOS simulator, an Android device, and a VM moved to a tab](art/alas-devices.png)
+![Devices tab with a booted iPhone simulator beside an agent session](art/alas-devices.png)
 
 ### Make it yours
 
