@@ -14,15 +14,21 @@ public struct ReviewPlaceable: Equatable, Sendable {
     }
 }
 
+public struct ReviewPlacedComment: Equatable, Sendable {
+    public let id: String
+    public let row: Int?
+
+    public init(id: String, row: Int?) {
+        self.id = id
+        self.row = row
+    }
+}
+
 public enum ReviewCommentPlacement {
-    /// Row index (into `ReviewLayout.rows(for:folded:false)`) after which each comment goes;
+    /// Row index (into `ReviewLayout.rows(for:folded:false)`) after which each comment goes, in input order;
     /// nil = top of file, shown as Outdated.
-    public static func place(_ items: [ReviewPlaceable], in hunks: [RemoteDiffHunk]) -> [String: Int?] {
-        var result: [String: Int?] = [:]
-        for item in items {
-            result[item.id] = .some(row(for: item, in: hunks))
-        }
-        return result
+    public static func place(_ items: [ReviewPlaceable], in hunks: [RemoteDiffHunk]) -> [ReviewPlacedComment] {
+        items.map { ReviewPlacedComment(id: $0.id, row: row(for: $0, in: hunks)) }
     }
 
     private static func row(for item: ReviewPlaceable, in hunks: [RemoteDiffHunk]) -> Int? {

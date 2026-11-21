@@ -133,25 +133,27 @@ struct ReviewLayoutTests {
         (ReviewPlaceable(id: "a", side: nil, line: nil, endLine: nil), nil),
     ] as [(ReviewPlaceable, Int?)])
     func commentsPlaceUnderTheirLastLine(item: ReviewPlaceable, row: Int?) {
-        #expect(ReviewCommentPlacement.place([item], in: Self.commentHunks) == ["a": row])
+        #expect(ReviewCommentPlacement.place([item], in: Self.commentHunks) == [ReviewPlacedComment(id: "a", row: row)])
     }
 
     @Test
     func commentRowsKeepInputOrderAndOutdatedOnesGoToTheTop() {
         let items = [
-            ReviewPlaceable(id: "x", side: "new", line: 43, endLine: nil),
             ReviewPlaceable(id: "y", side: "new", line: 43, endLine: nil),
+            ReviewPlaceable(id: "x", side: "new", line: 43, endLine: nil),
             ReviewPlaceable(id: "z", side: nil, line: nil, endLine: nil),
+            ReviewPlaceable(id: "b", side: nil, line: nil, endLine: nil),
         ]
-        let placed = ReviewCommentPlacement.place(items, in: Self.commentHunks)
+        var placed = ReviewCommentPlacement.place(items, in: Self.commentHunks)
+        placed.append(ReviewPlacedComment(id: "late", row: 99))
         let entry = Self.entry(.hunks(Self.commentHunks, truncated: false))
         let rows = ReviewLayout.rows(for: entry, folded: false, comments: placed)
         let id = Self.id
         #expect(rows == [
-            .hunkHeader(entry: id, hunk: 0), .comment(entry: id, id: "z"),
+            .hunkHeader(entry: id, hunk: 0), .comment(entry: id, id: "z"), .comment(entry: id, id: "b"),
             .line(entry: id, hunk: 0, line: 0), .line(entry: id, hunk: 0, line: 1),
-            .line(entry: id, hunk: 0, line: 2), .comment(entry: id, id: "x"), .comment(entry: id, id: "y"),
-            .line(entry: id, hunk: 0, line: 3),
+            .line(entry: id, hunk: 0, line: 2), .comment(entry: id, id: "y"), .comment(entry: id, id: "x"),
+            .line(entry: id, hunk: 0, line: 3), .comment(entry: id, id: "late"),
         ])
     }
 }

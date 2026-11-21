@@ -54,7 +54,7 @@ public enum ReviewLayout {
     ]
 
     public static func rows(
-        for entry: ReviewEntry, folded: Bool, comments: [String: Int?] = [:]
+        for entry: ReviewEntry, folded: Bool, comments: [ReviewPlacedComment] = []
     ) -> [ReviewRow] {
         if folded { return [] }
         let id = entry.id
@@ -67,7 +67,8 @@ public enum ReviewLayout {
             if hunks.isEmpty { return [.note(entry: id, text: "No changes to show")] }
             // Comment ids by the base row they follow; `comments` indexes the comment-free rows.
             var after: [Int: [String]] = [:]
-            for (cid, row) in comments.sorted(by: { $0.key < $1.key }) { after[row ?? 0, default: []].append(cid) }
+            let last = hunks.count + hunks.reduce(0) { $0 + $1.lines.count } - 1
+            for c in comments { after[min(c.row ?? 0, last), default: []].append(c.id) }
             var rows: [ReviewRow] = []
             var base = 0
             func add(_ row: ReviewRow) {
