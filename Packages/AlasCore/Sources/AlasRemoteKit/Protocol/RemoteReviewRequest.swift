@@ -32,6 +32,11 @@ public struct RemoteReviewSummary: Decodable, Equatable, Identifiable, Sendable 
     public let openCommentCount: Int
     public let updatedAt: Date
 
+    /// Whether the host adds comments to it: the kinds `AlasHost+PeerReviews` `comment` accepts.
+    public var takesNewComments: Bool {
+        ["local-changes", "commit", "tracked-commit", "commit-range", "branch", "review-request"].contains(kind)
+    }
+
     private enum Keys: String, CodingKey {
         case record, openCommentCount, target, status, updatedAt, draftSessionID, kind, title, sourceDescription
     }

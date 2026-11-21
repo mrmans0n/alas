@@ -149,7 +149,7 @@ private struct ReviewDetailView: View {
                     HStack {
                         Text(path).lineLimit(1).truncationMode(.middle)
                         Spacer()
-                        if let fileID = comments.first?.fileID {
+                        if summary.takesNewComments, let fileID = comments.first?.fileID {
                             Button("Comment", systemImage: "plus.bubble") { composing = .add(fileID, path: path) }
                                 .labelStyle(.iconOnly)
                         }
