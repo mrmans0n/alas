@@ -158,7 +158,7 @@ zmx_dirt="$(
     } | shasum -a 256 | awk '{print $1}'
 )"
 zig_id="$(shasum -a 256 "${zig_bin}" 2>/dev/null | awk '{print $1}')"
-script_id="$(shasum -a 256 "${script_path}" 2>/dev/null | awk '{print $1}')"
+script_id="$(cat "${script_path}" "${script_dir}/build-zmx-target.sh" | shasum -a 256 | awk '{print $1}')"
 fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' "${zmx_sha}" "${zmx_dirt}" "${target_arch}" "${zig_bin}" "${zig_id}" "${script_id}" | shasum -a 256 | awk '{print $1}')"
 cache_dir="${cache_root}/${fingerprint}"
 cached_binary="${cache_dir}/zmx"
