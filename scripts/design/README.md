@@ -150,8 +150,10 @@ workspace. `computer_screenshot` also exists, but it caps at 1280px, shows an
 approval card and can't be scripted.
 
 **Navigation.** `alas wt switch <branch>` works. It needs `ALAS_SOCKET_PATH`
-pointing at `/tmp/alas-<uid>-<hash>/hooks/pid-<pid>` and a working directory
-inside the fixture repo. Agent input to Alas builds is refused, so nothing here
+pointing at `/tmp/alas-<uid>-<hash>/hooks/pid-<pid>`, `ALAS_SESSION_ID` set to
+the seeded chat session, and a working directory inside the fixture repo.
+Without a session id the CLI only searches `/tmp/alas-<uid>`, where an isolated
+profile's socket never is. Agent input to Alas builds is refused, so nothing here
 clicks or types.
 
 **Populating the transcript.**

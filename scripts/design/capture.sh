@@ -281,12 +281,22 @@ wait_for 60 replay_finished
 # The sidebar scans a worktree's diff when it is first opened, so visit each one
 # and end on the selection the seed chose, which holds the transcript.
 cli="$app/Contents/Resources/alas-cli/macos-aarch64/alas"
+# Addresses the CLI to this capture's app. Without a session id the CLI only
+# searches the standard /tmp/alas-<uid> directory, which never holds an
+# isolated profile's socket, so it targets the seeded chat session
+# (SESSION_ID in make-demo-profile.sh). Setting both also overrides any
+# ALAS_SESSION_ID inherited from an Alas terminal or agent.
+use_capture_app() {
+  export ALAS_SOCKET_PATH="$runtime_dir/hooks/pid-$app_pid"
+  export ALAS_SESSION_ID=00000000-0000-4000-8000-000000000003
+}
 visit_worktrees() {
   cd "$profile/fixture/lantern"
-  export ALAS_SOCKET_PATH="$runtime_dir/hooks/pid-$app_pid"
+  use_capture_app
   local selected
-  # The seed orders it first, right after the main checkout.
-  selected="$("$cli" wt list | awk 'NR==2 {print $1}')"
+  # The seed orders it first, right after the main checkout. The branch is the
+  # second-to-last column: the current worktree's row starts with "*".
+  selected="$("$cli" wt list | awk 'NR==2 {print $(NF-1)}')"
   "$cli" wt list | awk '{print $(NF-1)}' | while read -r branch; do
     "$cli" wt switch "$branch" >/dev/null
     /bin/sleep 0.7
@@ -300,7 +310,7 @@ visit_worktrees() {
 if [[ -n "${ALAS_CAPTURE_CLI:-}" ]]; then
   (
     cd "$profile/fixture/lantern"
-    export ALAS_SOCKET_PATH="$runtime_dir/hooks/pid-$app_pid"
+    use_capture_app
     # The seed's selected worktree, where the transcript lives.
     selected_path="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["spaces"][0]["lastSelectedWorktreeId"])' "$profile/seed/spaces.json")"
     cd "$selected_path"
