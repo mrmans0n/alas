@@ -151,7 +151,11 @@ struct ACPMarkdownText: View {
         case .mermaid(let source):
             MermaidDiagramBlockView(source: source, profile: .transcript)
         case .visual(let title, let html):
-            ACPMarkdownVisualBlock(visual: .fenced(title: title, html: html), typography: typography)
+            let visual = ACPVisualAid.fenced(title: title, html: html)
+            // Blocks are keyed by offset, and the card opens its page once on appear: keying by the
+            // HTML-derived id replaces the page when a message's visual is rewritten in place.
+            ACPMarkdownVisualBlock(visual: visual, typography: typography)
+                .id(visual.id)
         case .image(let alt, let source):
             ACPMarkdownImageBlockView(alt: alt, source: source)
         case .table(let header, let rows):
