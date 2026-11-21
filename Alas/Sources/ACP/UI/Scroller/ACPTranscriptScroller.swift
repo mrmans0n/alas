@@ -1363,8 +1363,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
         }
 
-        /// The turn's request and patches, for its caption. File writes become a minus and plus
-        /// listing of their old and new text.
+        /// The turn's request and patches, for its caption. File writes become patches of their
+        /// changed hunks.
         static func captionInput(
             changes: ACPTurnChanges, messages: [ACPMessage], answerIndex: Int, worktreeRoot: String?
         ) -> ACPTurnCaptionPolicy.Input? {
@@ -1377,9 +1377,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             for message in messages[(changes.userIndex + 1)..<answerIndex] {
                 switch message {
                 case .fileEdit(_, let edit):
-                    let removed = (edit.oldText ?? "").split(separator: "\n", omittingEmptySubsequences: false).map { "-" + $0 }
-                    let added = edit.newText.split(separator: "\n", omittingEmptySubsequences: false).map { "+" + $0 }
-                    patches.append((["--- \(edit.path)"] + removed + added).joined(separator: "\n"))
+                    patches.append(ACPTurnCaptionPolicy.patch(path: edit.path, old: edit.oldText, new: edit.newText))
                 case .toolCall(let call) where !ACPTurnChanges.written(by: call, worktreeRoot: worktreeRoot).isEmpty:
                     patches += call.diffs.filter { $0.source == .toolCall && $0.isValid }.compactMap(\.patch)
                 default:

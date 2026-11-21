@@ -50,6 +50,21 @@ public enum ACPTurnCaptionPolicy {
         }
     }
 
+    /// A client file write as a unified patch of its changed hunks, so a small edit to a large file
+    /// fits the budget instead of spending it on the whole old file.
+    public static func patch(path: String, old: String?, new: String) -> String {
+        let hunks = LineDiff.parsedDiff(old: old, new: new).hunks.map { hunk in
+            ([hunk.header] + hunk.lines.map { line in
+                switch line.kind {
+                case .add: "+" + line.text
+                case .delete: "-" + line.text
+                case .context: " " + line.text
+                }
+            }).joined(separator: "\n")
+        }
+        return (["--- \(path)"] + hunks).joined(separator: "\n")
+    }
+
     /// The caption in `text`, or nil when it is not one plain line of a few words.
     public static func parse(_ text: String) -> String? {
         var caption = text.trimmingCharacters(in: .whitespacesAndNewlines)

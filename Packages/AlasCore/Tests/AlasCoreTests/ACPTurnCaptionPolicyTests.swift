@@ -27,4 +27,13 @@ struct ACPTurnCaptionPolicyTests {
         #expect(zip(prompts, prompts.dropFirst()).allSatisfy { $0.count > $1.count })
         #expect(!prompts[prompts.count - 1].contains("Patches:"))
     }
+
+    @Test func aFileWriteBecomesOnlyItsChangedHunks() {
+        let old = (1...500).map { "line \($0)" }.joined(separator: "\n")
+        let new = old.replacingOccurrences(of: "line 250\n", with: "line 250 edited\n")
+        let patch = ACPTurnCaptionPolicy.patch(path: "Big.swift", old: old, new: new)
+        #expect(patch.hasPrefix("--- Big.swift\n@@"))
+        #expect(patch.contains("\n-line 250\n+line 250 edited"))
+        #expect(!patch.contains("line 1\n") && patch.count < 300)
+    }
 }
