@@ -185,14 +185,18 @@ import Testing
         #expect(try RemoteReviewRequest.reviews(replying: 9, in: encode(.reviews(reviews: [summary]))) == nil)
     }
 
-    @Test func sessionConfigCarriesTheGoal() throws {
+    @Test func sessionConfigCarriesTheGoalAndMCPServers() throws {
         var config = RemoteSessionConfig(sessionId: "s", models: [], modes: [], autoRunEnabled: false, acceptsImages: false)
         config.goal = RemoteSessionGoal(objective: "Ship it", status: "active", tokenBudget: 50_000, tokensUsed: 1_200)
+        config.mcp = RemoteMCPStatus(requested: 1, skipped: 1, warning: nil, servers: [
+            .init(name: "alas", transport: "HTTP", detail: "Requested", requested: true),
+            .init(name: "db", transport: "stdio", detail: "Skipped: missing DB_URL", requested: false),
+        ])
         let data = try JSONEncoder().encode(RemoteServerMessage.sessionConfig(config))
         guard case .sessionConfig(let decoded) = try JSONDecoder().decode(RemoteServerMessageOf<OpaqueHostMessage, OpaqueHostMessage>.self, from: data)
         else { Issue.record("not a sessionConfig")
         return }
-        #expect(decoded.goal == config.goal)
+        #expect(decoded.goal == config.goal && decoded.mcp == config.mcp)
     }
 
     @Test(arguments: [

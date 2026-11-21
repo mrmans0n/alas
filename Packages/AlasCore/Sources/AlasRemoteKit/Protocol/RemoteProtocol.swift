@@ -135,6 +135,8 @@ public struct RemoteSessionConfig: Codable, Equatable, Sendable {
     /// text point into and `resolveReferences` looks up. Nil without one,
     /// and on older hosts.
     public var codeHost: RemoteCodeHost? = nil
+    /// The session's MCP servers, as the Mac's MCP pill lists them. Nil without any, and on older hosts.
+    public var mcp: RemoteMCPStatus? = nil
 
     public init(sessionId: String, models: [RemoteModelInfo], modes: [RemoteModelInfo], currentModel: String? = nil, currentMode: String? = nil, autoRunEnabled: Bool, acceptsImages: Bool, chips: RemoteChipState? = nil, supportsSteering: Bool? = nil, availableCommands: [RemoteSlashCommand]? = nil, usage: RemoteUsage? = nil, supportsQueueReorder: Bool? = nil, supportsMentions: Bool? = nil, agentIssue: RemoteAgentIssue? = nil, codeHost: RemoteCodeHost? = nil) {
         self.sessionId = sessionId
@@ -1105,7 +1107,7 @@ extension RemoteServerMessageOf: Codable {
         case type, sessions, sessionId, projectId, streamingState, canDrive, messages, upserts, payload, requestId, message
         case hasCancellableBackgroundWork
         case worktrees, agents, session, projects, branches, preferredBase, stage, worktreeId
-        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder, supportsMentions, agentIssue, goal, codeHost
+        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder, supportsMentions, agentIssue, goal, codeHost, mcp
         case query, candidates
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
@@ -1277,6 +1279,7 @@ extension RemoteServerMessageOf: Codable {
             config.agentIssue = try? c.decodeIfPresent(RemoteAgentIssue.self, forKey: .agentIssue) ?? nil
             config.goal = try? c.decodeIfPresent(RemoteSessionGoal.self, forKey: .goal) ?? nil
             config.codeHost = try? c.decodeIfPresent(RemoteCodeHost.self, forKey: .codeHost) ?? nil
+            config.mcp = try? c.decodeIfPresent(RemoteMCPStatus.self, forKey: .mcp) ?? nil
             self = .sessionConfig(config)
         case "sessionRenamed":
             self = .sessionRenamed(
@@ -1598,6 +1601,7 @@ extension RemoteServerMessageOf: Codable {
             try c.encodeIfPresent(cfg.agentIssue, forKey: .agentIssue)
             try c.encodeIfPresent(cfg.goal, forKey: .goal)
             try c.encodeIfPresent(cfg.codeHost, forKey: .codeHost)
+            try c.encodeIfPresent(cfg.mcp, forKey: .mcp)
         case .sessionRenamed(let id, let title):
             try c.encode("sessionRenamed", forKey: .type)
             try c.encode(id, forKey: .sessionId)

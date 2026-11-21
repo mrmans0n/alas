@@ -40,7 +40,23 @@ public enum RemoteSessionConfigProjection: Sendable {
             RemoteSessionGoal(objective: $0.objective, status: $0.status, tokenBudget: $0.tokenBudget, tokensUsed: $0.tokensUsed)
         }
         config.codeHost = codeHost
+        config.mcp = mcp(session: session)
         return config
+    }
+
+    /// The Mac's MCP pill, minus its stale mark: that compares with the project's settings, which
+    /// this does not read. ponytail: no stale mark on the phone; pass the project's servers to add it.
+    public static func mcp(session: ACPSession) -> RemoteMCPStatus? {
+        guard let state = ACPMCPStatusState(
+            summary: session.mcpAttachmentSummary, currentServers: nil,
+            externalStatus: session.mcpExternalStatus, builtInRegistration: session.builtInMCPRegistration,
+            builtInPolicyBlock: session.builtInMCPPolicyBlock, adapterSupportsHTTP: session.adapterSupportsHTTPMCP
+        ) else { return nil }
+        return RemoteMCPStatus(
+            requested: state.requestedCount, skipped: state.skippedCount, warning: state.builtInWarningText,
+            servers: (state.externalRows ?? state.rows).map {
+                RemoteMCPStatus.Server(name: $0.name, transport: $0.transport, detail: $0.detail, requested: $0.isRequested)
+            })
     }
 
     public static func agentIssue(session: ACPSession) -> RemoteAgentIssue? {

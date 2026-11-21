@@ -1,9 +1,10 @@
 import Foundation
+import AlasModel
 
 /// Warning state for the built-in "alas" MCP server on the current attach.
 /// Drives the status control's warning treatment and whether the
 /// "switch to HTTP transport" action is offered.
-enum BuiltInMCPWarning: Equatable {
+public enum BuiltInMCPWarning: Equatable, Sendable {
     /// The built-in server is registered (or not requested) — no warning.
     case none
     /// Attached over stdio, not registered, and the adapter supports HTTP:
@@ -24,40 +25,41 @@ enum BuiltInMCPWarning: Equatable {
 /// Presentation-only state for the MCP attachment status control. The
 /// planner's summary never retains resolved commands, environment values, or
 /// headers, and this policy deliberately keeps the same boundary.
-struct ACPMCPStatusState: Equatable {
-    struct Row: Equatable, Identifiable {
-        let id: String
-        let name: String
-        let transport: String
-        let detail: String
-        let isRequested: Bool
+public struct ACPMCPStatusState: Equatable, Sendable {
+    public struct Row: Equatable, Identifiable, Sendable {
+        public let id: String
+        public let name: String
+        public let transport: String
+        public let detail: String
+        public let isRequested: Bool
         /// Present on repo-defined rows the user can enable or disable
         /// right from this control.
-        let repoToggle: RepoToggle?
+        public let repoToggle: RepoToggle?
     }
 
     /// The enable/disable/approve affordance a repo-defined server's row carries.
-    enum RepoToggle: Equatable {
+    public enum RepoToggle: Equatable, Sendable {
         case enable
         case disable
         /// Re-approving a declined repo server from the status control.
         case approve
     }
 
-    let requestedCount: Int
-    let skippedCount: Int
-    let isStale: Bool
-    let rows: [Row]
-    let preambleDetail: String?
-    let externalRows: [Row]?
-    let showsAdapterInstallAction: Bool
-    let builtInWarning: BuiltInMCPWarning
-    let hasBuiltInWarning: Bool
-    let showsSwitchToHTTPAction: Bool
+    public let requestedCount: Int
+    public let skippedCount: Int
+    public let isStale: Bool
+    public let rows: [Row]
+    public let preambleDetail: String?
+    public let externalRows: [Row]?
+    public let showsAdapterInstallAction: Bool
+    public let builtInWarning: BuiltInMCPWarning
+    public let hasBuiltInWarning: Bool
+    public let showsSwitchToHTTPAction: Bool
 
-    init?(
+    /// Nil `currentServers` skips the stale check, for a reader without the project's configuration.
+    public init?(
         summary: MCPAttachmentSummary?,
-        currentServers: [ProjectMCPServer],
+        currentServers: [ProjectMCPServer]?,
         preamblePending: Bool = false,
         preambleSent: Bool = false,
         externalStatus: ACPMCPExternalStatus? = nil,
@@ -66,7 +68,7 @@ struct ACPMCPStatusState: Equatable {
         adapterSupportsHTTP: Bool = true
     ) {
         guard let summary,
-              !summary.statuses.isEmpty || !currentServers.isEmpty else {
+              !summary.statuses.isEmpty || !(currentServers ?? []).isEmpty else {
             return nil
         }
 
@@ -91,8 +93,9 @@ struct ACPMCPStatusState: Equatable {
         hasBuiltInWarning = builtInWarning != .none
         showsSwitchToHTTPAction = builtInWarning == .canSwitchToHTTP
 
-        isStale = summary.configurationFingerprint
-            != MCPAttachmentPlanner.configurationFingerprint(for: currentServers)
+        isStale = currentServers.map {
+            summary.configurationFingerprint != MCPAttachmentPlanner.configurationFingerprint(for: $0)
+        } ?? false
         rows = summary.statuses.map { Self.row($0) }
 
         if preamblePending {
@@ -170,11 +173,11 @@ struct ACPMCPStatusState: Equatable {
         }
     }
 
-    var summaryText: String {
+    public var summaryText: String {
         "\(requestedCount) requested"
     }
 
-    var accessibilitySummary: String {
+    public var accessibilitySummary: String {
         var parts = ["MCP: \(requestedCount) requested"]
         if skippedCount > 0 {
             parts.append("\(skippedCount) skipped")
@@ -182,19 +185,19 @@ struct ACPMCPStatusState: Equatable {
         if isStale {
             parts.append("New settings apply on reconnect.")
         }
-        switch builtInWarning {
-        case .none:
-            break
-        case .canSwitchToHTTP:
-            parts.append("Alas MCP server not started — switch to HTTP transport")
-        case .httpUnsupported:
-            parts.append("Alas MCP server not started and this agent has no HTTP MCP support")
-        case .alreadyHTTP:
-            parts.append("Alas MCP server not started over HTTP")
-        case .blockedByAgentPolicy:
-            parts.append("Alas MCP server blocked by the agent's managed policy")
-        }
+        if let builtInWarningText { parts.append(builtInWarningText) }
         return parts.joined(separator: ", ")
+    }
+
+    /// What is wrong with the built-in server, when something is.
+    public var builtInWarningText: String? {
+        switch builtInWarning {
+        case .none: nil
+        case .canSwitchToHTTP: "Alas MCP server not started — switch to HTTP transport"
+        case .httpUnsupported: "Alas MCP server not started and this agent has no HTTP MCP support"
+        case .alreadyHTTP: "Alas MCP server not started over HTTP"
+        case .blockedByAgentPolicy: "Alas MCP server blocked by the agent's managed policy"
+        }
     }
 
     private static func row(_ status: MCPAttachmentServerStatus, idPrefix: String = "") -> Row {

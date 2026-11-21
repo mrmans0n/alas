@@ -1593,7 +1593,6 @@
 		D08FB4816ED55A6844162202 /* ACPUserMessageImageMarkers.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8FDD12B80BF7793BD791661 /* ACPUserMessageImageMarkers.swift */; };
 		D0AAA970B164135A9C152AAB /* AndroidStreamConnectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0A97237E4D08100BA2E4AD /* AndroidStreamConnectorTests.swift */; };
 		D0E9985350ECD64F1D042345 /* MermaidModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33AEF4AA4C36DBC1B912F25 /* MermaidModelsTests.swift */; };
-		D0F370E528AA4D07814AEB15 /* ACPMCPStatusPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C051018EB105E225122750C /* ACPMCPStatusPolicy.swift */; };
 		D0F4A4F5BF5F1C3C625F11D9 /* Clipboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E6600436B01C75D85C01FFA /* Clipboard.swift */; };
 		D10A4D7D7EE46CA9B90B5B1D /* RunScriptStackCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8702AD93656420B917C4F705 /* RunScriptStackCatalogTests.swift */; };
 		D10A8F47A537C1C8969752B1 /* ACPMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8A0A083659269CDD16A6764 /* ACPMessageTests.swift */; };
@@ -2038,10 +2037,10 @@
 		2712E12EE8A4AD5B52367A67 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-host";
+			dstPath = "alas-vm-guest";
 			dstSubfolderSpec = 7;
 			files = (
-				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
+				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2059,10 +2058,10 @@
 		DF16EBE2557E441D41DDC075 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
+			dstPath = "alas-host";
 			dstSubfolderSpec = 7;
 			files = (
-				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
+				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2416,7 +2415,6 @@
 		2BFCE07604D55558B13FC33B /* DiffOpenFileAvailabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffOpenFileAvailabilityTests.swift; sourceTree = "<group>"; };
 		2BFD4C762D8323B78934ECE7 /* BranchPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BranchPicker.swift; sourceTree = "<group>"; };
 		2C0350206BA233AD3B54B3C7 /* session-update-compaction-update.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-compaction-update.json"; sourceTree = "<group>"; };
-		2C051018EB105E225122750C /* ACPMCPStatusPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMCPStatusPolicy.swift; sourceTree = "<group>"; };
 		2C17465AF6747EDCD8CCE416 /* ReviewSessionLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewSessionLoader.swift; sourceTree = "<group>"; };
 		2C2381497E73D74C8C314928 /* AgentRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRegistryTests.swift; sourceTree = "<group>"; };
 		2C64FC8AD8A0F87A9B854ABD /* RunOnPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunOnPicker.swift; sourceTree = "<group>"; };
@@ -6025,7 +6023,6 @@
 				2AE565966DD010FDFD7DFF50 /* ACPMarkdownLiveStyler.swift */,
 				DE2AC16E9220C05F670BE3EB /* ACPMarkdownText.swift */,
 				1936C815E64C7DB204340469 /* ACPMCPStatusControl.swift */,
-				2C051018EB105E225122750C /* ACPMCPStatusPolicy.swift */,
 				329882D757C34246C9848C3A /* ACPMentionChipAttachment.swift */,
 				E49006251DFBE67CCD0C4008 /* ACPMentionPicker.swift */,
 				9445B0E1BAF7BC567229B0BE /* ACPMentionSymbolPreview.swift */,
@@ -7856,7 +7853,6 @@
 				581EED58D4D12D77D734EF07 /* ACPImageEncoding+AppKit.swift in Sources */,
 				BAE6B1D93387807ADD7ED0CC /* ACPImageThumbnail.swift in Sources */,
 				BBACA7DCC1EFA6D55AEB38CE /* ACPMCPStatusControl.swift in Sources */,
-				D0F370E528AA4D07814AEB15 /* ACPMCPStatusPolicy.swift in Sources */,
 				7ABF2BE84D6677FE5BCC8ED1 /* ACPMarkdownInlineRenderer.swift in Sources */,
 				D2B220E198A50063BA6D085C /* ACPMarkdownInlineText.swift in Sources */,
 				88C1A4EBC12F7F7BA7FE9B06 /* ACPMarkdownInlineTextView.swift in Sources */,
