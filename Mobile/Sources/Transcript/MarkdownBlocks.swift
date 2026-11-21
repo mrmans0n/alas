@@ -18,6 +18,8 @@ enum MarkdownBlock: Equatable {
     case code(language: String?, chunks: [CodeChunk])
     case list([ListEntry])
     case quote(AttributedString)
+    /// A GitHub `> [!NOTE]`-style alert, as on the Mac.
+    case alert(MarkdownAlert.Kind, AttributedString)
     case table(header: [AttributedString], rows: [[AttributedString]])
     /// `![alt](source)` on its own line; inside other text an image reads as its alt text.
     case image(source: String, alt: String)
@@ -67,7 +69,12 @@ enum MarkdownBlock: Equatable {
                 .code(language: c.language, chunks: highlighted(c.code, language: c.language))
             }
         case let l as ListItemContainer: .list(entries(l, depth: 0, lines: lines))
-        case let q as BlockQuote: .quote(inline(q))
+        case let q as BlockQuote:
+            if let (kind, body) = MarkdownAlert.match(quotedLines(q, lines: lines)) {
+                .alert(kind, inline(Document(parsing: body)))
+            } else {
+                .quote(inline(q))
+            }
         case let t as Markdown.Table:
             .table(header: t.head.cells.map { inline($0) }, rows: t.body.rows.map { $0.cells.map { inline($0) } })
         default: nil
@@ -75,6 +82,19 @@ enum MarkdownBlock: Equatable {
     }
 
     static let codeChunkLines = 100
+
+    /// The quote's source lines without their `>` prefix, which the marker check reads.
+    private static func quotedLines(_ quote: BlockQuote, lines: [Substring]) -> [String] {
+        guard let range = quote.range, !lines.isEmpty else { return [] }
+        let first = min(max(range.lowerBound.line - 1, 0), lines.count - 1)
+        let last = min(max(range.upperBound.line - 1, first), lines.count - 1)
+        return lines[first ... last].map { line in
+            var s = Substring(line.drop { $0 == " " })
+            if s.first == ">" { s = s.dropFirst() }
+            if s.first == " " { s = s.dropFirst() }
+            return String(s)
+        }
+    }
 
     private static func isClosed(_ block: CodeBlock, lines: [Substring]) -> Bool {
         guard let range = block.range, !lines.isEmpty else { return true }

@@ -263,6 +263,16 @@ struct AgentMarkdown: View {
                             .padding(.leading, CGFloat(entry.depth) * 16)
                         }
                     }
+                case .alert(let kind, let s):
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(kind.title, systemImage: kind.symbol)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(kind.color)
+                        if !s.characters.isEmpty { inline(s) }
+                    }
+                    .padding(.leading, 10)
+                    .overlay(alignment: .leading) { Rectangle().fill(kind.color).frame(width: 3) }
+                    .accessibilityElement(children: .combine)
                 case .quote(let s):
                     inline(s).foregroundStyle(.secondary)
                         .padding(.leading, 10)
@@ -359,3 +369,17 @@ private struct AttachmentThumbnail: View {
         return nil
     }
 }
+
+private extension MarkdownAlert.Kind {
+    /// GitHub's colours, as the Mac maps them onto its theme.
+    var color: Color {
+        switch self {
+        case .note: .blue
+        case .tip: .green
+        case .important: .purple
+        case .warning: .orange
+        case .caution: .red
+        }
+    }
+}
+

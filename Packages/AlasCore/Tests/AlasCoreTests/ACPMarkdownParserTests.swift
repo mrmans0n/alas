@@ -94,4 +94,15 @@ struct ACPMarkdownParserTests {
         #expect(visual.id != ACPVisualAid.fenced(title: nil, html: "<svg></svg>").id)
         #expect(visual.presentation == .embedded)
     }
+
+    @Test(arguments: [
+        ("> [!NOTE]\n> Read this.", [.alert(kind: .note, text: "Read this.")]),
+        ("> [!warning] Mind the gap\n> twice", [.alert(kind: .warning, text: "Mind the gap\ntwice")]),
+        ("> [!CAUTION]", [.alert(kind: .caution, text: "")]),
+        ("> [!TODO]\n> not an alert", [.quote("[!TODO]\nnot an alert")]),
+        ("> plain [!NOTE]", [.quote("plain [!NOTE]")]),
+    ] as [(String, [ACPMarkdownParser.Block])])
+    func onlyKnownMarkersOnTheFirstLineMakeAlerts(source: String, expected: [ACPMarkdownParser.Block]) {
+        #expect(ACPMarkdownParser.parse(source) == expected)
+    }
 }
