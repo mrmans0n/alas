@@ -16,6 +16,7 @@ struct ComposerBar: View {
     @State private var selection = NSRange(location: 0, length: 0)
     @State private var picked: [PhotosPickerItem] = []
     @State private var showingGoal = false
+    @State private var showingMCP = false
     @State private var pickingPhotos = false
     @State private var takingPhoto = false
     @State private var searchTask: Task<Void, Never>?
@@ -188,6 +189,7 @@ struct ComposerBar: View {
             chip(name(config?.chips?.model, fallback: config?.currentModel, in: config?.models))
             chip(name(config?.chips?.thinking, fallback: nil, in: nil))
             chip(name(config?.chips?.mode, fallback: config?.currentMode, in: config?.modes))
+            if let mcp = config?.mcp { mcpChip(mcp) }
         }
         .lineLimit(1)
         .fixedSize()
@@ -234,6 +236,46 @@ struct ComposerBar: View {
         } message: {
             Text([goal.objective, goal.status?.replacingOccurrences(of: "_", with: " "), goal.tokenText]
                 .compactMap { $0 }.joined(separator: "\n"))
+        }
+    }
+
+    /// The Mac's MCP pill: the servers Alas asked the agent to attach, marked when one was skipped.
+    private func mcpChip(_ mcp: RemoteMCPStatus) -> some View {
+        Button { showingMCP = true } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "server.rack").imageScale(.small)
+                Text("MCP \(mcp.requested)").monospacedDigit()
+                if mcp.needsAttention { Image(systemName: "exclamationmark.triangle.fill").imageScale(.small).foregroundStyle(.orange) }
+            }
+            .font(.footnote.weight(.medium))
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(.quaternary, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("MCP: \(mcp.requested) requested" + (mcp.skipped > 0 ? ", \(mcp.skipped) skipped" : ""))
+        .sheet(isPresented: $showingMCP) {
+            NavigationStack {
+                List {
+                    if let warning = mcp.warning {
+                        Label(warning, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                    Section {
+                        ForEach(Array(mcp.servers.enumerated()), id: \.offset) { _, server in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(server.name)
+                                Text("\(server.transport) · \(server.detail)").font(.footnote)
+                                    .foregroundStyle(server.requested ? Color.secondary : .orange)
+                            }
+                        }
+                    } footer: {
+                        Text("What Alas asked the agent to attach when this session started. Change servers on the Mac.")
+                    }
+                }
+                .navigationTitle("MCP Servers")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingMCP = false } } }
+            }
+            .presentationDetents([.medium, .large])
         }
     }
 
