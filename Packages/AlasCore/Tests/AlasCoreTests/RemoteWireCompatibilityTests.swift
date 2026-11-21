@@ -185,6 +185,40 @@ import Testing
         #expect(try RemoteReviewRequest.reviews(replying: 9, in: encode(.reviews(reviews: [summary]))) == nil)
     }
 
+    @Test func phoneReadsAndAnswersAPullRequestsThreads() throws {
+        let ref = WorktreeRef(projectID: "p", path: "/r")
+        let decode = { (m: OpaqueHostMessage) in try JSONDecoder().decode(HostClientMessage.self, from: m.json).request }
+        #expect(try decode(RemoteReviewRequest.readProvider(id: 1, projectID: "p", path: "/r", sessionID: "s"))
+            == .readProviderReview(worktree: ref, sessionID: "s", withDiff: false))
+        #expect(try decode(RemoteReviewRequest.mutateThread(id: 1, projectID: "p", path: "/r", sessionID: "s", threadID: "t", .reply, body: "Done"))
+            == .mutateReviewThread(worktree: ref, sessionID: "s", threadID: "t", kind: .reply, body: "Done"))
+        #expect(try decode(RemoteReviewRequest.mutateThread(id: 1, projectID: "p", path: "/r", sessionID: "s", threadID: "t", .unresolve))
+            == .mutateReviewThread(worktree: ref, sessionID: "s", threadID: "t", kind: .unresolve, body: nil))
+
+        let thread = ShepherdFixtures.thread("t1")
+        let review = HostProviderReview(
+            remote: ShepherdFixtures.remote(), request: ShepherdFixtures.request(threads: [thread], threadsComplete: false),
+            capabilities: .githubCLI, account: "me", diff: nil, diffTruncated: false
+        )
+        let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 2, result: .providerReview(review: review))))
+        let read = try #require(RemoteReviewRequest.providerReview(replying: 2, in: reply))
+        #expect(read.account == "me" && read.canReply && read.canResolve && !read.areThreadsComplete)
+        let phoneThread = try #require(read.threads.first)
+        #expect(phoneThread.id == "t1" && phoneThread.path == thread.path && phoneThread.line == 12 && !phoneThread.isResolved)
+        #expect(phoneThread.comments.map(\.author) == ["maintainer"] && phoneThread.comments.map(\.body) == ["Please fix t1."])
+    }
+
+    @Test(arguments: [
+        ("gh api graphql failed: To get started with GitHub CLI, please run:  gh auth login",
+         "Sign in to gh on the Mac (run gh auth login there), then pull to refresh."),
+        ("glab api failed: 401 Unauthorized", "Sign in to glab on the Mac (run glab auth login there), then pull to refresh."),
+        ("gh is not installed or is not available on PATH.", "gh isn't installed on the Mac. Install it there, then pull to refresh."),
+        ("gh pr view failed: no pull requests found", "gh pr view failed: no pull requests found"),
+    ])
+    func phoneWordsAProviderFailureAsWhatToDoOnTheMac(_ raw: String, _ shown: String) {
+        #expect(RemoteReviewRequest.providerFailureMessage(raw) == shown)
+    }
+
     @Test func sessionConfigCarriesTheGoalAndMCPServers() throws {
         var config = RemoteSessionConfig(sessionId: "s", models: [], modes: [], autoRunEnabled: false, acceptsImages: false)
         config.goal = RemoteSessionGoal(objective: "Ship it", status: "active", tokenBudget: 50_000, tokensUsed: 1_200)

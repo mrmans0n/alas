@@ -63,6 +63,7 @@
 		A14327552D08819581097496 /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E84291A6AA43082A7F684D /* HostStore.swift */; };
 		A3EFBAAFB1F782DBE2533C3F /* TranscriptImageViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC6BBF70EB1F96D5AC5A8594 /* TranscriptImageViewer.swift */; };
 		A59DD972FD0014D05D374C07 /* ComposerPickers.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB8F788F5756229A6125FB0A /* ComposerPickers.swift */; };
+		A675A02B0E22DAA8F2033589 /* PullRequestThreadRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 431F910EE9661B3F354ECE99 /* PullRequestThreadRow.swift */; };
 		A6FDD0434FBF579996D90B20 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 98208F3704BAEEBFCA4EE7FB /* Markdown */; };
 		A71335B1FFB31FD930FB376F /* TCP.swift in Sources */ = {isa = PBXBuildFile; fileRef = E980E547B44AA84D5294286F /* TCP.swift */; };
 		ADC23C11ED7EB665B1C1BAED /* TerminalScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFE4FA35BA2B54541B0ABD61 /* TerminalScreen.swift */; };
@@ -152,6 +153,7 @@
 		372565FA395364953D615BC3 /* TranscriptScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptScreen.swift; sourceTree = "<group>"; };
 		3823E4E96BDA33C88A78FB32 /* ChipCards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChipCards.swift; sourceTree = "<group>"; };
 		416F4E87800E3DD89EE7DC25 /* NewSessionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionSheet.swift; sourceTree = "<group>"; };
+		431F910EE9661B3F354ECE99 /* PullRequestThreadRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PullRequestThreadRow.swift; sourceTree = "<group>"; };
 		44901AB1A6DD674216D30C2A /* ChipAttachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChipAttachment.swift; sourceTree = "<group>"; };
 		4AEC4569F211161953B0F178 /* AlasMobile-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Release.xcconfig"; sourceTree = "<group>"; };
 		54E4381744437D8FBFAD0E65 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -264,6 +266,7 @@
 				03FA6AEA78D99344CAAD8095 /* DiffView.swift */,
 				69BE14FB4617210C8AB913F2 /* FilesView.swift */,
 				DC497CD9E3E3ACCED5B931CD /* FileViewer.swift */,
+				431F910EE9661B3F354ECE99 /* PullRequestThreadRow.swift */,
 				72B87E9EB65053A4A68B69DB /* ReviewsView.swift */,
 				F11FB7A8BA65D28E96B7CFEB /* RunPreviewView.swift */,
 				1547D85F76565F3FE516B06A /* SessionWorkspace.swift */,
@@ -726,6 +729,7 @@
 				EFCBF7FA10487119D0321510 /* PeerPortForwarder.swift in Sources */,
 				0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */,
 				914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */,
+				A675A02B0E22DAA8F2033589 /* PullRequestThreadRow.swift in Sources */,
 				1635F671055BF795E113B685 /* PushRegistrar.swift in Sources */,
 				468E5015B45747F86FC3A04F /* QueueTray.swift in Sources */,
 				0C2F93617E2905DED2097D5C /* ReferenceCache.swift in Sources */,

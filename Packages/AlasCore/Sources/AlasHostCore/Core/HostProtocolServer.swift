@@ -480,7 +480,7 @@ public final class HostProtocolConnection {
             try await host.reviews.mutate(mutation, sessionID: sessionID, in: try reviewWorktree(ref), caller: caller)
         case .readProviderReview(let ref, let sessionID, let withDiff):
             return .providerReview(review: try await host.reviews.providerReview(
-                sessionID, in: try providerReviewWorktree(ref), withDiff: withDiff
+                sessionID, in: try providerReviewWorktree(ref, servesPhone: true), withDiff: withDiff
             ))
         case .openProviderReview(let ref, let number):
             return .review(review: try await host.reviews.openProviderReview(
@@ -488,7 +488,7 @@ public final class HostProtocolConnection {
             ))
         case .mutateReviewThread(let ref, let sessionID, let threadID, let kind, let body):
             return .reviewThreadMutated(result: try await host.reviews.mutateThread(
-                threadID, kind: kind, body: body, sessionID: sessionID, in: try providerReviewWorktree(ref), caller: caller
+                threadID, kind: kind, body: body, sessionID: sessionID, in: try providerReviewWorktree(ref, servesPhone: true), caller: caller
             ))
         case .publishReview(let ref, let sessionID, let publish):
             return .reviewPublished(result: try await host.reviews.publish(
@@ -714,9 +714,10 @@ public final class HostProtocolConnection {
         return try visibleWorktree(ref)
     }
 
-    /// A visible worktree, on a host that serves pull request reviews.
-    private func providerReviewWorktree(_ ref: WorktreeRef) throws -> Worktree {
-        guard host.servedCapabilities.contains(HostProtocolCapability.reviewsProviderV1) else {
+    /// A visible worktree, on a host that serves pull request reviews. An app
+    /// host still serves the user's own phone what `servesPhone` marks.
+    private func providerReviewWorktree(_ ref: WorktreeRef, servesPhone: Bool = false) throws -> Worktree {
+        guard host.servedCapabilities.contains(HostProtocolCapability.reviewsProviderV1) || (servesPhone && callerIsPhone) else {
             throw HostError.invalidRequest(reason: "This host does not serve pull request reviews.")
         }
         return try visibleWorktree(ref)

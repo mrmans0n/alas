@@ -2583,8 +2583,31 @@ struct HostProtocolServerTests {
 
         #expect(try await fixture.request(.listReviews(worktree: ref))
             == .failure(error: .invalidRequest(reason: "This host does not serve reviews.")))
-        #expect(try await fixture.request(.readProviderReview(worktree: ref, sessionID: "x", withDiff: false))
-            == .failure(error: .invalidRequest(reason: "This host does not serve pull request reviews.")))
+        let refused = HostResponse.failure(error: .invalidRequest(reason: "This host does not serve pull request reviews."))
+        #expect(try await fixture.request(.readProviderReview(worktree: ref, sessionID: "x", withDiff: false)) == refused)
+
+        // The user's own phone reads and answers a pull request's threads past the gate, but doesn't publish.
+        let server = HostProtocolServer(host: fixture.host)
+        server.delegationPairing = RemotePairingService(store: MemoryDeviceStore(devices: [RemoteDevice(
+            id: "d1", name: "d1", tokenHash: "d1", createdAt: .distantPast, lastSeenAt: nil, kind: .phone
+        )]))
+        let client = Client()
+        let connection = server.connect(caller: .remotePeer(deviceID: "d1"), send: client.receive)
+        let publish = HostReviewPublish(decision: .comment, body: "", draftIDs: nil, headSHA: nil)
+        let requests: [(HostRequest, HostResponse)] = [
+            (.readProviderReview(worktree: ref, sessionID: "x", withDiff: false), .failure(error: .notFound(what: "review x"))),
+            (.mutateReviewThread(worktree: ref, sessionID: "x", threadID: "t", kind: .resolve, body: nil),
+             .failure(error: .notFound(what: "review x"))),
+            (.publishReview(worktree: ref, sessionID: "x", publish: publish), refused),
+        ]
+        for (id, (request, expected)) in zip(1..., requests) {
+            await connection.receive(HostClientMessage(id: id, request: request))
+            guard case .response(id, let result) = client.messages.last else {
+                Issue.record("no response to \(request)")
+                continue
+            }
+            #expect(result == expected)
+        }
     }
 
     /// A Mac opens a worktree's pull request review, reusing the open one,
