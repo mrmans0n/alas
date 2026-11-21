@@ -31,11 +31,12 @@ struct SessionRecapSheet: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         .task {
-            let prompt = RemoteSessionRecap.prompt(rows: session.transcriptRows, goal: nil)
-            if let prompt, let found = await SessionRecapModel.recap(prompt) {
+            let rows = session.transcriptRows
+            guard RemoteSessionRecap.prompt(rows: rows, goal: nil) != nil else { return recap = .failed("Nothing to summarize yet.") }
+            if let found = await SessionRecapModel.recap(rows: rows, goal: nil) {
                 recap = .loaded(found)
             } else {
-                recap = .failed(prompt == nil ? "Nothing to summarize yet." : "Couldn't summarize this session.")
+                recap = .failed("Couldn't summarize this session.")
             }
         }
     }
@@ -51,11 +52,24 @@ enum SessionRecapModel {
 
     @MainActor static var isAvailable: Bool { CommitMessageModel.isAvailable }
 
-    @MainActor static func recap(_ prompt: String) async -> Recap? {
+    /// Bytes only bound tokens from above, so a dense transcript can still overflow the model's
+    /// context; each overflow retries with half the transcript.
+    @MainActor static func recap(rows: [RemoteTranscriptRow], goal: String?) async -> Recap? {
         guard isAvailable else { return nil }
-        let session = LanguageModelSession(instructions: RemoteSessionRecap.instructions)
         let options = GenerationOptions(temperature: 0, maximumResponseTokens: 600)
-        guard let recap = try? await session.respond(to: prompt, generating: Recap.self, options: options).content,
+        var byteLimit = RemoteSessionRecap.defaultByteLimit
+        var generated: Recap?
+        while generated == nil, byteLimit >= 1_000, let prompt = RemoteSessionRecap.prompt(rows: rows, goal: goal, byteLimit: byteLimit) {
+            let session = LanguageModelSession(instructions: RemoteSessionRecap.instructions)
+            do {
+                generated = try await session.respond(to: prompt, generating: Recap.self, options: options).content
+            } catch LanguageModelSession.GenerationError.exceededContextWindowSize {
+                byteLimit /= 2
+            } catch {
+                return nil
+            }
+        }
+        guard let recap = generated,
               RemoteSessionRecap.permits(goal: recap.goal, completed: recap.completed,
                                          blockers: recap.blockers, nextAction: recap.nextAction)
         else { return nil }
