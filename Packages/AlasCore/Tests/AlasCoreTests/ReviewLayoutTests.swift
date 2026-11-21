@@ -63,4 +63,57 @@ struct ReviewLayoutTests {
         marks.unmark(Self.id)
         #expect(!marks.isViewed(Self.id, hunks: Self.hunks))
     }
+
+    private static func line(_ kind: String, old: Int? = nil, new: Int? = nil) -> RemoteDiffLine {
+        RemoteDiffLine(kind: kind, text: "x", oldNumber: old, newNumber: new)
+    }
+
+    private static let selectionCases: [([RemoteDiffLine], RemoteReviewAnchor)] = [
+        ([line("add", new: 42)], .line(side: "new", startLine: 42, endLine: nil)),
+        ([line("add", new: 42), line("add", new: 43)], .line(side: "new", startLine: 42, endLine: 43)),
+        ([line("delete", old: 10), line("delete", old: 11)], .line(side: "old", startLine: 10, endLine: 11)),
+        (
+            [line("delete", old: 10), line("add", new: 10), line("add", new: 11)],
+            .line(side: "new", startLine: 10, endLine: 11)
+        ),
+        (
+            [line("context", old: 5, new: 5), line("context", old: 6, new: 6), line("context", old: 7, new: 7)],
+            .line(side: "new", startLine: 5, endLine: 7)
+        ),
+    ]
+
+    @Test(arguments: selectionCases)
+    func selectionAnchorsToOneSide(lines: [RemoteDiffLine], expected: RemoteReviewAnchor) {
+        let hunk = RemoteDiffHunk(header: "@@", oldStart: 1, newStart: 1, lines: lines)
+        var selection = ReviewSelection(entry: Self.id, hunk: 0, line: 0)
+        selection.extend(to: lines.count - 1, inHunk: 0)
+        #expect(selection.anchor(in: hunk) == expected)
+    }
+
+    @Test
+    func extendingStaysInItsHunk() {
+        var selection = ReviewSelection(entry: Self.id, hunk: 0, line: 3)
+        selection.extend(to: 9, inHunk: 1)
+        #expect((selection.start, selection.end) == (3, 3))
+        selection.extend(to: 1, inHunk: 0)
+        #expect((selection.start, selection.end) == (1, 3))
+    }
+
+    @Test
+    func selectionDropsWhenItsLinesAreGone() {
+        var selection = ReviewSelection(entry: Self.id, hunk: 0, line: 0)
+        selection.extend(to: 1, inHunk: 0)
+        #expect(selection.isValid(in: Self.hunks))
+        selection.extend(to: 2, inHunk: 0)
+        #expect(!selection.isValid(in: Self.hunks))
+        #expect(!ReviewSelection(entry: Self.id, hunk: 2, line: 0).isValid(in: Self.hunks))
+    }
+
+    @Test
+    func quotedTextPrefixesEachLineBySign() {
+        let hunk = Self.hunks[0]
+        var selection = ReviewSelection(entry: Self.id, hunk: 0, line: 0)
+        selection.extend(to: 1, inHunk: 0)
+        #expect(selection.quotedText(in: hunk) == "  a\n+ b")
+    }
 }
