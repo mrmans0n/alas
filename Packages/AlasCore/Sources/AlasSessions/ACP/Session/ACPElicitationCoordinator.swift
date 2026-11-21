@@ -27,13 +27,16 @@ public final class ACPElicitationCoordinator {
     private var pendingByToken: [UUID: ACPUserInputRequest] = [:]
     private var pendingPlans: [ACPCursorPlanRequest] = []
     private var notifiedRequestIds: Set<JSONRPCID> = []
-    /// The foreground prompt each optional form arrived under. A form that
-    /// arrived outside a prompt the runner owns has no entry: an idle
+    /// The foreground prompt each pending request arrived under. A request
+    /// that arrived outside a prompt the runner owns has no entry: an idle
     /// session, a broker-reattached or detached steering turn, or the window
     /// of a non-native steer between clearing the old prompt and the
-    /// redirect's `sendNow` installing the new one. Such a form goes with the
-    /// adapter's own `$/cancel_request`, or with stop and cancel-all.
-    private var optionalArrivalPromptIDs: [UUID: Int] = [:]
+    /// redirect's `sendNow` installing the new one. Such an optional form goes
+    /// with the adapter's own `$/cancel_request`, or with stop and cancel-all.
+    private var arrivalPromptIDs: [UUID: Int] = [:]
+    /// The prompt each URL wait's elicitation arrived under, by elicitation
+    /// id. See `ACPURLElicitationWaitPolicy`.
+    private var urlWaitPromptIDs: [String: Int] = [:]
     /// Ids the adapter withdrew before their form arrived; the cancel and the
     /// request travel on separate streams. Only ids no other pending request
     /// claimed land here (see `rememberWithdrawn(id:)`). Each id answers one
@@ -110,6 +113,7 @@ public final class ACPElicitationCoordinator {
     }
 
     public func respond(to token: UUID, action: ACPUserInputAction) {
+        let promptID = arrivalPromptIDs[token]
         guard let request = removePending(token: token) else { return }
         recordAnswer(request, action: action)
         switch request.source {
@@ -121,12 +125,7 @@ public final class ACPElicitationCoordinator {
         case .elicitation(let id, _):
             let response: ACPElicitationResponse
             if case .submit = action, case .url(let urlRequest) = request.mode {
-                session.transcript.urlElicitationWaits.append(.init(
-                    id: urlRequest.elicitationId,
-                    requestId: token,
-                    message: request.message,
-                    url: urlRequest.url
-                ))
+                beginURLWait(urlRequest, token: token, message: request.message, promptID: promptID)
                 response = .accept()
             } else {
                 response = Self.elicitationResponse(action)
@@ -191,16 +190,12 @@ public final class ACPElicitationCoordinator {
               await launchBrowser(urlRequest.url)
         else { return false }
 
+        let promptID = arrivalPromptIDs[token]
         guard removePending(token: token) != nil else { return false }
         guard let id = request.jsonRPCID else { return false }
         recordAnswer(request, action: .submit([:]))
         client.respondToElicitation(id: id, result: .success(.accept()))
-        session.transcript.urlElicitationWaits.append(.init(
-            id: urlRequest.elicitationId,
-            requestId: token,
-            message: request.message,
-            url: urlRequest.url
-        ))
+        beginURLWait(urlRequest, token: token, message: request.message, promptID: promptID)
         onInputResolved()
         navigateURL(urlRequest.url)
         return true
@@ -231,14 +226,22 @@ public final class ACPElicitationCoordinator {
     }
 
     /// Expires the optional forms that arrived under a foreground prompt that
-    /// just ended: an answer sent after its turn is not delivered. Called from
-    /// the runner's prompt bookkeeping, mid-steer included, so it never
-    /// settles the waiting state.
+    /// just ended: an answer sent after its turn is not delivered. Closes the
+    /// prompt's URL waits too when the adapter never completes them (see
+    /// `ACPURLElicitationWaitPolicy`). Called from the runner's prompt
+    /// bookkeeping, mid-steer included, so it never settles the waiting state.
     public func foregroundPromptEnded(_ promptID: Int) {
-        let expired = optionalArrivalPromptIDs.filter { $0.value == promptID }.map(\.key)
+        let expired = arrivalPromptIDs.filter {
+            $0.value == promptID && pendingByToken[$0.key]?.isBlocking == false
+        }.map(\.key)
         for token in expired {
             guard let request = removePending(token: token, settle: false) else { continue }
             cancel(request)
+        }
+        let endedWaits = Set(urlWaitPromptIDs.filter { $0.value == promptID }.keys)
+        urlWaitPromptIDs = urlWaitPromptIDs.filter { $0.value != promptID }
+        if ACPURLElicitationWaitPolicy.closesWithTurn(agentInfo: session.agentInfo) {
+            session.transcript.urlElicitationWaits.removeAll { endedWaits.contains($0.id) }
         }
     }
 
@@ -315,8 +318,8 @@ public final class ACPElicitationCoordinator {
         let wasEmpty = !pendingByToken.values.contains(where: \.isBlocking)
         pendingByToken[request.id] = request
         session.transcript.pendingUserInputs.append(request)
-        if !request.isBlocking, let promptID = session.activeForegroundPromptID() {
-            optionalArrivalPromptIDs[request.id] = promptID
+        if let promptID = session.activeForegroundPromptID() {
+            arrivalPromptIDs[request.id] = promptID
         }
         if request.isBlocking, let id = request.jsonRPCID, notifiedRequestIds.insert(id).inserted {
             onInputAwaiting(session, request)
@@ -335,7 +338,7 @@ public final class ACPElicitationCoordinator {
     @discardableResult
     private func removePending(token: UUID, settle: Bool = true) -> ACPUserInputRequest? {
         guard let request = pendingByToken.removeValue(forKey: token) else { return nil }
-        optionalArrivalPromptIDs.removeValue(forKey: token)
+        arrivalPromptIDs.removeValue(forKey: token)
         session.transcript.pendingUserInputs.removeAll { $0.id == token }
         clearNotificationDedupeIfResolved(for: request)
         if case .cursor = request.source {
@@ -351,6 +354,21 @@ public final class ACPElicitationCoordinator {
             presentNextPlan()
         }
         return request
+    }
+
+    private func beginURLWait(
+        _ urlRequest: ACPUserInputRequest.URLRequest,
+        token: UUID,
+        message: String,
+        promptID: Int?
+    ) {
+        if let promptID { urlWaitPromptIDs[urlRequest.elicitationId] = promptID }
+        session.transcript.urlElicitationWaits.append(.init(
+            id: urlRequest.elicitationId,
+            requestId: token,
+            message: message,
+            url: urlRequest.url
+        ))
     }
 
     private func enqueuePlan(_ request: ACPCursorPlanRequest) {
@@ -389,7 +407,7 @@ public final class ACPElicitationCoordinator {
     private func cancelAll() {
         let pending = session.transcript.pendingUserInputs
         pendingByToken.removeAll()
-        optionalArrivalPromptIDs.removeAll()
+        arrivalPromptIDs.removeAll()
         withdrawnRequestIDs.removeAll()
         session.transcript.pendingUserInputs.removeAll()
         session.transcript.pendingQuestion = nil
