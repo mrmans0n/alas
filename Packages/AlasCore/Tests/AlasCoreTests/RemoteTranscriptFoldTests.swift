@@ -152,7 +152,8 @@ struct RemoteTranscriptFoldTests {
         #expect(RemoteTranscriptImageSource.resolve(asset: ACPToolCallAsset(kind: .image)) == .unavailable)
     }
 
-    /// `u` user, `a` agent, `o` anything else, `e<path>` an edit adding and removing one line.
+    /// `u` user, `a` agent, `o` anything else, `e<path>` a file write and `t<paths>` a tool call's patches,
+    /// each adding and removing one line per path.
     @Test(arguments: [
         ("u ea eb ea a", 4, false, "a+2-2 b+1-1"),
         ("u ea eb ea a", 4, true, nil),
@@ -161,6 +162,8 @@ struct RemoteTranscriptFoldTests {
         ("u ea o a", 3, false, nil),
         ("ea u eb ec a", 4, false, "b+1-1 c+1-1"),
         ("eb ec a", 2, false, nil),
+        ("u tab a", 2, false, "a+1-1 b+1-1"),
+        ("u ea ta eb a", 4, false, "a+1-1 b+1-1"),
     ] as [(String, Int, Bool, String?)])
     func turnChangesSumTheEditsOfAFinishedTurnUnderItsAnswer(
         transcript: String, answer: Int, isTurnActive: Bool, expected: String?
@@ -170,7 +173,10 @@ struct RemoteTranscriptFoldTests {
             case "u": .user
             case "a": .agent
             case "o": .other
-            default: .edit(.init(path: String(token.dropFirst()), added: 1, removed: 1))
+            default:
+                token.first == "t"
+                    ? .toolCallEdits(token.dropFirst().map { .init(path: String($0), added: 1, removed: 1) })
+                    : .fileEdit(.init(path: String(token.dropFirst()), added: 1, removed: 1))
             }
         }
         let changes = ACPTurnChanges.forAnswer(at: answer, count: items.count, isTurnActive: isTurnActive) { items[$0] }

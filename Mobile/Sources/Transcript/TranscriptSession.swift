@@ -1092,7 +1092,8 @@ final class TranscriptSession {
             case .message(let visible):
                 let answer = base[visible.index]
                 guard let changes = ACPTurnChanges.forAnswer(
-                    at: visible.index, count: base.count, isTurnActive: isTurnActive, item: { Self.turnChangesItem(base[$0].row) })
+                    at: visible.index, count: base.count, isTurnActive: isTurnActive,
+                    item: { [worktreeRoot] in Self.turnChangesItem(base[$0].row, worktreeRoot: worktreeRoot) })
                 else { return [answer] }
                 return [answer, TranscriptItem(header: .turnChanges(changes), id: "turn-changes:" + answer.id, first: answer)]
             case .toolCallGroupMember(let visible, _):
@@ -1115,11 +1116,12 @@ final class TranscriptSession {
         }
     }
 
-    private static func turnChangesItem(_ row: RemoteTranscriptRow) -> ACPTurnChanges.Item {
+    private static func turnChangesItem(_ row: RemoteTranscriptRow, worktreeRoot: String?) -> ACPTurnChanges.Item {
         switch row {
         case .user: .user
         case .agent: .agent
-        case .fileEdit(let edit): .edit(.init(path: edit.path, added: edit.added, removed: edit.removed))
+        case .fileEdit(let edit): .fileEdit(.init(path: edit.path, added: edit.added, removed: edit.removed))
+        case .toolCall(let call): .toolCallEdits(ACPTurnChanges.written(by: call, worktreeRoot: worktreeRoot))
         default: .other
         }
     }

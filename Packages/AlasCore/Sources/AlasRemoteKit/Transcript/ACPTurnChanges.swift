@@ -16,7 +16,21 @@ public struct ACPTurnChanges: Equatable, Sendable {
 
     /// The facts about one transcript message the card reads.
     public enum Item: Equatable, Sendable {
-        case user, agent, edit(File), other
+        case user, agent, other
+        /// A file write the client handled for the agent.
+        case fileEdit(File)
+        /// What a finished tool call reported writing; see `written(by:worktreeRoot:)`.
+        case toolCallEdits([File])
+    }
+
+    /// The patches a completed tool call wrote, by path relative to `worktreeRoot`. Proposed changes,
+    /// unreadable patches and failed calls change nothing.
+    public static func written(by call: ACPToolCall, worktreeRoot: String?) -> [File] {
+        guard call.status == "completed" else { return [] }
+        return call.diffs.filter { $0.source == .toolCall && $0.isValid }.map {
+            File(path: ACPToolCallPresentation.displayPath($0.path, worktreeRoot: worktreeRoot),
+                 added: $0.added, removed: $0.removed)
+        }
     }
 
     /// Merged by path, in the order each was first edited.
@@ -46,20 +60,29 @@ public struct ACPTurnChanges: Equatable, Sendable {
         }
         if next == count, isTurnActive { return nil }
 
-        var edits: [File] = []
+        // Walking back from the answer, so newest first.
+        var edits: [(file: File, fromToolCall: Bool)] = []
         var start = index - 1
         while start >= 0 {
             let current = item(start)
             if current == .user { break }
-            if case .edit(let file) = current { edits.append(file) }
+            switch current {
+            case .fileEdit(let file): edits.append((file, false))
+            case .toolCallEdits(let files): edits += files.reversed().map { ($0, true) }
+            default: break
+            }
             start -= 1
         }
+        // An adapter can report a write as a patch on its tool call and also make it through the
+        // client, so a path a tool call reports leaves out the turn's file writes to it.
+        let reported = Set(edits.filter(\.fromToolCall).map(\.file.path))
+        edits.removeAll { !$0.fromToolCall && reported.contains($0.file.path) }
         // A paged window can start mid-turn, and the edits before it are not there to count.
         guard start >= 0, edits.count >= 2 else { return nil }
 
         var files: [File] = []
         var position: [String: Int] = [:]
-        for edit in edits.reversed() {
+        for edit in edits.reversed().map(\.file) {
             if let at = position[edit.path] {
                 files[at].added += edit.added
                 files[at].removed += edit.removed
