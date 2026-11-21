@@ -33,6 +33,10 @@ final class ReviewDocument {
     /// A hunk action's refusal.
     var error: String?
     private(set) var listLoaded = false
+    /// The Mac capped the file list, so the review doesn't hold every file.
+    private(set) var listTruncated = false
+    /// Each loaded entry's `ReviewViewedMarks.hash`, computed once per diff: hashing hashes every line.
+    @ObservationIgnored private var hashes: [ReviewEntryID: String] = [:]
     /// Syntax spans by `spanKey`, each line's counted across the entry's hunks.
     private(set) var spans: [String: [[HighlightSpan]]] = [:]
     @ObservationIgnored private var spansInFlight: Set<String> = []
@@ -60,34 +64,37 @@ final class ReviewDocument {
     func start() async {
         guard !listLoaded else { return }
         if let cached = cachedFiles() {
-            replace(with: cached)
+            replace(with: cached.entries, truncated: cached.truncated)
         } else {
             await refresh()
         }
     }
 
-    private func cachedFiles() -> [ReviewEntry]? {
+    private typealias FileList = (entries: [ReviewEntry], truncated: Bool)
+
+    private func cachedFiles() -> FileList? {
         switch source {
         case .localChanges, .branchChanges:
-            if case .loaded(let reply) = workspace.changes { return entries(from: reply) }
+            if case .loaded(let reply) = workspace.changes { return files(from: reply) }
         case .commit(let sha):
             if let open = workspace.commit, open.commit.revision == sha, case .loaded(let reply) = open.1 {
-                return entries(from: reply.files, namespace: "commit")
+                return (entries(from: reply.files, namespace: "commit"), reply.truncated)
             }
         }
         return nil
     }
 
-    private func fetchFiles() async -> Result<[ReviewEntry], RemoteGitFailure> {
+    private func fetchFiles() async -> Result<FileList, RemoteGitFailure> {
         switch source {
-        case .localChanges, .branchChanges: await workspace.loadChanges().map(entries(from:))
-        case .commit(let sha): await workspace.loadCommitFiles(sha).map { entries(from: $0.files, namespace: "commit") }
+        case .localChanges, .branchChanges: await workspace.loadChanges().map(files(from:))
+        case .commit(let sha): await workspace.loadCommitFiles(sha).map { (entries(from: $0.files, namespace: "commit"), $0.truncated) }
         }
     }
 
-    private func entries(from reply: ChangeListReply) -> [ReviewEntry] {
-        source == .branchChanges ? entries(from: reply.files, namespace: "branch")
+    private func files(from reply: ChangeListReply) -> FileList {
+        let entries = source == .branchChanges ? entries(from: reply.files, namespace: "branch")
             : entries(from: reply.staged, namespace: "staged") + entries(from: reply.unstaged, namespace: "unstaged")
+        return (entries, reply.truncated)
     }
 
     private func entries(from files: [RemoteChangedFile], namespace: String) -> [ReviewEntry] {
@@ -104,12 +111,13 @@ final class ReviewDocument {
         case .failure(let failure):
             if !listLoaded { listError = failure.message }
         case .success(let fresh):
-            replace(with: fresh)
+            replace(with: fresh.entries, truncated: fresh.truncated)
         }
     }
 
     /// Takes `fresh` in the host's order, which keeps the order of the paths both lists hold.
-    private func replace(with fresh: [ReviewEntry]) {
+    private func replace(with fresh: [ReviewEntry], truncated: Bool) {
+        listTruncated = truncated
         let old = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let refetch = fresh.map(\.id).filter { id in
             if case .hunks = old[id]?.content { return true }
@@ -161,11 +169,12 @@ final class ReviewDocument {
         case .success(let reply): .hunks(reply.hunks, truncated: reply.truncated)
         case .failure(let failure): .note(failure.message)
         }
+        let hash = ReviewViewedMarks.hash(of: Self.hunks(content))
+        hashes[id] = hash
         entries[i].content = content
-        let hunks = Self.hunks(content)
         if pendingViewed.remove(id) != nil {
-            setViewed(id, hunks: hunks)
-        } else if marks.hasMark(id), !marks.isViewed(id, hunks: hunks) {
+            setViewed(id, hash: hash)
+        } else if marks.hasMark(id), !marks.isViewed(id, hash: hash) {
             marks.unmark(id)
             ReviewPreferences.shared.save(marks, for: scope)
             folded.remove(id)
@@ -184,8 +193,7 @@ final class ReviewDocument {
     func isViewed(_ entry: ReviewEntry) -> Bool {
         switch entry.content {
         case .notLoaded, .loading: marks.hasMark(entry.id) || pendingViewed.contains(entry.id)
-        case .hunks(let hunks, _): marks.isViewed(entry.id, hunks: hunks)
-        case .note: marks.isViewed(entry.id, hunks: [])
+        case .hunks, .note: marks.isViewed(entry.id, hash: hashes[entry.id] ?? "")
         }
     }
 
@@ -200,7 +208,7 @@ final class ReviewDocument {
         }
         switch entry.content {
         case .hunks, .note:
-            setViewed(id, hunks: Self.hunks(entry.content))
+            setViewed(id, hash: hashes[id] ?? "")
         case .notLoaded, .loading:
             // The mark needs the diff's hash.
             pendingViewed.insert(id)
@@ -209,8 +217,8 @@ final class ReviewDocument {
         }
     }
 
-    private func setViewed(_ id: ReviewEntryID, hunks: [RemoteDiffHunk]) {
-        marks.mark(id, hunks: hunks)
+    private func setViewed(_ id: ReviewEntryID, hash: String) {
+        marks.mark(id, hash: hash)
         ReviewPreferences.shared.save(marks, for: scope)
         folded.insert(id)
     }
@@ -248,8 +256,8 @@ final class ReviewDocument {
     // MARK: Syntax
 
     func spanKey(_ entry: ReviewEntry) -> String? {
-        guard case .hunks(let hunks, _) = entry.content else { return nil }
-        return entry.id.path + "\u{1F}" + ReviewViewedMarks.hash(of: hunks)
+        guard case .hunks = entry.content, let hash = hashes[entry.id] else { return nil }
+        return entry.id.path + "\u{1F}" + hash
     }
 
     /// Tokenizes the entry's lines off the main actor, once per diff text.

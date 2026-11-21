@@ -18,7 +18,12 @@ public struct ReviewViewedMarks: Equatable, Sendable {
     }
 
     public func isViewed(_ id: ReviewEntryID, hunks: [RemoteDiffHunk]) -> Bool {
-        stored[Self.key(id)] == Self.hash(of: hunks)
+        isViewed(id, hash: Self.hash(of: hunks))
+    }
+
+    /// `hash` is `hash(of:)` of the diff, for a caller that keeps it.
+    public func isViewed(_ id: ReviewEntryID, hash: String) -> Bool {
+        stored[Self.key(id)] == hash
     }
 
     /// Marked at some hash: what a file not fetched yet is taken to be until its diff says otherwise.
@@ -27,7 +32,11 @@ public struct ReviewViewedMarks: Equatable, Sendable {
     }
 
     public mutating func mark(_ id: ReviewEntryID, hunks: [RemoteDiffHunk]) {
-        stored[Self.key(id)] = Self.hash(of: hunks)
+        mark(id, hash: Self.hash(of: hunks))
+    }
+
+    public mutating func mark(_ id: ReviewEntryID, hash: String) {
+        stored[Self.key(id)] = hash
     }
 
     public mutating func unmark(_ id: ReviewEntryID) {

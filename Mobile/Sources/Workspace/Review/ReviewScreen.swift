@@ -66,7 +66,17 @@ struct ReviewScreen: View {
             ContentUnavailableView("No changes to review.", systemImage: "checkmark.circle")
         } else {
             ReviewCollectionView(document: document, wraps: ReviewPreferences.shared.wrapsLines)
-                .safeAreaInset(edge: .top, spacing: 0) { FileStrip(document: document) }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    VStack(spacing: 0) {
+                        FileStrip(document: document)
+                        if document.listTruncated {
+                            Text("Showing the first \(document.entries.count) files; the Mac capped this change.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity).padding(.vertical, 4)
+                                .background(.bar)
+                        }
+                    }
+                }
                 .safeAreaInset(edge: .bottom, spacing: 0) { ActionBar(document: document) }
         }
     }
