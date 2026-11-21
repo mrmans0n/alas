@@ -19,12 +19,7 @@ struct DiffView: View {
         Group {
             switch workspace.diff?.1 {
             case .loaded(let reply):
-                DiffContent(reply: reply, path: workspace.diff?.key.path ?? "",
-                            actions: workspace.canChangeHunks ? hunkActions(workspace.diff?.key.stage) : [],
-                            busy: workspace.gitRunning != nil,
-                            comment: workspace.canCommentOnDiff ? { commenting = CommentTarget(anchor: Self.anchor($0)) } : nil) { action, index, hunk in
-                    if action == .discard { discarding = (index, hunk) } else { change(action, index, hunk) }
-                }
+                content(reply)
             case .failed(let message):
                 ContentUnavailableView(message, systemImage: "exclamationmark.triangle")
             default:
@@ -47,19 +42,38 @@ struct DiffView: View {
                 Task { error = await workspace.commentOnDiff(target.anchor, body: body) }
             }
         }
-        .confirmationDialog("Discard this hunk?", isPresented: Binding { discarding != nil } set: { if !$0 { discarding = nil } },
+        .confirmationDialog("Discard this hunk?", isPresented: isDiscarding,
                             titleVisibility: .visible, presenting: discarding) { held in
             Button("Discard", role: .destructive) { change(.discard, held.index, held.hunk) }
         } message: { _ in
             Text("Its changes are lost.")
         }
-        .alert("Couldn't do that", isPresented: Binding { error != nil } set: { if !$0 { error = nil } }) {
+        .alert("Couldn't do that", isPresented: isFailing) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(error ?? "")
         }
         // Backstop for a pop that skips the destination binding (a stack reset to the root).
         .onDisappear { workspace.closeDiff() }
+    }
+
+    private var isDiscarding: Binding<Bool> {
+        Binding { discarding != nil } set: { if !$0 { discarding = nil } }
+    }
+
+    private var isFailing: Binding<Bool> {
+        Binding { error != nil } set: { if !$0 { error = nil } }
+    }
+
+    /// Split out of `body`, whose one expression was too much for the type checker.
+    private func content(_ reply: DiffReply) -> DiffContent {
+        let actions: [RemoteHunkAction] = workspace.canChangeHunks ? hunkActions(workspace.diff?.key.stage) : []
+        var comment: ((RemoteDiffHunk) -> Void)?
+        if workspace.canCommentOnDiff { comment = { commenting = CommentTarget(anchor: Self.anchor($0)) } }
+        return DiffContent(reply: reply, path: workspace.diff?.key.path ?? "", actions: actions,
+                           busy: workspace.gitRunning != nil, comment: comment) { action, index, hunk in
+            if action == .discard { discarding = (index, hunk) } else { change(action, index, hunk) }
+        }
     }
 
     /// As the Mac: stage or discard from the unstaged diff, unstage from the staged one.
