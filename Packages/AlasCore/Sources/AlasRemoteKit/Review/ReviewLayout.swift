@@ -53,7 +53,9 @@ public enum ReviewLayout {
         "Podfile.lock", "Gemfile.lock", "go.sum", "poetry.lock",
     ]
 
-    public static func rows(for entry: ReviewEntry, folded: Bool) -> [ReviewRow] {
+    public static func rows(
+        for entry: ReviewEntry, folded: Bool, comments: [String: Int?] = [:]
+    ) -> [ReviewRow] {
         if folded { return [] }
         let id = entry.id
         switch entry.content {
@@ -63,10 +65,19 @@ public enum ReviewLayout {
             return [.note(entry: id, text: text)]
         case let .hunks(hunks, truncated):
             if hunks.isEmpty { return [.note(entry: id, text: "No changes to show")] }
+            // Comment ids by the base row they follow; `comments` indexes the comment-free rows.
+            var after: [Int: [String]] = [:]
+            for (cid, row) in comments.sorted(by: { $0.key < $1.key }) { after[row ?? 0, default: []].append(cid) }
             var rows: [ReviewRow] = []
+            var base = 0
+            func add(_ row: ReviewRow) {
+                rows.append(row)
+                for cid in after[base] ?? [] { rows.append(.comment(entry: id, id: cid)) }
+                base += 1
+            }
             for (h, hunk) in hunks.enumerated() {
-                rows.append(.hunkHeader(entry: id, hunk: h))
-                for l in hunk.lines.indices { rows.append(.line(entry: id, hunk: h, line: l)) }
+                add(.hunkHeader(entry: id, hunk: h))
+                for l in hunk.lines.indices { add(.line(entry: id, hunk: h, line: l)) }
             }
             if truncated { rows.append(.note(entry: id, text: "Diff truncated on the Mac")) }
             return rows

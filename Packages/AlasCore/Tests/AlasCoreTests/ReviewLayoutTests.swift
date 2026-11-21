@@ -116,4 +116,42 @@ struct ReviewLayoutTests {
         selection.extend(to: 1, inHunk: 0)
         #expect(selection.quotedText(in: hunk) == "  a\n+ b")
     }
+
+    private static let commentHunks = [
+        RemoteDiffHunk(header: "@@ -10,2 +41,3 @@", oldStart: 10, newStart: 41, lines: [
+            RemoteDiffLine(kind: "context", text: "a", oldNumber: 10, newNumber: 41),
+            RemoteDiffLine(kind: "add", text: "b", oldNumber: nil, newNumber: 42),
+            RemoteDiffLine(kind: "add", text: "c", oldNumber: nil, newNumber: 43),
+            RemoteDiffLine(kind: "delete", text: "d", oldNumber: 11, newNumber: nil),
+        ]),
+    ]
+
+    @Test(arguments: [
+        (ReviewPlaceable(id: "a", side: "new", line: 42, endLine: 43), 3),
+        (ReviewPlaceable(id: "a", side: "old", line: 10, endLine: nil), 1),
+        (ReviewPlaceable(id: "a", side: "new", line: 999, endLine: nil), nil),
+        (ReviewPlaceable(id: "a", side: nil, line: nil, endLine: nil), nil),
+    ] as [(ReviewPlaceable, Int?)])
+    func commentsPlaceUnderTheirLastLine(item: ReviewPlaceable, row: Int?) {
+        #expect(ReviewCommentPlacement.place([item], in: Self.commentHunks) == ["a": row])
+    }
+
+    @Test
+    func commentRowsKeepInputOrderAndOutdatedOnesGoToTheTop() {
+        let items = [
+            ReviewPlaceable(id: "x", side: "new", line: 43, endLine: nil),
+            ReviewPlaceable(id: "y", side: "new", line: 43, endLine: nil),
+            ReviewPlaceable(id: "z", side: nil, line: nil, endLine: nil),
+        ]
+        let placed = ReviewCommentPlacement.place(items, in: Self.commentHunks)
+        let entry = Self.entry(.hunks(Self.commentHunks, truncated: false))
+        let rows = ReviewLayout.rows(for: entry, folded: false, comments: placed)
+        let id = Self.id
+        #expect(rows == [
+            .hunkHeader(entry: id, hunk: 0), .comment(entry: id, id: "z"),
+            .line(entry: id, hunk: 0, line: 0), .line(entry: id, hunk: 0, line: 1),
+            .line(entry: id, hunk: 0, line: 2), .comment(entry: id, id: "x"), .comment(entry: id, id: "y"),
+            .line(entry: id, hunk: 0, line: 3),
+        ])
+    }
 }
