@@ -351,6 +351,12 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
 }
 
 private final class TranscriptCell: UICollectionViewCell {
+    /// The transcript scrolls under the navigation bar and the composer. A hosted row adds the part
+    /// of it under a bar to its size, so a row near an edge grew and shrank on every frame of a
+    /// scroll, re-laying out its neighbours each time. Rows never need the safe area; the
+    /// transcript's content insets already keep its ends clear of the bars.
+    override var safeAreaInsets: UIEdgeInsets { .zero }
+
     override func preferredLayoutAttributesFitting(
         _ layoutAttributes: UICollectionViewLayoutAttributes
     ) -> UICollectionViewLayoutAttributes {
