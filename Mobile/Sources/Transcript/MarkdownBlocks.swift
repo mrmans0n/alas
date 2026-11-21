@@ -23,6 +23,10 @@ enum MarkdownBlock: Equatable {
     case image(source: String, alt: String)
     /// A closed ```` ```mermaid ```` fence, drawn as a diagram.
     case mermaid(source: String)
+    /// A closed ```` ```visual ```` fence: HTML drawn inline as an embedded visual aid, as on the Mac.
+    case visual(ACPVisualAid)
+    /// A ```` ```visual ```` fence still streaming: a label stands in, so raw HTML never shows as code.
+    case drawingVisual(title: String?)
 
     static func parse(_ text: String) -> [MarkdownBlock] {
         let lines = text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" })  // cmark's line endings only, so line numbers match
@@ -50,9 +54,15 @@ enum MarkdownBlock: Equatable {
         case let c as CodeBlock:
             // As on the Mac, a fence still streaming stays plain: re-highlighting or drawing it per delta is too slow.
             if !isClosed(c, lines: lines) {
-                .code(language: c.language, chunks: highlighted(c.code, language: nil))
+                VisualFence.isVisual(language: c.language)
+                    ? .drawingVisual(title: VisualFence.title(language: c.language))
+                    : .code(language: c.language, chunks: highlighted(c.code, language: nil))
             } else if MermaidFence.isMermaid(language: c.language) {
                 .mermaid(source: c.code)
+            } else if VisualFence.isVisual(language: c.language),
+                      !c.code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // Same id as the Mac derives from the HTML, so a re-parse keeps the page and its height.
+                .visual(.fenced(title: VisualFence.title(language: c.language), html: c.code))
             } else {
                 .code(language: c.language, chunks: highlighted(c.code, language: c.language))
             }
