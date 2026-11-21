@@ -1823,8 +1823,9 @@ public enum HostProtocolCapability: Sendable {
     /// Hosts that serve `listReviews`, `readReview` and `mutateReview`:
     /// only a headless host.
     public static let reviewsV1 = "host.reviews.v1"
-    /// Hosts that serve `readProviderReview` and `mutateReviewThread` to a
-    /// device paired as the native phone app, an app host included.
+    /// Hosts that serve `readProviderReview`, `mutateReviewThread` and
+    /// `publishReview` to a device paired as the native phone app, an app
+    /// host included.
     public static let reviewsProviderPhoneV1 = "host.reviews.provider.phone.v1"
     /// Hosts that serve `readProviderReview`, `openProviderReview`,
     /// `mutateReviewThread` and `publishReview`: only a headless host.

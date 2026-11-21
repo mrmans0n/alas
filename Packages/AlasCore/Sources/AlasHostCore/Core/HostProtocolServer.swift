@@ -492,7 +492,7 @@ public final class HostProtocolConnection {
             ))
         case .publishReview(let ref, let sessionID, let publish):
             return .reviewPublished(result: try await host.reviews.publish(
-                publish, sessionID: sessionID, in: try providerReviewWorktree(ref), caller: caller
+                publish, sessionID: sessionID, in: try providerReviewWorktree(ref, servesPhone: true), caller: caller
             ))
         case .listStashes(let ref):
             // Reads, outside the gate as `readWorktree` is.

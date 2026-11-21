@@ -194,6 +194,9 @@ import Testing
             == .mutateReviewThread(worktree: ref, sessionID: "s", threadID: "t", kind: .reply, body: "Done"))
         #expect(try decode(RemoteReviewRequest.mutateThread(id: 1, projectID: "p", path: "/r", sessionID: "s", threadID: "t", .unresolve))
             == .mutateReviewThread(worktree: ref, sessionID: "s", threadID: "t", kind: .unresolve, body: nil))
+        #expect(try decode(RemoteReviewRequest.publish(id: 1, projectID: "p", path: "/r", sessionID: "s", .requestChanges, body: "Fix it", headSHA: "abc"))
+            == .publishReview(worktree: ref, sessionID: "s",
+                              publish: HostReviewPublish(decision: .requestChanges, body: "Fix it", draftIDs: nil, headSHA: "abc")))
 
         let thread = ShepherdFixtures.thread("t1")
         let review = HostProviderReview(
@@ -203,9 +206,33 @@ import Testing
         let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 2, result: .providerReview(review: review))))
         let read = try #require(RemoteReviewRequest.providerReview(replying: 2, in: reply))
         #expect(read.account == "me" && read.canReply && read.canResolve && !read.areThreadsComplete)
+        #expect(read.canComment && read.canSubmitReview && read.headSHA == ShepherdFixtures.head && read.displayName == "pull request #7")
         let phoneThread = try #require(read.threads.first)
         #expect(phoneThread.id == "t1" && phoneThread.path == thread.path && phoneThread.line == 12 && !phoneThread.isResolved)
         #expect(phoneThread.comments.map(\.author) == ["maintainer"] && phoneThread.comments.map(\.body) == ["Please fix t1."])
+
+        let published = ProviderReviewPublishResult(
+            published: [], failed: [ProviderReviewFailedComment(localDraftID: "d", message: "Line is outside the diff.")],
+            refreshedRequest: ShepherdFixtures.request(), warnings: []
+        )
+        let answer = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 3, result: .reviewPublished(result: published))))
+        #expect(RemoteReviewRequest.publishProblems(in: answer) == "Line is outside the diff.")
+    }
+
+    @Test(arguments: [
+        // drafts, canComment, canSubmitReview, decision, body, allowed
+        (1, true, true, RemoteReviewDecision.comment, "", true),
+        (0, true, true, .comment, "Looks good", false),
+        (1, false, true, .comment, "", false),
+        (0, true, true, .approve, "", true),
+        (3, true, false, .approve, "", false),
+        (0, true, true, .requestChanges, " \n", false),
+        (0, true, true, .requestChanges, "Rename it", true),
+    ])
+    func phoneSubmitsAReviewByTheMacsRules(_ drafts: Int, _ canComment: Bool, _ canSubmitReview: Bool,
+                                           _ decision: RemoteReviewDecision, _ body: String, _ allowed: Bool) {
+        let submission = RemoteReviewSubmission(draftCount: drafts, canComment: canComment, canSubmitReview: canSubmitReview)
+        #expect(submission.canSubmit(decision, body: body) == allowed)
     }
 
     @Test(arguments: [
@@ -214,6 +241,8 @@ import Testing
         ("glab api failed: 401 Unauthorized", "Sign in to glab on the Mac (run glab auth login there), then pull to refresh."),
         ("gh is not installed or is not available on PATH.", "gh isn't installed on the Mac. Install it there, then pull to refresh."),
         ("gh pr view failed: no pull requests found", "gh pr view failed: no pull requests found"),
+        ("glab api merge request approve failed: {\"message\":\"SHA does not match HEAD of source branch: abc\"}",
+         "The pull request changed since you loaded it. Pull to refresh, then submit again."),
     ])
     func phoneWordsAProviderFailureAsWhatToDoOnTheMac(_ raw: String, _ shown: String) {
         #expect(RemoteReviewRequest.providerFailureMessage(raw) == shown)
