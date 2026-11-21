@@ -172,7 +172,10 @@ final class ReviewDocument {
         let hash = ReviewViewedMarks.hash(of: Self.hunks(content))
         hashes[id] = hash
         entries[i].content = content
-        if pendingViewed.remove(id) != nil {
+        if case .failure = result {
+            // No diff, so nothing to mark or to check a mark against; a tick waiting on it lapses.
+            if pendingViewed.remove(id) != nil { folded.remove(id) }
+        } else if pendingViewed.remove(id) != nil {
             setViewed(id, hash: hash)
         } else if marks.hasMark(id), !marks.isViewed(id, hash: hash) {
             marks.unmark(id)

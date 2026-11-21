@@ -126,6 +126,8 @@ final class LineCell: UICollectionViewCell {
     let codeClip = UIView()
     private let code = UILabel()
     private var wrapTrailing: NSLayoutConstraint!
+    /// One code line at least, so a blank line keeps its row.
+    private var minHeight: NSLayoutConstraint!
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -140,9 +142,13 @@ final class LineCell: UICollectionViewCell {
         code.translatesAutoresizingMaskIntoConstraints = false
         codeClip.addSubview(code)
         wrapTrailing = code.trailingAnchor.constraint(equalTo: codeClip.trailingAnchor)
+        minHeight = code.heightAnchor.constraint(greaterThanOrEqualToConstant: ceil(ReviewMetrics.codeFont.lineHeight))
         NSLayoutConstraint.activate([
             gutter.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 8),
             gutter.firstBaselineAnchor.constraint(equalTo: code.firstBaselineAnchor),
+            gutter.topAnchor.constraint(greaterThanOrEqualTo: contentView.topAnchor, constant: 1),
+            gutter.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -1),
+            minHeight,
             codeClip.leadingAnchor.constraint(equalTo: gutter.trailingAnchor, constant: 6),
             codeClip.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -8),
             codeClip.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 1),
@@ -164,6 +170,7 @@ final class LineCell: UICollectionViewCell {
     /// `digits` pads both numbers, so every line of a file has the same gutter.
     func configure(_ line: RemoteDiffLine, spans: [HighlightSpan], digits: Int, wraps: Bool, offset: CGFloat, tokens: ThemeTokens) {
         let font = ReviewMetrics.codeFont
+        minHeight.constant = ceil(font.lineHeight)
         let tint: UIColor? = line.kind == "add" ? .systemGreen : line.kind == "delete" ? .systemRed : nil
         func pad(_ n: Int?) -> String {
             let s = n.map(String.init) ?? ""
