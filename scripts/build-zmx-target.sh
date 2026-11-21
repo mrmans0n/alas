@@ -11,6 +11,16 @@ local_cache="$4"
 global_cache="$5"
 output="$prefix/bin/zmx"
 
+# Check before building because Bash 3 can return 1 for a missing explicit path.
+if [[ "$zig_bin" == */* ]] && [ -e "$zig_bin" ] && { [ ! -f "$zig_bin" ] || [ ! -x "$zig_bin" ]; }; then
+    echo "build-zmx-target.sh: Zig is not executable: $zig_bin" >&2
+    exit 126
+fi
+if ! command -v "$zig_bin" >/dev/null; then
+    echo "build-zmx-target.sh: Zig not found: $zig_bin" >&2
+    exit 127
+fi
+
 read -r -a retry_delays <<< "${ALAS_ZMX_RETRY_DELAYS:-5 15 30 60 120 180}"
 attempt=1
 while true; do
