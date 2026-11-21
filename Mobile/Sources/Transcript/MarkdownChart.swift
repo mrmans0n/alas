@@ -6,14 +6,14 @@ import SwiftUI
 /// label shows its values.
 struct MarkdownChart: View {
     let chart: ChartSpec
-    @State private var selectedLabel: String?
+    @State private var selectedSlot: String?
 
     private static let colors: [Color] = [.accentColor, .blue, .green, .orange, .red, .purple]
 
     private var points: [Point] {
         chart.series.flatMap { series in
             zip(chart.labels, series.values).enumerated().map { index, pair in
-                Point(id: "\(series.name)#\(index)", label: pair.0, series: series.name, value: pair.1)
+                Point(id: "\(series.name)#\(index)", slot: String(index), series: series.name, value: pair.1)
             }
         }
     }
@@ -32,7 +32,8 @@ struct MarkdownChart: View {
                 .chartLegend(position: .top, alignment: .leading)
                 .frame(height: chart.height)
                 .accessibilityLabel(chart.title ?? (chart.kind == .line ? "Line chart" : "Bar chart"))
-            if let label = selectedLabel, let index = chart.labels.firstIndex(of: label) {
+            if let slot = selectedSlot, let index = Int(slot), chart.labels.indices.contains(index) {
+            let label = chart.labels[index]
                 Text(label + ": " + chart.series.map {
                     (chart.series.count > 1 ? $0.name + " " : "") + ChartSpec.format($0.values[index]) + chart.unit
                 }.joined(separator: ", "))
@@ -48,32 +49,45 @@ struct MarkdownChart: View {
         switch chart.kind {
         case .bar:
             Chart(points) { point in
-                BarMark(x: .value("Label", point.label), y: .value("Value", point.value))
+                BarMark(x: .value("Position", point.slot), y: .value("Value", point.value))
                     .position(by: .value("Series", point.series))
                     .foregroundStyle(by: .value("Series", point.series))
                     .cornerRadius(2)
             }
             .chartYAxis { valueAxis }
-            .chartXSelection(value: $selectedLabel)
+            .chartXAxis { labelAxis }
+            .chartXSelection(value: $selectedSlot)
         case .hbar:
             Chart(points) { point in
-                BarMark(x: .value("Value", point.value), y: .value("Label", point.label))
+                BarMark(x: .value("Value", point.value), y: .value("Position", point.slot))
                     .position(by: .value("Series", point.series))
                     .foregroundStyle(by: .value("Series", point.series))
                     .cornerRadius(2)
             }
             .chartXAxis { valueAxis }
-            .chartYSelection(value: $selectedLabel)
+            .chartYAxis { labelAxis }
+            .chartYSelection(value: $selectedSlot)
         case .line:
             Chart(points) { point in
-                LineMark(x: .value("Label", point.label), y: .value("Value", point.value))
+                LineMark(x: .value("Position", point.slot), y: .value("Value", point.value))
                     .foregroundStyle(by: .value("Series", point.series))
-                PointMark(x: .value("Label", point.label), y: .value("Value", point.value))
+                PointMark(x: .value("Position", point.slot), y: .value("Value", point.value))
                     .foregroundStyle(by: .value("Series", point.series))
                     .symbolSize(24)
             }
             .chartYAxis { valueAxis }
-            .chartXSelection(value: $selectedLabel)
+            .chartXAxis { labelAxis }
+            .chartXSelection(value: $selectedSlot)
+        }
+    }
+
+    private var labelAxis: some AxisContent {
+        AxisMarks { value in
+            AxisValueLabel {
+                if let slot = value.as(String.self), let index = Int(slot), chart.labels.indices.contains(index) {
+                    Text(chart.labels[index])
+                }
+            }
         }
     }
 
@@ -86,9 +100,10 @@ struct MarkdownChart: View {
         }
     }
 
+    /// Positioned by index, so repeated labels keep their own bars and points; the axis shows the text.
     private struct Point: Identifiable {
         let id: String
-        let label: String
+        let slot: String
         let series: String
         let value: Double
     }

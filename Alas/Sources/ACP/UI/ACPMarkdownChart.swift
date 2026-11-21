@@ -7,7 +7,7 @@ struct ACPMarkdownChart: View {
     let chart: ChartSpec
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
-    @State private var selectedLabel: String?
+    @State private var selectedSlot: String?
 
     /// `--alas-chart-1` to `6` in `PluginWebPolicy`, so a fence matches the same chart in a visual.
     private static let colorTokens = ["accent", "info", "add", "warn", "del", "goal"]
@@ -15,7 +15,7 @@ struct ACPMarkdownChart: View {
     private var points: [Point] {
         chart.series.flatMap { series in
             zip(chart.labels, series.values).enumerated().map { index, pair in
-                Point(id: "\(series.name)#\(index)", label: pair.0, series: series.name, value: pair.1)
+                Point(id: "\(series.name)#\(index)", slot: String(index), series: series.name, value: pair.1)
             }
         }
     }
@@ -46,41 +46,54 @@ struct ACPMarkdownChart: View {
         switch chart.kind {
         case .bar:
             Chart(points) { point in
-                BarMark(x: .value("Label", point.label), y: .value("Value", point.value))
+                BarMark(x: .value("Position", point.slot), y: .value("Value", point.value))
                     .position(by: .value("Series", point.series))
                     .foregroundStyle(by: .value("Series", point.series))
                     .cornerRadius(2)
-                    .opacity(opacity(for: point.label))
+                    .opacity(opacity(for: point.slot))
             }
             .chartYAxis { valueAxis }
-            .chartXSelection(value: $selectedLabel)
+            .chartXAxis { labelAxis }
+            .chartXSelection(value: $selectedSlot)
             .overlay(alignment: .topTrailing) { selection }
         case .hbar:
             Chart(points) { point in
-                BarMark(x: .value("Value", point.value), y: .value("Label", point.label))
+                BarMark(x: .value("Value", point.value), y: .value("Position", point.slot))
                     .position(by: .value("Series", point.series))
                     .foregroundStyle(by: .value("Series", point.series))
                     .cornerRadius(2)
-                    .opacity(opacity(for: point.label))
+                    .opacity(opacity(for: point.slot))
             }
             .chartXAxis { valueAxis }
-            .chartYSelection(value: $selectedLabel)
+            .chartYAxis { labelAxis }
+            .chartYSelection(value: $selectedSlot)
             .overlay(alignment: .bottomTrailing) { selection }
         case .line:
             Chart(points) { point in
-                LineMark(x: .value("Label", point.label), y: .value("Value", point.value))
+                LineMark(x: .value("Position", point.slot), y: .value("Value", point.value))
                     .foregroundStyle(by: .value("Series", point.series))
-                PointMark(x: .value("Label", point.label), y: .value("Value", point.value))
+                PointMark(x: .value("Position", point.slot), y: .value("Value", point.value))
                     .foregroundStyle(by: .value("Series", point.series))
                     .symbolSize(24)
-                if point.label == selectedLabel {
-                    RuleMark(x: .value("Label", point.label))
+                if point.slot == selectedSlot {
+                    RuleMark(x: .value("Position", point.slot))
                         .foregroundStyle(theme.color("fg-faint").opacity(0.4))
                 }
             }
             .chartYAxis { valueAxis }
-            .chartXSelection(value: $selectedLabel)
+            .chartXAxis { labelAxis }
+            .chartXSelection(value: $selectedSlot)
             .overlay(alignment: .topTrailing) { selection }
+        }
+    }
+
+    private var labelAxis: some AxisContent {
+        AxisMarks { value in
+            AxisValueLabel {
+                if let slot = value.as(String.self), let index = Int(slot), chart.labels.indices.contains(index) {
+                    Text(chart.labels[index])
+                }
+            }
         }
     }
 
@@ -95,14 +108,15 @@ struct ACPMarkdownChart: View {
         }
     }
 
-    private func opacity(for label: String) -> Double {
-        selectedLabel == nil || selectedLabel == label ? 1 : 0.45
+    private func opacity(for slot: String) -> Double {
+        selectedSlot == nil || selectedSlot == slot ? 1 : 0.45
     }
 
     /// The hovered label's values, one line per series.
     @ViewBuilder
     private var selection: some View {
-        if let label = selectedLabel, let index = chart.labels.firstIndex(of: label) {
+        if let slot = selectedSlot, let index = Int(slot), chart.labels.indices.contains(index) {
+            let label = chart.labels[index]
             VStack(alignment: .leading, spacing: 2) {
                 Text(label).font(scale.caption.font(weight: .semibold))
                 ForEach(chart.series, id: \.name) { series in
@@ -118,9 +132,10 @@ struct ACPMarkdownChart: View {
         }
     }
 
+    /// Positioned by index, so repeated labels keep their own bars and points; the axis shows the text.
     private struct Point: Identifiable {
         let id: String
-        let label: String
+        let slot: String
         let series: String
         let value: Double
     }

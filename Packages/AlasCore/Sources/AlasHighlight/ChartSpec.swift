@@ -60,7 +60,12 @@ public struct ChartSpec: Equatable, Sendable {
             // Swift Charts groups by name, so two series never share one.
             var name = raw.name?.text ?? ""
             if name.isEmpty { name = "Series \(index + 1)" }
-            if usedNames.contains(name) { name += " (\(index + 1))" }
+            var suffix = index + 1
+            let base = name
+            while usedNames.contains(name) {
+                name = "\(base) (\(suffix))"
+                suffix += 1
+            }
             usedNames.insert(name)
             series.append(Series(name: name, values: raw.values))
         }
