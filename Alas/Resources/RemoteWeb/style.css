@@ -208,11 +208,11 @@ a:hover { color: var(--accent-hover); }
 .md blockquote { margin: 6px 0; padding-left: 11px; border-left: 2px solid var(--line-strong); color: var(--fg-dim); }
 /* GitHub alerts: a titled quote in the alert's colour, as on the Mac and the phone. */
 .md blockquote.md-alert { --alert: var(--accent); border-left-color: var(--alert); color: var(--fg); }
-.md-alert-note { --alert: oklch(0.74 0.12 250); }
-.md-alert-tip { --alert: var(--add); }
-.md-alert-important { --alert: oklch(0.74 0.13 300); }
-.md-alert-warning { --alert: oklch(0.82 0.14 75); }
-.md-alert-caution { --alert: var(--del); }
+.md blockquote.md-alert-note { --alert: oklch(0.74 0.12 250); }
+.md blockquote.md-alert-tip { --alert: var(--add); }
+.md blockquote.md-alert-important { --alert: oklch(0.74 0.13 300); }
+.md blockquote.md-alert-warning { --alert: oklch(0.82 0.14 75); }
+.md blockquote.md-alert-caution { --alert: var(--del); }
 .md-alert-title { font-size: 13px; font-weight: 600; color: var(--alert); white-space: normal; }
 /* A ```visual or ```chart fence: an embedded visual between the row's prose, or its label while it streams. */
 .m-agent > .m-visual { margin: 8px 0; }
