@@ -2,7 +2,7 @@ import AlasRemoteKit
 import FoundationModels
 import SwiftUI
 
-/// The Changes tab: branch, staged, unstaged and commit sections as a flat list; a file opens its diff.
+/// The Changes tab: branch, staged, unstaged and commit sections as a flat list; a file opens the review at it.
 struct ChangesView: View {
     let workspace: SessionWorkspace
     let owner: UUID
@@ -132,6 +132,11 @@ private struct ChangeList: View {
         Task { if let message = await workspace.git(change) { error = message } }
     }
 
+    private func open(_ path: String, stage: String?) {
+        let source: ReviewSource = stage == nil ? .branchChanges : .localChanges
+        workspace.openReview(source, focus: ReviewEntryID(namespace: stage ?? "branch", path: path), by: owner)
+    }
+
     @ViewBuilder private var content: some View {
         if !reply.metricsAvailable {
             ContentUnavailableView("Change metrics are unavailable for this worktree.", systemImage: "chart.bar.xaxis")
@@ -150,7 +155,7 @@ private struct ChangeList: View {
                                     .font(.footnote).foregroundStyle(.secondary).listRowSeparator(.hidden)
                             }
                             ForEach(group.files, id: \.path) { file in
-                                Button { workspace.openDiff(file.path, stage: section.stage, by: owner) } label: {
+                                Button { open(file.path, stage: section.stage) } label: {
                                     FileRow(file: file, nested: !group.directory.isEmpty)
                                 }
                                 .buttonStyle(.plain)
@@ -366,7 +371,7 @@ private struct CommitRow: View {
     }
 }
 
-/// One commit's files, pushed from the Commits section; a file opens what the commit changed in it.
+/// One commit's files, pushed from the Commits section; a file opens the commit's review at it.
 struct CommitFilesView: View {
     let workspace: SessionWorkspace
 
@@ -405,16 +410,23 @@ struct CommitFilesView: View {
         .navigationSubtitle(workspace.commit?.commit.author ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
-        .navigationDestination(isPresented: Binding(
-            get: { workspace.diff?.key.sha != nil },
-            set: { if !$0 { workspace.closeDiff() } })) {
-            DiffView(workspace: workspace)
-        }
+        .commitReviewDestination(workspace)
     }
 
     private func open(_ path: String) {
         guard let commit = workspace.commit?.commit, let owner = workspace.pushedBy else { return }
-        workspace.openDiff(path, stage: nil, sha: commit.revision, by: owner)
+        workspace.openReview(.commit(sha: commit.revision), focus: ReviewEntryID(namespace: "commit", path: path), by: owner)
+    }
+}
+
+extension View {
+    /// Pushes the open commit review, which a commit's files and a file's history open.
+    func commitReviewDestination(_ workspace: SessionWorkspace) -> some View {
+        navigationDestination(isPresented: Binding(
+            get: { workspace.review?.source.isCommit == true },
+            set: { if !$0 { workspace.closeReview() } })) {
+            if let review = workspace.review { ReviewScreen(workspace: workspace, source: review.source, focus: review.focus) }
+        }
     }
 }
 
