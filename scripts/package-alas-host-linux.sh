@@ -47,9 +47,8 @@ host="$(swift build -c release --package-path "$root/Packages/AlasCore" --show-b
 # zmx, static against musl, as the app bundles it for SSH hosts.
 (
   cd "$root/ThirdParty/zmx"
-  ZIG_GLOBAL_CACHE_DIR="$build/zig-global-cache" "$zig_bin" build \
-    -Doptimize=ReleaseFast -Dtarget="$arch-linux-musl" \
-    --prefix "$build/zmx" --cache-dir "$build/zig-cache"
+  bash "$root/scripts/build-zmx-target.sh" "$zig_bin" "$arch-linux-musl" "$build/zmx" \
+    "$build/zig-cache" "$build/zig-global-cache"
 )
 
 # The alas CLI agents call to reach the host.
