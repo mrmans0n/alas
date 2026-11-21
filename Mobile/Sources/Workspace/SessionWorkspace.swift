@@ -34,6 +34,9 @@ struct ChangeListReply {
     }
 }
 
+/// Replies being waited for, by what they answer.
+private typealias Waiters<K: Hashable, R> = [K: [CheckedContinuation<Result<R, RemoteGitFailure>, Never>]]
+
 struct DiffReply {
     let hunks: [RemoteDiffHunk]
     let truncated: Bool
@@ -46,8 +49,7 @@ struct FileReply {
 }
 
 /// What one session's Changes and Files tabs show. Lives next to its `TranscriptSession` so a tab
-/// switch or a reconnect keeps the open diff and tree. Replies are applied only for this session
-/// and, for a diff, only for the key still open.
+/// switch or a reconnect keeps the open review and tree. Replies are applied only for this session.
 @MainActor @Observable
 final class SessionWorkspace {
     private(set) var changes: Load<ChangeListReply> = .idle
@@ -71,21 +73,29 @@ final class SessionWorkspace {
         return true
     }
 
-    /// Reloads the changes, and an open working-tree diff, when another workspace changed the mode.
+    /// Reloads the changes when another workspace changed the mode.
     func refreshIfComparisonChanged() {
         if case .idle = changes { return }
         guard changesMode != comparisonMode else { return }
         refreshChanges()
-        if let diff, diff.key.sha == nil { requestDiff(diff.key) }
     }
-    private(set) var diff: (key: DiffKey, Load<DiffReply>)?
+    /// Counts the host coming back online; an open review refreshes on it, since what it loaded may be stale.
+    private(set) var reconnects = 0
+    /// The review pushed from the Changes tab, a commit's files or a file's history.
+    private(set) var review: (source: ReviewSource, focus: ReviewEntryID?)?
+    @ObservationIgnored private var diffWaiters: Waiters<DiffKey, DiffReply> = [:]
+    @ObservationIgnored private var commitFilesWaiters: Waiters<String, CommitFilesReply> = [:]
+    /// Keyed by nothing: every wait for the change list takes the next one.
+    @ObservationIgnored private var changesWaiters: Waiters<Bool, ChangeListReply> = [:]
+    /// Each pending wait's request deadline, by its waiters' key path and key.
+    @ObservationIgnored private var waitTimers: [[AnyHashable]: Task<Void, Never>] = [:]
     /// The commit whose files are open, pushed from the Commits section.
     private(set) var commit: (commit: RemoteCommit, Load<CommitFilesReply>)?
     private(set) var tree = RemoteFileTree()
     private(set) var file: (path: String, Load<FileReply>)?
     /// The open file is a skill's `SKILL.md`, named by its command.
     @ObservationIgnored private var fileIsSkill = false
-    /// The screen that pushed the open diff or file. The session can be open in several tabs at once;
+    /// The screen that pushed the open review or file. The session can be open in several tabs at once;
     /// only that screen's stack shows it.
     private(set) var pushedBy: UUID?
     /// Directories the host cut short, and the last listing failure.
@@ -98,7 +108,7 @@ final class SessionWorkspace {
     @ObservationIgnored private let hub: HostHub
     @ObservationIgnored private var listener: ListenerToken?
     @ObservationIgnored private var streaming = "idle"
-    /// An idle refresh that arrived while a diff was open; it runs when the diff closes.
+    /// An idle refresh that arrived while a review was open; it runs when the review closes.
     @ObservationIgnored private var refreshDeferred = false
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var watchGeneration = 0
@@ -131,8 +141,8 @@ final class SessionWorkspace {
         self.sessionId = sessionId
     }
 
-    /// True while a view `owner` pushed (a diff or a file) is open.
-    func hasPushedChild(_ owner: UUID) -> Bool { pushedBy == owner && (diff != nil || file != nil || commit != nil) }
+    /// True while a view `owner` pushed (a review or a file) is open.
+    func hasPushedChild(_ owner: UUID) -> Bool { pushedBy == owner && (review != nil || file != nil || commit != nil) }
 
     // MARK: Lifecycle
 
@@ -171,7 +181,10 @@ final class SessionWorkspace {
             Task { @MainActor [weak self] in self?.watchHost(generation: generation) }
         }
         defer { hostWasOnline = online }
-        if online, !hostWasOnline { replay() }
+        if online, !hostWasOnline {
+            replay()
+            reconnects += 1
+        }
     }
 
     /// Asks again for whatever is open; the host forgot everything it was asked while away.
@@ -179,7 +192,8 @@ final class SessionWorkspace {
         changesFlight.reset()
         if case .idle = changes {} else { refreshChanges() }
         if let commit { send(.listCommitFiles(sessionId: sessionId, sha: commit.commit.revision)) }
-        if let diff { requestDiff(diff.key) }
+        for key in diffWaiters.keys { requestDiff(key) }
+        for sha in commitFilesWaiters.keys where sha != commit?.commit.revision { send(.listCommitFiles(sessionId: sessionId, sha: sha)) }
         if treeRequested { loadTree() }
         refreshShepherd()
         refreshRunScripts()
@@ -209,11 +223,54 @@ final class SessionWorkspace {
         send(.host(RemoteGitRequest.reviewStatus(id: id, projectID: target.projectID, path: target.worktree.path)))
     }
 
-    func openDiff(_ path: String, stage: String?, sha: String? = nil, by owner: UUID) {
+    func openReview(_ source: ReviewSource, focus: ReviewEntryID?, by owner: UUID) {
         pushedBy = owner
-        let key = DiffKey(path: path, stage: stage, sha: sha)
-        diff = (key, .loading)
-        requestDiff(key)
+        review = (source, focus)
+    }
+
+    func closeReview() {
+        review = nil
+        if refreshDeferred { scheduleRefresh() }
+    }
+
+    /// One file's diff. Loads of the same key share one request.
+    func loadDiff(_ key: DiffKey) async -> Result<DiffReply, RemoteGitFailure> {
+        await wait(\.diffWaiters, key) { requestDiff(key) }
+    }
+
+    /// A commit's files, without opening it.
+    func loadCommitFiles(_ sha: String) async -> Result<CommitFilesReply, RemoteGitFailure> {
+        await wait(\.commitFilesWaiters, sha) { send(.listCommitFiles(sessionId: sessionId, sha: sha)) }
+    }
+
+    /// Refreshes the change list and returns it once it lands.
+    func loadChanges() async -> Result<ChangeListReply, RemoteGitFailure> {
+        await wait(\.changesWaiters, true) { refreshChanges() }
+    }
+
+    /// Asks with `request` unless a wait for `key` already did, and waits for the reply, even if the
+    /// screen that asked has gone.
+    private func wait<K: Hashable, R: Sendable>(_ waiters: ReferenceWritableKeyPath<SessionWorkspace, Waiters<K, R>>, _ key: K,
+                                      request: () -> Void) async -> Result<R, RemoteGitFailure> {
+        guard hub.state(of: hostID) == .online else { return .failure(offline) }
+        let hold = activate()
+        defer { hold.cancel() }
+        if self[keyPath: waiters][key] == nil {
+            request()
+            // One timer per request, so a wait that joins late shares the request's deadline, not an earlier caller's.
+            waitTimers[[AnyHashable(waiters), AnyHashable(key)]] = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled else { return }
+                self?.resume(waiters, key, .failure(RemoteGitFailure("The machine didn't answer. Check the session there.")))
+            }
+        }
+        return await withCheckedContinuation { self[keyPath: waiters][key, default: []].append($0) }
+    }
+
+    private func resume<K: Hashable, R: Sendable>(_ waiters: ReferenceWritableKeyPath<SessionWorkspace, Waiters<K, R>>, _ key: K,
+                                        _ result: Result<R, RemoteGitFailure>) {
+        waitTimers.removeValue(forKey: [AnyHashable(waiters), AnyHashable(key)])?.cancel()
+        self[keyPath: waiters].removeValue(forKey: key)?.forEach { $0.resume(returning: result) }
     }
 
     private func requestDiff(_ key: DiffKey) {
@@ -232,12 +289,7 @@ final class SessionWorkspace {
 
     func closeCommit() {
         commit = nil
-        if diff?.key.sha != nil { closeDiff() }
-    }
-
-    func closeDiff() {
-        diff = nil
-        if refreshDeferred { scheduleRefresh() }
+        if case .commit = review?.source { closeReview() }
     }
 
     /// Refreshes the list and the file tree when the agent goes idle, once their tab has been opened.
@@ -252,7 +304,7 @@ final class SessionWorkspace {
     }
 
     private func scheduleRefresh() {
-        guard diff == nil else {
+        guard review == nil else {
             refreshDeferred = true
             return
         }
@@ -331,18 +383,16 @@ final class SessionWorkspace {
             || hub.supports(HostProtocolCapability.worktreesGitV1, on: hostID))
     }
 
-    /// Whether the open working-tree diff's hunks can be staged, unstaged or discarded one by one.
+    /// Whether working-tree hunks can be staged, unstaged or discarded one by one.
     var canChangeHunks: Bool {
-        guard let key = diff?.key, key.sha == nil, key.stage != nil, gitTarget != nil else { return false }
+        guard gitTarget != nil else { return false }
         return hub.supports(HostProtocolCapability.worktreesHunksPhoneV1, on: hostID)
             || hub.supports(HostProtocolCapability.worktreesHunksV1, on: hostID) && hub.supports(HostProtocolCapability.worktreesGitV1, on: hostID)
     }
 
-    /// Applies `action` to `hunk`, the `index`th of the open diff, then reads that diff again.
-    /// Returns the host's refusal, or nil.
-    func changeHunk(_ action: RemoteHunkAction, index: Int, _ hunk: RemoteDiffHunk) async -> String? {
-        guard let key = diff?.key, key.sha == nil else { return "This diff can't be changed from here." }
-        defer { if diff?.key == key { requestDiff(key) } }
+    /// Applies `action` to `hunk`, the `index`th of `key`'s working-tree diff. Returns the host's refusal, or nil.
+    func changeHunk(_ action: RemoteHunkAction, index: Int, _ hunk: RemoteDiffHunk, in key: DiffKey) async -> String? {
+        guard key.sha == nil else { return "This diff can't be changed from here." }
         return await git(.hunk(path: key.path, index: index, header: hunk.header, linesHash: hunk.linesHash, action: action))
     }
 
@@ -468,18 +518,11 @@ final class SessionWorkspace {
         }
     }
 
-    /// Whether the open diff takes comments: a working-tree one, which the local-changes review covers.
-    var canCommentOnDiff: Bool { canReview && diff?.key.sha == nil && diff?.key.stage != nil }
-
-    /// Comments on the open working-tree diff, in the worktree's local-changes review, as the Mac's
-    /// Review workspace files it. Returns the host's refusal, or nil.
-    func commentOnDiff(_ anchor: RemoteReviewAnchor, body: String) async -> String? {
-        guard let key = diff?.key, key.sha == nil, let stage = key.stage, let target = gitTarget,
-              let worktreeID = hub.sessions(of: hostID).first(where: { $0.id == sessionId })?.worktreeId
-        else { return "This diff can't be commented on from here." }
-        let session = RemoteReviewRequest.localChangesSessionID(worktreeID: worktreeID, worktreePath: target.worktree.path)
-        return await changeReview(session, .add(fileID: RemoteReviewFileID(namespace: stage, path: key.path), path: key.path,
-                                                anchor: anchor, body: body))
+    /// The worktree's local-changes review, where the Mac's Review workspace files working-tree comments.
+    var localChangesReviewID: String? {
+        guard let target = gitTarget,
+              let worktreeID = hub.sessions(of: hostID).first(where: { $0.id == sessionId })?.worktreeId else { return nil }
+        return RemoteReviewRequest.localChangesSessionID(worktreeID: worktreeID, worktreePath: target.worktree.path)
     }
 
     // MARK: Lifecycle
@@ -629,10 +672,7 @@ final class SessionWorkspace {
     private func hostReply(timeout: Duration = .seconds(120),
                            _ make: (Int) -> OpaqueHostMessage) async -> Result<OpaqueHostMessage, RemoteGitFailure> {
         // A send while the link is down goes nowhere, and the reply would never come.
-        guard hub.state(of: hostID) == .online else {
-            let name = hub.hosts.first { $0.id == hostID }?.name ?? "the machine"
-            return .failure(RemoteGitFailure("Not connected to \(name). Try again once it's back online."))
-        }
+        guard hub.state(of: hostID) == .online else { return .failure(offline) }
         let id = hub.nextHostRequestId()
         let hold = activate()
         defer { hold.cancel() }
@@ -645,6 +685,11 @@ final class SessionWorkspace {
             hostWaiters[id] = $0
             send(.host(make(id)))
         }
+    }
+
+    private var offline: RemoteGitFailure {
+        let name = hub.hosts.first { $0.id == hostID }?.name ?? "the machine"
+        return RemoteGitFailure("Not connected to \(name). Try again once it's back online.")
     }
 
     private func finishHostRequest(_ id: Int, _ result: Result<OpaqueHostMessage, RemoteGitFailure>) {
@@ -678,32 +723,36 @@ final class SessionWorkspace {
         case .changeList(let id, let ref, let metrics, let files, let staged, let unstaged, let commits,
                          let truncated, let commitsTruncated, _, _) where id == sessionId:
             if changeListLanded() { return }
-            changes = .loaded(ChangeListReply(
+            let reply = ChangeListReply(
                 comparisonRef: ref, metricsAvailable: metrics, files: files, staged: staged, unstaged: unstaged,
-                commits: commits, truncated: truncated, commitsTruncated: commitsTruncated))
+                commits: commits, truncated: truncated, commitsTruncated: commitsTruncated)
+            changes = .loaded(reply)
+            resume(\.changesWaiters, true, .success(reply))
         case .changeListFailed(let id, let reason, let message) where id == sessionId:
             if changeListLanded() { return }
-            changes = .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil))
+            let text = RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)
+            changes = .failed(text)
+            resume(\.changesWaiters, true, .failure(RemoteGitFailure(text)))
         case .fileDiffResult(let id, let path, let stage, let hunks, let truncated, let note) where id == sessionId:
-            guard diff?.key == DiffKey(path: path, stage: stage) else { return }
-            diff = (DiffKey(path: path, stage: stage), .loaded(DiffReply(hunks: hunks, truncated: truncated, metadataNote: note)))
+            resume(\.diffWaiters, DiffKey(path: path, stage: stage), .success(DiffReply(hunks: hunks, truncated: truncated, metadataNote: note)))
         case .fileDiffFailed(let id, let path, let stage, let reason, let message) where id == sessionId:
-            guard diff?.key == DiffKey(path: path, stage: stage) else { return }
-            diff = (DiffKey(path: path, stage: stage), .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)))
+            resume(\.diffWaiters, DiffKey(path: path, stage: stage),
+                   .failure(RemoteGitFailure(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil))))
         case .commitFiles(let id, let sha, let files, let truncated) where id == sessionId:
+            let reply = CommitFilesReply(files: files, truncated: truncated)
+            resume(\.commitFilesWaiters, sha, .success(reply))
             guard let open = commit?.commit, open.revision == sha else { return }
-            commit = (open, .loaded(CommitFilesReply(files: files, truncated: truncated)))
+            commit = (open, .loaded(reply))
         case .commitFilesFailed(let id, let sha, let reason, let message) where id == sessionId:
+            let text = RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)
+            resume(\.commitFilesWaiters, sha, .failure(RemoteGitFailure(text)))
             guard let open = commit?.commit, open.revision == sha else { return }
-            commit = (open, .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)))
+            commit = (open, .failed(text))
         case .commitDiffResult(let id, let sha, let path, let hunks, let truncated, let note) where id == sessionId:
-            let key = DiffKey(path: path, stage: nil, sha: sha)
-            guard diff?.key == key else { return }
-            diff = (key, .loaded(DiffReply(hunks: hunks, truncated: truncated, metadataNote: note)))
+            resume(\.diffWaiters, DiffKey(path: path, stage: nil, sha: sha), .success(DiffReply(hunks: hunks, truncated: truncated, metadataNote: note)))
         case .commitDiffFailed(let id, let sha, let path, let reason, let message) where id == sessionId:
-            let key = DiffKey(path: path, stage: nil, sha: sha)
-            guard diff?.key == key else { return }
-            diff = (key, .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)))
+            resume(\.diffWaiters, DiffKey(path: path, stage: nil, sha: sha),
+                   .failure(RemoteGitFailure(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil))))
         case .fileTree(let id, let path, let nodes, let truncated) where id == sessionId:
             tree.apply(path: path, nodes: nodes)
             treeError = nil

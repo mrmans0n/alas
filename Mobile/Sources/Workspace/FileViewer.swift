@@ -126,11 +126,7 @@ private struct FileHistoryView: View {
             case .failure(let failure): history = .failed(failure.message)
             }
         }
-        .navigationDestination(isPresented: Binding(
-            get: { workspace.diff?.key.sha != nil },
-            set: { if !$0 { workspace.closeDiff() } })) {
-            DiffView(workspace: workspace)
-        }
+        .commitReviewDestination(workspace)
     }
 
     private func row(_ entry: HostFileHistoryEntry) -> some View {
@@ -150,7 +146,7 @@ private struct FileHistoryView: View {
 
     private func open(_ entry: HostFileHistoryEntry) {
         guard let owner = workspace.pushedBy else { return }
-        workspace.openDiff(entry.pathAtCommit, stage: nil, sha: entry.commit.sha, by: owner)
+        workspace.openReview(.commit(sha: entry.commit.sha), focus: ReviewEntryID(namespace: "commit", path: entry.pathAtCommit), by: owner)
     }
 }
 

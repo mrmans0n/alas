@@ -51,6 +51,8 @@ struct CodeBlockView: View {
 /// The Mac's theme colours, read from its bundled theme files, so code reads the same on both.
 struct ThemeTokens {
     let colors: [String: Color]
+    /// `colors` for UIKit text.
+    let uiColors: [String: UIColor]
 
     static let light = ThemeTokens(resource: "light")
     static let dark = ThemeTokens(resource: "cool-slate")
@@ -68,6 +70,7 @@ struct ThemeTokens {
             guard let rgb = try? OKLCH.parse(value).linearSRGB() else { return nil }
             return Color(.sRGBLinear, red: rgb.red, green: rgb.green, blue: rgb.blue, opacity: rgb.alpha)
         }
+        uiColors = colors.mapValues { UIColor($0) }
     }
 
     func attributed(_ chunk: CodeChunk) -> AttributedString {
@@ -86,6 +89,18 @@ struct ThemeTokens {
                let range = Range(span.range, in: out) {
                 out[range].foregroundColor = color
             }
+        }
+        return out
+    }
+
+    /// `attributed(_:spans:changedLine:)` for UIKit text.
+    func nsAttributed(_ text: String, spans: [HighlightSpan], changedLine: Bool = false, font: UIFont) -> NSMutableAttributedString {
+        let fg = uiColors["fg"] ?? .label
+        let out = NSMutableAttributedString(string: text, attributes: [.font: font, .foregroundColor: fg])
+        let length = out.length
+        for span in spans where NSMaxRange(span.range) <= length {
+            let token = changedLine && span.capture == .comment ? nil : span.capture.themeToken
+            out.addAttribute(.foregroundColor, value: token.flatMap { uiColors[$0] } ?? fg, range: span.range)
         }
         return out
     }

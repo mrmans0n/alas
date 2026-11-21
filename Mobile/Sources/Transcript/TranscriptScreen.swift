@@ -86,7 +86,7 @@ struct TranscriptScreen: View {
             // A view pushed from this screen (a diff, a file) covers it and fires this too; keep
             // the session and workspace alive until the screen itself leaves the stack.
             // Checked a turn later so a pushed view popped along with this screen has cleared
-            // its state first (DiffView's own onDisappear), and so a screen that came straight
+            // its state first (ReviewScreen's own onDisappear), and so a screen that came straight
             // back keeps what it holds.
             Task { @MainActor in
                 if visible || terminalsWorktree != nil || runTerminal != nil || openedSubagent != nil || delegated != nil
@@ -154,11 +154,11 @@ struct TranscriptScreen: View {
             }
             // Destinations for views pushed from the tabs live here, on a view that stays mounted.
             .navigationDestination(isPresented: Binding(
-                get: { workspace.diff != nil && workspace.diff?.key.sha == nil && workspace.pushedBy == screenID },
-                set: { if !$0 { workspace.closeDiff() } })) {
-                DiffView(workspace: workspace)
+                get: { workspace.pushedBy == screenID && workspace.review?.source.isCommit == false },
+                set: { if !$0 { workspace.closeReview() } })) {
+                if let review = workspace.review { ReviewScreen(workspace: workspace, source: review.source, focus: review.focus) }
             }
-            // A commit's own diffs push from its file list.
+            // A commit's own review pushes from its file list.
             .navigationDestination(isPresented: Binding(
                 get: { workspace.commit != nil && workspace.pushedBy == screenID },
                 set: { if !$0 { workspace.closeCommit() } })) {
