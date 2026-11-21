@@ -45,6 +45,8 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     /// Theme variables baked into a fragment's frame; nil for a full document, which is served unmodified.
     @ObservationIgnored private let documentThemeVariables: [String: String]?
     @ObservationIgnored private var themeVariables: [String: String]
+    /// The theme the page is drawn in: the one it opened with, or the last `applyTheme`.
+    @ObservationIgnored private(set) var theme: Theme
 
     /// `layoutVariables` (the transcript's font, from `VisualAidWebPolicy.layoutVariables`) travel with the
     /// theme's colours: baked into a fragment's frame and pushed again by `applyTheme`.
@@ -64,6 +66,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         let variables = Self.variables(theme: theme, layoutVariables: layoutVariables)
         documentThemeVariables = RemoteVisualAidWebPolicy.isFullDocument(html) ? nil : variables
         themeVariables = variables
+        self.theme = theme
         schemeHandler = VisualAidSchemeHandler(
             visualID: visualID,
             document: RemoteVisualAidWebPolicy.document(
@@ -244,6 +247,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     }
 
     func applyTheme(_ theme: Theme, layoutVariables: [String: String] = [:]) {
+        self.theme = theme
         themeVariables = Self.variables(theme: theme, layoutVariables: layoutVariables)
         guard !isClosed, status == .ready else { return }
         pushTheme()
@@ -259,11 +263,13 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
             in: nil, in: Self.bridgeWorld, completionHandler: nil)
     }
 
-    /// The page as drawn now, or nil unless it is loaded and on screen: WebKit cannot snapshot a page
-    /// outside a window.
-    func snapshot() async -> NSImage? {
+    /// The page as drawn now, with the theme it is drawn in, or nil unless it is loaded and on screen:
+    /// WebKit cannot snapshot a page outside a window.
+    func snapshot() async -> (image: NSImage, theme: Theme)? {
         guard !isClosed, status == .ready, webView.window != nil, !webView.bounds.isEmpty else { return nil }
-        return try? await webView.takeSnapshot(configuration: nil)
+        let theme = theme
+        guard let image = try? await webView.takeSnapshot(configuration: nil), self.theme == theme else { return nil }
+        return (image, theme)
     }
 
     func close() {
@@ -651,11 +657,14 @@ final class VisualAidSnapshotStore {
 
     /// Keeps an earlier image when `image` is nil and the theme still matches, so closing a page that is
     /// already off screen does not drop the picture taken while it was visible.
-    func record(_ visualID: UUID, height: CGFloat, image: NSImage?, theme: Theme) {
+    @discardableResult
+    func record(_ visualID: UUID, height: CGFloat, image: NSImage?, theme: Theme) -> Entry {
         let kept = image ?? self.image(for: visualID, theme: theme)
+        let entry = Entry(height: height, image: kept, theme: theme)
         // Retina backing: about 4 bytes per pixel at 2x.
         let cost = kept.map { Int($0.size.width * $0.size.height) * 16 } ?? 0
-        cache.setObject(Box(Entry(height: height, image: kept, theme: theme)), forKey: visualID as NSUUID, cost: cost)
+        cache.setObject(Box(entry), forKey: visualID as NSUUID, cost: cost)
+        return entry
     }
 }
 

@@ -70,8 +70,9 @@ struct ACPVisualAidCard: View {
     @State private var slot = UUID()
     @State private var page: VisualAidWebPage?
     @State private var paused = false
-    /// The page as it looked when the budget paused it, shown until it is live again.
-    @State private var snapshot: NSImage?
+    /// The page's height, and its picture, from when the budget paused it. The picture shows only in the
+    /// theme it was drawn in; the height keeps the row steady either way.
+    @State private var pausedEntry: VisualAidSnapshotStore.Entry?
     @State private var sending = false
     @State private var hovered = false
     /// VoiceOver and keyboard users never hover, so for them the embedded actions stay visible.
@@ -101,11 +102,7 @@ struct ACPVisualAidCard: View {
         content
             .onAppear(perform: openPage)
             .onDisappear(perform: closePage)
-            .onChange(of: theme) {
-                page?.applyTheme(theme, layoutVariables: layoutVariables)
-                // A picture in the old theme would clash; the placeholder stands in until the page is live.
-                if snapshot != nil { snapshot = VisualAidSnapshotStore.shared.image(for: visual.id, theme: theme) }
-            }
+            .onChange(of: theme) { page?.applyTheme(theme, layoutVariables: layoutVariables) }
             .onChange(of: typography) { page?.applyTheme(theme, layoutVariables: layoutVariables) }
             .onReceive(actions.changes) { canAnswer = actions.canAnswer() }
             .onChange(of: canAnswer) { installChoiceHandler() }
@@ -160,7 +157,7 @@ struct ACPVisualAidCard: View {
                     .frame(height: VisualAidWebPolicy.contentHeight(
                         forContentHeight: page.contentHeight, presentation: .embedded))
             }
-        } else if paused, let snapshot {
+        } else if let snapshot = pausedSnapshotImage {
             pausedSnapshot(snapshot)
         } else {
             embeddedPlaceholder(
@@ -215,7 +212,7 @@ struct ACPVisualAidCard: View {
             Divider()
             surface
                 .frame(height: fillsHeight ? nil : VisualAidWebPolicy.contentHeight(
-                    forContentHeight: page?.contentHeight ?? VisualAidWebPolicy.minCardHeight,
+                    forContentHeight: page?.contentHeight ?? pausedHeight ?? VisualAidWebPolicy.minCardHeight,
                     presentation: .card))
                 .frame(maxHeight: fillsHeight ? .infinity : nil)
             if let question = visual.question {
@@ -259,7 +256,7 @@ struct ACPVisualAidCard: View {
             case .loading, .ready:
                 VisualAidWebSurface(webView: page.webView)
             }
-        } else if paused, usesSnapshots, let snapshot {
+        } else if let snapshot = pausedSnapshotImage {
             pausedSnapshot(snapshot)
         } else {
             placeholder(paused ? "Visual paused to save memory" : "Visual not loaded", button: ("Show visual", openPage))
@@ -345,6 +342,14 @@ struct ACPVisualAidCard: View {
     /// The pop-out tab fills its own height and has no transcript row to keep steady.
     private var usesSnapshots: Bool { !fillsHeight }
 
+    private var pausedHeight: CGFloat? { paused && usesSnapshots ? pausedEntry?.height : nil }
+
+    /// The paused page's picture, only in the theme it was drawn in.
+    private var pausedSnapshotImage: NSImage? {
+        guard paused, usesSnapshots, let pausedEntry, pausedEntry.theme == theme else { return nil }
+        return pausedEntry.image
+    }
+
     private func openPage() {
         guard page == nil else { return }
         let page = VisualAidWebPage(
@@ -356,18 +361,17 @@ struct ACPVisualAidCard: View {
         installChoiceHandler()
         let pageBinding = $page
         let pausedBinding = $paused
-        let snapshotBinding = $snapshot
+        let pausedEntryBinding = $pausedEntry
         let visualID = visual.id
-        let theme = theme
         let usesSnapshots = usesSnapshots
         VisualAidPageBudget.shared.admit(slot) {
             // The budget has already let this slot go; the picture is taken before the page closes, and
             // only if a later open or close has not replaced the page meanwhile.
             Task { @MainActor in
-                let image = usesSnapshots ? await page.snapshot() : nil
                 if usesSnapshots {
-                    VisualAidSnapshotStore.shared.record(visualID, height: page.contentHeight, image: image, theme: theme)
-                    snapshotBinding.wrappedValue = VisualAidSnapshotStore.shared.image(for: visualID, theme: theme)
+                    let captured = await page.snapshot()
+                    pausedEntryBinding.wrappedValue = VisualAidSnapshotStore.shared.record(
+                        visualID, height: page.contentHeight, image: captured?.image, theme: captured?.theme ?? page.theme)
                 }
                 page.close()
                 guard pageBinding.wrappedValue === page else { return }
@@ -379,7 +383,7 @@ struct ACPVisualAidCard: View {
 
     private func closePage() {
         if let page, usesSnapshots, page.status == .ready {
-            VisualAidSnapshotStore.shared.record(visual.id, height: page.contentHeight, image: nil, theme: theme)
+            VisualAidSnapshotStore.shared.record(visual.id, height: page.contentHeight, image: nil, theme: page.theme)
         }
         page?.close()
         page = nil
