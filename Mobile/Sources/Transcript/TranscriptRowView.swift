@@ -382,4 +382,3 @@ private extension MarkdownAlert.Kind {
         }
     }
 }
-
