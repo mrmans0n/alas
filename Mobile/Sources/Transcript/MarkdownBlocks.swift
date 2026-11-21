@@ -29,6 +29,15 @@ enum MarkdownBlock: Equatable {
         return Document(parsing: text).children.compactMap { block($0, lines: lines) }
     }
 
+    /// The 1-based lines (as cmark counts them) of top-level code blocks and
+    /// tables: blocks drawn from their text alone, without inline chips.
+    static func verbatimLines(in text: String) -> [ClosedRange<Int>] {
+        Document(parsing: text).children.compactMap { child in
+            guard child is CodeBlock || child is Markdown.Table, let range = child.range else { return nil }
+            return range.lowerBound.line ... max(range.lowerBound.line, range.upperBound.line)
+        }
+    }
+
     private static func block(_ markup: Markup, lines: [Substring]) -> MarkdownBlock? {
         switch markup {
         case let p as Paragraph:
@@ -67,9 +76,17 @@ enum MarkdownBlock: Equatable {
     /// Highlights the whole block once, then splits it, so a construct spanning a chunk
     /// boundary (a block comment, a multi-line string) still colours on both sides.
     private static func highlighted(_ code: String, language: String?) -> [CodeChunk] {
+        highlighted(code, fileExtension: ACPCodeLanguage.highlighterExtension(for: language))
+    }
+
+    /// A file's code, coloured by its path's language, in drawable chunks.
+    static func codeChunks(_ code: String, path: String) -> [CodeChunk] {
+        highlighted(code, fileExtension: ACPCodeLanguage.highlighterExtension(forPath: path))
+    }
+
+    private static func highlighted(_ code: String, fileExtension: String?) -> [CodeChunk] {
         let source = code.replacingOccurrences(of: "\r\n", with: "\n").trimmingCharacters(in: .newlines)
-        let spans = ACPCodeLanguage.highlighterExtension(for: language)
-            .map { TreeSitterHighlighter.highlight(source: source, fileExtension: $0) } ?? []
+        let spans = fileExtension.map { TreeSitterHighlighter.highlight(source: source, fileExtension: $0) } ?? []
         return HighlightChunks.split(source: source, spans: spans, linesPerChunk: codeChunkLines)
             .map { CodeChunk(text: $0.text, spans: $0.spans) }
     }

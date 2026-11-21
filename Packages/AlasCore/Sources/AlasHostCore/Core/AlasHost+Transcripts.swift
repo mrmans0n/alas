@@ -126,6 +126,7 @@ final class FollowedSession {
     private weak var session: ACPSession?
     private weak var manager: ACPSessionManager?
     private var signals: [ChangeSubscription] = []
+    private var references: ACPUpstreamReferenceStore?
     private var sent: TranscriptRevision?
     private var sentState: ACPSession.StreamingState?
     private var sentRequests: [HostPendingRequestID: HostPendingRequest] = [:]
@@ -145,9 +146,15 @@ final class FollowedSession {
             self?.isDirty = true
             changed()
         }
+        // The worktree's code host goes out with the config, so a viewer
+        // detects and resolves references the way this Mac does.
+        let references = manager.upstreamReferences.store(for: URL(fileURLWithPath: manager.worktreePath))
+        references.resolveRemote()
+        self.references = references
         signals = [
             transcript.willChange.observe(mark), transcript.streamingTicks.observe(mark),
             session.willChange.observe(mark), manager.summaryWillChange.observe(mark),
+            references.willChange.observe(mark),
         ]
     }
 
@@ -208,7 +215,8 @@ final class FollowedSession {
         return HostSessionState(
             isWriter: manager.isWriter(for: id),
             hasCancellableBackgroundWork: session.hasCancellableBackgroundWork,
-            config: RemoteSessionConfigProjection.config(sessionId: id, session: session),
+            config: RemoteSessionConfigProjection.config(
+                sessionId: id, session: session, codeHost: references?.remote?.codeHost),
             queue: RemoteQueueProjection.project(session.queue)
         )
     }

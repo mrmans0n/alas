@@ -2,10 +2,15 @@ import Foundation
 
 /// Finds `#N` / `!N` references in prose. Pure UTF-16 scanning so ranges
 /// line up with `NSAttributedString` storage.
-enum ACPUpstreamReferenceDetector {
-    struct Match: Equatable {
-        let range: NSRange
-        let reference: CodeHostReference
+public enum UpstreamReferenceText {
+    public struct Match: Equatable, Sendable {
+        public let range: NSRange
+        public let reference: CodeHostReference
+
+        public init(range: NSRange, reference: CodeHostReference) {
+            self.range = range
+            self.reference = reference
+        }
     }
 
     private static let backtick: unichar = 0x60
@@ -15,7 +20,7 @@ enum ACPUpstreamReferenceDetector {
     private static let leadingPunctuation = Set("([{\"'`".utf16)
     private static let trailingPunctuation = Set(".,;:!?)]}\"'`".utf16)
 
-    static func references(
+    public static func references(
         in text: String,
         host: CodeHostKind,
         precededBy: unichar? = nil,
@@ -62,7 +67,7 @@ enum ACPUpstreamReferenceDetector {
     /// and by draft restore, which passes the end of the restored text as
     /// `caret` since a freshly restored draft has no real selection yet.
     /// A `nil` caret skips nothing: at send time the token is final.
-    static func chippableMatches(in text: String, host: CodeHostKind, caret: NSRange?) -> [Match] {
+    public static func chippableMatches(in text: String, host: CodeHostKind, caret: NSRange?) -> [Match] {
         references(in: text, host: host, unclosedRunsExtendToEnd: true)
             .filter { match in
                 guard let caret else { return true }
@@ -73,15 +78,15 @@ enum ACPUpstreamReferenceDetector {
     private static let urlCandidate = try! NSRegularExpression(pattern: #"https?://[^\s<>()\[\]{}"'`]+"#, options: [.caseInsensitive])
     private static let urlTrailingPunctuation = Set(".,;:!?".utf16)
 
-    /// Exact PR / MR / issue URLs for `remote`'s repository, mapped to the
+    /// Exact PR / MR / issue URLs for `repository`, mapped to the
     /// reference they name: GitHub `/pull/N` and `/issues/N` to `#N`, GitLab
     /// `/-/merge_requests/N` to `!N` and `/-/issues/N` to `#N`. Anything
     /// more specific (extra path, query, fragment) stays a URL so the link
     /// to a file or comment isn't lost, as do other repositories' URLs and
     /// markdown link targets.
-    static func urlReferences(
+    public static func urlReferences(
         in text: String,
-        remote: CodeHostRemote,
+        repository: RemoteCodeHost,
         precededBy: unichar? = nil,
         followedBy: unichar? = nil
     ) -> [Match] {
@@ -100,14 +105,14 @@ enum ACPUpstreamReferenceDetector {
                   !(before == 0x28 && beforeThat == 0x5D), // "](": a markdown link target
                   isTrailingBoundary(after),
                   !code.contains(where: { NSLocationInRange(range.location, $0) }),
-                  let reference = reference(forURL: string.substring(with: range), remote: remote)
+                  let reference = reference(forURL: string.substring(with: range), repository: repository)
             else { continue }
             matches.append(Match(range: range, reference: reference))
         }
         return matches
     }
 
-    private static func reference(forURL string: String, remote: CodeHostRemote) -> CodeHostReference? {
+    private static func reference(forURL string: String, repository remote: RemoteCodeHost) -> CodeHostReference? {
         guard let components = URLComponents(string: string),
               let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
               components.host?.caseInsensitiveCompare(remote.host) == .orderedSame,
@@ -134,7 +139,7 @@ enum ACPUpstreamReferenceDetector {
     /// one). Punctuation typed between the digits and the caret is instead
     /// carried inside `replaceRange`, so the caller re-inserts it after the
     /// chip.
-    static func chipTarget(
+    public static func chipTarget(
         completingWith insertedText: String,
         at range: NSRange,
         in text: String,
@@ -174,7 +179,7 @@ enum ACPUpstreamReferenceDetector {
     /// another run of three. An unclosed run is literal text in CommonMark,
     /// so it opens nothing, unless `unclosedRunsExtendToEnd`. The keystroke
     /// path sets that so a code span still being typed doesn't chip.
-    static func codeRanges(in text: NSString, unclosedRunsExtendToEnd: Bool) -> [NSRange] {
+    public static func codeRanges(in text: NSString, unclosedRunsExtendToEnd: Bool) -> [NSRange] {
         let length = text.length
         var ranges: [NSRange] = []
         var index = 0

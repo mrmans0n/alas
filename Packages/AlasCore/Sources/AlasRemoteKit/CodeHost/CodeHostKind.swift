@@ -1,5 +1,4 @@
 import Foundation
-import AlasFoundation
 
 public enum CodeHostKind: String, Codable, Equatable, Sendable {
     case github

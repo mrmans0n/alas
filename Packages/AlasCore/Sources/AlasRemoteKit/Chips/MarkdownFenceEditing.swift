@@ -3,7 +3,7 @@ import Foundation
 /// What a keystroke should do about code fences. `.none` means the caller
 /// falls through to `PairedDelimiterEditing`, whose one- and two-backtick
 /// wrapping behaviour is unchanged by this feature.
-enum FenceEditAction: Equatable {
+public enum FenceEditAction: Equatable, Sendable {
     case openBlock
     case wrapSelection
     case none
@@ -21,25 +21,35 @@ enum FenceEditAction: Equatable {
 /// end of its backtick run to the end of the line, untrimmed. `infoString` is
 /// the trimmed contents of exactly that range. An opener with no info string
 /// still has an `infoRange` — an empty one parked where the tag would go.
-struct FencedBlock: Equatable {
-    var openFenceRange: NSRange
-    var bodyRange: NSRange
-    var closeFenceRange: NSRange?
-    var infoString: String
-    var infoRange: NSRange
-    var outerRange: NSRange
+public struct FencedBlock: Equatable, Sendable {
+    public var openFenceRange: NSRange
+    public var bodyRange: NSRange
+    public var closeFenceRange: NSRange?
+    public var infoString: String
+    public var infoRange: NSRange
+    public var outerRange: NSRange
+
+    public init(openFenceRange: NSRange, bodyRange: NSRange, closeFenceRange: NSRange?,
+                infoString: String, infoRange: NSRange, outerRange: NSRange) {
+        self.openFenceRange = openFenceRange
+        self.bodyRange = bodyRange
+        self.closeFenceRange = closeFenceRange
+        self.infoString = infoString
+        self.infoRange = infoRange
+        self.outerRange = outerRange
+    }
 }
 
-enum MarkdownFenceEditing {
+public enum MarkdownFenceEditing {
     /// CommonMark's minimum fence width.
-    static let minimumFenceLength = 3
+    public static let minimumFenceLength = 3
     /// CommonMark allows a fence to be indented by at most three spaces.
     ///
     /// Internal rather than private: `PairedComposerTextControls` reuses it to
     /// decide when a caret's preceding whitespace is a fence's own indentation
     /// rather than stray padding, so that decision can never drift from what
     /// `parseFence` itself accepts.
-    static let maximumFenceIndent = 3
+    public static let maximumFenceIndent = 3
 
     private static let space: unichar = 0x20
     private static let backtick: unichar = 0x60
@@ -54,7 +64,7 @@ enum MarkdownFenceEditing {
         var infoRange: NSRange      // the slot `info` was trimmed out of
     }
 
-    static func blocks(in text: String) -> [FencedBlock] {
+    public static func blocks(in text: String) -> [FencedBlock] {
         let ns = text as NSString
         let fences = fenceLines(in: ns)
         var blocks: [FencedBlock] = []
@@ -200,7 +210,7 @@ enum MarkdownFenceEditing {
     /// every character the edit touches by construction, and keeps covering
     /// them if that span ever changes shape, because the callers rewrite the
     /// range this asked about.
-    static func resolve(
+    public static func resolve(
         insertedText: String,
         in text: String,
         selectedRange: NSRange
@@ -253,7 +263,7 @@ enum MarkdownFenceEditing {
     /// which would otherwise survive as a stray backtick below the box.
     /// `.wrapSelection` consumes the two backticks flanking the selection on
     /// each side along with the selection between them.
-    static func rewrittenRange(
+    public static func rewrittenRange(
         for action: FenceEditAction,
         in text: String,
         selectedRange: NSRange
@@ -294,7 +304,7 @@ enum MarkdownFenceEditing {
     /// even though an edit there would take the marker apart. Anything asking
     /// whether an edit may proceed has to weigh the span that edit rewrites
     /// against `blocks(in:)` — see `resolve`.
-    static func block(containing location: Int, in text: String) -> FencedBlock? {
+    public static func block(containing location: Int, in text: String) -> FencedBlock? {
         blocks(in: text).first { block in
             let lower = block.infoRange.location
             let upper = block.closeFenceRange?.location ?? NSMaxRange(block.outerRange)
@@ -311,7 +321,7 @@ enum MarkdownFenceEditing {
     /// `.native` (the preceding character is identifier-like) and the second
     /// pairs, leaving a closer parked after the caret. Opening a block has to
     /// swallow that closer or it survives as a stray backtick below the box.
-    static func trailingBacktickRun(at location: Int, in text: String) -> Int {
+    public static func trailingBacktickRun(at location: Int, in text: String) -> Int {
         let ns = text as NSString
         guard location >= 0, location <= ns.length else { return 0 }
         return min(2, backtickRunLength(after: location, in: ns))
