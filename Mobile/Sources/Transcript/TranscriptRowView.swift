@@ -1,3 +1,4 @@
+import AlasHighlight
 import AlasRemoteKit
 import SwiftUI
 
@@ -237,6 +238,17 @@ struct AgentMarkdown: View {
                     inline(s).font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
                 case .code(let language, let chunks): CodeBlockView(language: language, chunks: chunks)
                 case .mermaid(let source): MermaidBlockView(source: source)
+                case .visual(let aid):
+                    if let session {
+                        // Keyed by visual, so a reused cell never hands one visual's page or height to another.
+                        VisualAidCard(aid: aid, session: session).id(aid.id)
+                    } else {
+                        CodeBlockView(language: VisualFence.tag, chunks: [CodeChunk(text: aid.html, spans: [])])
+                    }
+                case .drawingVisual(let title):
+                    Label(title.map { "Drawing \($0)…" } ?? "Drawing visual…", systemImage: "rectangle.on.rectangle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 case .list(let entries):
                     let widest = entries.compactMap { if case .number(let n) = $0.marker { n } else { nil } }
                         .max { $0.count < $1.count } ?? ""
