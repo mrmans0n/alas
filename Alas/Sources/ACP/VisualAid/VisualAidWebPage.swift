@@ -45,11 +45,16 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     /// Theme variables baked into a fragment's frame; nil for a full document, which is served unmodified.
     @ObservationIgnored private let documentThemeVariables: [String: String]?
     @ObservationIgnored private var themeVariables: [String: String]
+    /// The theme the page is drawn in: the one it opened with, or the last `applyTheme`.
+    @ObservationIgnored private(set) var theme: Theme
 
     /// `layoutVariables` (the transcript's font, from `VisualAidWebPolicy.layoutVariables`) travel with the
     /// theme's colours: baked into a fragment's frame and pushed again by `applyTheme`.
+    /// `initialHeight` is the height the visual last laid out at, so a page reopened on scroll-back starts
+    /// at its own size instead of growing from `minCardHeight` once it loads.
     init(
         visualID: UUID, html: String, theme: Theme, layoutVariables: [String: String] = [:],
+        initialHeight: CGFloat? = nil,
         locksNetworkAfterLoad: Bool,
         presentation: ACPVisualAid.Presentation = .card,
         networkLockDeadline: Duration = RemoteVisualAidWebPolicy.networkLockDeadline
@@ -57,9 +62,11 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         self.locksNetworkAfterLoad = locksNetworkAfterLoad
         self.networkLockDeadline = networkLockDeadline
         self.visualID = visualID
+        if let initialHeight { contentHeight = initialHeight }
         let variables = Self.variables(theme: theme, layoutVariables: layoutVariables)
         documentThemeVariables = RemoteVisualAidWebPolicy.isFullDocument(html) ? nil : variables
         themeVariables = variables
+        self.theme = theme
         schemeHandler = VisualAidSchemeHandler(
             visualID: visualID,
             document: RemoteVisualAidWebPolicy.document(
@@ -240,6 +247,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     }
 
     func applyTheme(_ theme: Theme, layoutVariables: [String: String] = [:]) {
+        self.theme = theme
         themeVariables = Self.variables(theme: theme, layoutVariables: layoutVariables)
         guard !isClosed, status == .ready else { return }
         pushTheme()
@@ -253,6 +261,25 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         webView.callAsyncJavaScript(
             "alasVisualTheme(variables)", arguments: ["variables": themeVariables],
             in: nil, in: Self.bridgeWorld, completionHandler: nil)
+    }
+
+    /// The page as drawn now, with the theme it is drawn in, or nil unless it is loaded and on screen
+    /// (WebKit cannot snapshot a page outside a window) and WebKit answers within `timeout`. The page is
+    /// already outside the live-page budget while this runs, so a slow capture is abandoned, not awaited.
+    func snapshot(timeout: Duration = .milliseconds(500)) async -> (image: NSImage, theme: Theme)? {
+        guard !isClosed, status == .ready, webView.window != nil, !webView.bounds.isEmpty else { return nil }
+        let theme = theme
+        let webView = webView
+        let image: NSImage? = await withCheckedContinuation { continuation in
+            let once = VisualAidResumeOnce(continuation)
+            webView.takeSnapshot(with: nil) { image, _ in once.resume(image) }
+            Task { @MainActor in
+                try? await Task.sleep(for: timeout)
+                once.resume(nil)
+            }
+        }
+        guard let image, self.theme == theme else { return nil }
+        return (image, theme)
     }
 
     func close() {
@@ -600,6 +627,84 @@ struct VisualAidScrollRouting: Equatable {
     private static func decide(deltaX: CGFloat, deltaY: CGFloat, edges: Edges) -> Owner {
         if abs(deltaX) > abs(deltaY) { return .page }
         return (deltaY > 0 ? edges.canScrollUp : edges.canScrollDown) ? .page : .transcript
+    }
+}
+
+/// Resumes a continuation with the first answer only: the snapshot or its timeout, whichever comes first.
+@MainActor
+private final class VisualAidResumeOnce {
+    private var continuation: CheckedContinuation<NSImage?, Never>?
+
+    init(_ continuation: CheckedContinuation<NSImage?, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ image: NSImage?) {
+        continuation?.resume(returning: image)
+        continuation = nil
+    }
+}
+
+/// What a visual looked like when its page last closed: its height, and an image when the page budget
+/// evicted it while on screen. Shown in place of a paused page, and used to size a page that reopens.
+@MainActor
+final class VisualAidSnapshotStore {
+    static let shared = VisualAidSnapshotStore()
+
+    struct Entry {
+        let height: CGFloat
+        let image: NSImage?
+        /// The theme the image was drawn in; an image from another theme is not shown.
+        let theme: Theme
+    }
+
+    private let cache = NSCache<NSUUID, Box>()
+    /// An evicted page stays live while its picture is taken, outside the page budget, so only this many
+    /// captures run at once; other evictions close their page straight away and keep just its height.
+    static let maxPendingCaptures = 1
+    private var pendingCaptures = 0
+
+    /// Claims a capture slot, or false when `maxPendingCaptures` are already running.
+    func beginCapture() -> Bool {
+        guard pendingCaptures < Self.maxPendingCaptures else { return false }
+        pendingCaptures += 1
+        return true
+    }
+
+    func endCapture() {
+        pendingCaptures = max(0, pendingCaptures - 1)
+    }
+
+    private final class Box {
+        let entry: Entry
+        init(_ entry: Entry) { self.entry = entry }
+    }
+
+    init() {
+        cache.countLimit = 64
+        cache.totalCostLimit = 64 * 1024 * 1024
+    }
+
+    func entry(for visualID: UUID) -> Entry? {
+        cache.object(forKey: visualID as NSUUID)?.entry
+    }
+
+    /// The image, only when it was drawn in `theme`.
+    func image(for visualID: UUID, theme: Theme) -> NSImage? {
+        guard let entry = entry(for: visualID), entry.theme == theme else { return nil }
+        return entry.image
+    }
+
+    /// Keeps an earlier image when `image` is nil and the theme still matches, so closing a page that is
+    /// already off screen does not drop the picture taken while it was visible.
+    @discardableResult
+    func record(_ visualID: UUID, height: CGFloat, image: NSImage?, theme: Theme) -> Entry {
+        let kept = image ?? self.image(for: visualID, theme: theme)
+        let entry = Entry(height: height, image: kept, theme: theme)
+        // Retina backing: about 4 bytes per pixel at 2x.
+        let cost = kept.map { Int($0.size.width * $0.size.height) * 16 } ?? 0
+        cache.setObject(Box(entry), forKey: visualID as NSUUID, cost: cost)
+        return entry
     }
 }
 

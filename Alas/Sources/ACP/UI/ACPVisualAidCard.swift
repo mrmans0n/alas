@@ -70,6 +70,9 @@ struct ACPVisualAidCard: View {
     @State private var slot = UUID()
     @State private var page: VisualAidWebPage?
     @State private var paused = false
+    /// The page's height when the budget paused it, which keeps the row steady while paused. The picture
+    /// itself stays in `VisualAidSnapshotStore`, whose limits would mean nothing if each card held one.
+    @State private var savedHeight: CGFloat?
     @State private var sending = false
     @State private var hovered = false
     /// VoiceOver and keyboard users never hover, so for them the embedded actions stay visible.
@@ -154,20 +157,40 @@ struct ACPVisualAidCard: View {
                     .frame(height: VisualAidWebPolicy.contentHeight(
                         forContentHeight: page.contentHeight, presentation: .embedded))
             }
+        } else if let snapshot = pausedSnapshotImage {
+            pausedSnapshot(snapshot)
         } else {
             embeddedPlaceholder(
-                paused ? "Visual paused to save memory" : "Visual not loaded", button: ("Show visual", openPage))
+                paused ? "Visual paused to save memory" : "Visual not loaded", button: ("Show visual", openPage),
+                minHeight: pausedHeight.map { VisualAidWebPolicy.contentHeight(forContentHeight: $0, presentation: .embedded) })
         }
     }
 
-    private func embeddedPlaceholder(_ text: String, button: (String, () -> Void)? = nil) -> some View {
+    /// A paused page's last picture. Clicking it makes the page live again, which may pause another.
+    private func pausedSnapshot(_ image: NSImage) -> some View {
+        Button(action: openPage) {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: image.size.width, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .help("Paused to save memory. Click to make it interactive.")
+        .accessibilityLabel("\(visual.title), paused")
+        .accessibilityHint("Makes the visual interactive")
+    }
+
+    private func embeddedPlaceholder(
+        _ text: String, button: (String, () -> Void)? = nil, minHeight: CGFloat? = nil
+    ) -> some View {
         VStack(alignment: .leading, spacing: scale.space[2]) {
             Text(text).foregroundStyle(theme.color("fg-muted"))
             if let button {
                 Button(button.0, action: button.1)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: VisualAidWebPolicy.minCardHeight, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: max(minHeight ?? 0, VisualAidWebPolicy.minCardHeight), alignment: .leading)
     }
 
     /// Styled like the transcript code block's copy button.
@@ -192,7 +215,7 @@ struct ACPVisualAidCard: View {
             Divider()
             surface
                 .frame(height: fillsHeight ? nil : VisualAidWebPolicy.contentHeight(
-                    forContentHeight: page?.contentHeight ?? VisualAidWebPolicy.minCardHeight,
+                    forContentHeight: page?.contentHeight ?? pausedHeight ?? VisualAidWebPolicy.minCardHeight,
                     presentation: .card))
                 .frame(maxHeight: fillsHeight ? .infinity : nil)
             if let question = visual.question {
@@ -236,6 +259,8 @@ struct ACPVisualAidCard: View {
             case .loading, .ready:
                 VisualAidWebSurface(webView: page.webView)
             }
+        } else if let snapshot = pausedSnapshotImage {
+            pausedSnapshot(snapshot)
         } else {
             placeholder(paused ? "Visual paused to save memory" : "Visual not loaded", button: ("Show visual", openPage))
         }
@@ -317,24 +342,59 @@ struct ACPVisualAidCard: View {
         }
     }
 
+    /// The pop-out tab fills its own height and has no transcript row to keep steady.
+    private var usesSnapshots: Bool { !fillsHeight }
+
+    private var pausedHeight: CGFloat? { paused && usesSnapshots ? savedHeight : nil }
+
+    /// The paused page's picture, only in the theme it was drawn in.
+    private var pausedSnapshotImage: NSImage? {
+        guard paused, usesSnapshots else { return nil }
+        return VisualAidSnapshotStore.shared.image(for: visual.id, theme: theme)
+    }
+
     private func openPage() {
         guard page == nil else { return }
         let page = VisualAidWebPage(
             visualID: visual.id, html: visual.html, theme: theme, layoutVariables: layoutVariables,
+            initialHeight: usesSnapshots ? VisualAidSnapshotStore.shared.entry(for: visual.id)?.height : nil,
             locksNetworkAfterLoad: visual.question != nil, presentation: isEmbedded ? .embedded : .card)
         self.page = page
         paused = false
         installChoiceHandler()
         let pageBinding = $page
         let pausedBinding = $paused
+        let savedHeightBinding = $savedHeight
+        let visualID = visual.id
+        let usesSnapshots = usesSnapshots
         VisualAidPageBudget.shared.admit(slot) {
-            pageBinding.wrappedValue?.close()
-            pageBinding.wrappedValue = nil
-            pausedBinding.wrappedValue = true
+            // The budget has already let this slot go, so the page stays live only for a bounded capture:
+            // one at a time, abandoned after `snapshot`'s timeout. It is unset only if a later open or
+            // close has not replaced it meanwhile.
+            Task { @MainActor in
+                if usesSnapshots {
+                    let store = VisualAidSnapshotStore.shared
+                    var captured: (image: NSImage, theme: Theme)?
+                    if store.beginCapture() {
+                        captured = await page.snapshot()
+                        store.endCapture()
+                    }
+                    savedHeightBinding.wrappedValue = VisualAidSnapshotStore.shared.record(
+                        visualID, height: page.contentHeight, image: captured?.image, theme: captured?.theme ?? page.theme
+                    ).height
+                }
+                page.close()
+                guard pageBinding.wrappedValue === page else { return }
+                pageBinding.wrappedValue = nil
+                pausedBinding.wrappedValue = true
+            }
         }
     }
 
     private func closePage() {
+        if let page, usesSnapshots, page.status == .ready {
+            VisualAidSnapshotStore.shared.record(visual.id, height: page.contentHeight, image: nil, theme: page.theme)
+        }
         page?.close()
         page = nil
         VisualAidPageBudget.shared.release(slot)
