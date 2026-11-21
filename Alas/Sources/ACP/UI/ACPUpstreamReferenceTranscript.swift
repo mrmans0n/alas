@@ -54,7 +54,7 @@ extension ACPUpstreamReferenceChip {
                 let rendered = ACPMarkdownInlineRenderer.makeAttributedString(
                     source: fragment, theme: theme, typography: .default, role: .body
                 )
-                for match in ACPUpstreamReferenceDetector.references(in: rendered.string, host: host)
+                for match in UpstreamReferenceText.references(in: rendered.string, host: host)
                 where isVisibleReference(in: rendered, range: match.range) && seen.insert(match.reference).inserted {
                     references.append(match.reference)
                 }

@@ -111,6 +111,7 @@ struct NativePeerDocumentView: View {
         case .file: "peer"
         case .stashDiff: "stash"
         case .checkpointDiff: "checkpoint"
+        case .skill: "skill"
         }
     }
 

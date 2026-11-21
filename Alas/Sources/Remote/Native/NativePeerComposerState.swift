@@ -97,7 +97,8 @@ enum NativePeerComposerState {
 
     static func slashSuggestions(from config: RemoteSessionConfig?) -> [ACPPromptSuggestion] {
         (config?.availableCommands ?? []).map {
-            ACPPromptSuggestion(command: $0.command, description: $0.description, hint: $0.hint)
+            ACPPromptSuggestion(command: $0.command, description: $0.description, hint: $0.hint,
+                                presentation: $0.skill.map { .peerSkill(hasFile: $0.hasFile) })
         }
     }
 

@@ -73,13 +73,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             } else if let open { open(nil) } else { pending.append(nil) }
             return
         }
-        if action == "allow" || action == "deny", let serverId, let sessionId {
+        let quick: QuickAnswer? = switch action {
+        case "allow", "deny": .permission(allow: action == "allow")
+        case "accept": .plan
+        case _ where action.hasPrefix(RemoteQuestionQuickAnswer.actionPrefix):
+            .question(optionId: String(action.dropFirst(RemoteQuestionQuickAnswer.actionPrefix.count)))
+        default: nil
+        }
+        if let quick, let serverId, let sessionId {
             // Only the request the alert showed may be answered; an alert the extension did not rewrite names none.
             let request = alas?["request"] as? String
             var answered = false
             if let request {
-                answered = await inBackground("Answer permission") {
-                    await answer(serverId: serverId, sessionId: sessionId, request: request, allow: action == "allow")
+                answered = await inBackground("Answer request") {
+                    await answer(serverId: serverId, sessionId: sessionId, request: request, with: quick)
                 }
             }
             if !answered { await postCouldntAnswer(serverId: serverId, sessionId: sessionId, title: response.notification.request.content.title) }
@@ -141,9 +148,48 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         return true
     }
 
-    /// Answers the session's pending permission once, if it is the request `request` names, taking over
+    /// What a notification action answers.
+    private enum QuickAnswer {
+        case permission(allow: Bool)
+        case question(optionId: String)
+        case plan
+
+        var kind: RequestKind {
+            switch self {
+            case .permission: .permission
+            case .question: .question
+            case .plan: .plan
+            }
+        }
+
+        /// The identity of what the session has pending of this kind.
+        @MainActor func pending(in session: TranscriptSession) -> String? {
+            switch self {
+            case .permission: session.permission.flatMap(RemoteRequestIdentity.of)
+            case .question: session.question.flatMap(RemoteRequestIdentity.of)
+            case .plan: session.plan.flatMap(RemoteRequestIdentity.of)
+            }
+        }
+
+        @MainActor func send(in session: TranscriptSession) {
+            switch self {
+            case .permission(let allow):
+                if let now = session.permission, let optionId = RemotePermissionQuickAnswer.optionId(in: now, allow: allow) {
+                    session.answerPermission(optionId: optionId)
+                }
+            case .question(let optionId):
+                if let question = session.question?.questions.first {
+                    session.answerQuestion([RemoteQuestionAnswer(questionId: question.id, selectedOptionIds: [optionId])])
+                }
+            case .plan:
+                session.answerPlan(action: "accept", reason: nil)
+            }
+        }
+    }
+
+    /// Answers the session's pending request once, if it is the request `request` names, taking over
     /// the writer lease when the Mac holds it, and waits until it resolves.
-    @MainActor private static func answer(serverId: String, sessionId: String, request: String, allow: Bool) async -> Bool {
+    @MainActor private static func answer(serverId: String, sessionId: String, request: String, with quick: QuickAnswer) async -> Bool {
         let deadline = ContinuousClock.now + .seconds(25)
         guard let hub, let registry,
               let route = await hub.route(serverId: serverId, sessionId: sessionId, before: deadline) else { return false }
@@ -171,16 +217,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         var sent = false
         let settled = await wait(until: {
             // Nothing pending and nothing sent: it was answered elsewhere, so there is nothing to apologize for.
-            guard let now = session.permission else { return !sent || !session.hasDeferredAnswer(.permission) }
+            guard let now = quick.pending(in: session) else { return !sent || !session.hasDeferredAnswer(quick.kind) }
             // A different request than the one the user saw must never get this answer.
-            guard RemoteRequestIdentity.of(now) == request else { return true }
+            guard now == request else { return true }
             if !sent {
-                // `answerPermission` ignores a request that only just replaced another, so retry until it takes.
+                // An answer ignores a request that only just replaced another, so retry until it takes.
                 // An already-answered kind is not re-sent: that guard is what keeps this a single answer.
-                if let optionId = RemotePermissionQuickAnswer.optionId(in: now, allow: allow) {
-                    session.answerPermission(optionId: optionId)
-                }
-                sent = session.answered.contains(.permission)
+                quick.send(in: session)
+                sent = session.answered.contains(quick.kind)
             }
             return false
         })

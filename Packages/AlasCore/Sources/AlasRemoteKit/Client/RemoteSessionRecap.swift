@@ -23,7 +23,7 @@ public enum RemoteSessionRecap {
         var plan: [String]?
         for row in rows {
             switch row {
-            case .user(let text, _, _, _) where !text.isEmpty: turns.append("User: \(clip(text))")
+            case .user(let text, _, _, _, _, _) where !text.isEmpty: turns.append("User: \(clip(text))")
             case .agent(let text) where !text.isEmpty: turns.append("Agent: \(clip(text))")
             case .plan(let items): plan = items.map { "- [\($0.status)] \(clip($0.content))" }
             default: break

@@ -10,6 +10,8 @@ struct TranscriptScreen: View {
     @State private var held: (session: TranscriptSession, token: ListenerToken)?
     @State private var workspace: SessionWorkspace?
     @State private var workspaceToken: ListenerToken?
+    /// What chip cards read and do for this screen.
+    @State private var chipActions: ChipActions?
     /// Owns this screen's pushed diff or file: the same session may be open in another tab too.
     @State private var screenID = UUID()
     @State private var visible = false
@@ -120,6 +122,7 @@ struct TranscriptScreen: View {
         let workspace = registry.workspace(hostID: hostID, sessionId: sessionId)
         workspaceToken = workspace.activate()
         self.workspace = workspace
+        chipActions = ChipActions(session: session, workspace: workspace, owner: screenID)
     }
 
     private func content(_ session: TranscriptSession, _ workspace: SessionWorkspace) -> some View {
@@ -177,7 +180,8 @@ struct TranscriptScreen: View {
                             RequestCard(session: session).environment(\.cardFloats, true).padding(.horizontal, 12).padding(.bottom, 4)
                             if mode == .transcript {
                                 ComposerBar(session: session, onOpenSettings: { showSettings = true },
-                                            onShip: session.canDrive && workspace.canShepherd ? { ship(workspace) } : nil)
+                                            onShip: session.canDrive && workspace.canShepherd ? { ship(workspace) } : nil,
+                                            actions: chipActions)
                             }
                         }
                     }
@@ -197,6 +201,7 @@ struct TranscriptScreen: View {
                 case .discard: return .discarded
                 }
             })
+            .environment(\.chipActions, chipActions)
             // A Ship or review card's "Review changes" jumps to the Changes tab.
             .environment(\.openSessionChanges, openChanges)
             .background(Color(.systemBackground))

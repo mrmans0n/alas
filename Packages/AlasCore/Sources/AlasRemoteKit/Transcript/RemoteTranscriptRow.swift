@@ -5,9 +5,11 @@ import Foundation
 /// flattened text.
 public enum RemoteTranscriptRow: Equatable, Sendable {
     /// `images` replace their `🖼` labels in the text; a viewer shows each
-    /// label again until its bytes load.
+    /// label again until its bytes load. `mentions` replace their `📎`
+    /// labels. `pastedSpans` are UTF-16 ranges of the text.
     /// `card` is the row's `ACPPromptCard` as JSON, for one Alas injected.
-    case user(String, checkpointID: UUID?, images: [RemoteWireMessage.Image] = [], card: String? = nil)
+    case user(String, checkpointID: UUID?, images: [RemoteWireMessage.Image] = [], card: String? = nil,
+              mentions: [RemoteUserMention] = [], pastedSpans: [ACPPastedTextSpan] = [])
     case agent(String)
     case thought(String)
     case toolCall(ACPToolCall)
@@ -25,11 +27,18 @@ public enum RemoteTranscriptRow: Equatable, Sendable {
         switch message.kind {
         case "user":
             let images = message.images ?? []
+            let mentions = message.mentions ?? []
+            var shown = images.isEmpty ? text : RemoteWireMessage.userRowText(text, removingImageNames: images.map(\.name))
+            if !mentions.isEmpty {
+                shown = RemoteWireMessage.userRowText(shown, removingResourceNames: mentions.map(\.name))
+            }
             self = .user(
-                images.isEmpty ? text : RemoteWireMessage.userRowText(text, removingImageNames: images.map(\.name)),
+                shown,
                 checkpointID: message.checkpointId.flatMap(UUID.init(uuidString:)),
                 images: images,
-                card: message.card
+                card: message.card,
+                mentions: mentions,
+                pastedSpans: message.pastedSpans ?? []
             )
         case "agent":
             self = .agent(text)

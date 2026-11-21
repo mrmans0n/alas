@@ -32,6 +32,24 @@ public final class ACPUpstreamReferenceStore: ChangeTracking {
             return environment
         }
 
+        /// The repository, when it comes from elsewhere than this machine's git: a peer's host.
+        public var fixedRemote: CodeHostRemote?
+        /// Looks a reference up in place of the provider's CLI, when set.
+        public var lookup: (@Sendable (CodeHostReference) async -> Result<CodeHostReferenceSummary, CodeHostReferenceFailure>)?
+
+        /// A peer session's store: its host names the repository and looks
+        /// references up, so nothing runs `git` or `gh`/`glab` here.
+        public static func peer(
+            remote: CodeHostRemote,
+            lookup: @escaping @Sendable (CodeHostReference) async -> Result<CodeHostReferenceSummary, CodeHostReferenceFailure>
+        ) -> Environment {
+            var environment = Environment(remotes: { _ in [] }, providers: CodeHostProviderRegistry(providers: [:]),
+                                          now: { Date() })
+            environment.fixedRemote = remote
+            environment.lookup = lookup
+            return environment
+        }
+
         public init(remotes: @escaping @Sendable (URL) async throws -> [GitRemote], providers: CodeHostProviderRegistry, now: @escaping @Sendable () -> Date) {
             self.remotes = remotes
             self.providers = providers
@@ -119,6 +137,11 @@ public final class ACPUpstreamReferenceStore: ChangeTracking {
     /// each composer attach) re-runs the cheap `git remote -v` again, which
     /// picks up a remote added after this worktree first opened.
     public func resolveRemote() {
+        if let fixed = environment.fixedRemote {
+            remote = fixed
+            remoteResolved = true
+            return
+        }
         guard remoteTask == nil else { return }
         let root = worktreeRoot
         let environment = environment
@@ -161,14 +184,28 @@ public final class ACPUpstreamReferenceStore: ChangeTracking {
     }
 
     public func ensureLoaded(_ reference: CodeHostReference) {
-        guard let remote,
-              let provider = environment.providers.provider(for: remote.kind),
-              loads[reference] == nil
-        else { return }
+        guard let remote, loads[reference] == nil else { return }
         if let cached = entries[reference],
            environment.now().timeIntervalSince(cached.at) < Self.staleAfter {
             return
         }
+        if let lookup = environment.lookup {
+            if entries[reference] == nil { set(reference, .loading) }
+            loads[reference] = Task { [weak self] in
+                await self?.acquireLoadSlot()
+                let result = await lookup(reference)
+                guard let self else { return }
+                self.releaseLoadSlot()
+                self.loads[reference] = nil
+                guard self.remote == remote else { return }
+                switch result {
+                case .success(let summary): self.set(reference, .loaded(summary))
+                case .failure(let failure): self.set(reference, .failed(failure))
+                }
+            }
+            return
+        }
+        guard let provider = environment.providers.provider(for: remote.kind) else { return }
         if entries[reference] == nil {
             set(reference, .loading)
         }

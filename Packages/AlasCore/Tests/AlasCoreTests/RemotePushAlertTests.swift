@@ -75,3 +75,22 @@ struct RemotePermissionQuickAnswerTests {
         #expect(RemotePermissionQuickAnswer.optionId(in: payload, allow: allow) == expected)
     }
 }
+
+struct RemoteQuestionQuickAnswerTests {
+    /// (questions, options per question, allowMultiple) → offers buttons.
+    @Test(arguments: [
+        (1, 2, false, true),
+        (1, 4, false, true),
+        (1, 5, false, false),
+        (1, 0, false, false),
+        (1, 2, true, false),
+        (2, 2, false, false),
+    ] as [(Int, Int, Bool, Bool)])
+    func offersButtonsOnlyForOneSingleChoiceThatFits(questions: Int, options: Int, multiple: Bool, offered: Bool) {
+        let payload = RemoteQuestionPayload(requestId: 1, title: nil, questions: (0 ..< questions).map { q in
+            RemoteQuestion(id: "q\(q)", prompt: "?", options: (0 ..< options).map { RemoteQuestionOption(id: "o\($0)", label: "O\($0)") },
+                           allowMultiple: multiple)
+        })
+        #expect((RemoteQuestionQuickAnswer.options(in: payload) != nil) == offered)
+    }
+}
