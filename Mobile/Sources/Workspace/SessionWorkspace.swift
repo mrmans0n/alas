@@ -79,6 +79,8 @@ final class SessionWorkspace {
         guard changesMode != comparisonMode else { return }
         refreshChanges()
     }
+    /// Counts the host coming back online; an open review refreshes on it, since what it loaded may be stale.
+    private(set) var reconnects = 0
     /// The review pushed from the Changes tab, a commit's files or a file's history.
     private(set) var review: (source: ReviewSource, focus: ReviewEntryID?)?
     @ObservationIgnored private var diffWaiters: Waiters<DiffKey, DiffReply> = [:]
@@ -179,7 +181,10 @@ final class SessionWorkspace {
             Task { @MainActor [weak self] in self?.watchHost(generation: generation) }
         }
         defer { hostWasOnline = online }
-        if online, !hostWasOnline { replay() }
+        if online, !hostWasOnline {
+            replay()
+            reconnects += 1
+        }
     }
 
     /// Asks again for whatever is open; the host forgot everything it was asked while away.

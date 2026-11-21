@@ -41,6 +41,7 @@ struct ReviewScreen: View {
                 }
             }
             .task { await document.start() }
+            .onChange(of: workspace.reconnects) { Task { await document.refresh() } }
             .alert("Couldn't do that", isPresented: Binding { document.error != nil } set: { if !$0 { document.error = nil } }) {
                 Button("OK", role: .cancel) {}
             } message: {

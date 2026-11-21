@@ -150,18 +150,19 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     private func menu(_ id: ReviewEntryID, index: Int) -> UIMenu? {
         guard !document.hunkActions(id).isEmpty else { return nil }
         return UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self else { return completion([]) }
+            // The hunk as the menu showed it: a diff refreshed since then makes the host refuse, not act on another hunk.
+            guard let self, let hunk = hunks(id)?[safe: index] else { return completion([]) }
             let busy = document.gitBusy
             let items: [UIMenuElement] = document.hunkActions(id).map { action in
                 let item: UIAction = switch action {
                 case .stage: UIAction(title: "Stage Hunk", image: UIImage(systemName: "plus.circle")) { [weak self] _ in
-                        self?.run(.stage, id, index)
+                        self?.run(.stage, id, index, hunk)
                     }
                 case .unstage: UIAction(title: "Unstage Hunk", image: UIImage(systemName: "minus.circle")) { [weak self] _ in
-                        self?.run(.unstage, id, index)
+                        self?.run(.unstage, id, index, hunk)
                     }
                 case .discard: UIAction(title: "Discard Hunk…", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
-                        self?.confirmDiscard(id, index)
+                        self?.confirmDiscard(id, index, hunk)
                     }
                 }
                 if busy { item.attributes.insert(.disabled) }
@@ -171,16 +172,14 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         }])
     }
 
-    /// Reads the hunk when the action runs, so a diff refreshed since the menu opened isn't acted on as it was.
-    private func run(_ action: RemoteHunkAction, _ id: ReviewEntryID, _ index: Int) {
-        guard let hunk = hunks(id)?[safe: index] else { return }
+    private func run(_ action: RemoteHunkAction, _ id: ReviewEntryID, _ index: Int, _ hunk: RemoteDiffHunk) {
         Task { await document.changeHunk(action, entry: id, index: index, hunk) }
     }
 
-    private func confirmDiscard(_ id: ReviewEntryID, _ index: Int) {
+    private func confirmDiscard(_ id: ReviewEntryID, _ index: Int, _ hunk: RemoteDiffHunk) {
         let alert = UIAlertController(title: "Discard this hunk?", message: "Its changes are lost.", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Discard", style: .destructive) { [weak self] _ in self?.run(.discard, id, index) })
+        alert.addAction(UIAlertAction(title: "Discard", style: .destructive) { [weak self] _ in self?.run(.discard, id, index, hunk) })
         present(alert, animated: true)
     }
 
