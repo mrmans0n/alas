@@ -133,6 +133,20 @@ struct VisualAidWebPolicyTests {
 }
 
 extension VisualAidWebPolicyTests {
+    /// `@MainActor`: the store is main-actor isolated, like the cards that use it.
+    @MainActor
+    @Test("a paused visual's picture survives a later close and is hidden in another theme")
+    func snapshotStoreKeepsThePictureForItsTheme() {
+        let store = VisualAidSnapshotStore()
+        let dark = Theme(id: "dark", name: "Dark", tokens: [:])
+        let image = NSImage(size: NSSize(width: 4, height: 4))
+        store.record(Self.id, height: 120, image: image, theme: dark)
+        store.record(Self.id, height: 140, image: nil, theme: dark)
+        #expect(store.image(for: Self.id, theme: dark) === image)
+        #expect(store.entry(for: Self.id)?.height == 140)
+        #expect(store.image(for: Self.id, theme: .fallback) == nil)
+    }
+
     /// `@MainActor` on this test only: WKWebView needs the main thread.
     @MainActor
     @Test("WebRTC is gone from the page and from every about:blank or srcdoc child frame")

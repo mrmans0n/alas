@@ -48,8 +48,11 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
 
     /// `layoutVariables` (the transcript's font, from `VisualAidWebPolicy.layoutVariables`) travel with the
     /// theme's colours: baked into a fragment's frame and pushed again by `applyTheme`.
+    /// `initialHeight` is the height the visual last laid out at, so a page reopened on scroll-back starts
+    /// at its own size instead of growing from `minCardHeight` once it loads.
     init(
         visualID: UUID, html: String, theme: Theme, layoutVariables: [String: String] = [:],
+        initialHeight: CGFloat? = nil,
         locksNetworkAfterLoad: Bool,
         presentation: ACPVisualAid.Presentation = .card,
         networkLockDeadline: Duration = RemoteVisualAidWebPolicy.networkLockDeadline
@@ -57,6 +60,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         self.locksNetworkAfterLoad = locksNetworkAfterLoad
         self.networkLockDeadline = networkLockDeadline
         self.visualID = visualID
+        if let initialHeight { contentHeight = initialHeight }
         let variables = Self.variables(theme: theme, layoutVariables: layoutVariables)
         documentThemeVariables = RemoteVisualAidWebPolicy.isFullDocument(html) ? nil : variables
         themeVariables = variables
@@ -253,6 +257,13 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         webView.callAsyncJavaScript(
             "alasVisualTheme(variables)", arguments: ["variables": themeVariables],
             in: nil, in: Self.bridgeWorld, completionHandler: nil)
+    }
+
+    /// The page as drawn now, or nil unless it is loaded and on screen: WebKit cannot snapshot a page
+    /// outside a window.
+    func snapshot() async -> NSImage? {
+        guard !isClosed, status == .ready, webView.window != nil, !webView.bounds.isEmpty else { return nil }
+        return try? await webView.takeSnapshot(configuration: nil)
     }
 
     func close() {
@@ -600,6 +611,51 @@ struct VisualAidScrollRouting: Equatable {
     private static func decide(deltaX: CGFloat, deltaY: CGFloat, edges: Edges) -> Owner {
         if abs(deltaX) > abs(deltaY) { return .page }
         return (deltaY > 0 ? edges.canScrollUp : edges.canScrollDown) ? .page : .transcript
+    }
+}
+
+/// What a visual looked like when its page last closed: its height, and an image when the page budget
+/// evicted it while on screen. Shown in place of a paused page, and used to size a page that reopens.
+@MainActor
+final class VisualAidSnapshotStore {
+    static let shared = VisualAidSnapshotStore()
+
+    struct Entry {
+        let height: CGFloat
+        let image: NSImage?
+        /// The theme the image was drawn in; an image from another theme is not shown.
+        let theme: Theme
+    }
+
+    private let cache = NSCache<NSUUID, Box>()
+
+    private final class Box {
+        let entry: Entry
+        init(_ entry: Entry) { self.entry = entry }
+    }
+
+    init() {
+        cache.countLimit = 64
+        cache.totalCostLimit = 64 * 1024 * 1024
+    }
+
+    func entry(for visualID: UUID) -> Entry? {
+        cache.object(forKey: visualID as NSUUID)?.entry
+    }
+
+    /// The image, only when it was drawn in `theme`.
+    func image(for visualID: UUID, theme: Theme) -> NSImage? {
+        guard let entry = entry(for: visualID), entry.theme == theme else { return nil }
+        return entry.image
+    }
+
+    /// Keeps an earlier image when `image` is nil and the theme still matches, so closing a page that is
+    /// already off screen does not drop the picture taken while it was visible.
+    func record(_ visualID: UUID, height: CGFloat, image: NSImage?, theme: Theme) {
+        let kept = image ?? self.image(for: visualID, theme: theme)
+        // Retina backing: about 4 bytes per pixel at 2x.
+        let cost = kept.map { Int($0.size.width * $0.size.height) * 16 } ?? 0
+        cache.setObject(Box(Entry(height: height, image: kept, theme: theme)), forKey: visualID as NSUUID, cost: cost)
     }
 }
 
