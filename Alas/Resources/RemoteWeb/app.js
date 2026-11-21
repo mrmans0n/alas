@@ -2194,7 +2194,7 @@ function resubscribe() {
 function insertMessage(m, open) {
   if (m.isHidden === true) {
     const gone = messageNodes.get(m.stableId);
-    if (gone?.dataset.visualId) forgetVisualCard(gone.dataset.visualId);
+    if (gone?.dataset.visualId || gone?.querySelector?.("[data-visual-id]")) forgetVisualCardsIn(gone);
     gone?.remove();
     messageNodes.delete(m.stableId);
     messages.set(m.stableId, m);
@@ -2214,7 +2214,7 @@ function insertMessage(m, open) {
 function upsertMessage(m) {
   if (m.isHidden === true) {
     const gone = messageNodes.get(m.stableId);
-    if (gone?.dataset.visualId) forgetVisualCard(gone.dataset.visualId);
+    if (gone?.dataset.visualId || gone?.querySelector?.("[data-visual-id]")) forgetVisualCardsIn(gone);
     gone?.remove();
     messageNodes.delete(m.stableId);
     messages.set(m.stableId, m);
@@ -2227,7 +2227,13 @@ function upsertMessage(m) {
       messages.set(m.stableId, m);
       return;
     }
+    if (existing.dataset.segmented && m.kind === "agent" && patchAgentSegments(existing, m)) {
+      existing.dataset.index = m.index;
+      messages.set(m.stableId, m);
+      return;
+    }
     const wasOpen = existing.classList.contains("is-open") ? new Set([m.stableId]) : null;
+    forgetVisualCardsIn(existing);   // before rendering, which may register a card under the same id
     const node = renderMessage(m, m.stableId, wasOpen);
     node.dataset.sid = m.stableId;
     node.dataset.index = m.index;
@@ -3191,6 +3197,90 @@ function md(text) {
 }
 function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
+// Markdown into `node`, with GitHub alerts drawn as alerts.
+function setMarkdown(node, text) {
+  node.innerHTML = md(text);
+  decorateAlerts(node);
+}
+
+// A blockquote whose first line is "[!NOTE]", "[!TIP]", "[!IMPORTANT]", "[!WARNING]" or "[!CAUTION]"
+// becomes a titled alert, as on the Mac and the phone. Text after the marker on its line is kept.
+function decorateAlerts(node) {
+  node.querySelectorAll("blockquote").forEach((quote) => {
+    const paragraph = quote.firstElementChild;
+    const first = paragraph?.tagName === "P" ? paragraph.firstChild : null;
+    if (!first || first.nodeType !== Node.TEXT_NODE) return;
+    const alert = RemoteTranscriptMarkdown.alertMarker(first.data.split("\n")[0]);
+    if (!alert) return;
+    first.data = first.data.replace(/^\s*\[![A-Za-z]+\]\s*/, "");
+    if (!first.data) {
+      const next = first.nextSibling;
+      first.remove();
+      if (next?.nodeName === "BR") next.remove();
+    }
+    if (!paragraph.childNodes.length) paragraph.remove();
+    quote.classList.add("md-alert", "md-alert-" + alert.kind);
+    quote.prepend(el("div", "md-alert-title", alert.title));
+  });
+}
+
+// An agent row's text. Closed ```visual and ```chart fences draw as embedded visuals between its
+// prose; such a row is built from segments so a streaming update can patch it in place.
+function renderAgentText(node, m, sid) {
+  const segments = agentSegments(m.text, sid);
+  if (!segments.some((segment) => segment.type !== "markdown")) { setMarkdown(node, m.text); return; }
+  node.dataset.segmented = "1";
+  node.replaceChildren(...segments.map(segmentNode));
+}
+
+function agentSegments(text, sid) {
+  return RemoteTranscriptMarkdown.splitVisualFences(text || "").map((segment, index) => segment.type === "visual"
+    ? { ...segment, id: RemoteTranscriptMarkdown.stableVisualId(sid + ":" + index + ":" + segment.html) }
+    : segment);
+}
+
+function segmentKey(segment) {
+  return segment.type === "visual" ? "visual:" + segment.id : segment.type;
+}
+
+function segmentNode(segment) {
+  let node;
+  if (segment.type === "visual") {
+    node = visualCardNode({ id: segment.id, title: segment.title || "Visual", html: segment.html,
+                            presentation: "embedded", question: null });
+  } else if (segment.type === "drawing") {
+    node = el("div", "md-drawing", segment.title ? "Drawing " + segment.title + "…" : "Drawing visual…");
+  } else {
+    node = el("div", "md-segment");
+    setMarkdown(node, segment.text);
+    node.markdownText = segment.text;
+  }
+  node.dataset.segment = segmentKey(segment);
+  return node;
+}
+
+// Updates a segmented agent row in place: a visual whose segment is unchanged keeps its node, because
+// moving or rebuilding an iframe reloads its page. False when the text no longer has a visual.
+function patchAgentSegments(node, m) {
+  const segments = agentSegments(m.text, m.stableId);
+  if (!segments.some((segment) => segment.type !== "markdown")) return false;
+  const children = [...node.children];
+  segments.forEach((segment, index) => {
+    const child = children[index];
+    if (child && child.dataset.segment === segmentKey(segment)) {
+      if (segment.type === "markdown" && child.markdownText !== segment.text) {
+        setMarkdown(child, segment.text);
+        child.markdownText = segment.text;
+      }
+      return;
+    }
+    const next = segmentNode(segment);
+    if (child) { forgetVisualCardsIn(child); child.replaceWith(next); } else node.append(next);
+  });
+  children.slice(segments.length).forEach((child) => { forgetVisualCardsIn(child); child.remove(); });
+  return true;
+}
+
 const TOOL_VERB = { read: "Read", search: "Searched", execute: "Ran", run: "Ran", edit: "Edit" };
 // status → [icon name, color class]; the icon comes from ICON_SVG.
 const TOOL_STATUS = { completed: ["check", "ok"], failed: ["cross", "err"], in_progress: ["pips", "run"], pending: ["pips", "run"], canceled: ["stop", "run"], cancelled: ["stop", "run"] };
@@ -3199,7 +3289,10 @@ const TOOL_STATUS = { completed: ["check", "ok"], failed: ["cross", "err"], in_p
 // collapsed "Thinking…" row, and collapsed tool/structured cards.
 function renderMessage(m, sid, open) {
   let node;
-  if (m.kind === "user" || m.kind === "agent") {
+  if (m.kind === "agent") {
+    node = el("div", "msg md m-agent");
+    renderAgentText(node, m, sid);
+  } else if (m.kind === "user") {
     node = el("div", "msg md m-" + m.kind);
     const images = m.kind === "user" ? (m.images || []).filter(image => isLocalTranscriptImage(image.uri)) : [];
     node.innerHTML = md(images.length ? userTextWithoutImageLabels(m.text, images) : m.text);
@@ -3312,6 +3405,13 @@ function resetVisualCards(keepDrafts) {
   visualFrameOrder = [];
 }
 
+// Forgets the card of `node` and of every visual inside it, as when a row leaves the transcript.
+function forgetVisualCardsIn(node) {
+  if (!node) return;
+  if (node.dataset?.visualId) forgetVisualCard(node.dataset.visualId);
+  node.querySelectorAll?.("[data-visual-id]").forEach((inner) => forgetVisualCard(inner.dataset.visualId));
+}
+
 function forgetVisualCard(visualId) {
   visualFrameOrder = RemoteVisualAid.releaseFrame(visualFrameOrder, visualId);
   const card = visualCards.get(visualId);
@@ -3323,10 +3423,16 @@ function forgetVisualCard(visualId) {
 function renderVisualAid(m) {
   const visual = RemoteVisualAid.parseVisual(m.json);
   if (!visual) return el("div", "msg m-agent", m.text || "");   // an old or malformed row shows its title
+  const node = visualCardNode(visual);
+  node.dataset.kind = "visualAid";
+  return node;
+}
+
+// A visual's card, registered so the frame budget and observers manage its page.
+function visualCardNode(visual) {
   // An embedded visual is part of the reply: no card chrome or title, only the page.
   const presentation = RemoteVisualAid.presentationOf(visual);
   const node = el("div", presentation === "embedded" ? "msg m-visual m-visual-embedded" : "msg m-visual");
-  node.dataset.kind = "visualAid";
   node.dataset.visualId = visual.id;
   const host = el("div", "visual-host");
   const answer = el("div", "visual-answer");

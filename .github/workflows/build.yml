@@ -933,3 +933,7 @@ jobs:
       - name: Test remote web visual aid
         if: ${{ !cancelled() }}
         run: bash scripts/tests/remote-web-visual-aid/run.sh
+
+      - name: Test remote web transcript markdown
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/remote-web-transcript-markdown/run.sh

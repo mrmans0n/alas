@@ -355,6 +355,20 @@ struct RemoteWebAssetTests {
         try expectReferencedAndPrecached("/repo-filter.js", html: html, sw: sw)
     }
 
+    @Test func transcriptMarkdownModuleLoadsBeforeApp() throws {
+        let js = try asset("transcript-markdown.js")
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+
+        #expect(js.contains("globalThis.RemoteTranscriptMarkdown ="))
+        // Pure module: no DOM access.
+        #expect(!js.contains("document."))
+        #expect(!js.contains("window."))
+
+        try expectLoadsBeforeApp("/transcript-markdown.js", in: html)
+        try expectReferencedAndPrecached("/transcript-markdown.js", html: html, sw: sw)
+    }
+
     @Test func repoHeadersAreCollapsibleWithColorTiles() throws {
         let js = try asset("app.js")
         let css = try asset("style.css")
