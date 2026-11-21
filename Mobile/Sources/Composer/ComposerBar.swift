@@ -99,30 +99,18 @@ struct ComposerBar: View {
         VStack(alignment: .leading, spacing: 6) {
             if !session.draft.images.isEmpty { tiles }
             ZStack(alignment: .topLeading) {
-                if session.draft.content.isEmpty {
-                    Text(suggestion ?? "Message").foregroundStyle(.tertiary).lineLimit(4)
-                        .padding(.horizontal, 4).padding(.vertical, 8)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                }
                 ComposerTextView(draft: $session.draft.content, selection: $selection, rules: rules,
                                  references: session.references, actions: actions,
                                  focusRequest: session.composerFocusRequest,
                                  onPasteImages: config?.acceptsImages == true ? { images in
                                      Task { for data in images { await ImageStaging.stage(data, into: session) } }
                                  } : nil)
+                if session.draft.content.isEmpty { placeholder }
             }
             HStack(spacing: 6) {
                 if config?.acceptsImages == true { attachButton }
                 chips
                 QueueBadge(session: session, open: $queueOpen)
-                if let suggestion {
-                    Button("Use suggestion", systemImage: "text.insert") { session.acceptNextPromptSuggestion() }
-                        .font(.footnote.weight(.medium))
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.capsule)
-                        .accessibilityValue(suggestion)
-                }
                 Spacer(minLength: 0)
                 if let usage = config?.usage, usage.context != nil || !usage.lastTurn.isEmpty || !usage.cumulative.isEmpty {
                     UsageRing(usage: usage)
@@ -134,6 +122,26 @@ struct ComposerBar: View {
         .padding(.top, 4)
         .padding(.bottom, 8)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+    }
+
+    /// The ghost text over the empty field. A suggestion ends in a small Use pill, as the Mac's
+    /// hint ends in its Ship button; only the pill takes taps, so the rest still focuses the field.
+    private var placeholder: some View {
+        HStack(alignment: .lastTextBaseline, spacing: 6) {
+            Text(suggestion ?? "Message").foregroundStyle(.tertiary).lineLimit(4)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            if let suggestion {
+                Button("Use") { session.acceptNextPromptSuggestion() }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.mini)
+                    .accessibilityLabel("Use suggestion")
+                    .accessibilityValue(suggestion)
+            }
+        }
+        .padding(.horizontal, 4).padding(.vertical, 8)
     }
 
     private var tiles: some View {
