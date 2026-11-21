@@ -48,4 +48,19 @@ struct ReviewLayoutTests {
     func largeAndGeneratedFilesStartFolded(path: String, add: Int, del: Int, folded: Bool) {
         #expect(ReviewLayout.startsFolded(path: path, add: add, del: del) == folded)
     }
+
+    @Test
+    func viewedMarkClearsWhenTheDiffChanges() {
+        let changed = [RemoteDiffHunk(header: "@@ -1,2 +1,2 @@", oldStart: 1, newStart: 1, lines: [
+            RemoteDiffLine(kind: "context", text: "a", oldNumber: 1, newNumber: 1),
+            RemoteDiffLine(kind: "add", text: "B", oldNumber: nil, newNumber: 2),
+        ]), Self.hunks[1]]
+        var marks = ReviewViewedMarks()
+        marks.mark(Self.id, hunks: Self.hunks)
+        #expect(marks.isViewed(Self.id, hunks: Self.hunks))
+        #expect(!marks.isViewed(Self.id, hunks: changed))
+        #expect(ReviewViewedMarks(stored: marks.stored).isViewed(Self.id, hunks: Self.hunks))
+        marks.unmark(Self.id)
+        #expect(!marks.isViewed(Self.id, hunks: Self.hunks))
+    }
 }
