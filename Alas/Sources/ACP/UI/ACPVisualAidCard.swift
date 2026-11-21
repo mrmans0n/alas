@@ -162,7 +162,7 @@ struct ACPVisualAidCard: View {
         } else {
             embeddedPlaceholder(
                 paused ? "Visual paused to save memory" : "Visual not loaded", button: ("Show visual", openPage),
-                minHeight: pausedHeight)
+                minHeight: pausedHeight.map { VisualAidWebPolicy.contentHeight(forContentHeight: $0, presentation: .embedded) })
         }
     }
 
