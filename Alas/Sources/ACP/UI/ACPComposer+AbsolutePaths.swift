@@ -49,8 +49,8 @@ extension ACPNSTextView {
         guard chipsAbsolutePaths, let textStorage else { return false }
         let string = textStorage.string as NSString
         let prefix = string.substring(to: range.location) as NSString
-        let closed = ACPUpstreamReferenceDetector.codeRanges(in: prefix, unclosedRunsExtendToEnd: false)
-        let open = ACPUpstreamReferenceDetector.codeRanges(in: prefix, unclosedRunsExtendToEnd: true)
+        let closed = UpstreamReferenceText.codeRanges(in: prefix, unclosedRunsExtendToEnd: false)
+        let open = UpstreamReferenceText.codeRanges(in: prefix, unclosedRunsExtendToEnd: true)
         guard open.count <= closed.count,
               prefix.range(of: Self.openLinkDestinationPattern, options: .regularExpression).location == NSNotFound
         else { return false }
@@ -81,7 +81,7 @@ extension ACPNSTextView {
     private static func codeRanges(in text: String, unclosedRunsExtendToEnd: Bool) -> [NSRange] {
         let string = text as NSString
         var ranges = MarkdownFenceEditing.blocks(in: text).map(\.outerRange)
-            + ACPUpstreamReferenceDetector.codeRanges(in: string, unclosedRunsExtendToEnd: unclosedRunsExtendToEnd)
+            + UpstreamReferenceText.codeRanges(in: string, unclosedRunsExtendToEnd: unclosedRunsExtendToEnd)
         if let links = try? NSRegularExpression(pattern: #"\]\([^)\n]*\)"#) {
             ranges += links.matches(in: text, range: NSRange(location: 0, length: string.length)).map(\.range)
         }

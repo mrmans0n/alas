@@ -91,9 +91,13 @@ struct StagedImage: Identifiable {
 
 /// What the user is composing. Lives on the session so it outlives the screen and reconnects.
 struct ComposerDraft {
-    var text = ""
+    /// The text and its chips: commands, mentions, references, collapsed pastes.
+    var content = RemoteComposerDraft()
     var images: [StagedImage] = []
-    var mentions: [RemoteMention] = []
+
+    /// What `sendPrompt` sends as the text.
+    var text: String { content.text }
+    var hasContent: Bool { content.hasContent || !images.isEmpty }
 }
 
 /// What this phone holds for one visual aid's card. Kept on the session by visual id, so a draft and a
@@ -198,6 +202,8 @@ final class TranscriptSession {
     /// Bumped to raise the keyboard on the composer, with the caret at the end of the draft.
     private(set) var composerFocusRequest = 0
     var visualAids: [UUID: VisualAidCardState] = [:]
+    /// What the session's `#N`/`!N` references name, as the host looked them up.
+    let references = ReferenceCache()
 
     let hostID: UUID
     let sessionId: String
@@ -307,7 +313,11 @@ final class TranscriptSession {
     /// Quotes a transcript message, or part of one, under the draft and focuses the composer, as the Mac's Quote does.
     func quote(_ message: String) {
         guard ACPMessageQuote.canQuote(message) else { return }
-        draft.text = ACPMessageQuote.appending(message, to: draft.text)
+        // The quote goes in as text after the draft's chips; its own `/` and `#` stay as quoted.
+        let current = draft.content.text
+        let quoted = ACPMessageQuote.appending(message, to: current)
+        draft.content = RemoteComposerDraft(
+            segments: draft.content.segments + [.text((quoted as NSString).substring(from: (current as NSString).length))]).merged
         composerFocusRequest += 1
     }
 
@@ -352,10 +362,11 @@ final class TranscriptSession {
         let attachments = draft.images.map {
             RemoteAttachment(name: nil, mimeType: $0.mimeType, dataBase64: $0.data.base64EncodedString())
         }
-        let mentions = Array(RemoteComposerText.liveMentions(draft.mentions, in: text)
-            .prefix(RemoteAttachmentLimits.maxMentionCount))
+        // A mention goes out while its chip is in the draft.
+        let mentions = Array(draft.content.mentions.prefix(RemoteAttachmentLimits.maxMentionCount))
         rejection = nil
-        let sent = drive(.sendPrompt(sessionId: sessionId, text: text, attachments: attachments, intent: intent, mentions: mentions),
+        let sent = drive(.sendPrompt(sessionId: sessionId, text: text, attachments: attachments, intent: intent,
+                                     mentions: mentions, pastedSpans: draft.content.pastedSpans),
                          offline: "Your message wasn't sent.")
         guard sent else { return }
         sendCount += 1
@@ -557,6 +568,15 @@ final class TranscriptSession {
         hub.send(.searchMentions(sessionId: sessionId, query: query), to: hostID)
     }
 
+    /// Asks the host what `references` name, once each; the cache marks them
+    /// unsupported when the host can't look them up.
+    func resolve(_ references: [CodeHostReference]) {
+        guard hub.state(of: hostID) == .online else { return }
+        self.references.ensure(references, supported: config?.codeHost != nil) { spellings in
+            hub.send(.resolveReferences(sessionId: sessionId, spellings: spellings), to: hostID)
+        }
+    }
+
     /// Verbs that need the writer lease ask for it first when this phone does not hold it.
     /// False, with `rejection` set, when the host is offline and nothing was sent.
     @discardableResult
@@ -699,6 +719,7 @@ final class TranscriptSession {
         tabAction = nil
         mentionCandidates = []
         mentionCandidatesQuery = nil
+        references.forgetPending()
         // A final read whose reply never came, or came before the exit, is asked again.
         settledTerminals = settledTerminals.filter { id in
             toolTerminals[id].map { !$0.isAwaitingExit } ?? false
@@ -862,20 +883,23 @@ final class TranscriptSession {
             if !unsettled.isEmpty {
                 // Ahead of what the user typed since, as the Mac does, so neither is lost.
                 let rejected = unsettled.removeFirst().draft
-                draft = ComposerDraft(
-                    text: [rejected.text, draft.text].filter { !$0.isEmpty }.joined(separator: "\n"),
-                    images: rejected.images + draft.images,
-                    mentions: rejected.mentions + draft.mentions)
+                draft = ComposerDraft(content: rejected.content.appending(draft.content),
+                                      images: rejected.images + draft.images)
             }
             rejection = reason ?? state.config?.agentIssue?.message ?? "The host refused this prompt."
             if subscription == nil, unsettled.isEmpty { listener = nil }
         case .queueEditRestored(let id, _, let text) where id == sessionId:
-            draft.text += draft.text.isEmpty ? text : "\n" + text
+            let restored = RemoteComposerDraft.restoring(
+                text, commands: (config?.availableCommands ?? []).map(\.command), codeHost: config?.codeHost?.kind, caret: nil)
+            draft.content = draft.content.appending(restored)
         case .mentionCandidates(let id, let query, let candidates) where id == sessionId:
             if query == lastMentionQuery {
                 mentionCandidates = candidates
                 mentionCandidatesQuery = query
             }
+            return
+        case .referenceSummaries(let id, let entries) where id == sessionId:
+            references.apply(entries)
             return
         case .error(let message, let id) where id == sessionId:
             rejection = message
@@ -965,8 +989,10 @@ final class TranscriptSession {
 
     /// Puts the suggestion in the composer, ready to edit.
     func acceptNextPromptSuggestion() {
-        guard let nextPromptSuggestion, draft.text.isEmpty else { return }
-        draft.text = nextPromptSuggestion
+        guard let nextPromptSuggestion, draft.content.isEmpty else { return }
+        draft.content = RemoteComposerDraft.restoring(
+            nextPromptSuggestion, commands: (config?.availableCommands ?? []).map(\.command),
+            codeHost: config?.codeHost?.kind, caret: nil)
         self.nextPromptSuggestion = nil
         composerFocusRequest += 1
     }

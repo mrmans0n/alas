@@ -75,9 +75,16 @@ struct NativePeerSessionView: View {
                 changes: client.visualChanges.eraseToAnyPublisher()
             ),
             visualForm: { client.visualForm(for: $0, sessionId: transcript.sessionId) },
-            visualStatus: { client.visualStatus(for: $0, sessionId: transcript.sessionId) }
+            visualStatus: { client.visualStatus(for: $0, sessionId: transcript.sessionId) },
+            commands: (offersShip ? [ACPAlasSlashCommand.shipSuggestion] : [])
+                + NativePeerComposerState.slashSuggestions(from: transcript.config),
+            upstreamReferences: client.upstreamReferences(for: transcript.sessionId, codeHost: transcript.config?.codeHost),
+            promptCardContext: ACPPromptCardContext(perform: { _ in }, openSkill: { client.openSkill($0) })
         )
     }
+
+    /// Ship is offered here as in the composer, so a sent `/ship` chips the same.
+    private var offersShip: Bool { canDrive && client.selectedSessionShips }
 
     /// Matches the right pane, which opens the restore for this target only.
     private var servesCheckpoints: Bool {
@@ -586,7 +593,9 @@ private struct NativePeerComposer: View {
                 onEditorSelectionChange: { reconcileMentionPicker() },
                 onEditorKeyDown: handleMentionKey,
                 onDictationShortcut: { dictation.handleShortcut($0) },
-                alasCommands: offersShip ? [ACPAlasSlashCommand.shipSuggestion] : []
+                upstreamReferences: client.upstreamReferences(for: transcript.sessionId, codeHost: config?.codeHost),
+                alasCommands: offersShip ? [ACPAlasSlashCommand.shipSuggestion] : [],
+                onOpenSkill: { client.openSkill($0) }
             )
             .disabled(!sessionOpen)
             .accessibilityLabel("Message peer session")

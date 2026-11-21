@@ -10,7 +10,14 @@ struct SlashPicker: View {
         PickerList {
             ForEach(commands, id: \.command) { command in
                 PickerRow(title: command.command, detail: command.description ?? command.hint, mono: true) {
+                    CommandCap(isAlas: command.command == ChipActions.ship.command)
+                } action: {
                     pick(command)
+                }
+                .overlay(alignment: .trailing) {
+                    if command.skill != nil {
+                        Text("Skill").font(.caption2).foregroundStyle(.tertiary).padding(.trailing, 16)
+                    }
                 }
             }
         }
@@ -48,6 +55,10 @@ struct MentionPicker: View {
             PickerList {
                 ForEach(shown, id: \.self) { mention in
                     PickerRow(title: mention.name, detail: mention.detail, mono: mention.kind == RemoteMention.file) {
+                        Image(systemName: MentionCard.icon(kind: mention.kind, name: mention.value))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 18)
+                    } action: {
                         pick(mention)
                     }
                     .allowsHitTesting(!searching)
@@ -78,20 +89,24 @@ private struct PickerList<Content: View>: View {
     }
 }
 
-private struct PickerRow: View {
+private struct PickerRow<Leading: View>: View {
     let title: String
     let detail: String?
     let mono: Bool
+    @ViewBuilder let leading: Leading
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(mono ? .subheadline.monospaced() : .subheadline)
-                    .lineLimit(1)
-                if let detail {
-                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 10) {
+                leading
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(mono ? .subheadline.monospaced() : .subheadline)
+                        .lineLimit(1)
+                    if let detail {
+                        Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -100,5 +115,22 @@ private struct PickerRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// A command row's wand cap, with the prism on a command Alas runs itself.
+private struct CommandCap: View {
+    let isAlas: Bool
+
+    var body: some View {
+        Image(systemName: "wand.and.sparkles")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 18, height: 18)
+            .background {
+                if isAlas { PrismBackground() } else { Color(ChipStyle.commandTint).opacity(0.55) }
+            }
+            .clipShape(.rect(cornerRadius: ChipStyle.radius))
+            .accessibilityHidden(true)
     }
 }

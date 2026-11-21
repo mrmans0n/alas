@@ -20,6 +20,15 @@ public struct ACPCommandPresentation: Codable, Equatable, Hashable, Sendable {
         self.action = action
     }
 
+    /// A peer session's skill. The peer's host keeps the file and serves it by
+    /// command name, so `skillPath` is only a marker that there is one.
+    public static func peerSkill(hasFile: Bool) -> Self {
+        Self(isSkill: true, skillPath: hasFile ? peerSkillPath : nil)
+    }
+
+    /// `skillPath` of a peer skill that has a file; nothing reads it locally.
+    public static let peerSkillPath = "/"
+
     /// The record of one wire command, or nil when nothing usable remains:
     /// another version, a path that is not absolute, an unknown action kind,
     /// or a config action without its id or value.

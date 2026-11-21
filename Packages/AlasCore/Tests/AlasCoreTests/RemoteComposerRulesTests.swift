@@ -89,6 +89,92 @@ struct RemoteComposerRulesTests {
         #expect(RemoteAttachmentLimits.refusal(adding: size, to: staged) == expected)
     }
 
+    @Test func aDraftSendsItsChipsSpelledOutWithPastedSpansInUTF16() {
+        let file = RemoteMention(kind: RemoteMention.file, value: "a/B.swift", name: "B.swift")
+        let draft = RemoteComposerDraft(segments: [
+            .chip(.command("/review")), .text(" 👍 "), .chip(.mention(file)), .text(" \r\n"),
+            .chip(.pasted(ordinal: 1, text: "x\ny")), .text(" "), .chip(.reference(CodeHostReference(spelling: "#12")!)),
+            .chip(.mention(file)),
+        ])
+        #expect(draft.text == "/review 👍 @B.swift \r\nx\ny #12@B.swift")
+        #expect(draft.mentions == [file])
+        #expect(draft.pastedSpans == [ACPPastedTextSpan(ordinal: 1, utf16Offset: 22, utf16Length: 3)])
+        // A mention glued to the next chip gets a separating space.
+        let glued = RemoteComposerDraft(segments: [.chip(.mention(file)), .chip(.pasted(ordinal: 2, text: "z"))])
+        #expect(glued.text == "@B.swift z")
+        #expect(glued.pastedSpans == [ACPPastedTextSpan(ordinal: 2, utf16Offset: 9, utf16Length: 1)])
+    }
+
+    @Test(arguments: [
+        ("/review #12 done", 16, ["cmd:/review", "txt: ", "ref:#12", "txt: done"]),
+        // The caret right after `#12`: its digits may still be coming.
+        ("/review #12", 11, ["cmd:/review", "txt: #12"]),
+        ("/review #12", nil, ["cmd:/review", "txt: ", "ref:#12"]),
+        // Code stays text, and `!N` is not a reference on GitHub.
+        ("`/review` !3 x", 14, ["txt:`/review` !3 x"]),
+    ] as [(String, Int?, [String])])
+    func restoringChipsCompletedTokensOutsideCode(text: String, caret: Int?, expected: [String]) {
+        let draft = RemoteComposerDraft.restoring(text, commands: ["/review"], codeHost: .github, caret: caret)
+        #expect(draft.segments.map(Self.describe) == expected)
+        #expect(draft.text == text)
+    }
+
+    @Test func aLongPasteCollapsesAndARepositoryURLBecomesItsReference() {
+        let repo = RemoteCodeHost(kind: .github, host: "github.com", webURL: URL(string: "https://github.com/o/r")!)
+        let long = Array(repeating: "line", count: 21).joined(separator: "\n")
+        #expect(RemoteComposerDraft.pasteSegments(long, replacing: NSRange(location: 0, length: 0), in: "",
+                                                  commands: [], codeHost: repo, nextOrdinal: 3)
+            == [.chip(.pasted(ordinal: 3, text: long))])
+        #expect(RemoteComposerDraft.pasteSegments("https://github.com/o/r/pull/9 and /review now", replacing: NSRange(location: 4, length: 0),
+                                                  in: "see ", commands: ["/review"], codeHost: repo, nextOrdinal: 1)
+            .map(Self.describe) == ["ref:#9", "txt: and ", "cmd:/review", "txt: now"])
+        #expect(RemoteComposerDraft.pasteSegments("#9", replacing: NSRange(location: 3, length: 0),
+                                                  in: "abc", commands: [], codeHost: repo, nextOrdinal: 1)
+            == [.text("#9")])
+        // Inside code, a URL stays as pasted: between two backticks, or in a fenced block.
+        let url = "https://github.com/o/r/pull/9"
+        #expect(RemoteComposerDraft.pasteSegments(url, replacing: NSRange(location: 1, length: 0), in: "``",
+                                                  commands: [], codeHost: repo, nextOrdinal: 1) == [.text(url)])
+        #expect(RemoteComposerDraft.pasteSegments(url, replacing: NSRange(location: 4, length: 0), in: "```\n\n```",
+                                                  commands: [], codeHost: repo, nextOrdinal: 1) == [.text(url)])
+        // So does a URL pasted as a Markdown link's target.
+        #expect(RemoteComposerDraft.pasteSegments(url, replacing: NSRange(location: 5, length: 0), in: "[PR]()",
+                                                  commands: [], codeHost: repo, nextOrdinal: 1) == [.text(url)])
+    }
+
+    /// Editor offsets count a chip as one character; a replace splits text runs and keeps chips whole.
+    @Test func aDraftEditsAndCopiesInDisplayUnits() {
+        let file = RemoteMention(kind: RemoteMention.file, value: "B.swift", name: "B.swift")
+        let draft = RemoteComposerDraft(segments: [.text("fix 👍 "), .chip(.mention(file)), .text(" now")])
+        #expect(draft.displayText == "fix 👍 \u{FFFC} now")
+        // "@B" typed after "now" becomes a mention: the token's range is replaced by the chip.
+        let typed = draft.replacing(NSRange(location: 12, length: 0), with: [.text(" @B")])
+        let picked = typed.replacing(NSRange(location: 13, length: 2), with: [.chip(.mention(file)), .text(" ")])
+        #expect(picked.segments == [.text("fix 👍 "), .chip(.mention(file)), .text(" now "), .chip(.mention(file)), .text(" ")])
+        // Deleting across a chip takes it whole.
+        #expect(draft.replacing(NSRange(location: 4, length: 4), with: []).segments == [.text("fix  now")])
+        #expect(draft.spelled(NSRange(location: 4, length: 5)) == "👍 @B.swift ")
+    }
+
+    /// A refused prompt comes back ahead of a paste made since; both were `#1`, so the later one moves on.
+    @Test func appendingRenumbersAPasteWhoseNumberIsTaken() {
+        let refused = RemoteComposerDraft(segments: [.text("see "), .chip(.pasted(ordinal: 1, text: "a"))])
+        let typed = RemoteComposerDraft(segments: [.chip(.pasted(ordinal: 1, text: "b")), .chip(.pasted(ordinal: 2, text: "c"))])
+        let joined = refused.appending(typed)
+        #expect(joined.segments.map(Self.describe) == ["txt:see ", "pst:1", "txt:\n", "pst:3", "pst:2"])
+        #expect(Set(joined.pastedSpans.map(\.ordinal)).count == 3)
+    }
+
+    private static func describe(_ segment: RemoteDraftSegment) -> String {
+        switch segment {
+        case .text(let text): "txt:" + text
+        case .chip(.command(let command)): "cmd:" + command
+        case .chip(.reference(let reference)): "ref:" + reference.spelling
+        case .chip(.mention(let mention)): "men:" + mention.name
+        case .chip(.pasted(let ordinal, _)): "pst:\(ordinal)"
+        }
+    }
+
     @Test(arguments: [
         ("", "one", "> one\n"),
         ("draft", "one\n\n**two**", "draft\n> one\n> \n> **two**\n"),

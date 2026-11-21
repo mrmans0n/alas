@@ -36,6 +36,13 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
     var visualActions: ACPVisualAidActions = .readOnly
     var visualForm: (ACPVisualAid) -> ACPUserInputFormState? = { _ in nil }
     var visualStatus: (UUID) -> ACPVisualAidSendStatus = { _ in ACPVisualAidSendStatus() }
+    /// The agent's commands, chipped at the start of user messages.
+    var commands: [ACPPromptSuggestion] = []
+    /// Looks up the `#N`/`!N` references user messages name, through the peer.
+    var upstreamReferences: ACPUpstreamReferenceStore? = nil
+    /// Opens a skill command's file and shows `/ship`'s state, for command chips.
+    /// Only user messages get it: its no-op `perform` must not show a prompt card's action.
+    var promptCardContext: ACPPromptCardContext? = nil
 
     @Environment(\.theme) private var theme
     @Environment(\.openURL) private var openURL
@@ -256,6 +263,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
             let isPlanActive: Bool
             let typography: ACPChatTypography
             let offersRestore: Bool
+            let commands: [ACPPromptSuggestion]
         }
 
         private func messageSpec(
@@ -275,7 +283,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                 equalityToken: Self.token(
                     MessageTokenInputs(
                         row: tokenRow, inGroup: inGroup, isPlanActive: isPlanActive, typography: host.typography,
-                        offersRestore: host.onRestoreCheckpoint != nil),
+                        offersRestore: host.onRestoreCheckpoint != nil, commands: host.commands),
                     host: host
                 ),
                 build: {
@@ -284,7 +292,8 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                             row: row, stableId: stableId, rowCache: rowCache,
                             contentMaxWidth: host.contentMaxWidth, typography: host.typography,
                             isPlanActive: isPlanActive, onQuote: host.onQuote,
-                            onRestoreCheckpoint: host.onRestoreCheckpoint,
+                            onRestoreCheckpoint: host.onRestoreCheckpoint, commands: host.commands,
+                            promptCardContext: host.promptCardContext,
                             visualActions: host.visualActions, visualForm: host.visualForm, visualStatus: host.visualStatus
                         )
                         if inGroup {
@@ -389,6 +398,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                     .environment(\.designScale, host.designScale)
                     .environment(\.openURL, host.openURL)
                     .environment(\.acpTranscriptImageReader, host.imageReader)
+                    .environment(\.acpUpstreamReferenceStore, host.upstreamReferences)
             )
         }
 
@@ -508,6 +518,10 @@ private struct NativePeerRowView: View {
     let isPlanActive: Bool
     var onQuote: (String) -> Void = { _ in }
     var onRestoreCheckpoint: ((CheckpointID) -> Void)? = nil
+    /// The agent's commands, chipped at the start of a user message.
+    var commands: [ACPPromptSuggestion] = []
+    var promptCardContext: ACPPromptCardContext? = nil
+    @Environment(\.acpUpstreamReferenceStore) private var upstreamReferences
 
     var visualActions: ACPVisualAidActions = .readOnly
     var visualForm: (ACPVisualAid) -> ACPUserInputFormState? = { _ in nil }
@@ -520,12 +534,12 @@ private struct NativePeerRowView: View {
 
     var body: some View {
         switch row {
-        case .user(let text, _, _, let card?) where Self.promptCard(card) != nil:
+        case .user(let text, _, _, let card?, _, _) where Self.promptCard(card) != nil:
             // A turn Alas sent, as the local transcript shows it.
             PromptCardRow(card: Self.promptCard(card)!, text: text, contentMaxWidth: contentMaxWidth, typography: typography)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contextMenu { messageMenu(text, checkpointID: nil) }
-        case .user(let text, let checkpointID, let images, _):
+        case .user(let text, let checkpointID, let images, _, let mentions, let pastedSpans):
             HStack {
                 Spacer(minLength: 40)
                 VStack(alignment: .trailing, spacing: 4) {
@@ -537,9 +551,27 @@ private struct NativePeerRowView: View {
                             }
                         }
                     }
+                    if !mentions.isEmpty {
+                        HStack(spacing: 4) {
+                            ForEach(Array(mentions.enumerated()), id: \.offset) { _, mention in
+                                mentionBadge(mention)
+                            }
+                        }
+                    }
+                    if let upstreamReferences {
+                        // Only typed text, as in a local row.
+                        ACPUserReferenceSummary(
+                            text: ACPPastedTextContents(text: text, spans: pastedSpans)?.typedText ?? text,
+                            store: upstreamReferences)
+                    }
                     if !text.isEmpty {
-                        ACPMarkdownText(raw: text, typography: typography)
+                        let symbols = Self.symbolAttachments(mentions)
+                        ACPUserMessageText(
+                            text: text, attachments: symbols, pastedSpans: pastedSpans, typography: typography,
+                            commands: .fixed(commands), chipsAbsolutePaths: false,
+                            symbolMentions: ACPTranscriptSymbolMentions(attachments: symbols, root: nil))
                             .acpUserBubble()
+                            .environment(\.acpPromptCardContext, promptCardContext)
                     }
                 }
                 .frame(maxWidth: contentMaxWidth * 0.75, alignment: .trailing)
@@ -601,6 +633,32 @@ private struct NativePeerRowView: View {
         actions.popOut = { _ in showsVisualPreview = true }
         actions.popOutLabel = "Expand visual"
         return actions
+    }
+
+    /// A sent mention, badged as a local row badges its attachment. The peer
+    /// keeps the files, so a symbol badge has no preview.
+    @ViewBuilder
+    private func mentionBadge(_ mention: RemoteUserMention) -> some View {
+        if let symbol = mention.symbol, let target = Self.symbolTarget(symbol) {
+            ACPSymbolBadge(target: target, snapshot: symbol.snapshot, root: nil, typography: typography)
+        } else {
+            FileChip(path: mention.name, lines: nil,
+                     iconSystemName: mention.kind == RemoteMention.session ? "bubble.left.and.bubble.right" : "at")
+        }
+    }
+
+    static func symbolTarget(_ symbol: RemoteSymbolMention) -> ACPSymbolReference.Target? {
+        guard let kind = SymbolKind(rawValue: symbol.kind) else { return nil }
+        return ACPSymbolReference.Target(path: symbol.path, name: symbol.name, kind: kind, container: symbol.container,
+                                         lineRange: symbol.lineRange, includeCode: symbol.includesCode)
+    }
+
+    /// The symbol mentions as the attachments a local row has, so the text chips their `@` labels.
+    static func symbolAttachments(_ mentions: [RemoteUserMention]) -> [ACPMessage.Attachment] {
+        mentions.compactMap { mention in
+            guard let symbol = mention.symbol, let target = symbolTarget(symbol) else { return nil }
+            return ACPMessage.Attachment(uri: ACPSymbolReference.uri(for: target), name: mention.name, symbol: symbol.snapshot)
+        }
     }
 
     @ViewBuilder

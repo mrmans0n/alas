@@ -72,7 +72,7 @@ struct UserMessageRow: View {
                     attachments: attachments,
                     pastedSpans: pastedSpans,
                     typography: typography,
-                    session: session,
+                    commands: .session(session),
                     chipsAbsolutePaths: chipsAbsolutePaths,
                     symbolMentions: ACPTranscriptSymbolMentions(attachments: attachments, root: worktreeRoot)
                 )
@@ -222,7 +222,7 @@ struct ACPReportedChangesPopover: View {
     }
 }
 
-private struct ACPUserReferenceSummary: View {
+struct ACPUserReferenceSummary: View {
     let text: String
     @ObservedObject var store: ACPUpstreamReferenceStore
     @Environment(\.theme) private var theme

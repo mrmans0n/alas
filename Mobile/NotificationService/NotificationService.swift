@@ -157,10 +157,10 @@ private final class Job {
         finished = true
         connections.values.forEach { $0.disconnect() }
         connections = [:]
-        deliver(content())
+        Task { deliver(await content()) }
     }
 
-    private func content() -> UNNotificationContent {
+    private func content() async -> UNNotificationContent {
         if let item, let updated = original.mutableCopy() as? UNMutableNotificationContent {
             updated.title = item.title
             updated.body = item.body.flatMap { $0.split(separator: "\n").first.map(String.init) } ?? "\(item.project) · \(item.branch)"
@@ -183,6 +183,39 @@ private final class Job {
             updated.userInfo["alas"] = alas
             updated.categoryIdentifier = "permission"
         }
+        // Accept, or one button per option, answer only the request this names, like Allow and Deny.
+        let identity: String? = switch pending {
+        case .planRequest(_, let payload): RemoteRequestIdentity.of(payload)
+        case .questionRequest(_, let payload) where RemoteQuestionQuickAnswer.options(in: payload) != nil:
+            RemoteRequestIdentity.of(payload)
+        default: nil
+        }
+        if let identity, var alas = updated.userInfo["alas"] as? [String: Any] {
+            if case .questionRequest(_, let payload) = pending, let options = RemoteQuestionQuickAnswer.options(in: payload) {
+                updated.categoryIdentifier = await Self.questionCategory(identity: identity, options: options)
+            } else {
+                updated.categoryIdentifier = "plan"
+            }
+            alas["request"] = identity
+            updated.userInfo["alas"] = alas
+        }
         return updated
+    }
+
+    /// Registers a category whose actions are this question's options, and names it.
+    private static func questionCategory(identity: String, options: [RemoteQuestionOption]) async -> String {
+        let id = "question-\(identity.prefix(16))"
+        let center = UNUserNotificationCenter.current()
+        let actions = options.map {
+            UNNotificationAction(identifier: RemoteQuestionQuickAnswer.actionPrefix + $0.id, title: $0.label,
+                                 options: [.authenticationRequired])
+        }
+        var categories = await center.notificationCategories().filter { $0.identifier != id }
+        // ponytail: past 16, every older question alert loses its buttons and opens the card when tapped.
+        let questions = categories.filter { $0.identifier.hasPrefix("question-") }
+        if questions.count >= 16 { categories.subtract(questions) }
+        categories.insert(UNNotificationCategory(identifier: id, actions: actions, intentIdentifiers: []))
+        center.setNotificationCategories(categories)
+        return id
     }
 }

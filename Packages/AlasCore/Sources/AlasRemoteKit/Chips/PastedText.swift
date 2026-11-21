@@ -1,9 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
-import AlasCode
 
 /// Where one pasted-text badge sits in a recorded user message. Offsets are
 /// UTF-16 units into the message `text`, so the renderer slices with

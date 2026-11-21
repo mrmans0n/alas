@@ -1,12 +1,12 @@
 import Foundation
 import Testing
-@testable import Alas
+@testable import AlasCore
 
-@Suite("ACP upstream reference detector")
-struct ACPUpstreamReferenceDetectorTests {
+@Suite("Upstream reference text")
+struct UpstreamReferenceTextTests {
     private func spellings(_ text: String, _ host: CodeHostKind = .github,
                            precededBy: unichar? = nil, followedBy: unichar? = nil) -> [String] {
-        ACPUpstreamReferenceDetector.references(in: text, host: host, precededBy: precededBy, followedBy: followedBy)
+        UpstreamReferenceText.references(in: text, host: host, precededBy: precededBy, followedBy: followedBy)
             .map(\.reference.spelling)
     }
 
@@ -44,7 +44,7 @@ struct ACPUpstreamReferenceDetectorTests {
     )
     func openFenceExtendsOnlyWhenRequested(unclosedRunsExtendToEnd: Bool, expected: [String]) {
         let text = "```\nsee #13"
-        let spellings = ACPUpstreamReferenceDetector.references(
+        let spellings = UpstreamReferenceText.references(
             in: text, host: .github, unclosedRunsExtendToEnd: unclosedRunsExtendToEnd
         ).map(\.reference.spelling)
         #expect(spellings == expected)
@@ -59,13 +59,13 @@ struct ACPUpstreamReferenceDetectorTests {
 
     @Test("whitespace after a token completes it, carrying typed punctuation along")
     func keystrokeTarget() throws {
-        let plain = try #require(ACPUpstreamReferenceDetector.chipTarget(
+        let plain = try #require(UpstreamReferenceText.chipTarget(
             completingWith: " ", at: NSRange(location: 7, length: 0), in: "see #12", host: .github
         ))
         #expect(plain.match.range == NSRange(location: 4, length: 3))
         #expect(plain.replaceRange == NSRange(location: 4, length: 3))
 
-        let punctuated = try #require(ACPUpstreamReferenceDetector.chipTarget(
+        let punctuated = try #require(UpstreamReferenceText.chipTarget(
             completingWith: " ", at: NSRange(location: 6, length: 0), in: "(#12).", host: .github
         ))
         #expect(punctuated.match.range == NSRange(location: 1, length: 3))
@@ -75,7 +75,7 @@ struct ACPUpstreamReferenceDetectorTests {
     @Test("non-whitespace keystrokes, glued tokens, and open code spans never complete")
     func keystrokeMisses() {
         func target(_ typed: String, _ text: String) -> Bool {
-            ACPUpstreamReferenceDetector.chipTarget(
+            UpstreamReferenceText.chipTarget(
                 completingWith: typed,
                 at: NSRange(location: (text as NSString).length, length: 0),
                 in: text,
@@ -88,23 +88,21 @@ struct ACPUpstreamReferenceDetectorTests {
         #expect(!target(" ", "see #"))
     }
 
-    private static let github = CodeHostRemote(
-        kind: .github, host: "github.com", owner: "mrmans0n", repository: "alas",
-        remoteName: "origin", webURL: URL(string: "https://github.com/mrmans0n/alas")!
+    private static let github = RemoteCodeHost(
+        kind: .github, host: "github.com", webURL: URL(string: "https://github.com/mrmans0n/alas")!
     )
-    private static let gitlab = CodeHostRemote(
-        kind: .gitlab, host: "gitlab.example.com", owner: "platform/mobile", repository: "alas",
-        remoteName: "origin", webURL: URL(string: "https://gitlab.example.com/platform/mobile/alas")!
+    private static let gitlab = RemoteCodeHost(
+        kind: .gitlab, host: "gitlab.example.com", webURL: URL(string: "https://gitlab.example.com/platform/mobile/alas")!
     )
 
-    private func urls(_ text: String, _ remote: CodeHostRemote = Self.github) -> [String] {
-        ACPUpstreamReferenceDetector.urlReferences(in: text, remote: remote).map(\.reference.spelling)
+    private func urls(_ text: String, _ repository: RemoteCodeHost = Self.github) -> [String] {
+        UpstreamReferenceText.urlReferences(in: text, repository: repository).map(\.reference.spelling)
     }
 
     @Test("same-repo PR and issue URLs map to their reference, keeping trailing punctuation outside")
     func urlMatches() {
         let text = "see https://github.com/mrmans0n/alas/pull/1506. and (HTTP://GitHub.com/MrMans0n/Alas/issues/12/)"
-        let matches = ACPUpstreamReferenceDetector.urlReferences(in: text, remote: Self.github)
+        let matches = UpstreamReferenceText.urlReferences(in: text, repository: Self.github)
         #expect(matches.map(\.reference.spelling) == ["#1506", "#12"])
         let first = (text as NSString).substring(with: matches[0].range)
         #expect(first == "https://github.com/mrmans0n/alas/pull/1506")

@@ -35,7 +35,7 @@ struct ACPDelegatedPromptSourceTests {
     func aCardedTurnReachesAPeerWithItsCard() throws {
         let source = ACPDelegatedPromptSource.shipCreate(kind: .github, branch: "feature", messageID: UUID())
         let message = ACPMessage.user(id: UUID(), messageId: nil, text: "Open a PR.", attachments: [], delegatedSource: source)
-        guard case .user(let text, _, _, let json?) = RemoteTranscriptRow(message: RemoteSessionGateway.toWire(message, index: 0)) else {
+        guard case .user(let text, _, _, let json?, _, _) = RemoteTranscriptRow(message: RemoteSessionGateway.toWire(message, index: 0)) else {
             Issue.record("expected a carded user row")
             return
         }
