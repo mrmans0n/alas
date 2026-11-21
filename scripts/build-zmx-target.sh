@@ -27,7 +27,8 @@ while true; do
         status=$?
     fi
 
-    if [ "$status" -ge 128 ] || [ "$attempt" -gt "${#retry_delays[@]}" ]; then
+    # Bash reserves 126 and 127 for invocation failures and 128+ for signals.
+    if [ "$status" -ge 126 ] || [ "$attempt" -gt "${#retry_delays[@]}" ]; then
         exit "$status"
     fi
     delay="${retry_delays[$((attempt - 1))]}"
