@@ -3278,6 +3278,7 @@ function patchAgentSegments(node, m) {
     if (child) { forgetVisualCardsIn(child); child.replaceWith(next); } else node.append(next);
   });
   children.slice(segments.length).forEach((child) => { forgetVisualCardsIn(child); child.remove(); });
+  loadTranscriptImages(node, currentSession);   // as renderMessage does: rewritten prose brings new <img> placeholders
   return true;
 }
 
