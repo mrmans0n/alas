@@ -243,6 +243,68 @@ extension VisualAidWebPolicyTests {
         #expect(edges as? [String: Bool] == ["scrollUp": true, "scrollDown": scrollsDown])
     }
 
+    /// `@MainActor`: WKWebView needs the main thread.
+    @MainActor
+    @Test("the frame's chart component draws its data, or says why it cannot", arguments: [
+        (#"<alas-chart type="bar" data='{"labels":["a","b","c"],"series":[{"name":"p50","values":[3,5,-2]},{"name":"p95","values":[4,9,1]}]}'></alas-chart>"#,
+         "alas-chart rect.alas-bar", 6),
+        (#"<alas-chart type="hbar" data='{"labels":["a","b"],"values":[1,2]}'></alas-chart>"#, "alas-chart rect.alas-bar", 2),
+        (#"<alas-chart type="line" data='{"labels":["a","b"],"series":[{"values":[1,2]},{"values":[3,1]}]}'></alas-chart>"#,
+         "alas-chart path.alas-line", 2),
+        (#"<alas-chart data='{"labels":["a"],"values":[1,2]}'></alas-chart>"#, "alas-chart .alas-chart-error", 1),
+        (#"<alas-chart data='not json'></alas-chart>"#, "alas-chart .alas-chart-error", 1),
+    ])
+    func chartComponentRenders(html: String, selector: String, count: Int) async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(), html: html, theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false,
+            presentation: .embedded)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        let found = try await page.webView.evaluateJavaScript(
+            "document.querySelectorAll('\(selector)').length", in: nil, contentWorld: .page)
+        #expect(found as? Int == count)
+    }
+
+    /// `@MainActor`: WKWebView needs the main thread.
+    @MainActor
+    @Test("chart tooltips keep small values apart and round large ones", arguments: [
+        ("[0.001,0.0025]", ["A: 0.001s", "B: 0.0025s"]),
+        ("[1234.5,98765]", ["A: 1235s", "B: 98.8ks"]),
+    ])
+    func chartTooltipsFormatValues(values: String, expected: [String]) async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(),
+            html: #"<alas-chart unit="s" data='{"labels":["A","B"],"values":\#(values)}'></alas-chart>"#,
+            theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false, presentation: .embedded)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        let tips = try await page.webView.evaluateJavaScript(
+            "[...document.querySelectorAll('alas-chart rect.alas-bar title')].map(t => t.textContent)",
+            in: nil, contentWorld: .page)
+        #expect(tips as? [String] == expected)
+    }
+
+    /// `@MainActor`: WKWebView needs the main thread.
+    @MainActor
+    @Test("chart ticks stay distinct at any scale", arguments: ["[1e-11,2e-11]", "[0.3,0.7]", "[120000,450000]"])
+    func chartTicksStayDistinct(values: String) async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(),
+            html: #"<alas-chart data='{"labels":["A","B"],"values":\#(values)}'></alas-chart>"#,
+            theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false, presentation: .embedded)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        let rows = try await page.webView.evaluateJavaScript(
+            "[...document.querySelectorAll('alas-chart line.alas-chart-grid')].map(l => l.getAttribute('y1'))",
+            in: nil, contentWorld: .page)
+        let positions = try #require(rows as? [String])
+        #expect(positions.count >= 3)
+        #expect(Set(positions).count == positions.count)
+    }
+
     /// Waits until the page leaves `.loading` and requires that it landed on `.ready`.
     @MainActor
     private func waitUntilReady(_ page: VisualAidWebPage) async throws {

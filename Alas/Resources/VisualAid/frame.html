@@ -39,10 +39,198 @@
   .mock-button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--alas-accent, AccentColor); background: var(--alas-accent, AccentColor); color: var(--alas-background, Canvas); }
   .mock-input { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--alas-line, #8884); background: transparent; color: inherit; }
   .placeholder { display: grid; place-items: center; min-height: 80px; border: 1px dashed var(--alas-line, #8884); border-radius: 6px; color: var(--alas-dim, GrayText); }
+  /* Data components, mirrored in RemoteWeb/visual-aid.js. */
+  alas-chart { display: block; margin: 4px 0 12px; }
+  .alas-chart-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; color: var(--alas-dim, GrayText); margin-bottom: 6px; }
+  .alas-chart-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  .alas-chart-text { font-size: 11px; fill: var(--alas-dim, GrayText); font-variant-numeric: tabular-nums; }
+  .alas-chart-grid { stroke: var(--alas-line, #8884); stroke-width: 1; }
+  .alas-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .alas-bar:hover, .alas-dot:hover { opacity: .8; }
+  .alas-chart-error { color: var(--alas-tone-danger, red); font-size: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .stat { background: var(--alas-card, #8881); border-radius: var(--alas-radius, 6px); padding: 12px; }
+  .stat .value { display: block; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .delta { font-size: 12px; color: var(--alas-dim, GrayText); }
+  .delta.up { color: var(--alas-tone-success, green); }
+  .delta.down { color: var(--alas-tone-danger, red); }
+  .timeline { list-style: none; margin: 0 0 12px 4px; padding: 0 0 0 14px; border-left: 2px solid var(--alas-line, #8884); }
+  .timeline li { position: relative; padding: 0 0 12px 8px; }
+  .timeline li::before { content: ""; position: absolute; left: -20px; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--alas-accent, AccentColor); }
+  .timeline .when { display: block; font-size: 11.5px; color: var(--alas-dim, GrayText); }
+  .flow { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-bottom: 12px; }
+  .flow > * { position: relative; box-sizing: border-box; flex: 1 1 100px; background: var(--alas-card, #8881); border-radius: var(--alas-radius, 6px); padding: 10px 12px; }
+  .flow > * + *::before { content: "→"; position: absolute; left: -12px; top: 50%; transform: translate(-50%, -50%); color: var(--alas-dim, GrayText); }
+  .callout { border-left: 3px solid var(--alas-tone-info, AccentColor); background: var(--alas-card, #8881); border-radius: var(--alas-radius, 6px); padding: 10px 12px; margin-bottom: 12px; }
+  .callout.success { border-left-color: var(--alas-tone-success, green); }
+  .callout.warn { border-left-color: var(--alas-tone-warning, orange); }
+  .callout.danger { border-left-color: var(--alas-tone-danger, red); }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 12px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--alas-line, #8884); }
+  th { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--alas-dim, GrayText); }
+  th.num, td.num { text-align: right; }
 </style>
 <script>
   // Agent habits from the superpowers companion call these; selection is drawn by Alas.
   function toggleSelect() {}
+</script>
+<script>
+/* alas-components:begin */
+(() => {
+  // No template literals here: RemoteWeb/visual-aid.js holds a copy inside one.
+  // <alas-chart type="bar|hbar|line" height="200" unit="ms" data='{"labels":[...],"series":[{"name":"...","values":[...]}]}'>
+  const NS = "http://www.w3.org/2000/svg";
+  const TYPES = ["bar", "hbar", "line"];
+  const svg = (tag, attrs, parent) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (parent) parent.appendChild(node);
+    return node;
+  };
+  const tip = (node, text) => { svg("title", {}, node).textContent = text; };
+  const color = (i) => "var(--alas-chart-" + ((i % 6) + 1) + ", currentColor)";
+  const fmt = (n) => {
+    const a = Math.abs(n);
+    if (a >= 1e9) return +(n / 1e9).toFixed(1) + "B";
+    if (a >= 1e6) return +(n / 1e6).toFixed(1) + "M";
+    if (a >= 1e4) return +(n / 1e3).toFixed(1) + "k";
+    if (a >= 100) return String(Math.round(n));
+    // Three significant digits, so 0.001 and 0.002 stay apart.
+    return String(+n.toPrecision(3));
+  };
+  const textWidth = (s) => String(s).length * 6.2;
+  function niceScale(min, max) {
+    if (min === max) { max = min === 0 ? 1 : min + Math.abs(min); }
+    const raw = (max - min) / 4;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+    const lo = Math.floor(min / step) * step, hi = Math.ceil(max / step) * step;
+    // Count steps and trim float noise by significant digits, so tiny scales keep distinct ticks.
+    const ticks = [];
+    for (let k = 0, n = Math.round((hi - lo) / step); k <= n; k++) ticks.push(+(lo + k * step).toPrecision(12));
+    return { lo, hi, ticks };
+  }
+  function parse(el) {
+    let data;
+    try { data = JSON.parse(el.getAttribute("data") || ""); } catch (_) { throw new Error("data is not valid JSON"); }
+    if (!data || typeof data !== "object") throw new Error("data must be an object");
+    let series = data.series;
+    if (!series && Array.isArray(data.values)) series = [{ name: data.name || "", values: data.values }];
+    if (!Array.isArray(series) || !series.length) throw new Error("data needs a series array");
+    const labels = Array.isArray(data.labels) ? data.labels.map(String) : series[0].values.map((_, i) => String(i + 1));
+    series = series.map((s, i) => {
+      if (!s || !Array.isArray(s.values)) throw new Error("series " + (i + 1) + " needs a values array");
+      if (s.values.length !== labels.length) throw new Error("series " + (i + 1) + " has " + s.values.length + " values for " + labels.length + " labels");
+      if (!s.values.every((v) => typeof v === "number" && isFinite(v))) throw new Error("series " + (i + 1) + " has a non-numeric value");
+      return { name: s.name == null ? "" : String(s.name), values: s.values };
+    });
+    return { labels, series };
+  }
+  class AlasChart extends HTMLElement {
+    connectedCallback() {
+      this.render();
+      if (!this.observer && window.ResizeObserver) {
+        this.observer = new ResizeObserver(() => { if (this.clientWidth !== this.drawnWidth) this.render(); });
+        this.observer.observe(this);
+      }
+    }
+    disconnectedCallback() { if (this.observer) { this.observer.disconnect(); this.observer = null; } }
+    render() {
+      const type = TYPES.includes(this.getAttribute("type")) ? this.getAttribute("type") : "bar";
+      const unit = this.getAttribute("unit") || "";
+      this.textContent = "";
+      this.drawnWidth = this.clientWidth;
+      let data;
+      try { data = parse(this); } catch (e) {
+        const note = document.createElement("div");
+        note.className = "alas-chart-error";
+        note.textContent = "Chart data is invalid: " + e.message;
+        this.appendChild(note);
+        return;
+      }
+      const { labels, series } = data;
+      if (series.length > 1 || series[0].name) {
+        const legend = document.createElement("div");
+        legend.className = "alas-chart-legend";
+        series.forEach((s, i) => {
+          const item = document.createElement("span");
+          const swatch = document.createElement("span");
+          swatch.className = "alas-chart-swatch";
+          swatch.style.background = color(i);
+          item.append(swatch, s.name || "Series " + (i + 1));
+          legend.appendChild(item);
+        });
+        this.appendChild(legend);
+      }
+      const width = Math.max(160, this.clientWidth || 480);
+      const values = series.flatMap((s) => s.values);
+      const scale = niceScale(Math.min(0, ...values), Math.max(0, ...values));
+      const tickLabel = (t) => fmt(t) + unit;
+      const rowHeight = Math.max(14, series.length * 12 + 8);
+      const height = Math.min(800, Math.max(80, Number(this.getAttribute("height")) ||
+        (type === "hbar" ? labels.length * rowHeight + 28 : 200)));
+      const root = svg("svg", {
+        width: "100%", height, viewBox: "0 0 " + width + " " + height, role: "img",
+        "aria-label": this.getAttribute("label") || (type === "line" ? "Line" : "Bar") + " chart of " + (series.map((s) => s.name).filter(Boolean).join(", ") || "values"),
+      }, this);
+      const text = (x, y, content, anchor, parent) => {
+        const t = svg("text", { x, y, "text-anchor": anchor, class: "alas-chart-text" }, parent || root);
+        t.textContent = content;
+        return t;
+      };
+      const label = (l, s, v) => l + (s.name ? " · " + s.name : "") + ": " + fmt(v) + unit;
+      if (type === "hbar") {
+        const left = Math.min(width * 0.4, Math.max(...labels.map(textWidth)) + 10);
+        const right = Math.max(12, textWidth(tickLabel(scale.hi)) / 2 + 4);
+        const plot = { x: left, y: 4, w: width - left - right, h: height - 24 };
+        const x = (v) => plot.x + (v - scale.lo) / (scale.hi - scale.lo) * plot.w;
+        for (const t of scale.ticks) {
+          svg("line", { x1: x(t), x2: x(t), y1: plot.y, y2: plot.y + plot.h, class: "alas-chart-grid" }, root);
+          text(x(t), height - 6, tickLabel(t), "middle");
+        }
+        const band = plot.h / labels.length, bar = band * 0.75 / series.length;
+        labels.forEach((l, i) => {
+          text(left - 6, plot.y + band * i + band / 2 + 4, l, "end");
+          series.forEach((s, j) => {
+            const v = s.values[i], y = plot.y + band * i + band * 0.125 + bar * j;
+            const r = svg("rect", { x: Math.min(x(0), x(v)), y, width: Math.abs(x(v) - x(0)), height: Math.max(1, bar - 1),
+              rx: 2, class: "alas-bar", style: "fill: " + color(j) }, root);
+            tip(r, label(l, s, v));
+          });
+        });
+        return;
+      }
+      const left = Math.max(...scale.ticks.map((t) => textWidth(tickLabel(t)))) + 10;
+      const plot = { x: left, y: 8, w: width - left - 8, h: height - 30 };
+      const y = (v) => plot.y + plot.h - (v - scale.lo) / (scale.hi - scale.lo) * plot.h;
+      for (const t of scale.ticks) {
+        svg("line", { x1: plot.x, x2: plot.x + plot.w, y1: y(t), y2: y(t), class: "alas-chart-grid" }, root);
+        text(left - 6, y(t) + 4, tickLabel(t), "end");
+      }
+      const band = plot.w / labels.length;
+      const every = Math.max(1, Math.ceil(Math.max(...labels.map(textWidth)) / Math.max(1, band - 6)));
+      labels.forEach((l, i) => { if (i % every === 0) text(plot.x + band * i + band / 2, height - 8, l, "middle"); });
+      if (type === "line") {
+        const px = (i) => plot.x + band * i + band / 2;
+        series.forEach((s, j) => {
+          svg("path", { d: s.values.map((v, i) => (i ? "L" : "M") + px(i) + "," + y(v)).join(""),
+            class: "alas-line", style: "stroke: " + color(j) }, root);
+          s.values.forEach((v, i) => tip(svg("circle", { cx: px(i), cy: y(v), r: 3, class: "alas-dot", style: "fill: " + color(j) }, root), label(labels[i], s, v)));
+        });
+        return;
+      }
+      const bar = band * 0.75 / series.length;
+      labels.forEach((l, i) => series.forEach((s, j) => {
+        const v = s.values[i], x = plot.x + band * i + band * 0.125 + bar * j;
+        const r = svg("rect", { x, y: Math.min(y(0), y(v)), width: Math.max(1, bar - 1), height: Math.abs(y(v) - y(0)),
+          rx: 2, class: "alas-bar", style: "fill: " + color(j) }, root);
+        tip(r, label(l, s, v));
+      }));
+    }
+  }
+  if (!customElements.get("alas-chart")) customElements.define("alas-chart", AlasChart);
+})();
+/* alas-components:end */
 </script>
 </head>
 <body>{{CONTENT}}</body>
