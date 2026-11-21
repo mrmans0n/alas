@@ -5,9 +5,9 @@ import Foundation
 /// are the visual's title (```` ```visual Auth flow ````). Plain `html` and `svg`
 /// fences stay code, because agents use them to show source they are editing.
 ///
-/// A ```` ```chart ```` fence is shorthand for a visual holding one `<alas-chart>`: its body is the
-/// chart's JSON data, and words after the tag pick the type and set the other attributes
-/// (```` ```chart line unit=ms label="Build time" ````).
+/// A ```` ```chart ```` fence draws a chart natively: its body is `<alas-chart>`'s JSON data, and words
+/// after the tag pick the type and set the other options (```` ```chart line unit=ms label="Build time" ````).
+/// See `ChartSpec`.
 public enum VisualFence: Sendable {
     public static let tag = "visual"
     public static let chartTag = "chart"
@@ -25,32 +25,22 @@ public enum VisualFence: Sendable {
         return rest.isEmpty ? nil : rest
     }
 
-    /// The HTML a closed fence draws, or nil when it draws none: not a visual fence, an empty body,
-    /// or a chart whose body is not a JSON object, which stays code so the data is still readable.
+    /// The HTML a closed ```` ```visual ```` fence draws, or nil for an empty body or any other fence.
+    /// A chart fence draws natively instead; see `ChartSpec`.
     public static func html(language: String?, code: String) -> String? {
-        guard let language, isVisual(language: language),
-              !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard firstWord(language) == tag, !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
-        guard firstWord(language) == chartTag else { return code }
-        guard (try? JSONSerialization.jsonObject(with: Data(code.utf8))) is [String: Any] else { return nil }
-        let options = chartOptions(language.drop { !$0.isWhitespace }.trimmingCharacters(in: .whitespaces))
-        var attributes = [("type", options.type ?? "bar")]
-        for key in ["unit", "height", "label"] {
-            if let value = options.attributes[key] { attributes.append((key, value)) }
-        }
-        attributes.append(("data", code.trimmingCharacters(in: .whitespacesAndNewlines)))
-        let rendered = attributes.map { "\($0.0)=\"\(escaped($0.1))\"" }.joined(separator: " ")
-        return "<alas-chart \(rendered)></alas-chart>"
+        return code
     }
 
-    private static let chartTypes: Set = ["bar", "hbar", "line"]
+    static let chartTypes: Set = ["bar", "hbar", "line"]
 
-    private static func firstWord(_ language: String?) -> String? {
+    static func firstWord(_ language: String?) -> String? {
         language?.split(whereSeparator: \.isWhitespace).first?.lowercased()
     }
 
     /// A bare chart type, and `key=value` or `key="quoted value"` pairs. Anything else is ignored.
-    private static func chartOptions(_ text: String) -> (type: String?, attributes: [String: String]) {
+    static func chartOptions(_ text: String) -> (type: String?, attributes: [String: String]) {
         var type: String?
         var attributes: [String: String] = [:]
         var rest = Substring(text)
@@ -76,13 +66,5 @@ public enum VisualFence: Sendable {
             attributes[key.lowercased()] = String(value)
         }
         return (type, attributes)
-    }
-
-    private static func escaped(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
     }
 }

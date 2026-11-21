@@ -247,6 +247,7 @@ struct AgentMarkdown: View {
                     } else {
                         CodeBlockView(language: VisualFence.tag, chunks: [CodeChunk(text: aid.html, spans: [])])
                     }
+                case .chart(let chart): MarkdownChart(chart: chart)
                 case .drawingVisual(let title):
                     Label(title.map { "Drawing \($0)…" } ?? "Drawing visual…", systemImage: "rectangle.on.rectangle")
                         .font(.footnote)

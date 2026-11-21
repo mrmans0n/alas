@@ -18,8 +18,10 @@ public enum ACPMarkdownParser: Sendable {
         case code(language: String?, body: String)
         case streamingCode(language: String?, body: String)
         case mermaid(source: String)
-        /// A closed ```` ```visual ```` or ```` ```chart ```` fence: HTML drawn inline as an embedded visual aid.
+        /// A closed ```` ```visual ```` fence: HTML drawn inline as an embedded visual aid.
         case visual(title: String?, html: String)
+        /// A closed ```` ```chart ```` fence whose data `<alas-chart>` accepts, drawn natively.
+        case chart(ChartSpec)
         case image(alt: String, source: String)
         case table(header: [String], rows: [[String]])
     }
@@ -334,6 +336,8 @@ public enum ACPMarkdownParser: Sendable {
                         .isEmpty
                     if MermaidFence.isMermaid(language: fence.language), hasRenderableCode {
                         blocks.append(.mermaid(source: codeBody))
+                    } else if let chart = ChartSpec(language: fence.language, code: codeBody) {
+                        blocks.append(.chart(chart))
                     } else if let html = VisualFence.html(language: fence.language, code: codeBody) {
                         blocks.append(.visual(title: VisualFence.title(language: fence.language), html: html))
                     } else {
