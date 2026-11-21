@@ -29,7 +29,7 @@ done
 n=\$(cat "${counter}")
 n=\$((n + 1))
 echo "\${n}" > "${counter}"
-if [ "\${n}" -lt 3 ]; then
+if [ "\${n}" -eq 1 ] || [ "\${n}" -eq 2 ] || [ "\${n}" -eq 4 ]; then
     echo "flaky-zig: simulated transient download failure" >&2
     exit 56
 fi
@@ -46,7 +46,8 @@ ALAS_ZMX_CACHE_DIR="${tmp}/cache" \
 ALAS_ZMX_RETRY_DELAYS="0 0" \
     bash "${repo_root}/scripts/build-zmx.sh" >"${tmp}/out" 2>"${tmp}/err"
 
-[ "$(cat "${counter}")" = "5" ] || { echo "expected 5 total Zig invocations" >&2; exit 1; }
+[ "$(cat "${counter}")" = "6" ] || { echo "expected 6 total Zig invocations" >&2; exit 1; }
 grep -q "retrying in 0s (attempt 2/3)" "${tmp}/err" || { echo "missing first retry warning" >&2; exit 1; }
 grep -q "retrying in 0s (attempt 3/3)" "${tmp}/err" || { echo "missing second retry warning" >&2; exit 1; }
 [ -x "${srcroot}/.build/zmx/arm64/install/bin/zmx" ] || { echo "missing zmx output after retry" >&2; exit 1; }
+[ -x "${srcroot}/.build/zmx/linux-x86_64/install/bin/zmx" ] || { echo "missing Linux zmx output after retry" >&2; exit 1; }

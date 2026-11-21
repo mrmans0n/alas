@@ -35,11 +35,6 @@ zmx_global_cache_dir="${zmx_build_root}/.zig-global-cache"
 cache_root_default="${HOME}/Library/Caches/Alas/zmx"
 cache_root="${ALAS_ZMX_CACHE_DIR:-${cache_root_default}}/${target_arch}"
 keep="${ALAS_ZMX_CACHE_KEEP:-5}"
-retry_delays=()
-for delay in ${ALAS_ZMX_RETRY_DELAYS:-5 15 30 60 120 180}; do
-    retry_delays+=("${delay}")
-done
-
 warn() { echo "build-zmx.sh: warning: $*" >&2; }
 die()  { echo "build-zmx.sh: error: $*" >&2; exit 1; }
 
@@ -86,22 +81,13 @@ build_linux_binaries() {
             continue
         fi
 
-        rm -f "${linux_output}"
         mkdir -p "${linux_prefix}"
-        # Zig 0.17 dropped `zig build --global-cache-dir`; the env var keeps the
-        # global cache under .build/zmx instead of ~/.cache/zig. Fetched
-        # packages stay in the submodule's gitignored zig-pkg/: moving them out
-        # with ZIG_LOCAL_PKG_DIR breaks Ghostty's relative `.path` dependencies.
         (
             cd "${zmx_src}"
-            ZIG_GLOBAL_CACHE_DIR="${srcroot}/.build/zmx/linux-${linux_arch}/.zig-global-cache" \
-                "${zig_bin}" build \
-                -Doptimize=ReleaseFast \
-                -Dtarget="${linux_target}" \
-                --prefix "${linux_prefix}" \
-                --cache-dir "${srcroot}/.build/zmx/linux-${linux_arch}/.zig-cache"
+            bash "${script_dir}/build-zmx-target.sh" "${zig_bin}" "${linux_target}" "${linux_prefix}" \
+                "${srcroot}/.build/zmx/linux-${linux_arch}/.zig-cache" \
+                "${srcroot}/.build/zmx/linux-${linux_arch}/.zig-global-cache"
         )
-        [ -x "${linux_output}" ] || die "Linux zmx build produced no binary: ${linux_output}"
         printf '%s\n' "${linux_fingerprint}" > "${linux_marker}.tmp"
         mv "${linux_marker}.tmp" "${linux_marker}"
     done
@@ -192,37 +178,12 @@ case "${target_arch}" in
     *)      die "unsupported target_arch '${target_arch}'" ;;
 esac
 
-# Build.
-run_zig_build_with_retries() {
-    local attempt status delay
-    attempt=1
-    while true; do
-        rm -f "${zmx_output}"
-        if (
-            cd "${zmx_src}"
-            ZIG_GLOBAL_CACHE_DIR="${zmx_global_cache_dir}" \
-                "${zig_bin}" build \
-                -Doptimize=ReleaseFast \
-                -Dtarget="${zig_arch}-macos.14.0" \
-                --prefix "${zmx_install_prefix}" \
-                --cache-dir "${zmx_local_cache_dir}"
-        ) && [ -x "${zmx_output}" ]; then
-            return 0
-        fi
+(
+    cd "${zmx_src}"
+    bash "${script_dir}/build-zmx-target.sh" "${zig_bin}" "${zig_arch}-macos.14.0" \
+        "${zmx_install_prefix}" "${zmx_local_cache_dir}" "${zmx_global_cache_dir}"
+)
 
-        status=$?
-        if [ "${attempt}" -gt "${#retry_delays[@]}" ]; then
-            return "${status}"
-        fi
-
-        delay="${retry_delays[$((attempt - 1))]}"
-        warn "zig build failed with exit ${status}; retrying in ${delay}s (attempt $((attempt + 1))/$(( ${#retry_delays[@]} + 1 )))"
-        sleep "${delay}"
-        attempt=$((attempt + 1))
-    done
-}
-
-run_zig_build_with_retries
 build_linux_binaries
 
 # Publish to cache atomically. Use a per-process temp file so two concurrent
