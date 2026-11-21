@@ -6,19 +6,23 @@ public struct ReviewSelection: Equatable, Sendable {
     public let hunk: Int
     public private(set) var start: Int
     public private(set) var end: Int
+    /// The line the selection started on; extending spans from it to the new line.
+    private let anchorLine: Int
 
     public init(entry: ReviewEntryID, hunk: Int, line: Int) {
         self.entry = entry
         self.hunk = hunk
+        anchorLine = line
         start = line
         end = line
     }
 
+    /// Spans from the first line to `line`, so a drag that comes back shrinks the range.
     /// Ignored for another hunk: a range never spans hunks.
     public mutating func extend(to line: Int, inHunk hunk: Int) {
         guard hunk == self.hunk else { return }
-        start = min(start, line)
-        end = max(end, line)
+        start = min(anchorLine, line)
+        end = max(anchorLine, line)
     }
 
     /// Added and context lines anchor to the new side, removed lines to the old one;

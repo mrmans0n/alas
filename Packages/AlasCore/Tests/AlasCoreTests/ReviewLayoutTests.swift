@@ -97,6 +97,12 @@ struct ReviewLayoutTests {
         #expect((selection.start, selection.end) == (3, 3))
         selection.extend(to: 1, inHunk: 0)
         #expect((selection.start, selection.end) == (1, 3))
+        var drag = ReviewSelection(entry: Self.id, hunk: 0, line: 10)
+        drag.extend(to: 15, inHunk: 0)
+        drag.extend(to: 12, inHunk: 0)
+        #expect((drag.start, drag.end) == (10, 12))
+        drag.extend(to: 8, inHunk: 0)
+        #expect((drag.start, drag.end) == (8, 10))
     }
 
     @Test

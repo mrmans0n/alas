@@ -522,6 +522,7 @@ extension ReviewCollectionController {
     }
 
     /// Floats the pill under the selection's last line, at the trailing edge; hidden while that line isn't laid out.
+    /// Near the viewport's bottom (the diff's last row included) it moves up, as far as above that line, to stay reachable.
     fileprivate func placePill() {
         guard let selection = document.selection,
               let indexPath = dataSource.indexPath(for: .line(entry: selection.entry, hunk: selection.hunk, line: selection.end)),
@@ -530,8 +531,10 @@ extension ReviewCollectionController {
             return
         }
         let size = pill.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+        let visibleBottom = collectionView.contentOffset.y + collectionView.bounds.height - collectionView.adjustedContentInset.bottom
+        let y = max(min(last.frame.maxY + 4, visibleBottom - size.height - 8), last.frame.minY - size.height - 4)
         pill.frame = CGRect(x: collectionView.bounds.width - collectionView.safeAreaInsets.right - size.width - 12,
-                            y: last.frame.maxY + 4, width: size.width, height: size.height)
+                            y: y, width: size.width, height: size.height)
         pill.isHidden = false
     }
 
