@@ -31,9 +31,9 @@ struct SessionRecapSheet: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         .task {
-            let rows = session.transcriptRows
-            guard RemoteSessionRecap.prompt(rows: rows, goal: nil) != nil else { return recap = .failed("Nothing to summarize yet.") }
-            if let found = await SessionRecapModel.recap(rows: rows, goal: nil) {
+            let rows = session.transcriptRows, goal = session.config?.goal?.objective
+            guard RemoteSessionRecap.prompt(rows: rows, goal: goal) != nil else { return recap = .failed("Nothing to summarize yet.") }
+            if let found = await SessionRecapModel.recap(rows: rows, goal: goal) {
                 recap = .loaded(found)
             } else {
                 recap = .failed("Couldn't summarize this session.")
