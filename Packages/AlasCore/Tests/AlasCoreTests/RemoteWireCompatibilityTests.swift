@@ -136,6 +136,24 @@ import Testing
         #expect(RemoteAttentionRequest.items(replying: 9, in: reply) == nil)
     }
 
+    @Test func aRefreshAskedForMeanwhileReplacesTheReplyInFlight() {
+        var flight = RemoteSingleFlight()
+        let start = ContinuousClock.now
+        var steps: [Bool] = []
+        steps.append(flight.shouldSend(now: start))
+        // Mode B, then back to A, while the first A is out: both wait.
+        steps.append(flight.shouldSend(now: start + .seconds(1)))
+        steps.append(flight.shouldSend(now: start + .seconds(2)))
+        // A's reply is dropped in favour of one fresh request, whose own reply shows.
+        steps.append(flight.landed())
+        steps.append(flight.shouldSend(now: start + .seconds(3)))
+        steps.append(flight.landed())
+        // A lost reply holds the next request only for a while.
+        steps.append(flight.shouldSend(now: start + .seconds(4)))
+        steps.append(flight.shouldSend(now: start + .seconds(4) + RemoteSingleFlight.patience))
+        #expect(steps == [true, false, false, true, true, false, true, true])
+    }
+
     @Test func phoneReadsWhatACommitMessageIsSuggestedFrom() throws {
         let request = RemoteGitRequest.commitMessageInput(id: 3, projectID: "p", path: "/r").json
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: request)

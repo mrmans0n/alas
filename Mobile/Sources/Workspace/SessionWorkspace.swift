@@ -51,6 +51,33 @@ struct FileReply {
 @MainActor @Observable
 final class SessionWorkspace {
     private(set) var changes: Load<ChangeListReply> = .idle
+    /// What Branch Changes and Commits compare against; nil follows the Mac's setting. Shared by every workspace.
+    var comparisonMode: ChangesComparisonMode? {
+        get { ChangesComparison.shared.mode }
+        set {
+            guard newValue != ChangesComparison.shared.mode else { return }
+            ChangesComparison.shared.mode = newValue
+            refreshIfComparisonChanged()
+        }
+    }
+    /// The mode the loaded changes were asked with.
+    @ObservationIgnored private var changesMode: ChangesComparisonMode?
+    @ObservationIgnored private var changesFlight = RemoteSingleFlight()
+
+    /// Notes the change list answered; true when a newer refresh was waiting and went out instead.
+    private func changeListLanded() -> Bool {
+        guard changesFlight.landed() else { return false }
+        refreshChanges()
+        return true
+    }
+
+    /// Reloads the changes, and an open working-tree diff, when another workspace changed the mode.
+    func refreshIfComparisonChanged() {
+        if case .idle = changes { return }
+        guard changesMode != comparisonMode else { return }
+        refreshChanges()
+        if let diff, diff.key.sha == nil { requestDiff(diff.key) }
+    }
     private(set) var diff: (key: DiffKey, Load<DiffReply>)?
     /// The commit whose files are open, pushed from the Commits section.
     private(set) var commit: (commit: RemoteCommit, Load<CommitFilesReply>)?
@@ -145,6 +172,7 @@ final class SessionWorkspace {
 
     /// Asks again for whatever is open; the host forgot everything it was asked while away.
     private func replay() {
+        changesFlight.reset()
         if case .idle = changes {} else { refreshChanges() }
         if let commit { send(.listCommitFiles(sessionId: sessionId, sha: commit.commit.revision)) }
         if let diff { requestDiff(diff.key) }
@@ -161,7 +189,9 @@ final class SessionWorkspace {
 
     func refreshChanges() {
         if case .loaded = changes {} else { changes = .loading }
-        send(.listChanges(sessionId: sessionId))
+        guard changesFlight.shouldSend() else { return }
+        changesMode = comparisonMode
+        send(.listChanges(sessionId: sessionId, comparisonMode: comparisonMode))
         refreshPullRequest()
     }
 
@@ -184,7 +214,7 @@ final class SessionWorkspace {
         if let sha = key.sha {
             send(.commitFileDiff(sessionId: sessionId, sha: sha, path: key.path))
         } else {
-            send(.fileDiff(sessionId: sessionId, path: key.path, stage: key.stage))
+            send(.fileDiff(sessionId: sessionId, path: key.path, stage: key.stage, comparisonMode: comparisonMode))
         }
     }
 
@@ -505,10 +535,12 @@ final class SessionWorkspace {
             }
         case .changeList(let id, let ref, let metrics, let files, let staged, let unstaged, let commits,
                          let truncated, let commitsTruncated, _, _) where id == sessionId:
+            if changeListLanded() { return }
             changes = .loaded(ChangeListReply(
                 comparisonRef: ref, metricsAvailable: metrics, files: files, staged: staged, unstaged: unstaged,
                 commits: commits, truncated: truncated, commitsTruncated: commitsTruncated))
         case .changeListFailed(let id, let reason, let message) where id == sessionId:
+            if changeListLanded() { return }
             changes = .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil))
         case .fileDiffResult(let id, let path, let stage, let hunks, let truncated, let note) where id == sessionId:
             guard diff?.key == DiffKey(path: path, stage: stage) else { return }
@@ -548,5 +580,18 @@ final class SessionWorkspace {
         default:
             break
         }
+    }
+}
+
+/// The phone-wide Compare Against choice.
+@MainActor @Observable
+final class ChangesComparison {
+    static let shared = ChangesComparison()
+    private static let key = "changesComparisonMode"
+
+    var mode: ChangesComparisonMode? = UserDefaults.standard.string(forKey: key).flatMap(ChangesComparisonMode.init(rawValue:))
+        // Manual compares against the Mac's per-worktree pick, which the host doesn't forward; it isn't offered.
+        .flatMap { $0 == .manual ? nil : $0 } {
+        didSet { UserDefaults.standard.set(mode?.rawValue, forKey: Self.key) }
     }
 }
