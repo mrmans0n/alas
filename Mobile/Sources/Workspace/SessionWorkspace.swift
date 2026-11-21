@@ -85,6 +85,8 @@ final class SessionWorkspace {
     @ObservationIgnored private var commitFilesWaiters: Waiters<String, CommitFilesReply> = [:]
     /// Keyed by nothing: every wait for the change list takes the next one.
     @ObservationIgnored private var changesWaiters: Waiters<Bool, ChangeListReply> = [:]
+    /// Each pending wait's request deadline, by its waiters' key path and key.
+    @ObservationIgnored private var waitTimers: [[AnyHashable]: Task<Void, Never>] = [:]
     /// The commit whose files are open, pushed from the Commits section.
     private(set) var commit: (commit: RemoteCommit, Load<CommitFilesReply>)?
     private(set) var tree = RemoteFileTree()
@@ -248,18 +250,21 @@ final class SessionWorkspace {
         guard hub.state(of: hostID) == .online else { return .failure(offline) }
         let hold = activate()
         defer { hold.cancel() }
-        if self[keyPath: waiters][key] == nil { request() }
-        let timeout = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(60))
-            guard !Task.isCancelled else { return }
-            self?.resume(waiters, key, .failure(RemoteGitFailure("The machine didn't answer. Check the session there.")))
+        if self[keyPath: waiters][key] == nil {
+            request()
+            // One timer per request, so a wait that joins late shares the request's deadline, not an earlier caller's.
+            waitTimers[[AnyHashable(waiters), AnyHashable(key)]] = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled else { return }
+                self?.resume(waiters, key, .failure(RemoteGitFailure("The machine didn't answer. Check the session there.")))
+            }
         }
-        defer { timeout.cancel() }
         return await withCheckedContinuation { self[keyPath: waiters][key, default: []].append($0) }
     }
 
     private func resume<K: Hashable, R: Sendable>(_ waiters: ReferenceWritableKeyPath<SessionWorkspace, Waiters<K, R>>, _ key: K,
                                         _ result: Result<R, RemoteGitFailure>) {
+        waitTimers.removeValue(forKey: [AnyHashable(waiters), AnyHashable(key)])?.cancel()
         self[keyPath: waiters].removeValue(forKey: key)?.forEach { $0.resume(returning: result) }
     }
 

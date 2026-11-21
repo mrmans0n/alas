@@ -72,6 +72,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         let pan = UIPanGestureRecognizer(target: self, action: #selector(pan(_:)))
         pan.delegate = self
         collectionView.addGestureRecognizer(pan)
+        // Ours fails at once on vertical motion, so scrolling still starts straight away.
+        collectionView.panGestureRecognizer.require(toFail: pan)
 
         makeDataSource()
         document.scrollTo = { [weak self] in self?.scroll(to: $0) }
@@ -94,7 +96,7 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     private func makeDataSource() {
         let hunkHeader = UICollectionView.CellRegistration<HunkHeaderCell, ReviewRow> { [weak self] cell, _, row in
             guard let self, case .hunkHeader(let id, let h) = row, let hunk = hunks(id)?[safe: h] else { return }
-            cell.configure(header: hunk.header, menu: menu(id, index: h, hunk))
+            cell.configure(header: hunk.header, menu: menu(id, index: h))
         }
         let line = UICollectionView.CellRegistration<LineCell, ReviewRow> { [weak self] cell, _, row in
             guard let self, case .line(let id, let h, let l) = row, let hunk = hunks(id)?[safe: h],
@@ -145,7 +147,7 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     }
 
     /// Built when it opens, so it reflects a git action still running.
-    private func menu(_ id: ReviewEntryID, index: Int, _ hunk: RemoteDiffHunk) -> UIMenu? {
+    private func menu(_ id: ReviewEntryID, index: Int) -> UIMenu? {
         guard !document.hunkActions(id).isEmpty else { return nil }
         return UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
             guard let self else { return completion([]) }
@@ -153,13 +155,13 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             let items: [UIMenuElement] = document.hunkActions(id).map { action in
                 let item: UIAction = switch action {
                 case .stage: UIAction(title: "Stage Hunk", image: UIImage(systemName: "plus.circle")) { [weak self] _ in
-                        self?.run(.stage, id, index, hunk)
+                        self?.run(.stage, id, index)
                     }
                 case .unstage: UIAction(title: "Unstage Hunk", image: UIImage(systemName: "minus.circle")) { [weak self] _ in
-                        self?.run(.unstage, id, index, hunk)
+                        self?.run(.unstage, id, index)
                     }
                 case .discard: UIAction(title: "Discard Hunk…", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
-                        self?.confirmDiscard(id, index, hunk)
+                        self?.confirmDiscard(id, index)
                     }
                 }
                 if busy { item.attributes.insert(.disabled) }
@@ -169,14 +171,16 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         }])
     }
 
-    private func run(_ action: RemoteHunkAction, _ id: ReviewEntryID, _ index: Int, _ hunk: RemoteDiffHunk) {
+    /// Reads the hunk when the action runs, so a diff refreshed since the menu opened isn't acted on as it was.
+    private func run(_ action: RemoteHunkAction, _ id: ReviewEntryID, _ index: Int) {
+        guard let hunk = hunks(id)?[safe: index] else { return }
         Task { await document.changeHunk(action, entry: id, index: index, hunk) }
     }
 
-    private func confirmDiscard(_ id: ReviewEntryID, _ index: Int, _ hunk: RemoteDiffHunk) {
+    private func confirmDiscard(_ id: ReviewEntryID, _ index: Int) {
         let alert = UIAlertController(title: "Discard this hunk?", message: "Its changes are lost.", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Discard", style: .destructive) { [weak self] _ in self?.run(.discard, id, index, hunk) })
+        alert.addAction(UIAlertAction(title: "Discard", style: .destructive) { [weak self] _ in self?.run(.discard, id, index) })
         present(alert, animated: true)
     }
 
@@ -191,13 +195,17 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         entryIndex = Dictionary(entries.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
         var restyled: [ReviewEntryID] = []
         var reshaped: [ReviewEntryID] = []
+        /// Rows are positional, so rows kept across a content change still show the old diff.
+        var rewritten: [ReviewEntryID] = []
         for entry in entries {
             let id = entry.id
             let state = Drawn(content: entry.content, folded: document.folded.contains(id),
                               hasSpans: document.spanKey(entry).map { document.spans[$0] != nil } ?? false)
             guard drawn[id] != state else { continue }
             if drawn[id]?.content != state.content {
+                if drawn[id] != nil { rewritten.append(id) }
                 widest[id] = nil
+                offsets[id] = nil
                 metrics[id] = Self.measure(entry.content)
             }
             drawn[id] = state
@@ -206,13 +214,11 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             sectionRows[id] = rows
         }
         let ids = entries.map(\.id)
-        let stale = wrapsChanged ? ids : restyled
         if ids != sectionIDs {
             sectionIDs = ids
             var snapshot = NSDiffableDataSourceSnapshot<ReviewEntryID, ReviewRow>()
             snapshot.appendSections(ids)
             for id in ids { snapshot.appendItems(sectionRows[id] ?? [], toSection: id) }
-            snapshot.reconfigureItems(stale.flatMap { sectionRows[$0] ?? [] })
             dataSource.apply(snapshot, animatingDifferences: false)
         } else {
             for id in reshaped {
@@ -220,11 +226,13 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
                 section.append(sectionRows[id] ?? [])
                 dataSource.apply(section, to: id, animatingDifferences: false)
             }
-            if !stale.isEmpty {
-                var snapshot = dataSource.snapshot()
-                snapshot.reconfigureItems(stale.flatMap { sectionRows[$0] ?? [] })
-                dataSource.apply(snapshot, animatingDifferences: false)
-            }
+        }
+        // After the shape is applied, so every row reconfigured is in the snapshot.
+        let stale = wrapsChanged ? ids : Array(Set(restyled + rewritten))
+        if !stale.isEmpty {
+            var snapshot = dataSource.snapshot()
+            snapshot.reconfigureItems(stale.flatMap { sectionRows[$0] ?? [] })
+            dataSource.apply(snapshot, animatingDifferences: false)
         }
         for indexPath in collectionView.indexPathsForVisibleSupplementaryElements(ofKind: UICollectionView.elementKindSectionHeader) {
             if let view = collectionView.supplementaryView(forElementKind: UICollectionView.elementKindSectionHeader, at: indexPath)

@@ -123,7 +123,8 @@ final class ReviewDocument {
         }
         let ids = Set(fresh.map(\.id))
         folded = folded.intersection(ids)
-        for entry in fresh where old[entry.id] == nil
+        // The focused file opens unfolded: the user tapped it to read it.
+        for entry in fresh where old[entry.id] == nil && (listLoaded || entry.id != focus)
             && (ReviewLayout.startsFolded(path: entry.id.path, add: entry.add, del: entry.del) || marks.hasMark(entry.id)) {
             folded.insert(entry.id)
         }
