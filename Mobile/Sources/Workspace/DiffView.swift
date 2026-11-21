@@ -7,16 +7,19 @@ struct DiffView: View {
     let workspace: SessionWorkspace
     @State private var discarding: (index: Int, hunk: RemoteDiffHunk)?
     @State private var error: String?
+    /// What a comment being written will sit on.
+    @State private var commenting: CommentTarget?
+
+    private struct CommentTarget: Identifiable {
+        let id = UUID()
+        let anchor: RemoteReviewAnchor
+    }
 
     var body: some View {
         Group {
             switch workspace.diff?.1 {
             case .loaded(let reply):
-                DiffContent(reply: reply, path: workspace.diff?.key.path ?? "",
-                            actions: workspace.canChangeHunks ? hunkActions(workspace.diff?.key.stage) : [],
-                            busy: workspace.gitRunning != nil) { action, index, hunk in
-                    if action == .discard { discarding = (index, hunk) } else { change(action, index, hunk) }
-                }
+                content(reply)
             case .failed(let message):
                 ContentUnavailableView(message, systemImage: "exclamationmark.triangle")
             default:
@@ -27,19 +30,50 @@ struct DiffView: View {
         .navigationSubtitle(workspace.diff.map { $0.key.sha.map { String($0.prefix(7)) } ?? $0.key.stage?.capitalized ?? "" } ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
-        .confirmationDialog("Discard this hunk?", isPresented: Binding { discarding != nil } set: { if !$0 { discarding = nil } },
+        .toolbar {
+            if workspace.canCommentOnDiff {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Comment on File", systemImage: "plus.bubble") { commenting = CommentTarget(anchor: .file) }
+                }
+            }
+        }
+        .sheet(item: $commenting) { target in
+            CommentSheet(title: target.anchor == .file ? "Comment on File" : "Comment on Hunk", text: "") { body in
+                Task { error = await workspace.commentOnDiff(target.anchor, body: body) }
+            }
+        }
+        .confirmationDialog("Discard this hunk?", isPresented: isDiscarding,
                             titleVisibility: .visible, presenting: discarding) { held in
             Button("Discard", role: .destructive) { change(.discard, held.index, held.hunk) }
         } message: { _ in
             Text("Its changes are lost.")
         }
-        .alert("Couldn't do that", isPresented: Binding { error != nil } set: { if !$0 { error = nil } }) {
+        .alert("Couldn't do that", isPresented: isFailing) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(error ?? "")
         }
         // Backstop for a pop that skips the destination binding (a stack reset to the root).
         .onDisappear { workspace.closeDiff() }
+    }
+
+    private var isDiscarding: Binding<Bool> {
+        Binding { discarding != nil } set: { if !$0 { discarding = nil } }
+    }
+
+    private var isFailing: Binding<Bool> {
+        Binding { error != nil } set: { if !$0 { error = nil } }
+    }
+
+    /// Split out of `body`, whose one expression was too much for the type checker.
+    private func content(_ reply: DiffReply) -> DiffContent {
+        let actions: [RemoteHunkAction] = workspace.canChangeHunks ? hunkActions(workspace.diff?.key.stage) : []
+        var comment: ((RemoteDiffHunk) -> Void)?
+        if workspace.canCommentOnDiff { comment = { commenting = CommentTarget(anchor: Self.anchor($0)) } }
+        return DiffContent(reply: reply, path: workspace.diff?.key.path ?? "", actions: actions,
+                           busy: workspace.gitRunning != nil, comment: comment) { action, index, hunk in
+            if action == .discard { discarding = (index, hunk) } else { change(action, index, hunk) }
+        }
     }
 
     /// As the Mac: stage or discard from the unstaged diff, unstage from the staged one.
@@ -49,6 +83,16 @@ struct DiffView: View {
         case "staged": [.unstage]
         default: []
         }
+    }
+
+    /// The hunk's changed lines on the side they were added, else removed, from; its context lines
+    /// when it changed none.
+    private static func anchor(_ hunk: RemoteDiffHunk) -> RemoteReviewAnchor {
+        let added = hunk.lines.filter { $0.kind == "add" }.compactMap(\.newNumber)
+        let removed = hunk.lines.filter { $0.kind == "delete" }.compactMap(\.oldNumber)
+        let (side, lines) = !added.isEmpty ? ("new", added) : !removed.isEmpty ? ("old", removed) : ("new", hunk.lines.compactMap(\.newNumber))
+        guard let first = lines.min(), let last = lines.max() else { return .file }
+        return .line(side: side, startLine: first, endLine: last)
     }
 
     private func change(_ action: RemoteHunkAction, _ index: Int, _ hunk: RemoteDiffHunk) {
@@ -62,6 +106,8 @@ private struct DiffContent: View {
     /// What each hunk's menu offers; empty for none.
     let actions: [RemoteHunkAction]
     let busy: Bool
+    /// Comments on a hunk; nil when this diff takes no comments.
+    let comment: ((RemoteDiffHunk) -> Void)?
     let act: (RemoteHunkAction, Int, RemoteDiffHunk) -> Void
     /// Each line's syntax spans, counted across hunks; empty until tokenized, or without a grammar.
     @State private var spans: [[HighlightSpan]] = []
@@ -92,7 +138,7 @@ private struct DiffContent: View {
                         switch block {
                         case .header(_, let index, let hunk):
                             HStack(spacing: 8) {
-                                if !actions.isEmpty { menu(index, hunk) }
+                                if !actions.isEmpty || comment != nil { menu(index, hunk) }
                                 Text(hunk.header).foregroundStyle(.secondary).fixedSize(horizontal: true, vertical: false)
                             }
                             .padding(.vertical, 6).padding(.horizontal, 8)
@@ -126,6 +172,7 @@ private struct DiffContent: View {
 
     private func menu(_ index: Int, _ hunk: RemoteDiffHunk) -> some View {
         Menu {
+            if let comment { Button("Comment on Hunk…", systemImage: "plus.bubble") { comment(hunk) } }
             ForEach(actions, id: \.self) { action in
                 switch action {
                 case .stage: Button("Stage Hunk", systemImage: "plus.circle") { act(.stage, index, hunk) }

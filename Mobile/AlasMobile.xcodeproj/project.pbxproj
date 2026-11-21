@@ -51,6 +51,7 @@
 		7DAFD28FE14392621FCDBF53 /* SessionListCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB90BAD33068D0FA5A49EE21 /* SessionListCache.swift */; };
 		82768FC0D800B66EDDFC9B99 /* MermaidBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3D6661CD737A1ADDE5B9897 /* MermaidBlockView.swift */; };
 		86D9AB9FE0BDDAC8209FCCA2 /* ImageStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21958EE58C9376495D96344 /* ImageStaging.swift */; };
+		87D190629E512CCFAFC1EBFC /* ReviewsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72B87E9EB65053A4A68B69DB /* ReviewsView.swift */; };
 		8C58038A7F246D4E54AB3829 /* ChipView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90C6ADD446D0AD2676F2CFF8 /* ChipView.swift */; };
 		8CC4E4A8EB4C471BF4525901 /* ShepherdSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02BAEE99CC723E41B717AD92 /* ShepherdSheet.swift */; };
 		90418683B56D8FDCE540EB72 /* WorktreesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFC88463B7E1083C886AC282 /* WorktreesView.swift */; };
@@ -164,6 +165,7 @@
 		67165C95A555833F59448D9E /* VisualAidWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualAidWebView.swift; sourceTree = "<group>"; };
 		69BE14FB4617210C8AB913F2 /* FilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesView.swift; sourceTree = "<group>"; };
 		703A93DEDFDC64715553851D /* AlasNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = AlasNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		72B87E9EB65053A4A68B69DB /* ReviewsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewsView.swift; sourceTree = "<group>"; };
 		74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyStackTranscriptView.swift; sourceTree = "<group>"; };
 		76125E107DB96A4DC64944CB /* AttentionFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionFeed.swift; sourceTree = "<group>"; };
 		7728D27BA09D4A7193ABB64C /* TranscriptImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptImage.swift; sourceTree = "<group>"; };
@@ -262,6 +264,7 @@
 				03FA6AEA78D99344CAAD8095 /* DiffView.swift */,
 				69BE14FB4617210C8AB913F2 /* FilesView.swift */,
 				DC497CD9E3E3ACCED5B931CD /* FileViewer.swift */,
+				72B87E9EB65053A4A68B69DB /* ReviewsView.swift */,
 				F11FB7A8BA65D28E96B7CFEB /* RunPreviewView.swift */,
 				1547D85F76565F3FE516B06A /* SessionWorkspace.swift */,
 				F56F68CCA7CB55635220C51E /* ShepherdPill.swift */,
@@ -727,6 +730,7 @@
 				468E5015B45747F86FC3A04F /* QueueTray.swift in Sources */,
 				0C2F93617E2905DED2097D5C /* ReferenceCache.swift in Sources */,
 				90AE44675FE782B711960528 /* RequestCard.swift in Sources */,
+				87D190629E512CCFAFC1EBFC /* ReviewsView.swift in Sources */,
 				72049EBD4013BEA3EB39D753 /* RunPreviewView.swift in Sources */,
 				7DAFD28FE14392621FCDBF53 /* SessionListCache.swift in Sources */,
 				28DDA5893612F777C9742BC4 /* SessionRecapSheet.swift in Sources */,

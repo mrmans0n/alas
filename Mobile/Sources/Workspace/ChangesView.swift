@@ -6,6 +6,7 @@ import SwiftUI
 struct ChangesView: View {
     let workspace: SessionWorkspace
     let owner: UUID
+    @State private var showingReviews = false
 
     var body: some View {
         Group {
@@ -25,6 +26,11 @@ struct ChangesView: View {
             }
         }
         .toolbar {
+            if workspace.canReview {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Reviews", systemImage: "text.bubble") { showingReviews = true }
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu("Compare Against", systemImage: "arrow.left.arrow.right") {
                     Picker("Compare Against", selection: Binding(
@@ -41,6 +47,7 @@ struct ChangesView: View {
                 Button("Refresh Changes", systemImage: "arrow.clockwise") { workspace.refreshChanges() }
             }
         }
+        .navigationDestination(isPresented: $showingReviews) { ReviewsView(workspace: workspace) }
         .onAppear {
             if case .idle = workspace.changes { workspace.refreshChanges() } else { workspace.refreshIfComparisonChanged() }
         }

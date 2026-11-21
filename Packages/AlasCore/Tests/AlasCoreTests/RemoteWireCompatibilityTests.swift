@@ -136,6 +136,55 @@ import Testing
         #expect(RemoteAttentionRequest.items(replying: 9, in: reply) == nil)
     }
 
+    @Test func phoneReadsAndChangesTheMacsDraftReviews() throws {
+        let ref = WorktreeRef(projectID: "p", path: "/r")
+        let decode = { (m: OpaqueHostMessage) in try JSONDecoder().decode(HostClientMessage.self, from: m.json).request }
+        let session = ReviewDraftSessionID.localChanges(worktreeID: "w\u{1f}1", worktreePath: URL(fileURLWithPath: "/r/"), scope: .all)
+        #expect(RemoteReviewRequest.localChangesSessionID(worktreeID: "w\u{1f}1", worktreePath: "/r/") == session.rawValue)
+        let fileID = RemoteReviewFileID(namespace: "unstaged", path: "a.swift")
+        let macFileID = DiffReviewFileID(namespace: "unstaged", path: "a.swift")
+        #expect(try decode(RemoteReviewRequest.list(id: 1, projectID: "p", path: "/r")) == .listReviews(worktree: ref))
+        #expect(try decode(RemoteReviewRequest.read(id: 1, projectID: "p", path: "/r", sessionID: "s")) == .readReview(worktree: ref, sessionID: "s"))
+        let mutations: [(RemoteReviewMutation, HostReviewMutation)] = [
+            (.add(fileID: fileID, path: "a.swift", anchor: .line(side: "new", startLine: 3, endLine: 5), body: "Why?"),
+             .add(fileID: macFileID, path: "a.swift", originalPath: nil,
+                  anchor: .line(side: .new, startLine: 3, endLine: 5, selectedText: nil), body: "Why?")),
+            (.add(fileID: fileID, path: "a.swift", anchor: .file, body: "Split"),
+             .add(fileID: macFileID, path: "a.swift", originalPath: nil, anchor: .file, body: "Split")),
+            (.edit(commentID: "c", body: "b"), .edit(commentID: "c", body: "b")),
+            (.delete(commentID: "c"), .delete(commentID: "c")),
+            (.resolve(commentID: "c"), .resolve(commentID: "c")),
+            (.dismiss(commentID: "c"), .dismiss(commentID: "c")),
+        ]
+        for (phone, mac) in mutations {
+            #expect(try decode(RemoteReviewRequest.mutate(id: 1, projectID: "p", path: "/r", sessionID: "s", phone))
+                == .mutateReview(worktree: ref, sessionID: "s", mutation: mac))
+        }
+
+        let target = ReviewSessionTarget.localChanges(worktreeID: "w\u{1f}1", repositoryPath: URL(fileURLWithPath: "/r"), scope: .all)
+        let date = Date(timeIntervalSinceReferenceDate: 1_000)
+        let summary = HostReviewSummary(record: ReviewSessionRecord(id: target.id, target: target, createdAt: date, updatedAt: date),
+                                        openCommentCount: 1)
+        let comment = ReviewDraftComment(
+            id: "c", sessionID: target.draftSessionID, fileID: macFileID, path: "a.swift",
+            anchor: .line(side: .new, startLine: 3, endLine: nil, selectedText: "x"), bodyMarkdown: "Why?", state: .active,
+            createdAt: date, updatedAt: date, author: .agent(name: "Codex"),
+            replies: [ReviewCommentReply(id: "r", author: .user, bodyMarkdown: "Because", createdAt: date)])
+        let encode = { (result: HostResponse) in
+            OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 2, result: result)))
+        }
+        let listed = try #require(RemoteReviewRequest.reviews(replying: 2, in: encode(.reviews(reviews: [summary]))))
+        #expect(listed.map(\.id) == [summary.sessionID])
+        #expect(listed.first?.kind == "local-changes" && listed.first?.openCommentCount == 1)
+        let read = try #require(RemoteReviewRequest.review(
+            replying: 2, in: encode(.review(review: HostReview(summary: summary, comments: [comment])))))
+        let phoneComment = try #require(read.comments.first)
+        #expect(phoneComment.fileID == fileID && phoneComment.anchor == .line(side: "new", startLine: 3, endLine: nil))
+        #expect(phoneComment.author == "Codex" && phoneComment.replies.map(\.author) == ["You"])
+        #expect(phoneComment.replies.map(\.body) == ["Because"])
+        #expect(try RemoteReviewRequest.reviews(replying: 9, in: encode(.reviews(reviews: [summary]))) == nil)
+    }
+
     @Test func sessionConfigCarriesTheGoal() throws {
         var config = RemoteSessionConfig(sessionId: "s", models: [], modes: [], autoRunEnabled: false, acceptsImages: false)
         config.goal = RemoteSessionGoal(objective: "Ship it", status: "active", tokenBudget: 50_000, tokensUsed: 1_200)
