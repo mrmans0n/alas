@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 
 /// An HTML visual an agent showed through the `visual_show` MCP tool, with an
@@ -102,6 +103,18 @@ public struct ACPVisualAid: Codable, Equatable, Sendable {
     /// the request wins and defaults to `.embedded`.
     public static func resolvePresentation(requested: Presentation?, hasQuestion: Bool) -> Presentation {
         hasQuestion ? .card : (requested ?? .embedded)
+    }
+
+    /// The embedded visual a ```` ```visual ```` fence in agent markdown draws. The id comes from the
+    /// HTML, so re-parsing the message on every chunk or scroll keeps the same page instead of reloading it.
+    public static func fenced(title: String?, html: String) -> ACPVisualAid {
+        let digest = Array(SHA256.hash(data: Data(html.utf8)).prefix(16))
+        let id = UUID(uuid: (
+            digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
+            digest[8], digest[9], digest[10], digest[11], digest[12], digest[13], digest[14], digest[15]))
+        return ACPVisualAid(
+            id: id, title: title ?? "Visual", html: html, question: nil, presentation: .embedded,
+            createdAt: Date(timeIntervalSince1970: 0))
     }
 
     private enum CodingKeys: String, CodingKey {

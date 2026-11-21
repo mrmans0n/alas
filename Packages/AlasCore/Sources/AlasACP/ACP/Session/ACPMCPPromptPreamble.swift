@@ -578,12 +578,17 @@ public enum ACPMCPPromptPreamble: Sendable {
     /// When to reach for a visual. Mirrors the server instructions and tool
     /// description in AlasCLI/crates/alas/src/mcp.rs; keep them in sync.
     private static func visualPolicy(tool: String) -> String {
-        "Reach for \(tool) when an explanation has shape: "
-            + "how parts connect (architecture, data or control flow, state machines, sequences), "
-            + "options compared on several dimensions, before/after layouts or UI sketches, "
-            + "or numbers that read better as a chart. Keep it to one visual per reply, usually none: "
-            + "skip it for short answers, single facts, code edits, status updates, and anything "
-            + "a list or code block already shows clearly."
+        "When an explanation has shape (how parts connect: architecture, data or control flow, "
+            + "state machines, sequences; options compared on several dimensions; before/after layouts "
+            + "or UI sketches; numbers that read better as a chart), draw it: put a ```visual fenced block "
+            + "of HTML in your reply, with an optional title after the tag (```visual Auth flow), and Alas "
+            + "renders it inline with no frame. Leave the outer element without background, border or "
+            + "padding, give charts fixed pixel heights, and take every colour and font from the theme "
+            + "variables: --alas-text, --alas-dim, --alas-muted, --alas-accent, --alas-accent-soft, "
+            + "--alas-card, --alas-border, --alas-line, --alas-chart-1 to 6, --alas-radius, "
+            + "--alas-font-sans, --alas-font-mono. Use \(tool) instead to ask the user a question about "
+            + "a visual or to show a UI mockup in a titled card. Skip visuals for short answers, "
+            + "single facts, code edits, and status updates."
     }
 
     private static func ggStackLine(_ context: GGPreambleStackContext, cliMode: Bool, shipsWithAlas: Bool) -> String {

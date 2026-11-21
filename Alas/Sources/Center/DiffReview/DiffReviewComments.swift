@@ -578,7 +578,7 @@ enum DiffReviewInlineFeedbackMarkdown {
                 return (text, false)
             case .taskList(let items):
                 return (items.map { "[\($0.isChecked ? "x" : " ")] \($0.text)" }.joined(separator: " "), false)
-            case .code(_, let body), .streamingCode(_, let body), .mermaid(let body):
+            case .code(_, let body), .streamingCode(_, let body), .mermaid(let body), .visual(_, let body):
                 return (body, true)
             case .image(let alt, let source):
                 return (alt.isEmpty ? source : alt, true)
@@ -604,6 +604,8 @@ enum DiffReviewInlineFeedbackMarkdown {
                 return body
             case .mermaid(let source):
                 return source
+            case .visual(let title, _):
+                return title ?? "Visual"
             case .image(let alt, let source):
                 return alt.isEmpty ? source : alt
             case .table(let header, let rows):
