@@ -1,0 +1,16 @@
+{
+  "version": "0.24.6",
+  "headline": {
+    "title": "Review every file",
+    "body": "Review a whole change in one scroll on iPhone and iPad, jump through files, and keep track of what you've viewed.",
+    "media": "media/0.24.6-review-every-file.png"
+  },
+  "also": [
+    {
+      "title": "Submit reviews from iPhone"
+    },
+    {
+      "title": "Native charts in transcripts"
+    }
+  ]
+}

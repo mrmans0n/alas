@@ -6,8 +6,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- When Codex's managed MCP policy blocks the Alas MCP server, point the session at the `alas` CLI instead of tools that never load, and remember the block for the agent's next sessions.
-- Install Alas agent skills from Settings > Agents, or with `alas skill install`: a routing `alas` skill and skills for reviews, delegation, previews, computer use and devices, which teach any agent to drive Alas with the CLI. `alas skill guide` prints the same guides.
+## [0.24.6] - 2026-11-22
+
+### ✨ Features
+
+- When Alas detects a managed Codex policy blocking its MCP server, steer affected sessions to the bundled `alas` CLI instead of missing tools, and offer optional agent skills for CLI-based reviews, delegation, previews, computer use, and devices ([#2639](https://github.com/mrmans0n/alas/pull/2639)).
+- Show Mac-style chips for slash commands, skills, mentions, code-host references, and pasted text in the iPhone and iPad composer and transcript, and in Mac peer sessions ([#2632](https://github.com/mrmans0n/alas/pull/2632)).
+- Accept plans and answer eligible single-choice questions directly from iPhone and iPad notifications after unlocking the device ([#2641](https://github.com/mrmans0n/alas/pull/2641)).
+- On iPhone and iPad, choose whether Changes compares against the Mac's setting, the base branch, or the branch upstream ([#2642](https://github.com/mrmans0n/alas/pull/2642)).
+- Browse a file's commit history on iPhone and iPad, then open the commit review focused on that file ([#2643](https://github.com/mrmans0n/alas/pull/2643)).
+- Take a photo from the composer and attach it to a prompt on iPhone or iPad ([#2645](https://github.com/mrmans0n/alas/pull/2645)).
+- Show the agent or recognised developer tool running in a focused terminal pane, and use it in synced terminal tab titles when available ([#2646](https://github.com/mrmans0n/alas/pull/2646)).
+- Show a session's goal, state, and token use on iPhone and iPad, and generate an on-device recap of recent context on compatible Apple Intelligence devices ([#2647](https://github.com/mrmans0n/alas/pull/2647), [#2648](https://github.com/mrmans0n/alas/pull/2648), [#2655](https://github.com/mrmans0n/alas/pull/2655)).
+- Open and manage the Mac's draft review comments from iPhone and iPad, including editing, resolving, dismissing, deleting, and adding file-level comments inside an existing review ([#2644](https://github.com/mrmans0n/alas/pull/2644)).
+- Render `visual` fences as inline visual aids on Mac, iPhone, and iPad, retain snapshots for paused visuals, and add themed offline stats, timelines, flows, callouts, and tables ([#2656](https://github.com/mrmans0n/alas/pull/2656), [#2657](https://github.com/mrmans0n/alas/pull/2657), [#2662](https://github.com/mrmans0n/alas/pull/2662), [#2666](https://github.com/mrmans0n/alas/pull/2666)).
+- See each session's MCP servers and warnings from the iPhone composer ([#2658](https://github.com/mrmans0n/alas/pull/2658)).
+- Read, reply to, resolve, and reopen GitHub or GitLab review threads from iPhone when the provider and signed-in account allow it ([#2661](https://github.com/mrmans0n/alas/pull/2661)).
+- Submit eligible pull or merge request reviews from iPhone with comments, approvals, or change requests ([#2665](https://github.com/mrmans0n/alas/pull/2665)).
+- Review a change in one continuous scroll on iPhone and iPad, with a file strip, sticky headers, viewed marks, folding, and lazy-loaded diffs ([#2669](https://github.com/mrmans0n/alas/pull/2669)).
+- Render `chart` fences natively on Mac, iPhone, and iPad, with bar, horizontal-bar, and line charts plus values on hover or tap ([#2671](https://github.com/mrmans0n/alas/pull/2671), [#2673](https://github.com/mrmans0n/alas/pull/2673)).
+- Render GitHub-style notes, tips, and warnings as native transcript alerts on Mac, iPhone, and iPad ([#2667](https://github.com/mrmans0n/alas/pull/2667)).
+- Show a finished turn's file changes and line totals beneath its answer on Mac, iPhone, and iPad, with optional on-device captions on supported Macs ([#2670](https://github.com/mrmans0n/alas/pull/2670), [#2672](https://github.com/mrmans0n/alas/pull/2672)).
+- Keep suggested prompts in a compact inline Use pill that leaves more room for iPhone and iPad composer controls ([#2660](https://github.com/mrmans0n/alas/pull/2660)).
+
+### 🐛 Fixes
+
+- Keep iPhone transcript rows steady during fast scrolling and beneath the navigation and composer bars ([#2659](https://github.com/mrmans0n/alas/pull/2659), [#2663](https://github.com/mrmans0n/alas/pull/2663)).
+- Clear stale browser-wait cards when affected Codex turns end so next-prompt suggestions can resume ([#2668](https://github.com/mrmans0n/alas/pull/2668)).
+
+### 🏗️ Internal
+
+- Make host-socket and scheduled-session tests tolerate CI contention ([#2640](https://github.com/mrmans0n/alas/pull/2640), [#2649](https://github.com/mrmans0n/alas/pull/2649)).
+- Retry transient dependency fetch failures in zmx builds used by Linux packaging and macOS release bundles ([#2650](https://github.com/mrmans0n/alas/pull/2650)).
+- Extend preview fixture time limits under CI contention without changing the production startup timeout ([#2651](https://github.com/mrmans0n/alas/pull/2651)).
+- Update the `notify` dependency to 9.0.0 ([#2652](https://github.com/mrmans0n/alas/pull/2652)).
+- Fix isolated-profile design captures so the CLI addresses the seeded session ([#2654](https://github.com/mrmans0n/alas/pull/2654)).
+- Update remote capability expectations for phone review threads ([#2664](https://github.com/mrmans0n/alas/pull/2664)).
+
+### 📚 Docs
+
+- Refresh the README's feature list and screenshots ([#2653](https://github.com/mrmans0n/alas/pull/2653)).
 
 ## [0.24.5] - 2026-11-20
 
