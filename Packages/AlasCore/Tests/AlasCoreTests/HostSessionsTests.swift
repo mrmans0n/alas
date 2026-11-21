@@ -1235,13 +1235,17 @@ struct HostSessionsTests {
 
     /// A stopped runner reports no turn, so a scheduled firing waiting on a
     /// session the host closes ends as stopped rather than waiting hours.
-    @Test(arguments: HostSessionClose.allCases)
+    @Test(.timeLimit(.minutes(5)), arguments: HostSessionClose.allCases)
     func closingAScheduledSessionEndsItsTurnWaitAsStopped(_ close: HostSessionClose) async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
+        var attaching: Task<UUID?, Never>?
+        fixture.core.sessionAttachScheduler = { manager, id in attaching = Task { await manager.attach(to: id, freshlyCreated: true) } }
+        defer { attaching?.cancel() }
         let sessions = fixture.host.sessions
         let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
-        try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
+        _ = await (try #require(attaching)).value
+        try #require(sessions.isWriter(id))
         fixture.core.scheduledAgentTurns.expect(id)
         switch close {
         case .archive: try await sessions.archive(id, caller: .app)

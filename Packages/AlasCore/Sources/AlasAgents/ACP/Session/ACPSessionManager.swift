@@ -1531,6 +1531,7 @@ public final class ACPSessionManager: ChangeTracking {
     private var v2PreviewCreations: [ACPSession.ID: UUID] = [:]
     private var v2PreviewProcessesEnded: Set<ACPSession.ID> = []
 #if DEBUG
+    public var v2PreviewStartupTimeoutForTesting: Duration?
     public var v2PreviewAdmissionRecordsForTesting: [ACPV2PreviewQualifiedAdapter]?
     public var prepareV2PreviewLaunchForTesting: (@MainActor (String) async throws -> ACPV2PreviewPreparedLaunch)?
 #endif
@@ -11324,7 +11325,12 @@ extension ACPSessionManager {
     public func createV2PreviewSession(agentId: String) async throws -> ACPSession {
         guard offersV2PreviewCreation, admitsNewWork() else { throw ACPV2PreviewManagerError.unavailable }
         await previousManagerDisposal?.value
-        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+        #if DEBUG
+        let startupTimeout = v2PreviewStartupTimeoutForTesting ?? .seconds(60)
+        #else
+        let startupTimeout: Duration = .seconds(60)
+        #endif
+        let deadline = ContinuousClock.now.advanced(by: startupTimeout)
         let prepared = try await prepareV2PreviewLaunch(agentId: agentId)
         // Preflight avoids creating a row for an unqualified package. Actual
         // writer authority is established and checked again before open.

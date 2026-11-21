@@ -36,18 +36,27 @@ public final class HarnessDetector: @unchecked Sendable {
     /// Called every poll with the latest detected kind for a session (or nil).
     /// Invoked on the main queue — see the type's invariants.
     public typealias UpdateHandler = (String, HarnessKind?) -> Void
+    /// Called every poll with the catalogued non-agent program in the
+    /// foreground of a session, or nil. Invoked on the main queue.
+    public typealias AppUpdateHandler = (String, TerminalApp?) -> Void
 
     /// Guards every mutable field below. See the invariants on the type.
     private let lock = NSLock()
     private var _providers: [String: PidProvider] = [:]
     private var _timer: DispatchSourceTimer?
     private var _onUpdate: UpdateHandler?
+    private var _onAppUpdate: AppUpdateHandler?
 
     private let queue = DispatchQueue(label: "io.nlopez.alas.harness-detector")
 
     public var onUpdate: UpdateHandler? {
         get { lock.withLock { _onUpdate } }
         set { lock.withLock { _onUpdate = newValue } }
+    }
+
+    public var onAppUpdate: AppUpdateHandler? {
+        get { lock.withLock { _onAppUpdate } }
+        set { lock.withLock { _onAppUpdate = newValue } }
     }
 
     public func register(sessionId: String, pidProvider: @escaping PidProvider) {
@@ -91,16 +100,26 @@ public final class HarnessDetector: @unchecked Sendable {
         let snapshot = lock.withLock { _providers }
         for (sid, provider) in snapshot {
             let pid = provider() ?? 0
-            let kind: HarnessKind? = pid > 0 ? Self.matchKind(pid: pid) : nil
-            DispatchQueue.main.async { [self] in deliverUpdate(sessionId: sid, kind: kind) }
+            let path = pid > 0 ? ProcessTable.executablePath(of: pid) : nil
+            let kind = path.flatMap { Self.matchKind(pid: pid, executablePath: $0) }
+            let app = kind == nil ? path.flatMap { Self.matchApp(pid: pid, executablePath: $0) } : nil
+            DispatchQueue.main.async { [self] in deliverUpdate(sessionId: sid, kind: kind, app: app) }
         }
     }
 
     /// Invoked only from `DispatchQueue.main.async`. Snapshots the handler
     /// under the lock, then calls it with the lock released.
-    private func deliverUpdate(sessionId: String, kind: HarnessKind?) {
-        let handler = lock.withLock { _onUpdate }
+    private func deliverUpdate(sessionId: String, kind: HarnessKind?, app: TerminalApp?) {
+        let (handler, appHandler) = lock.withLock { (_onUpdate, _onAppUpdate) }
         handler?(sessionId, kind)
+        appHandler?(sessionId, app)
+    }
+
+    /// Arguments are read only for interpreters, whose own name says little.
+    static func matchApp(pid: pid_t, executablePath: String) -> TerminalApp? {
+        let executable = (executablePath as NSString).lastPathComponent
+        let arguments = TerminalAppCatalog.isInterpreter(executable) ? ProcessTable.arguments(of: pid) : nil
+        return TerminalAppCatalog.app(forExecutablePath: executablePath, arguments: arguments)
     }
 
     public static func matchKind(processName: String) -> HarnessKind? {
@@ -117,6 +136,10 @@ public final class HarnessDetector: @unchecked Sendable {
     /// Identify the foreground executable or the Codex binary behind its npm launcher.
     public static func matchKind(pid: pid_t) -> HarnessKind? {
         guard let path = ProcessTable.executablePath(of: pid) else { return nil }
+        return matchKind(pid: pid, executablePath: path)
+    }
+
+    private static func matchKind(pid: pid_t, executablePath path: String) -> HarnessKind? {
         let basename = (path as NSString).lastPathComponent
         if let kind = matchKind(processName: basename) { return kind }
 

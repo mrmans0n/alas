@@ -417,6 +417,18 @@ struct CenterPaneView: View {
                     return state.agent(id: session.agentId)
                         ?? AgentBuiltins.entry(id: session.agentId)
                 },
+                terminalPresenceLookup: { id in
+                    guard let tab = tabs.first(where: { $0.id == id }),
+                          case .terminal(let s) = tab,
+                          let leaf = s.root.find(leafId: s.focusedLeafId)?.leaf else { return nil }
+                    return TerminalTabPresence.resolve(
+                        harness: state.harness.activeHarnessBySession[leaf.sessionId],
+                        app: state.harness.foregroundAppBySession[leaf.sessionId],
+                        cwd: leaf.lastCwd,
+                        renamesTab: state.config.terminal.syncTabTitleWithTerminalTitle
+                            && !state.tabs.prefersStoredTerminalTitle(for: tab)
+                    )
+                },
                 pluginCommands: state.pluginCommands(.toolbar, projectID: worktree.projectId),
                 onRunPluginCommand: { state.runPluginCommand($0, slot: .toolbar, worktreeID: worktree.id) },
                 sessionPluginCommands: { [sessionCommands = state.pluginCommands(.sessionMenu, projectID: worktree.projectId)] id in
