@@ -158,11 +158,11 @@ enum ACPUpstreamReferenceChip {
         excluding: (NSRange) -> Bool = { _ in false },
         urlRemote: CodeHostRemote? = nil
     ) -> Int {
-        let tokens = ACPUpstreamReferenceDetector
+        let tokens = UpstreamReferenceText
             .references(in: storage.string, host: host, precededBy: precededBy, followedBy: followedBy)
         let urls = urlRemote.map {
-            ACPUpstreamReferenceDetector.urlReferences(
-                in: storage.string, remote: $0, precededBy: precededBy, followedBy: followedBy
+            UpstreamReferenceText.urlReferences(
+                in: storage.string, repository: $0.codeHost, precededBy: precededBy, followedBy: followedBy
             )
         } ?? []
         // A token inside a URL (a `#` fragment) is already rejected by the

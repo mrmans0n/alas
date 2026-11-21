@@ -467,7 +467,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// `onAccepted` fires when `submit` takes the prompt (sent, queued, or
     /// waiting on a model switch); `onResult` still reports how it ended.
     public func sendPrompt(
-        for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment],
+        for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], draft: ACPComposerDraft? = nil,
         delegatedSource: ACPDelegatedPromptSource? = nil, normalUserTurn: Bool = true,
         isStillWanted: (@MainActor () -> Bool)? = nil, onAccepted: (@MainActor () -> Void)? = nil,
         onResult: @escaping @MainActor (Bool) -> Void
@@ -485,7 +485,7 @@ public final class ACPSessionManager: ChangeTracking {
             return
         }
         let accepted = submit(sessionId: id, text: text, attachments: attachments, intent: .auto,
-                              draft: nil, waitForModelModeSelections: true,
+                              draft: draft, waitForModelModeSelections: true,
                               delegatedSource: delegatedSource, normalUserTurn: normalUserTurn,
                               onCompleted: { ok in onResult(ok) })
         if accepted {
@@ -787,7 +787,10 @@ public final class ACPSessionManager: ChangeTracking {
     /// Steer from the remote client: same route the composer's ⌥⏎ takes.
     /// `ACPSubmitRoute.resolve` handles the degenerate idle+empty case by
     /// falling back to a plain send.
-    public func steerPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
+    public func steerPrompt(
+        for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], draft: ACPComposerDraft? = nil,
+        onResult: @escaping @MainActor (Bool) -> Void
+    ) async {
         let suggestionSession = sessions[id]
         suggestionSession?.nextPromptWorkCount += 1
         defer { suggestionSession?.nextPromptWorkCount -= 1 }
@@ -795,7 +798,7 @@ public final class ACPSessionManager: ChangeTracking {
             onResult(false)
             return
         }
-        let accepted = submit(sessionId: id, text: text, attachments: attachments, intent: .steer,
+        let accepted = submit(sessionId: id, text: text, attachments: attachments, intent: .steer, draft: draft,
                               onCompleted: { ok in onResult(ok) })
         if accepted { onQueueChanged?(id, true) }
         if !accepted { onResult(false) }

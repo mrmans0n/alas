@@ -748,7 +748,7 @@ struct ACPInputField: NSViewRepresentable {
                 // explicit reference markers were handled above.
                 let end = (storage.string as NSString).length
                 let caret = NSRange(location: end, length: 0)
-                let matches = ACPUpstreamReferenceDetector.chippableMatches(
+                let matches = UpstreamReferenceText.chippableMatches(
                     in: storage.string, host: host, caret: caret
                 )
                 for match in matches.reversed() {
@@ -1617,7 +1617,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// hand-typed command or upstream reference (`#12`, etc.),
     /// turning it into a chip in the SAME edit as the keystroke instead of
     /// a follow-up one — see
-    /// `ACPSlashCommand.chipTarget(completingWith:at:in:suggestions:)` for
+    /// `SlashCommandText.chipTarget(completingWith:at:in:commands:)` for
     /// why a follow-up edit is unsafe here. Everything else (fenced-block
     /// pairing, IME composition, plain typing) still goes through
     /// `PairedDelimiterTextView`'s own `insertText`.
@@ -1627,9 +1627,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
         let range = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
         if let text = insertString as? String,
            let textStorage, let coordinator,
-           let target = ACPSlashCommand.chipTarget(
-               completingWith: text, at: range, in: textStorage,
-               suggestions: coordinator.promptSuggestions
+           let target = SlashCommandText.chipTarget(
+               completingWith: text, at: range, in: textStorage.string,
+               commands: coordinator.promptSuggestions.map(\.command)
            ) {
             let chip = NSMutableAttributedString(
                 attributedString: ACPSlashCommand.chip(
@@ -1662,7 +1662,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// above guards against.
     func pillCommandsIfNeeded() {
         guard let textStorage, let coordinator, !hasMarkedText() else { return }
-        let targets = ACPSlashCommand.chipTargets(in: textStorage.string, suggestions: coordinator.promptSuggestions)
+        let targets = SlashCommandText.chipTargets(
+            in: textStorage.string, commands: coordinator.promptSuggestions.map(\.command))
         for target in targets.reversed() {
             let chip = ACPSlashCommand.chip(
                 for: target.command, font: chatTypography.appKitFont(), suggestions: coordinator.promptSuggestions
@@ -1908,9 +1909,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
         onNextPromptStateChange(nextPromptInputState)
     }
 
-    /// See `ACPSlashCommand.activeToken(in:caret:)`.
+    /// See `RemoteComposerText.slashToken(in:caret:)`.
     private func currentSlashToken() -> (start: Int, query: String)? {
-        ACPSlashCommand.activeToken(in: string as NSString, caret: selectedRange().location)
+        RemoteComposerText.slashToken(in: string as NSString, caret: selectedRange().location)
     }
 
     func reconcileSlashPanel() {
@@ -3301,7 +3302,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         }
         let range = NSRange(location: slashStart, length: caret - slashStart)
         closeSlashPanel()
-        let inCode = ACPSlashCommand.isInCode(range.location, in: ts.string as NSString)
+        let inCode = SlashCommandText.isInCode(range.location, in: ts.string as NSString)
         // A command whose negotiated action sets a config option (Codex
         // `/plan`) runs it with the session control instead of inserting
         // text: the typed `/query` goes away in one undoable edit. An action

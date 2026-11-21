@@ -156,6 +156,24 @@ import Testing
         #expect(RemoteSessionGoal(objective: "o", status: nil, tokenBudget: budget, tokensUsed: used).tokenText == expected)
     }
 
+    @Test func aRefreshAskedForMeanwhileReplacesTheReplyInFlight() {
+        var flight = RemoteSingleFlight()
+        let start = ContinuousClock.now
+        var steps: [Bool] = []
+        steps.append(flight.shouldSend(now: start))
+        // Mode B, then back to A, while the first A is out: both wait.
+        steps.append(flight.shouldSend(now: start + .seconds(1)))
+        steps.append(flight.shouldSend(now: start + .seconds(2)))
+        // A's reply is dropped in favour of one fresh request, whose own reply shows.
+        steps.append(flight.landed())
+        steps.append(flight.shouldSend(now: start + .seconds(3)))
+        steps.append(flight.landed())
+        // A lost reply holds the next request only for a while.
+        steps.append(flight.shouldSend(now: start + .seconds(4)))
+        steps.append(flight.shouldSend(now: start + .seconds(4) + RemoteSingleFlight.patience))
+        #expect(steps == [true, false, false, true, true, false, true, true])
+    }
+
     @Test func phoneReadsWhatACommitMessageIsSuggestedFrom() throws {
         let request = RemoteGitRequest.commitMessageInput(id: 3, projectID: "p", path: "/r").json
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: request)
@@ -373,6 +391,45 @@ import Testing
         #expect(RemoteSessionGateway.toWire(row.message, index: 0, createdAt: nil).createdAt == nil)
     }
 
+    /// A user row carries its mentions and pasted spans, and a viewer shows
+    /// the mentions in place of their `📎` lines.
+    @MainActor
+    @Test func userRowsCarryMentionsAndPastedSpans() throws {
+        let target = ACPSymbolReference.Target(path: "Sources/A.swift", name: "run", kind: .function,
+                                               container: "Runner", lineRange: 3...9, includeCode: true)
+        let snapshot = ACPSymbolSnapshot(lineRange: 3...9, contentHash: "h", excerpt: "func run() {}",
+                                         truncated: false, found: true)
+        let spans = [ACPPastedTextSpan(ordinal: 1, utf16Offset: 18, utf16Length: 1)]
+        let message = ACPMessage.user(
+            id: UUID(), messageId: nil, text: "fix @Runner.run() \u{FFFC}",
+            attachments: [
+                .init(uri: ACPSymbolReference.uri(for: target), name: "Runner.run()", symbol: snapshot),
+                .init(uri: "alas-session://abc", name: "Other chat"),
+                .init(uri: "file:///repo/Sources", name: "Sources/"),
+            ],
+            pastedSpans: spans)
+        let wire = RemoteSessionGateway.toWire(message, index: 0)
+        #expect(wire.pastedSpans == spans)
+        #expect(wire.mentions == [
+            RemoteUserMention(kind: RemoteMention.symbol, name: "Runner.run()", symbol: RemoteSymbolMention(
+                path: "Sources/A.swift", name: "run", kind: "function", container: "Runner",
+                lineRange: 3...9, includesCode: true, snapshot: snapshot)),
+            RemoteUserMention(kind: RemoteMention.session, name: "Other chat"),
+            RemoteUserMention(kind: RemoteMention.file, name: "Sources/"),
+        ])
+        guard case .user(let shown, _, _, _, let mentions, let rowSpans) = RemoteTranscriptRow(message: wire) else {
+            Issue.record("expected a user row")
+            return
+        }
+        #expect(shown == "fix @Runner.run() \u{FFFC}")
+        #expect(mentions == wire.mentions)
+        #expect(rowSpans == spans)
+
+        // Only the appended label goes; the user's own identical line stays.
+        let own = RemoteWireMessage.userRowText(text: "📎 A.swift", attachmentNames: [], resourceNames: ["A.swift"])
+        #expect(RemoteWireMessage.userRowText(own, removingResourceNames: ["A.swift"]) == "📎 A.swift")
+    }
+
     /// Answered questions, outcome cards and failure incidents reach the phone
     /// as the values their cards draw, with their caption kept for older clients.
     @MainActor // `toWire` reads a `StreamingText`.
@@ -586,6 +643,34 @@ enum RemoteWireSamples {
                 subagent: .init(id: "c2", name: "Explorer", task: "Look around", state: "failed", lastError: "boom")),
         ]),
         .subagentTranscript(sessionId: "s1", subagentId: "gone", found: false, state: nil, messages: []),
+        .sessionConfig(RemoteSessionConfig(
+            sessionId: "s1", models: [], modes: [], autoRunEnabled: false, acceptsImages: true,
+            availableCommands: [
+                RemoteSlashCommand(command: "/review", description: "Review", skill: RemoteSkillInfo(hasFile: true)),
+                RemoteSlashCommand(command: "/compact"),
+            ],
+            codeHost: RemoteCodeHost(kind: .gitlab, host: "gitlab.example.com",
+                                     webURL: URL(string: "https://gitlab.example.com/group/repo")!))),
+        .transcriptDelta(
+            sessionId: "s1", streamingState: "idle", canDrive: true,
+            upserts: [
+                RemoteWireMessage(
+                    stableId: "u1", kind: "user", text: "see @run() \u{FFFC}\n\n📎 Runner.run()", json: nil, index: 8,
+                    mentions: [RemoteUserMention(kind: RemoteMention.symbol, name: "Runner.run()", symbol: RemoteSymbolMention(
+                        path: "Sources/A.swift", name: "run", kind: "function", container: "Runner", lineRange: 3...9,
+                        includesCode: true,
+                        snapshot: ACPSymbolSnapshot(lineRange: 3...9, contentHash: "h", excerpt: "func run() {}",
+                                                    truncated: false, found: true)))],
+                    pastedSpans: [ACPPastedTextSpan(ordinal: 1, utf16Offset: 11, utf16Length: 1)]),
+            ],
+            epoch: 1, revision: 11, hasCancellableBackgroundWork: false),
+        .referenceSummaries(sessionId: "s1", entries: [
+            RemoteReferenceEntry(spelling: "#1", summary: CodeHostReferenceSummary(
+                kind: .issue, number: 1, title: "Crash", state: .closed, author: "nacho",
+                createdAt: Date(timeIntervalSince1970: 1_800_000_000), updatedAt: nil, closedAt: nil, mergedAt: nil,
+                url: URL(string: "https://gitlab.example.com/group/repo/-/issues/1")!)),
+            RemoteReferenceEntry(spelling: "!2", failure: .unauthenticated(executable: "glab", host: "gitlab.example.com")),
+        ]),
         .nextPromptSuggestion(sessionId: "s1", text: "Run the tests"),
         .nextPromptSuggestion(sessionId: "s1", text: nil),
     ]
@@ -607,6 +692,11 @@ enum RemoteWireSamples {
         .host(HostClientMessage(id: 5, request: .listSessions)),
         .readToolTerminal(sessionId: "s1", terminalId: "t1"),
         .readSubagent(sessionId: "s1", subagentId: "c1"),
+        .sendPrompt(
+            sessionId: "s1", text: "fix \u{FFFC} 👍", attachments: [], intent: "auto",
+            pastedSpans: [ACPPastedTextSpan(ordinal: 1, utf16Offset: 4, utf16Length: 1)]),
+        .readSkill(sessionId: "s1", command: "/review"),
+        .resolveReferences(sessionId: "s1", spellings: ["#1", "!2"]),
         .suggestNextPrompt(sessionId: "s1"),
     ]
 }
