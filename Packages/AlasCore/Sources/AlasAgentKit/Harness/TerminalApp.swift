@@ -111,10 +111,13 @@ public enum TerminalAppCatalog {
                 return next.map(names(forScript:)) ?? []
             }
             if options.inlineCode.contains(argument) { return [] }
-            if options.takingValue.contains(argument) { index += 2; continue }
+            if options.takingValue.contains(argument) { index += 2
+            continue }
             // Deno and Bun take a subcommand before the script.
-            if ["run", "x", "exec"].contains(argument) { index += 1; continue }
-            if argument.hasPrefix("-") { index += 1; continue }
+            if ["run", "x", "exec"].contains(argument) { index += 1
+            continue }
+            if argument.hasPrefix("-") { index += 1
+            continue }
             return names(forScript: argument)
         }
         return []
