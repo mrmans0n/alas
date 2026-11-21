@@ -82,6 +82,11 @@ struct ACPMarkdownParserTests {
         ("```visual\n\n```", [.code(language: "visual", body: "")]),
         ("```html\n<svg/>\n```", [.code(language: "html", body: "<svg/>")]),
         ("```visualize\n<svg/>\n```", [.code(language: "visualize", body: "<svg/>")]),
+        ("```chart line unit=ms label=\"Build & test\"\n{\"labels\":[\"a\"]}\n```", [.visual(
+            title: "Build & test",
+            html: "<alas-chart type=\"line\" unit=\"ms\" label=\"Build &amp; test\" data=\"{&quot;labels&quot;:[&quot;a&quot;]}\"></alas-chart>")]),
+        ("```chart\n{}\n```", [.visual(title: "Chart", html: "<alas-chart type=\"bar\" data=\"{}\"></alas-chart>")]),
+        ("```chart\nnot json\n```", [.code(language: "chart", body: "not json")]),
     ] as [(String, [ACPMarkdownParser.Block])])
     func onlyClosedVisualFencesBecomeVisuals(source: String, expected: [ACPMarkdownParser.Block]) {
         #expect(ACPMarkdownParser.parse(source) == expected)

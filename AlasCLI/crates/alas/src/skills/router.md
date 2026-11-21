@@ -27,8 +27,11 @@ The commands in these guides are shorter forms of the same tools.
   several dimensions, before/after layouts, or numbers that read better as a
   chart), draw it: a ```` ```visual ```` fenced block of HTML in your reply,
   with an optional title after the tag, renders inline in the user's theme.
-  For charts use `<alas-chart type="bar|hbar|line" data='{"labels":[...],"series":[{"name":"...","values":[...]}]}'>`
-  rather than hand-drawn SVG; the frame also provides `stats`/`stat`,
+  A chart on its own can be a ```` ```chart ```` fenced block of JSON data
+  (`{"labels":[...],"series":[{"name":"...","values":[...]}]}`) with its type
+  and options after the tag (```` ```chart line unit=ms label="Build time" ````).
+  Inside a visual, use `<alas-chart type="bar|hbar|line" data='...'>` with the
+  same data. Never hand-draw SVG charts; the frame also provides `stats`/`stat`,
   `timeline`, `flow` and `callout` classes and styles tables.
 - `alas visual show --title <title> --html-file <path>` shows an HTML visual
   through a tool call instead, for a mockup in a titled card or a question. Add
