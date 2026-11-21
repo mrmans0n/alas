@@ -2218,6 +2218,20 @@ struct TabsManagerRuntimeTitleTests {
         #expect(mgr.displayTerminalTitle(for: tab) == "vim foo")
     }
 
+    @Test func renamedTerminalKeepsItsTitleUntilTheTerminalReportsANewOne() {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "bash", sessionId: "s1")
+        guard case .terminal(let state) = tab else {
+            Issue.record("Expected terminal tab")
+            return
+        }
+        #expect(!mgr.prefersStoredTerminalTitle(for: tab))
+        mgr.clearTerminalRuntimeTitles(forLeavesInTabId: tab.id)
+        #expect(mgr.prefersStoredTerminalTitle(for: tab))
+        mgr.setTerminalRuntimeTitle(leafId: state.focusedLeafId, title: "lazygit")
+        #expect(!mgr.prefersStoredTerminalTitle(for: tab))
+    }
+
     @Test func displayTerminalTitleReturnsNilForNonTerminalTab() {
         let mgr = TabsManager()
         let tab = mgr.appendEditor(worktreeId: "wt", title: "README.md", relativePath: "README.md")

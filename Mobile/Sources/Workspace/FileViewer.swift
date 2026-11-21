@@ -9,6 +9,7 @@ struct FileViewer: View {
     let session: TranscriptSession
     let openPreview: (URL) -> OpenURLAction.Result?
     @State private var showSource = false
+    @State private var showHistory = false
     /// False once the viewer leaves the stack; a full-screen image over it leaves it true.
     @Environment(\.isPresented) private var isPresented
 
@@ -63,6 +64,11 @@ struct FileViewer: View {
         .navigationTitle(name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if workspace.canReadFileHistory {
+                ToolbarItem(placement: .secondaryAction) {
+                    Button("History", systemImage: "clock.arrow.circlepath") { showHistory = true }
+                }
+            }
             if FileKind(path: path) == .markdown {
                 ToolbarItem(placement: .primaryAction) {
                     Picker("View", selection: $showSource) {
@@ -74,6 +80,7 @@ struct FileViewer: View {
             }
         }
         .background(Color(.systemBackground))
+        .navigationDestination(isPresented: $showHistory) { FileHistoryView(workspace: workspace, path: path) }
         // Backstop for a pop that skips the destination binding (a stack reset to the root).
         .onDisappear {
             guard !isPresented else { return }
@@ -83,6 +90,68 @@ struct FileViewer: View {
     }
 
     private var name: String { path.split(separator: "/").last.map(String.init) ?? "File" }
+}
+
+/// The commits that touched a file; one opens its diff of the file as it was named then.
+private struct FileHistoryView: View {
+    let workspace: SessionWorkspace
+    let path: String
+    @State private var history: Load<(entries: [HostFileHistoryEntry], truncated: Bool)> = .loading
+
+    var body: some View {
+        Group {
+            switch history {
+            case .loaded(let found) where found.entries.isEmpty:
+                ContentUnavailableView("No Commits", systemImage: "clock", description: Text("No commit has touched this file yet."))
+            case .loaded(let found):
+                List {
+                    ForEach(found.entries, id: \.commit.sha) { entry in
+                        Button { open(entry) } label: { row(entry) }
+                    }
+                    if found.truncated {
+                        Text("Older commits aren't shown.").font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+            case .failed(let message):
+                ContentUnavailableView(message, systemImage: "exclamationmark.triangle")
+            default:
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .navigationTitle("History")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            switch await workspace.fileHistory(path) {
+            case .success(let found): history = .loaded(found)
+            case .failure(let failure): history = .failed(failure.message)
+            }
+        }
+        .navigationDestination(isPresented: Binding(
+            get: { workspace.diff?.key.sha != nil },
+            set: { if !$0 { workspace.closeDiff() } })) {
+            DiffView(workspace: workspace)
+        }
+    }
+
+    private func row(_ entry: HostFileHistoryEntry) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(entry.commit.subject).font(.body).foregroundStyle(.primary).lineLimit(2)
+            HStack(spacing: 6) {
+                Text(entry.commit.shortSha).monospaced()
+                Text(entry.commit.author)
+                Text(entry.commit.date, style: .relative)
+            }
+            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            if entry.pathAtCommit != path {
+                Label(entry.pathAtCommit, systemImage: "arrow.turn.down.right").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+    }
+
+    private func open(_ entry: HostFileHistoryEntry) {
+        guard let owner = workspace.pushedBy else { return }
+        workspace.openDiff(entry.pathAtCommit, stage: nil, sha: entry.commit.sha, by: owner)
+    }
 }
 
 /// How the viewer shows a file, by its extension.

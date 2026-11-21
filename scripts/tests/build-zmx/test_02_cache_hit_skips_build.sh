@@ -6,7 +6,8 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
 srcroot="${tmp}/srcroot"
-mkdir -p "${srcroot}/ThirdParty/zmx"
+mkdir -p "${srcroot}/ThirdParty/zmx" "${srcroot}/scripts"
+cp "${repo_root}/scripts/"build-zmx{,-target}.sh "${srcroot}/scripts/"
 (cd "${srcroot}/ThirdParty/zmx" && git init -q && git commit -q --allow-empty -m init)
 
 # A zig stub that records each build invocation, so we can count them.
@@ -41,10 +42,16 @@ env_vars=(
     "ALAS_ZMX_ZIG_BIN=${tmp}/counting-zig.sh"
     "ALAS_ZMX_CACHE_DIR=${tmp}/cache"
 )
-env "${env_vars[@]}" bash "${repo_root}/scripts/build-zmx.sh"
+env "${env_vars[@]}" bash "${srcroot}/scripts/build-zmx.sh"
 first=$(cat "${counter}")
 [ "${first}" = "3" ] || { echo "expected 3 total Zig invocations on cold cache, got ${first}" >&2; exit 1; }
 
-env "${env_vars[@]}" bash "${repo_root}/scripts/build-zmx.sh"
+env "${env_vars[@]}" bash "${srcroot}/scripts/build-zmx.sh"
 second=$(cat "${counter}")
 [ "${second}" = "3" ] || { echo "expected cache hit (still 3 total Zig invocations), got ${second}" >&2; exit 1; }
+
+# A helper-only edit must invalidate the native and both Linux outputs.
+printf '\n# different build recipe\n' >> "${srcroot}/scripts/build-zmx-target.sh"
+env "${env_vars[@]}" bash "${srcroot}/scripts/build-zmx.sh"
+third=$(cat "${counter}")
+[ "${third}" = "6" ] || { echo "expected all three targets to rebuild, got ${third} total invocations" >&2; exit 1; }
