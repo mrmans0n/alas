@@ -114,7 +114,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         collectionView.delegate = self
         // Hosted rows can re-render after this controller is gone (a pop in progress, a cell the
         // collection view still holds), so every capture is weak: an `unowned` one aborted there.
-        let registration = UICollectionView.CellRegistration<UICollectionViewCell, String> { [weak self] cell, _, id in
+        let registration = UICollectionView.CellRegistration<TranscriptCell, String> { [weak self] cell, _, id in
             guard let self, let item = itemsByID[id] else { return }
             cell.contentConfiguration = UIHostingConfiguration {
                 TranscriptRowView(item: item, isExpanded: shownExpanded.contains(id), image: input.image,
@@ -344,6 +344,23 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
             if abs(collectionView.contentOffset.y - target) < 0.5 { return }
             collectionView.contentOffset.y = target
         }
+    }
+}
+
+private final class TranscriptCell: UICollectionViewCell {
+    override func preferredLayoutAttributesFitting(
+        _ layoutAttributes: UICollectionViewLayoutAttributes
+    ) -> UICollectionViewLayoutAttributes {
+        // The transcript fills a single column. Fit the content at that width without using the
+        // cell's previous height, which can grow by a pixel on each layout pass during a fling.
+        let size = contentView.systemLayoutSizeFitting(
+            CGSize(width: layoutAttributes.size.width, height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        )
+        let preferred = layoutAttributes.copy() as! UICollectionViewLayoutAttributes
+        preferred.size.height = ceil(size.height)
+        return preferred
     }
 }
 
