@@ -442,6 +442,20 @@ final class SessionWorkspace {
         .map(RemoteReviewRequest.providerFailureMessage)
     }
 
+    /// Submits review `sessionID` on the provider with its open line drafts, as the host's user,
+    /// pinned to `headSHA`, the head the phone showed. Succeeds with what it couldn't post, if anything.
+    func submitReview(_ sessionID: String, _ decision: RemoteReviewDecision, body: String,
+                      headSHA: String?) async -> Result<String?, RemoteGitFailure> {
+        guard let target = gitTarget else { return .failure(RemoteGitFailure("This review can't be submitted from here.")) }
+        // Each draft may be its own provider call; a phone giving up early would invite a duplicate submission.
+        return await hostReply(timeout: .seconds(300)) {
+            RemoteReviewRequest.publish(id: $0, projectID: target.projectID, path: target.worktree.path,
+                                        sessionID: sessionID, decision, body: body, headSHA: headSHA)
+        }
+        .map { RemoteReviewRequest.publishProblems(in: $0) }
+        .mapError { RemoteGitFailure(RemoteReviewRequest.providerFailureMessage($0.message)) }
+    }
+
     private static func readable<T>(_ value: T?) -> Result<T, RemoteGitFailure> {
         value.map(Result.success) ?? .failure(RemoteGitFailure("The machine's answer couldn't be read."))
     }

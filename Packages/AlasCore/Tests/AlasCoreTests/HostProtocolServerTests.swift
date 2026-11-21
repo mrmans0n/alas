@@ -2586,7 +2586,7 @@ struct HostProtocolServerTests {
         let refused = HostResponse.failure(error: .invalidRequest(reason: "This host does not serve pull request reviews."))
         #expect(try await fixture.request(.readProviderReview(worktree: ref, sessionID: "x", withDiff: false)) == refused)
 
-        // The user's own phone reads and answers a pull request's threads past the gate, but doesn't publish.
+        // The user's own phone reads, answers and submits a pull request review past the gate.
         let server = HostProtocolServer(host: fixture.host)
         server.delegationPairing = RemotePairingService(store: MemoryDeviceStore(devices: [RemoteDevice(
             id: "d1", name: "d1", tokenHash: "d1", createdAt: .distantPast, lastSeenAt: nil, kind: .phone
@@ -2598,7 +2598,7 @@ struct HostProtocolServerTests {
             (.readProviderReview(worktree: ref, sessionID: "x", withDiff: false), .failure(error: .notFound(what: "review x"))),
             (.mutateReviewThread(worktree: ref, sessionID: "x", threadID: "t", kind: .resolve, body: nil),
              .failure(error: .notFound(what: "review x"))),
-            (.publishReview(worktree: ref, sessionID: "x", publish: publish), refused),
+            (.publishReview(worktree: ref, sessionID: "x", publish: publish), .failure(error: .notFound(what: "review x"))),
         ]
         for (id, (request, expected)) in zip(1..., requests) {
             await connection.receive(HostClientMessage(id: id, request: request))

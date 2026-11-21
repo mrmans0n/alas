@@ -70,17 +70,24 @@ private struct ReviewDetailView: View {
         case add(RemoteReviewFileID, path: String)
         case edit(RemoteReviewComment)
         case reply(RemoteProviderThread)
+        case submit(RemoteProviderReview, [RemoteReviewComment])
 
         var id: String {
             switch self {
             case .add(let fileID, _): "add:\(fileID.namespace):\(fileID.path)"
             case .edit(let comment): "edit:\(comment.id)"
             case .reply(let thread): "reply:\(thread.id)"
+            case .submit: "submit"
             }
         }
     }
 
     private var readsThreads: Bool { summary.kind == "review-request" && workspace.canReadPullRequestThreads }
+
+    private var canSubmit: Bool {
+        guard case .loaded(let pr) = threads, case .loaded(let drafts) = review else { return false }
+        return !RemoteReviewSubmission(pr, drafts: drafts.comments).decisions.isEmpty
+    }
 
     /// Who the provider posts as, for the confirmations.
     private var poster: String {
@@ -106,6 +113,16 @@ private struct ReviewDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
         .task { await load() }
+        .toolbar {
+            if readsThreads {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Submit Review") {
+                        if case .loaded(let pr) = threads, case .loaded(let drafts) = review { composing = .submit(pr, drafts.comments) }
+                    }
+                    .disabled(!canSubmit)
+                }
+            }
+        }
         .sheet(item: $composing) { composing in sheet(composing) }
         .confirmationDialog(resolving?.isResolved == true ? "Unresolve this thread?" : "Resolve this thread?",
                             isPresented: Binding { resolving != nil } set: { if !$0 { resolving = nil } },
@@ -140,6 +157,16 @@ private struct ReviewDetailView: View {
         case .reply(let thread):
             CommentSheet(title: "Reply", text: "", confirmation: "It's posted on the pull request, as \(poster).") { body in
                 changeThread(thread, .reply, body: body)
+            }
+        case .submit(let pr, let drafts):
+            SubmitReviewSheet(review: pr, drafts: drafts, poster: poster) { decision, body in
+                switch await workspace.submitReview(summary.id, decision, body: body, headSHA: pr.headSHA) {
+                case .failure(let failure): return failure.message
+                case .success(let problems):
+                    error = problems.map { "The review was submitted, but:\n\($0)" }
+                    await load()
+                    return nil
+                }
             }
         }
     }
@@ -365,5 +392,114 @@ struct CommentSheet: View {
     private func save() {
         submit(text.trimmingCharacters(in: .whitespacesAndNewlines))
         dismiss()
+    }
+}
+
+/// Submits a pull or merge request review: a verdict, an optional summary and the open line drafts,
+/// after a last confirmation naming the verdict.
+private struct SubmitReviewSheet: View {
+    let review: RemoteProviderReview
+    let submission: RemoteReviewSubmission
+    /// Open drafts that stay on the Mac: file comments, and line ones the provider can't anchor.
+    let unpostedCount: Int
+    let poster: String
+    /// Returns why it failed, or nil once it's submitted.
+    let submit: (RemoteReviewDecision, String) async -> String?
+    @State private var decision: RemoteReviewDecision
+    @State private var text = ""
+    @State private var confirming = false
+    @State private var submitting = false
+    @State private var error: String?
+    @Environment(\.dismiss) private var dismiss
+
+    init(review: RemoteProviderReview, drafts: [RemoteReviewComment], poster: String,
+         submit: @escaping (RemoteReviewDecision, String) async -> String?) {
+        self.review = review
+        submission = RemoteReviewSubmission(review, drafts: drafts)
+        unpostedCount = drafts.count { $0.isOpen && !$0.isPublished && !$0.isPublishable }
+        self.poster = poster
+        self.submit = submit
+        _decision = State(initialValue: submission.decisions.first ?? .comment)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("Decision", selection: $decision) {
+                        ForEach(submission.decisions, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                } footer: {
+                    if !submission.decisions.contains(.approve) {
+                        Text("Approving and requesting changes aren't available on this \(review.displayName).")
+                    }
+                }
+                Section {
+                    TextField(decision == .requestChanges ? "What needs to change" : "Optional", text: $text, axis: .vertical)
+                        .lineLimit(4...12)
+                } header: {
+                    Text("Summary")
+                }
+                Section {
+                    Text(Self.comments(submission.draftCount) + " posted with it")
+                    if unpostedCount > 0 {
+                        Text(Self.comments(unpostedCount) + " stay on the Mac: only open line comments are posted.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text("Posts as \(poster) on \(review.providerName).")
+                }
+                if let error {
+                    Section { Text(error).foregroundStyle(.red) }
+                }
+            }
+            .navigationTitle("Submit Review")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(submitting) }
+                ToolbarItem(placement: .confirmationAction) {
+                    if submitting {
+                        ProgressView()
+                    } else {
+                        Button("Submit") { confirming = true }
+                            .disabled(!submission.canSubmit(decision, body: text))
+                            .confirmationDialog(question, isPresented: $confirming, titleVisibility: .visible) {
+                                Button(decision.title) { Task { await send() } }
+                            } message: {
+                                Text("Others on \(review.providerName) see it at once.")
+                            }
+                    }
+                }
+            }
+        }
+        .interactiveDismissDisabled(submitting)
+    }
+
+    private var question: String {
+        switch decision {
+        case .comment: "Comment on \(review.displayName) as \(poster)?"
+        case .requestChanges: "Request changes on \(review.displayName) as \(poster)?"
+        case .approve: "Approve \(review.displayName) as \(poster)?"
+        }
+    }
+
+    private static func comments(_ count: Int) -> String { count == 1 ? "1 comment" : "\(count) comments" }
+
+    private func send() async {
+        submitting = true
+        error = await submit(decision, text.trimmingCharacters(in: .whitespacesAndNewlines))
+        submitting = false
+        if error == nil { dismiss() }
+    }
+}
+
+private extension RemoteReviewDecision {
+    var title: String {
+        switch self {
+        case .comment: "Comment"
+        case .requestChanges: "Request Changes"
+        case .approve: "Approve"
+        }
     }
 }

@@ -73,11 +73,19 @@ public struct RemoteReviewComment: Decodable, Equatable, Identifiable, Sendable 
     public let author: String
     public let replies: [Reply]
     public let updatedAt: Date
+    /// Already posted to the pull or merge request.
+    public let isPublished: Bool
 
     public var isOpen: Bool { state == "active" }
 
+    /// Whether a review submission posts it: `ProviderReviewPublishPlanner.publishableDrafts`.
+    public var isPublishable: Bool {
+        guard isOpen, !isPublished, case .line(let side, let start, _) = anchor else { return false }
+        return side != "unknown" && start > 0 && !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private enum Keys: String, CodingKey {
-        case id, fileID, path, anchor, bodyMarkdown, state, author, replies, updatedAt
+        case id, fileID, path, anchor, bodyMarkdown, state, author, replies, updatedAt, providerPublish
         case file, line, image, side, startLine, endLine, user, agent, name
     }
 
@@ -96,6 +104,7 @@ public struct RemoteReviewComment: Decodable, Equatable, Identifiable, Sendable 
         body = try c.decode(String.self, forKey: .bodyMarkdown)
         state = try c.decode(String.self, forKey: .state)
         updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        isPublished = c.contains(.providerPublish)
         func name(_ key: Keys, in container: KeyedDecodingContainer<Keys>) -> String {
             guard let author = try? container.nestedContainer(keyedBy: Keys.self, forKey: key),
                   let agent = try? author.nestedContainer(keyedBy: Keys.self, forKey: .agent) else { return "You" }
@@ -156,9 +165,24 @@ public struct RemoteProviderReview: Decodable, Equatable, Sendable {
     public let canResolve: Bool
     /// The host's login; nil when it can't tell.
     public let account: String?
+    public let canComment: Bool
+    public let canSubmitReview: Bool
+    /// `CodeHostKind`: github or gitlab.
+    public let provider: String
+    public let number: Int
+    /// The head the threads were read at, which a submission pins its comments to.
+    public let headSHA: String?
+
+    /// E.g. "pull request #12" or "merge request !12".
+    public var displayName: String {
+        provider == "gitlab" ? "merge request !\(number)" : "pull request #\(number)"
+    }
+
+    public var providerName: String { provider == "gitlab" ? "GitLab" : "GitHub" }
 
     private enum Keys: String, CodingKey {
-        case request, capabilities, account, threads, areThreadsComplete, canReply, canResolve
+        case request, capabilities, account, threads, areThreadsComplete, canReply, canResolve, canComment, canSubmitReview
+        case remote, kind, number, headSHA
     }
 
     public init(from decoder: Decoder) throws {
@@ -169,7 +193,42 @@ public struct RemoteProviderReview: Decodable, Equatable, Sendable {
         areThreadsComplete = try request.decodeIfPresent(Bool.self, forKey: .areThreadsComplete) ?? true
         canReply = try capabilities.decode(Bool.self, forKey: .canReply)
         canResolve = try capabilities.decode(Bool.self, forKey: .canResolve)
+        canComment = try capabilities.decode(Bool.self, forKey: .canComment)
+        canSubmitReview = try capabilities.decode(Bool.self, forKey: .canSubmitReview)
         account = try review.decodeIfPresent(String.self, forKey: .account)
+        provider = try review.nestedContainer(keyedBy: Keys.self, forKey: .remote).decode(String.self, forKey: .kind)
+        number = try request.decode(Int.self, forKey: .number)
+        headSHA = try request.decodeIfPresent(String.self, forKey: .headSHA)
+    }
+}
+
+/// A submitted review's verdict (`ProviderReviewDecision`).
+public enum RemoteReviewDecision: String, CaseIterable, Sendable {
+    case comment, requestChanges, approve
+}
+
+/// What the phone may submit of a pull or merge request review, by the Mac's publish sheet's rules.
+public struct RemoteReviewSubmission: Equatable, Sendable {
+    /// Open line comments the submission posts.
+    public let draftCount: Int
+    /// A comment-only review needs a draft to post; a verdict needs the provider to take reviews.
+    public let decisions: [RemoteReviewDecision]
+
+    public init(draftCount: Int, canComment: Bool, canSubmitReview: Bool) {
+        self.draftCount = draftCount
+        decisions = RemoteReviewDecision.allCases.filter {
+            $0 == .comment ? draftCount > 0 && canComment : canSubmitReview
+        }
+    }
+
+    public init(_ review: RemoteProviderReview, drafts: [RemoteReviewComment]) {
+        self.init(draftCount: drafts.count(where: \.isPublishable), canComment: review.canComment, canSubmitReview: review.canSubmitReview)
+    }
+
+    /// Requesting changes needs a summary saying which.
+    public func canSubmit(_ decision: RemoteReviewDecision, body: String) -> Bool {
+        decisions.contains(decision)
+            && (decision != .requestChanges || !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 }
 
@@ -223,6 +282,28 @@ public enum RemoteReviewRequest {
         return RemoteGitRequest.envelope(id: id, ["mutateReviewThread": request])
     }
 
+    /// Submits review `sessionID` with its open line drafts, pinned to `headSHA`; answered as a git action is.
+    public static func publish(id: Int, projectID: String, path: String, sessionID: String,
+                               _ decision: RemoteReviewDecision, body: String, headSHA: String?) -> OpaqueHostMessage {
+        var publish: [String: Any] = ["decision": decision.rawValue, "body": body]
+        publish["headSHA"] = headSHA
+        return RemoteGitRequest.envelope(id: id, ["publishReview": [
+            "worktree": ["projectID": projectID, "path": path], "sessionID": sessionID, "publish": publish,
+        ]])
+    }
+
+    /// What a submission couldn't post, worded for the user; nil when it all went through.
+    public static func publishProblems(in message: OpaqueHostMessage) -> String? {
+        struct Result: Decodable {
+            struct Failed: Decodable { let message: String }
+            let failed: [Failed]
+            let warnings: [String]
+        }
+        guard let result = decode(Result.self, at: "reviewPublished", "result", replying: nil, in: message) else { return nil }
+        let problems = result.failed.map(\.message) + result.warnings
+        return problems.isEmpty ? nil : problems.joined(separator: "\n")
+    }
+
     public static func providerReview(replying id: Int? = nil, in message: OpaqueHostMessage) -> RemoteProviderReview? {
         decode(RemoteProviderReview.self, at: "providerReview", "review", replying: id, in: message)
     }
@@ -231,6 +312,10 @@ public enum RemoteReviewRequest {
     /// what to do there, not as its raw error.
     public static func providerFailureMessage(_ message: String) -> String {
         let lower = message.lowercased()
+        // GitLab refuses an approval pinned to a head that has since moved.
+        if lower.contains("does not match head") {
+            return "The pull request changed since you loaded it. Pull to refresh, then submit again."
+        }
         let cli = lower.hasPrefix("glab") || lower.contains("glab auth") ? "glab" : "gh"
         if lower.contains("is not installed") {
             return "\(cli) isn't installed on the Mac. Install it there, then pull to refresh."
