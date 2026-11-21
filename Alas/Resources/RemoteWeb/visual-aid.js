@@ -114,7 +114,9 @@
     if (a >= 1e9) return +(n / 1e9).toFixed(1) + "B";
     if (a >= 1e6) return +(n / 1e6).toFixed(1) + "M";
     if (a >= 1e4) return +(n / 1e3).toFixed(1) + "k";
-    return String(+n.toFixed(2));
+    if (a >= 100) return String(Math.round(n));
+    // Three significant digits, so 0.001 and 0.002 stay apart.
+    return String(+n.toPrecision(3));
   };
   const textWidth = (s) => String(s).length * 6.2;
   function niceScale(min, max) {

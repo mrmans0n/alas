@@ -266,6 +266,26 @@ extension VisualAidWebPolicyTests {
         #expect(found as? Int == count)
     }
 
+    /// `@MainActor`: WKWebView needs the main thread.
+    @MainActor
+    @Test("chart tooltips keep small values apart and round large ones", arguments: [
+        ("[0.001,0.0025]", ["A: 0.001s", "B: 0.0025s"]),
+        ("[1234.5,98765]", ["A: 1235s", "B: 98.8ks"]),
+    ])
+    func chartTooltipsFormatValues(values: String, expected: [String]) async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(),
+            html: #"<alas-chart unit="s" data='{"labels":["A","B"],"values":\#(values)}'></alas-chart>"#,
+            theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false, presentation: .embedded)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        let tips = try await page.webView.evaluateJavaScript(
+            "[...document.querySelectorAll('alas-chart rect.alas-bar title')].map(t => t.textContent)",
+            in: nil, contentWorld: .page)
+        #expect(tips as? [String] == expected)
+    }
+
     /// Waits until the page leaves `.loading` and requires that it landed on `.ready`.
     @MainActor
     private func waitUntilReady(_ page: VisualAidWebPage) async throws {
