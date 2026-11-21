@@ -104,6 +104,9 @@ struct OnDeviceAIPane: View {
             helperPreference("Failure briefs", description: "Explain failed run scripts and suggest checks.",
                 selection: Binding(get: { state.config.runFailureBriefsEnabled },
                                    set: { state.setRunFailureBriefsEnabled($0) }))
+            helperPreference("Turn captions", description: "Describe what a finished turn's code changes did, above its changed files.",
+                selection: Binding(get: { state.config.turnCaptionsEnabled },
+                                   set: { state.setTurnCaptionsEnabled($0) }))
             SettingsRow(name: "Conflict explanations", desc: "Explain a merge conflict when you request it.") {
                 Text(appleAvailability.isAvailable || state.localTextModelAvailable ? "Available on request" : "No model available")
                     .font(scale.metaFont)

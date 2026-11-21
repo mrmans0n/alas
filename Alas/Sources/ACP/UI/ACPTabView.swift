@@ -1062,7 +1062,8 @@ private struct ACPSessionView: View {
                     revealLine: nil, revealCharacter: nil, editable: false)
             },
             reportedChangesActions: reportedChangesActions,
-            composerSpacerHeight: transcriptTailSpacerHeight
+            composerSpacerHeight: transcriptTailSpacerHeight,
+            turnCaptions: state.turnCaptions
         )
     }
 

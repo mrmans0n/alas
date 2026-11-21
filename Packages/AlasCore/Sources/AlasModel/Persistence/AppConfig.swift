@@ -96,6 +96,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var sessionSummariesEnabled: Bool = false
     public var sessionRecapThreshold: SessionRecapThreshold = .twoHours
     public var runFailureBriefsEnabled: Bool = true
+    /// Caption a finished turn's changes card with what its code changes did.
+    public var turnCaptionsEnabled: Bool = true
     public var localTextModelEnabled: Bool = false
     public var issueWorktreeNameSuggestionsEnabled: Bool = true
     /// Gate for plugins. Off: nothing is scanned, loaded or run. On, a plugin still runs only once approved.
@@ -945,6 +947,7 @@ extension AppConfig {
              sessionSummariesEnabled,
              sessionRecapThreshold,
              runFailureBriefsEnabled,
+             turnCaptionsEnabled,
              localTextModelEnabled,
              issueWorktreeNameSuggestionsEnabled,
              pluginsEnabled,
@@ -1221,6 +1224,7 @@ extension AppConfig {
         sessionSummariesEnabled = (try? c.decode(Bool.self, forKey: .sessionSummariesEnabled)) ?? false
         sessionRecapThreshold = (try? c.decode(SessionRecapThreshold.self, forKey: .sessionRecapThreshold)) ?? .twoHours
         runFailureBriefsEnabled = (try? c.decode(Bool.self, forKey: .runFailureBriefsEnabled)) ?? true
+        turnCaptionsEnabled = (try? c.decode(Bool.self, forKey: .turnCaptionsEnabled)) ?? true
         let priorModelConsent = nextPromptSuggestionsEnabled || sessionSummariesEnabled
         localTextModelEnabled =
             (try? c.decode(Bool.self, forKey: .localTextModelEnabled)) ?? priorModelConsent

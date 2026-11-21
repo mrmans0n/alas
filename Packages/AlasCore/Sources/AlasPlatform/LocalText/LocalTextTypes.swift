@@ -21,6 +21,7 @@ public enum LocalTextCaller: Hashable, Sendable {
     case commitMessage
     case changeSummary
     case attentionRollUp
+    case turnCaption
 }
 
 public struct LocalTextGenerationRequest: Sendable {
