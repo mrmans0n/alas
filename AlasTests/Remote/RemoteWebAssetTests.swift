@@ -1844,6 +1844,22 @@ struct RemoteWebAssetTests {
         }
     }
 
+    @Test func visualAidComponentsScriptMatchesTheDesktopFrame() throws {
+        let desktop = try String(
+            contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().appendingPathComponent("Alas/Resources/VisualAid/frame.html"),
+            encoding: .utf8)
+        let phone = try asset("visual-aid.js")
+        func components(_ source: String) -> Substring? {
+            guard let start = source.range(of: "/* alas-components:begin */"),
+                  let end = source.range(of: "/* alas-components:end */", range: start.upperBound..<source.endIndex)
+            else { return nil }
+            return source[start.lowerBound..<end.upperBound]
+        }
+        let desktopScript = try #require(components(desktop))
+        #expect(components(phone) == desktopScript)
+    }
+
     @Test func visualAidAnswerOnlyChangesTheCardWithoutReplacingItsFrame() throws {
         let source = try asset("app.js")
         let start = try #require(source.range(of: "function upsertMessage("))

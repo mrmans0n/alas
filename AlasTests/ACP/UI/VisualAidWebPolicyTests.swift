@@ -243,6 +243,29 @@ extension VisualAidWebPolicyTests {
         #expect(edges as? [String: Bool] == ["scrollUp": true, "scrollDown": scrollsDown])
     }
 
+    /// `@MainActor`: WKWebView needs the main thread.
+    @MainActor
+    @Test("the frame's chart component draws its data, or says why it cannot", arguments: [
+        (#"<alas-chart type="bar" data='{"labels":["a","b","c"],"series":[{"name":"p50","values":[3,5,-2]},{"name":"p95","values":[4,9,1]}]}'></alas-chart>"#,
+         "alas-chart rect.alas-bar", 6),
+        (#"<alas-chart type="hbar" data='{"labels":["a","b"],"values":[1,2]}'></alas-chart>"#, "alas-chart rect.alas-bar", 2),
+        (#"<alas-chart type="line" data='{"labels":["a","b"],"series":[{"values":[1,2]},{"values":[3,1]}]}'></alas-chart>"#,
+         "alas-chart path.alas-line", 2),
+        (#"<alas-chart data='{"labels":["a"],"values":[1,2]}'></alas-chart>"#, "alas-chart .alas-chart-error", 1),
+        (#"<alas-chart data='not json'></alas-chart>"#, "alas-chart .alas-chart-error", 1),
+    ])
+    func chartComponentRenders(html: String, selector: String, count: Int) async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(), html: html, theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false,
+            presentation: .embedded)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        let found = try await page.webView.evaluateJavaScript(
+            "document.querySelectorAll('\(selector)').length", in: nil, contentWorld: .page)
+        #expect(found as? Int == count)
+    }
+
     /// Waits until the page leaves `.loading` and requires that it landed on `.ready`.
     @MainActor
     private func waitUntilReady(_ page: VisualAidWebPage) async throws {
