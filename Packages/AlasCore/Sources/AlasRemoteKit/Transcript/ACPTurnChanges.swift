@@ -2,7 +2,7 @@ import Foundation
 
 /// The files one finished turn edited, drawn as a card under the turn's answer.
 public struct ACPTurnChanges: Equatable, Sendable {
-    public struct File: Equatable, Sendable {
+    public struct File: Hashable, Sendable {
         public let path: String
         public var added: Int
         public var removed: Int
@@ -35,12 +35,15 @@ public struct ACPTurnChanges: Equatable, Sendable {
 
     /// Merged by path, in the order each was first edited.
     public let files: [File]
+    /// Where the turn starts: its user message.
+    public let userIndex: Int
 
     public var added: Int { files.reduce(0) { $0 + $1.added } }
     public var removed: Int { files.reduce(0) { $0 + $1.removed } }
 
-    public init(files: [File]) {
+    public init(files: [File], userIndex: Int) {
         self.files = files
+        self.userIndex = userIndex
     }
 
     /// The changes of the turn whose answer is at `index`: the last agent message before the next
@@ -91,6 +94,6 @@ public struct ACPTurnChanges: Equatable, Sendable {
                 files.append(edit)
             }
         }
-        return ACPTurnChanges(files: files)
+        return ACPTurnChanges(files: files, userIndex: start)
     }
 }

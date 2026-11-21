@@ -730,7 +730,7 @@ struct NextPromptSettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
-    @Test(arguments: ["titles", "names", "briefs"])
+    @Test(arguments: ["titles", "names", "briefs", "captions"])
     func rejectedHelperDisableRemainsOffUntilRetryPersists(_ helper: String) async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
@@ -742,6 +742,7 @@ struct NextPromptSettingsTests {
             switch helper {
             case "titles": return config.harness.acpLocalTitlesEnabled
             case "names": return config.issueWorktreeNameSuggestionsEnabled
+            case "captions": return config.turnCaptionsEnabled
             default: return config.runFailureBriefsEnabled
             }
         }
@@ -749,6 +750,7 @@ struct NextPromptSettingsTests {
         switch helper {
         case "titles": state.setACPLocalTitlesEnabled(false)
         case "names": state.setIssueWorktreeNameSuggestionsEnabled(false)
+        case "captions": state.setTurnCaptionsEnabled(false)
         default: state.setRunFailureBriefsEnabled(false)
         }
         #expect(!enabled(in: state.config))

@@ -61,6 +61,8 @@ struct ACPMessageList: View {
     /// the viewport bottom keeps the streaming caret / last message above the
     /// composer instead of behind it.
     var composerSpacerHeight: CGFloat = ACPComposerMetrics.restingTailSpacerHeight
+    /// Nil shows turn changes cards without captions.
+    var turnCaptions: ACPTurnCaptionStore? = nil
     @Environment(\.theme) private var theme
     @Environment(\.acpChatBackgroundIsMaterial) private var backgroundIsMaterial
 
@@ -113,7 +115,8 @@ struct ACPMessageList: View {
                 failureIncidentActions: failureIncidentActions,
                 onOpenPlanFile: onOpenPlanFile,
                 reportedChangesActions: reportedChangesActions,
-                composerSpacerHeight: composerSpacerHeight
+                composerSpacerHeight: composerSpacerHeight,
+                turnCaptions: turnCaptions
             )
             if Self.shouldShowGoToNewestAffordance(
                 followsTranscriptTail: session.followsTranscriptTail

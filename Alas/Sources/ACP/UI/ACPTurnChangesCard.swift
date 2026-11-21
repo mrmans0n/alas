@@ -3,7 +3,15 @@ import SwiftUI
 /// The files a finished turn changed, under its answer: one line per file with its line counts,
 /// each opening the file's diff.
 struct ACPTurnChangesCard: View {
+    /// Where the card's caption comes from, and what it is written from.
+    struct Caption {
+        let store: ACPTurnCaptionStore
+        let key: String
+        let input: () -> ACPTurnCaptionPolicy.Input?
+    }
+
     let changes: ACPTurnChanges
+    let caption: Caption?
     let onOpenDiff: (String) -> Void
     @Environment(\.theme) private var theme
     @Environment(\.acpMarkdownProseMaxWidth) private var proseMaxWidth
@@ -52,25 +60,80 @@ struct ACPTurnChangesCard: View {
         .frame(maxWidth: proseMaxWidth, alignment: .leading)
     }
 
+    @ViewBuilder
     private var header: some View {
-        HStack(spacing: scale.space[2]) {
-            Image(systemName: "doc.on.doc")
-                .font(scale.caption.font(weight: .regular))
-                .foregroundStyle(theme.color("accent"))
-            Text(changes.files.count == 1 ? "1 file changed" : "\(changes.files.count) files changed")
-                .font(scale.caption.font(weight: .semibold))
-                .foregroundStyle(theme.color("fg"))
-            counts(added: changes.added, removed: changes.removed)
-            Spacer(minLength: 0)
+        if let caption {
+            CaptionedHeader(caption: caption, store: caption.store, changes: changes)
+        } else {
+            CaptionedHeader.countsLine(changes: changes)
         }
-        .padding(.horizontal, scale.space[3]).padding(.top, scale.space[2]).padding(.bottom, scale.space[1])
     }
 
     private func counts(added: Int, removed: Int) -> some View {
+        ACPTurnChangesCounts(added: added, removed: removed)
+    }
+}
+
+private struct ACPTurnChangesCounts: View {
+    let added: Int
+    let removed: Int
+    @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
+
+    var body: some View {
         HStack(spacing: scale.space[1]) {
             Text("+\(added)").foregroundStyle(theme.color("add"))
             Text("-\(removed)").foregroundStyle(theme.color("del"))
         }
         .font(scale.caption.font(weight: .regular, design: .monospaced))
+    }
+}
+
+/// The card's first line: "N files changed" with the totals, under the turn's caption once written.
+private struct CaptionedHeader: View {
+    let caption: ACPTurnChangesCard.Caption
+    @ObservedObject var store: ACPTurnCaptionStore
+    let changes: ACPTurnChanges
+    @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let text = store.captions[caption.key] {
+                Text(text)
+                    .font(scale.meta.font(weight: .semibold))
+                    .foregroundStyle(theme.color("fg"))
+                    .lineLimit(2)
+                    .padding(.horizontal, scale.space[3]).padding(.top, scale.space[2])
+                    .transition(.opacity)
+            }
+            Self.countsLine(changes: changes)
+        }
+        .animation(.easeOut(duration: 0.15), value: store.captions[caption.key])
+        .onAppear { store.request(key: caption.key, input: caption.input) }
+    }
+
+    static func countsLine(changes: ACPTurnChanges) -> some View {
+        CountsLine(changes: changes)
+    }
+
+    private struct CountsLine: View {
+        let changes: ACPTurnChanges
+        @Environment(\.theme) private var theme
+        @Environment(\.designScale) private var scale
+
+        var body: some View {
+            HStack(spacing: scale.space[2]) {
+                Image(systemName: "doc.on.doc")
+                    .font(scale.caption.font(weight: .regular))
+                    .foregroundStyle(theme.color("accent"))
+                Text(changes.files.count == 1 ? "1 file changed" : "\(changes.files.count) files changed")
+                    .font(scale.caption.font(weight: .semibold))
+                    .foregroundStyle(theme.color("fg"))
+                ACPTurnChangesCounts(added: changes.added, removed: changes.removed)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, scale.space[3]).padding(.top, scale.space[2]).padding(.bottom, scale.space[1])
+        }
     }
 }

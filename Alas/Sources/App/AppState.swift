@@ -278,6 +278,7 @@ final class AppState {
     private(set) var closedTabHistory = ClosedTabHistory()
     var runScriptFailureQueue = RunScriptFailureQueue()
     let runFailureBriefs = RunFailureBriefCoordinator()
+    @ObservationIgnored lazy var turnCaptions = makeTurnCaptionStore()
     let inAppNotifications = InAppNotificationStore()
     /// Observed command lifecycles, keyed by worktree then script. Deliberately
     /// separate from `tabs`: a run's outcome outlives its terminal shell, and a

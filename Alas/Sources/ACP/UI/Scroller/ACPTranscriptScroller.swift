@@ -61,6 +61,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     /// Height of the invisible tail row that keeps the end of the transcript
     /// clear of the composer stack; see `ACPComposerMetrics.tailSpacerHeight`.
     var composerSpacerHeight: CGFloat = ACPComposerMetrics.restingTailSpacerHeight
+    /// Nil shows turn changes cards without captions.
+    var turnCaptions: ACPTurnCaptionStore? = nil
 
     /// Ambient theme at the point this representable sits in the SwiftUI
     /// tree. Individual rows are hosted in their own, otherwise-disconnected
@@ -691,7 +693,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                    let changes = Self.turnChanges(
                        answerIndex: row.index, messages: messages, isTurnActive: isTurnActive,
                        worktreeRoot: host.trustedImageRoot?.path) {
-                    specs.append(Self.turnChangesSpec(host: host, answer: row, changes: changes))
+                    specs.append(Self.turnChangesSpec(
+                        host: host, answer: row, changes: changes, messages: messages))
                 }
                 // Fork divider follows its boundary row, as in the legacy list.
                 // Grouping breaks a run at that boundary (`groupingOptions`), so
@@ -1337,17 +1340,51 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         static func turnChangesSpec(
             host: ACPTranscriptScroller,
             answer: ACPTranscriptVisibleRow,
-            changes: ACPTurnChanges
+            changes: ACPTurnChanges,
+            messages: [ACPMessage]
         ) -> ACPTranscriptRowSpec {
-            ACPTranscriptRowSpec(
+            let worktreeRoot = host.trustedImageRoot?.path
+            let caption = host.turnCaptions.map { store in
+                ACPTurnChangesCard.Caption(
+                    store: store,
+                    // Changes to the turn ask again, so a caption never describes an older set of edits.
+                    key: answer.stableId + "#" + String(changes.files.hashValue),
+                    input: { captionInput(changes: changes, messages: messages, answerIndex: answer.index, worktreeRoot: worktreeRoot) }
+                )
+            }
+            return ACPTranscriptRowSpec(
                 id: "__turn_changes__" + answer.stableId,
                 equalityToken: token(changes, host: host),
                 build: {
                     wrapRow(host: host) {
-                        ACPTurnChangesCard(changes: changes, onOpenDiff: host.onOpenDiff)
+                        ACPTurnChangesCard(changes: changes, caption: caption, onOpenDiff: host.onOpenDiff)
                     }
                 }
             )
+        }
+
+        /// The turn's request and patches, for its caption. File writes become patches of their
+        /// changed hunks.
+        static func captionInput(
+            changes: ACPTurnChanges, messages: [ACPMessage], answerIndex: Int, worktreeRoot: String?
+        ) -> ACPTurnCaptionPolicy.Input? {
+            guard messages.indices.contains(changes.userIndex), changes.userIndex < answerIndex,
+                  answerIndex <= messages.count
+            else { return nil }
+            var request: String?
+            if case .user(_, _, let text, _, _, _) = messages[changes.userIndex] { request = text }
+            var patches: [String] = []
+            for message in messages[(changes.userIndex + 1)..<answerIndex] {
+                switch message {
+                case .fileEdit(_, let edit):
+                    patches.append(ACPTurnCaptionPolicy.patch(path: edit.path, old: edit.oldText, new: edit.newText))
+                case .toolCall(let call) where !ACPTurnChanges.written(by: call, worktreeRoot: worktreeRoot).isEmpty:
+                    patches += call.diffs.filter { $0.source == .toolCall && $0.isValid }.compactMap(\.patch)
+                default:
+                    break
+                }
+            }
+            return ACPTurnCaptionPolicy.Input(request: request, files: changes.files, patches: patches)
         }
 
         /// Verbatim port of the fork divider inserted right after the fork
