@@ -129,6 +129,55 @@ public enum RemoteReviewMutation: Equatable, Sendable {
     case dismiss(commentID: String)
 }
 
+/// A pull or merge request thread as its provider shows it to the host's user (`ReviewThread`).
+public struct RemoteProviderThread: Decodable, Equatable, Identifiable, Sendable {
+    public struct Comment: Decodable, Equatable, Sendable {
+        public let author: String?
+        public let body: String
+    }
+
+    public let id: String
+    public let path: String?
+    public let line: Int?
+    public let isResolved: Bool
+    public let isOutdated: Bool
+    public let comments: [Comment]
+    public let viewerCanResolve: Bool
+    public let viewerCanUnresolve: Bool
+    public let viewerCanReply: Bool
+}
+
+/// A pull or merge request's threads, and what the host's user may do to them (`HostProviderReview`).
+public struct RemoteProviderReview: Decodable, Equatable, Sendable {
+    public let threads: [RemoteProviderThread]
+    /// False when the provider listed only some threads.
+    public let areThreadsComplete: Bool
+    public let canReply: Bool
+    public let canResolve: Bool
+    /// The host's login; nil when it can't tell.
+    public let account: String?
+
+    private enum Keys: String, CodingKey {
+        case request, capabilities, account, threads, areThreadsComplete, canReply, canResolve
+    }
+
+    public init(from decoder: Decoder) throws {
+        let review = try decoder.container(keyedBy: Keys.self)
+        let request = try review.nestedContainer(keyedBy: Keys.self, forKey: .request)
+        let capabilities = try review.nestedContainer(keyedBy: Keys.self, forKey: .capabilities)
+        threads = try request.decode([RemoteReviewRequest.Lenient<RemoteProviderThread>].self, forKey: .threads).compactMap(\.value)
+        areThreadsComplete = try request.decodeIfPresent(Bool.self, forKey: .areThreadsComplete) ?? true
+        canReply = try capabilities.decode(Bool.self, forKey: .canReply)
+        canResolve = try capabilities.decode(Bool.self, forKey: .canResolve)
+        account = try review.decodeIfPresent(String.self, forKey: .account)
+    }
+}
+
+/// What the phone does to a provider thread (`ProviderThreadMutationKind`).
+public enum RemoteProviderThreadAction: String, Sendable {
+    case reply, resolve, unresolve
+}
+
 /// The draft review verbs as host-protocol messages (`host.reviews.phone.v1`), for a client that
 /// carries them as `OpaqueHostMessage`. Mutations are answered as a git action is: see
 /// `RemoteGitRequest.reply(to:in:)`.
@@ -155,6 +204,42 @@ public enum RemoteReviewRequest {
         return fields.map {
             $0.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\u{1f}", with: "\\u001f")
         }.joined(separator: "\u{1f}")
+    }
+
+    /// A pull or merge request review's threads (`host.reviews.provider.phone.v1`), without its diff.
+    public static func readProvider(id: Int, projectID: String, path: String, sessionID: String) -> OpaqueHostMessage {
+        RemoteGitRequest.envelope(id: id, ["readProviderReview": [
+            "worktree": ["projectID": projectID, "path": path], "sessionID": sessionID, "withDiff": false,
+        ]])
+    }
+
+    /// Replies to, resolves or unresolves a provider thread, as the host's user; answered as a git action is.
+    public static func mutateThread(id: Int, projectID: String, path: String, sessionID: String, threadID: String,
+                                    _ action: RemoteProviderThreadAction, body: String? = nil) -> OpaqueHostMessage {
+        var request: [String: Any] = [
+            "worktree": ["projectID": projectID, "path": path], "sessionID": sessionID, "threadID": threadID, "kind": action.rawValue,
+        ]
+        request["body"] = body
+        return RemoteGitRequest.envelope(id: id, ["mutateReviewThread": request])
+    }
+
+    public static func providerReview(replying id: Int? = nil, in message: OpaqueHostMessage) -> RemoteProviderReview? {
+        decode(RemoteProviderReview.self, at: "providerReview", "review", replying: id, in: message)
+    }
+
+    /// A provider failure as the phone words it: a CLI missing or signed out on the Mac reads as
+    /// what to do there, not as its raw error.
+    public static func providerFailureMessage(_ message: String) -> String {
+        let lower = message.lowercased()
+        let cli = lower.hasPrefix("glab") || lower.contains("glab auth") ? "glab" : "gh"
+        if lower.contains("is not installed") {
+            return "\(cli) isn't installed on the Mac. Install it there, then pull to refresh."
+        }
+        let signedOut = ["auth login", "not logged in", "authentication is required", "bad credentials", "http 401", "401 unauthorized"]
+        if signedOut.contains(where: lower.contains) {
+            return "Sign in to \(cli) on the Mac (run \(cli) auth login there), then pull to refresh."
+        }
+        return message
     }
 
     public static func reviews(replying id: Int? = nil, in message: OpaqueHostMessage) -> [RemoteReviewSummary]? {
@@ -193,7 +278,7 @@ public enum RemoteReviewRequest {
     }
 
     /// Skips an entry a newer host sends in a shape the phone can't read.
-    private struct Lenient<T: Decodable>: Decodable {
+    fileprivate struct Lenient<T: Decodable>: Decodable {
         let value: T?
         init(from decoder: Decoder) throws { value = try? T(from: decoder) }
     }

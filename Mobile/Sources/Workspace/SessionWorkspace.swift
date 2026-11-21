@@ -415,6 +415,33 @@ final class SessionWorkspace {
         .flatMap { Self.readable(RemoteReviewRequest.review(in: $0)) }
     }
 
+    /// Whether the host reads and answers a pull or merge request review's threads for the phone.
+    var canReadPullRequestThreads: Bool {
+        gitTarget != nil && (hub.supports(HostProtocolCapability.reviewsProviderPhoneV1, on: hostID)
+            || hub.supports(HostProtocolCapability.reviewsProviderV1, on: hostID))
+    }
+
+    /// Review `sessionID`'s pull or merge request threads, fetched from its provider by the host.
+    func pullRequestThreads(_ sessionID: String) async -> Result<RemoteProviderReview, RemoteGitFailure> {
+        guard let target = gitTarget else { return .failure(RemoteGitFailure("This pull request can't be read from here.")) }
+        return await hostReply {
+            RemoteReviewRequest.readProvider(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID)
+        }
+        .mapError { RemoteGitFailure(RemoteReviewRequest.providerFailureMessage($0.message)) }
+        .flatMap { Self.readable(RemoteReviewRequest.providerReview(in: $0)) }
+    }
+
+    /// Replies to, resolves or unresolves a thread on the provider, as the host's user.
+    /// Returns the host's refusal, worded for the user, or nil once it's done.
+    func changeThread(_ sessionID: String, threadID: String, _ action: RemoteProviderThreadAction, body: String? = nil) async -> String? {
+        guard let target = gitTarget else { return "This pull request can't be changed from here." }
+        return await hostRequest {
+            RemoteReviewRequest.mutateThread(id: $0, projectID: target.projectID, path: target.worktree.path,
+                                             sessionID: sessionID, threadID: threadID, action, body: body)
+        }
+        .map(RemoteReviewRequest.providerFailureMessage)
+    }
+
     private static func readable<T>(_ value: T?) -> Result<T, RemoteGitFailure> {
         value.map(Result.success) ?? .failure(RemoteGitFailure("The machine's answer couldn't be read."))
     }
