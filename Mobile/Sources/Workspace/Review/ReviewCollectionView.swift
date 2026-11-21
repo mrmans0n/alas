@@ -21,6 +21,9 @@ struct ReviewCollectionView: UIViewControllerRepresentable {
 final class ReviewCollectionController: UIViewController, UICollectionViewDelegate, UIGestureRecognizerDelegate {
     private let document: ReviewDocument
     private var collectionView: UICollectionView!
+    private var sidePan: UIPanGestureRecognizer!
+    private var tap: UITapGestureRecognizer!
+    private var press: UILongPressGestureRecognizer!
     private var dataSource: UICollectionViewDiffableDataSource<ReviewEntryID, ReviewRow>!
     private var wraps = true
     private var focused = false
@@ -30,6 +33,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         let content: ReviewEntryContent
         let folded: Bool
         let hasSpans: Bool
+        let comments: [RemoteReviewComment]
+        let selection: ReviewSelection?
     }
     private var drawn: [ReviewEntryID: Drawn] = [:]
     private var sectionRows: [ReviewEntryID: [ReviewRow]] = [:]
@@ -42,6 +47,14 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     private var offsets: [ReviewEntryID: CGFloat] = [:]
     private var widest: [ReviewEntryID: CGFloat] = [:]
     private var panning: (id: ReviewEntryID, start: CGFloat, limit: CGFloat)?
+
+    /// The comments drawn, by id, and those whose lines left the diff.
+    private var commentsByID: [String: RemoteReviewComment] = [:]
+    private var outdated: Set<String> = []
+    /// A long press's finger, in the controller's view, and the edge auto-scroll it drives.
+    private var pressPoint: CGPoint = .zero
+    private var autoScroller: CADisplayLink?
+    private lazy var pill = makePill()
 
     init(document: ReviewDocument) {
         self.document = document
@@ -69,11 +82,20 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         }, for: .valueChanged)
         collectionView.refreshControl = refresh
 
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(pan(_:)))
-        pan.delegate = self
-        collectionView.addGestureRecognizer(pan)
+        sidePan = UIPanGestureRecognizer(target: self, action: #selector(pan(_:)))
+        sidePan.delegate = self
+        collectionView.addGestureRecognizer(sidePan)
         // Ours fails at once on vertical motion, so scrolling still starts straight away.
-        collectionView.panGestureRecognizer.require(toFail: pan)
+        collectionView.panGestureRecognizer.require(toFail: sidePan)
+        // Both begin only on a line of a review that takes comments; the tap only on its numbers.
+        tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+        tap.delegate = self
+        collectionView.addGestureRecognizer(tap)
+        press = UILongPressGestureRecognizer(target: self, action: #selector(pressed(_:)))
+        press.minimumPressDuration = 0.3
+        press.delegate = self
+        collectionView.addGestureRecognizer(press)
+        collectionView.addSubview(pill)
 
         makeDataSource()
         document.scrollTo = { [weak self] in self?.scroll(to: $0) }
@@ -103,8 +125,19 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
                   let diffLine = hunk.lines[safe: l], let metric = metrics[id] else { return }
             let entrySpans = entry(id).flatMap(document.spanKey).flatMap { self.document.spans[$0] } ?? []
             let tokens = collectionView.traitCollection.userInterfaceStyle == .dark ? ThemeTokens.dark : ThemeTokens.light
+            let selection = document.selection
+            let selected = selection.map { $0.entry == id && $0.hunk == h && ($0.start ... $0.end).contains(l) } ?? false
             cell.configure(diffLine, spans: entrySpans[safe: metric.starts[h] + l] ?? [], digits: metric.digits,
-                           wraps: wraps, offset: offsets[id] ?? 0, tokens: tokens)
+                           wraps: wraps, offset: offsets[id] ?? 0, tokens: tokens, selected: selected)
+            cell.accessibilityCustomActions = document.reviewSessionID == nil ? nil : lineActions(id, hunk: h, line: l)
+        }
+        let comment = UICollectionView.CellRegistration<ReviewCommentCell, ReviewRow> { [weak self] cell, _, row in
+            guard let self, case .comment(_, let cid) = row, let comment = commentsByID[cid] else { return }
+            var badges: [String] = []
+            if !comment.isOpen { badges.append(comment.state.capitalized) }
+            if outdated.contains(cid) { badges.append("Outdated") }
+            cell.configure(author: comment.author, location: Self.location(comment.anchor), body: comment.body, badges: badges,
+                           replies: comment.replies.map { .init(author: $0.author, body: $0.body) }, dimmed: !comment.isOpen)
         }
         let note = UICollectionView.CellRegistration<NoteCell, ReviewRow> { cell, _, row in
             switch row {
@@ -116,7 +149,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             switch row {
             case .hunkHeader: collectionView.dequeueConfiguredReusableCell(using: hunkHeader, for: indexPath, item: row)
             case .line: collectionView.dequeueConfiguredReusableCell(using: line, for: indexPath, item: row)
-            case .placeholder, .note, .comment: collectionView.dequeueConfiguredReusableCell(using: note, for: indexPath, item: row)
+            case .comment: collectionView.dequeueConfiguredReusableCell(using: comment, for: indexPath, item: row)
+            case .placeholder, .note: collectionView.dequeueConfiguredReusableCell(using: note, for: indexPath, item: row)
             }
         }
         let header = UICollectionView.SupplementaryRegistration<FileHeaderView>(
@@ -143,7 +177,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         let id = entry.id
         view.configure(entry, folded: document.folded.contains(id), isViewed: document.isViewed(entry),
                        onFold: { [weak self] in self?.document.toggleFolded(id) },
-                       onViewed: { [weak self] in self?.document.toggleViewed(id) })
+                       onViewed: { [weak self] in self?.document.toggleViewed(id) },
+                       onComment: document.reviewSessionID == nil ? nil : { [weak self] in self?.document.composing = .file(id) })
     }
 
     /// Built when it opens, so it reflects a git action still running.
@@ -189,6 +224,10 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         let entries = document.entries
         // Headers read the marks; reading them here asks SwiftUI to call again when they change.
         _ = document.marks
+        // Comments only show where they can be written: the local-changes review.
+        let byFile = document.reviewSessionID == nil ? [:] : Dictionary(grouping: document.comments, by: \.fileID)
+        commentsByID = Dictionary(document.comments.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let selection = document.selection
         let wrapsChanged = wraps != self.wraps
         self.wraps = wraps
         entryIndex = Dictionary(entries.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -198,8 +237,10 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         var rewritten: [ReviewEntryID] = []
         for entry in entries {
             let id = entry.id
+            let comments = byFile[RemoteReviewFileID(namespace: id.namespace, path: id.path)] ?? []
             let state = Drawn(content: entry.content, folded: document.folded.contains(id),
-                              hasSpans: document.spanKey(entry).map { document.spans[$0] != nil } ?? false)
+                              hasSpans: document.spanKey(entry).map { document.spans[$0] != nil } ?? false,
+                              comments: comments, selection: selection?.entry == id ? selection : nil)
             guard drawn[id] != state else { continue }
             if drawn[id]?.content != state.content {
                 if drawn[id] != nil { rewritten.append(id) }
@@ -208,7 +249,14 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
                 metrics[id] = Self.measure(entry.content)
             }
             drawn[id] = state
-            let rows = ReviewLayout.rows(for: entry, folded: state.folded)
+            var placed: [ReviewPlacedComment] = []
+            if case .hunks(let hunks, _) = entry.content {
+                placed = ReviewCommentPlacement.place(comments.map(Self.placeable), in: hunks)
+                for (comment, place) in zip(comments, placed) {
+                    if place.row == nil, case .line = comment.anchor { outdated.insert(comment.id) } else { outdated.remove(comment.id) }
+                }
+            }
+            let rows = ReviewLayout.rows(for: entry, folded: state.folded, comments: placed)
             if rows == sectionRows[id] { restyled.append(id) } else { reshaped.append(id) }
             sectionRows[id] = rows
         }
@@ -236,6 +284,24 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         for indexPath in collectionView.indexPathsForVisibleSupplementaryElements(ofKind: UICollectionView.elementKindSectionHeader) {
             if let view = collectionView.supplementaryView(forElementKind: UICollectionView.elementKindSectionHeader, at: indexPath)
                 as? FileHeaderView { configure(view, section: indexPath.section) }
+        }
+        placePill()
+    }
+
+    private static func placeable(_ comment: RemoteReviewComment) -> ReviewPlaceable {
+        guard case .line(let side, let start, let end) = comment.anchor else {
+            return ReviewPlaceable(id: comment.id, side: nil, line: nil, endLine: nil)
+        }
+        return ReviewPlaceable(id: comment.id, side: side, line: start, endLine: end)
+    }
+
+    private static func location(_ anchor: RemoteReviewAnchor) -> String {
+        switch anchor {
+        case .file: return "File"
+        case .image: return "Image"
+        case .line(let side, let start, let end):
+            let range = end.flatMap { $0 != start ? "L\(start)\u{2013}\($0)" : nil } ?? "L\(start)"
+            return range + (side == "old" ? " (old)" : "")
         }
     }
 
@@ -288,6 +354,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         reportCurrent()
+        // Rows self-size as they scroll in, moving the selection's last line.
+        placePill()
     }
 
     /// The entry whose header (or row) is at the top of the list.
@@ -310,7 +378,12 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     // MARK: Scroll mode's sideways pan
 
     func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
-        guard let pan = gesture as? UIPanGestureRecognizer, pan.view == collectionView else { return true }
+        if gesture === tap || gesture === press {
+            let point = gesture.location(in: collectionView)
+            guard document.reviewSessionID != nil, let hit = line(at: point) else { return false }
+            return gesture === press || hit.cell.isInGutter(hit.cell.convert(point, from: collectionView))
+        }
+        guard gesture === sidePan, let pan = gesture as? UIPanGestureRecognizer else { return true }
         let velocity = pan.velocity(in: collectionView)
         guard !wraps, abs(velocity.x) > abs(velocity.y),
               let indexPath = collectionView.indexPathForItem(at: pan.location(in: collectionView)),
@@ -343,6 +416,165 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         let width = ceil((longest as NSString).size(withAttributes: [.font: ReviewMetrics.codeFont]).width)
         widest[id] = width
         return width
+    }
+}
+
+// MARK: Selecting and commenting
+
+extension ReviewCollectionController {
+    fileprivate func line(at point: CGPoint) -> (id: ReviewEntryID, hunk: Int, line: Int, cell: LineCell)? {
+        guard let indexPath = collectionView.indexPathForItem(at: point),
+              case .line(let id, let h, let l)? = dataSource.itemIdentifier(for: indexPath),
+              let cell = collectionView.cellForItem(at: indexPath) as? LineCell else { return nil }
+        return (id, h, l, cell)
+    }
+
+    @objc fileprivate func tapped(_ gesture: UITapGestureRecognizer) {
+        guard let hit = line(at: gesture.location(in: collectionView)) else { return }
+        document.tapLine(hit.id, hunk: hit.hunk, line: hit.line)
+    }
+
+    /// Selects the pressed line, then extends to the line under the finger; scrolling and the
+    /// sideways pan are off until the finger lifts, so the drag only selects.
+    @objc fileprivate func pressed(_ gesture: UILongPressGestureRecognizer) {
+        pressPoint = gesture.location(in: view)
+        switch gesture.state {
+        case .began:
+            guard let hit = line(at: gesture.location(in: collectionView)) else { return }
+            document.select(hit.id, hunk: hit.hunk, line: hit.line)
+            UISelectionFeedbackGenerator().selectionChanged()
+            collectionView.panGestureRecognizer.isEnabled = false
+            sidePan.isEnabled = false
+            let link = CADisplayLink(target: self, selector: #selector(autoScroll(_:)))
+            link.add(to: .main, forMode: .common)
+            autoScroller = link
+        case .changed:
+            extendToPress()
+        default:
+            autoScroller?.invalidate()
+            autoScroller = nil
+            collectionView.panGestureRecognizer.isEnabled = true
+            sidePan.isEnabled = true
+        }
+    }
+
+    private func extendToPress() {
+        guard let hit = line(at: view.convert(pressPoint, to: collectionView)) else { return }
+        document.extendSelection(hit.id, hunk: hit.hunk, line: hit.line)
+    }
+
+    /// Within 60 pt of the list's top or bottom edge, scrolls that way at up to 900 pt/s, faster the deeper the finger.
+    @objc private func autoScroll(_ link: CADisplayLink) {
+        let band: CGFloat = 60
+        let inset = collectionView.adjustedContentInset
+        let visible = collectionView.frame.inset(by: inset)
+        let up = visible.minY + band - pressPoint.y
+        let down = pressPoint.y - (visible.maxY - band)
+        let depth = up > 0 ? -min(up, band) : down > 0 ? min(down, band) : 0
+        guard depth != 0 else { return }
+        let top = -inset.top
+        let bottom = max(top, collectionView.contentSize.height + inset.bottom - collectionView.bounds.height)
+        let step = 900 * depth / band * CGFloat(link.targetTimestamp - link.timestamp)
+        let y = min(max(collectionView.contentOffset.y + step, top), bottom)
+        guard y != collectionView.contentOffset.y else { return }
+        collectionView.contentOffset.y = y
+        extendToPress()
+    }
+
+    /// VoiceOver's way to select: each action checks the selection when it runs, not when the row was drawn.
+    fileprivate func lineActions(_ id: ReviewEntryID, hunk: Int, line: Int) -> [UIAccessibilityCustomAction] {
+        [
+            UIAccessibilityCustomAction(name: "Select line") { [weak self] _ in
+                self?.document.select(id, hunk: hunk, line: line)
+                return true
+            },
+            UIAccessibilityCustomAction(name: "Extend selection to here") { [weak self] _ in
+                guard let self, let selection = document.selection, selection.entry == id, selection.hunk == hunk else { return false }
+                document.extendSelection(id, hunk: hunk, line: line)
+                return true
+            },
+            UIAccessibilityCustomAction(name: "Comment on selection") { [weak self] _ in
+                guard let self, document.selection != nil else { return false }
+                document.composeSelection()
+                return true
+            },
+        ]
+    }
+
+    fileprivate func makePill() -> UIView {
+        var commentStyle = UIButton.Configuration.filled()
+        commentStyle.title = "Comment"
+        commentStyle.image = UIImage(systemName: "plus.bubble")
+        commentStyle.imagePadding = 6
+        commentStyle.cornerStyle = .capsule
+        let comment = UIButton(configuration: commentStyle, primaryAction: UIAction { [weak self] _ in self?.document.composeSelection() })
+        var clearStyle = UIButton.Configuration.gray()
+        clearStyle.image = UIImage(systemName: "xmark")
+        clearStyle.cornerStyle = .capsule
+        let clear = UIButton(configuration: clearStyle, primaryAction: UIAction { [weak self] _ in self?.document.selection = nil })
+        clear.accessibilityLabel = "Clear Selection"
+        let pill = UIStackView(arrangedSubviews: [clear, comment])
+        pill.spacing = 8
+        pill.isHidden = true
+        // Above the rows and the pinned file headers.
+        pill.layer.zPosition = 1000
+        return pill
+    }
+
+    /// Floats the pill under the selection's last line, at the trailing edge; hidden while that line isn't laid out.
+    fileprivate func placePill() {
+        guard let selection = document.selection,
+              let indexPath = dataSource.indexPath(for: .line(entry: selection.entry, hunk: selection.hunk, line: selection.end)),
+              let last = collectionView.layoutAttributesForItem(at: indexPath) else {
+            pill.isHidden = true
+            return
+        }
+        let size = pill.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+        pill.frame = CGRect(x: collectionView.bounds.width - collectionView.safeAreaInsets.right - size.width - 12,
+                            y: last.frame.maxY + 4, width: size.width, height: size.height)
+        pill.isHidden = false
+    }
+
+    // MARK: Comment menu
+
+    @objc func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
+                        point: CGPoint) -> UIContextMenuConfiguration? {
+        guard indexPaths.count == 1, case .comment(_, let cid)? = dataSource.itemIdentifier(for: indexPaths[0]),
+              let comment = commentsByID[cid] else { return nil }
+        return UIContextMenuConfiguration(actionProvider: { [weak self] _ in self?.menu(for: comment) })
+    }
+
+    /// As the Reviews list: edit, resolve and dismiss an open comment; delete any.
+    private func menu(for comment: RemoteReviewComment) -> UIMenu {
+        var items: [UIMenuElement] = []
+        if comment.isOpen {
+            items += [
+                UIAction(title: "Edit…", image: UIImage(systemName: "pencil")) { [weak self] _ in self?.document.composing = .edit(comment) },
+                UIAction(title: "Resolve", image: UIImage(systemName: "checkmark")) { [weak self] _ in
+                    self?.change(.resolve(commentID: comment.id))
+                },
+                UIAction(title: "Dismiss", image: UIImage(systemName: "xmark")) { [weak self] _ in
+                    self?.change(.dismiss(commentID: comment.id))
+                },
+            ]
+        }
+        items.append(UIAction(title: "Delete…", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+            self?.confirmDelete(comment)
+        })
+        return UIMenu(children: items)
+    }
+
+    private func change(_ mutation: RemoteReviewMutation) {
+        Task { await document.change(mutation) }
+    }
+
+    private func confirmDelete(_ comment: RemoteReviewComment) {
+        let alert = UIAlertController(title: "Delete this comment?", message: "It's deleted on the Mac too.", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Delete", style: .destructive) { [weak self] _ in
+            self?.change(.delete(commentID: comment.id))
+        })
+        present(alert, animated: true)
     }
 }
 

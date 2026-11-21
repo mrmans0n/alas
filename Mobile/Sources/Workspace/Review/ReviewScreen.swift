@@ -42,6 +42,9 @@ struct ReviewScreen: View {
             }
             .task { await document.start() }
             .onChange(of: workspace.reconnects) { Task { await document.refresh() } }
+            .sheet(item: Binding { document.composing } set: { document.composing = $0 }) { composing in
+                sheet(composing)
+            }
             .alert("Couldn't do that", isPresented: Binding { document.error != nil } set: { if !$0 { document.error = nil } }) {
                 Button("OK", role: .cancel) {}
             } message: {
@@ -49,6 +52,23 @@ struct ReviewScreen: View {
             }
             // Backstop for a pop that skips the destination binding (a stack reset to the root).
             .onDisappear { workspace.closeReview() }
+    }
+
+    @ViewBuilder private func sheet(_ composing: ReviewComposing) -> some View {
+        switch composing {
+        case .lines(let entry, let anchor, let title, let quote):
+            CommentSheet(title: title, text: "", quote: quote) { body in
+                Task { await document.comment(on: entry, anchor: anchor, body: body) }
+            }
+        case .file(let entry):
+            CommentSheet(title: "Comment on File", text: "") { body in
+                Task { await document.comment(on: entry, anchor: .file, body: body) }
+            }
+        case .edit(let comment):
+            CommentSheet(title: "Edit Comment", text: comment.body) { body in
+                Task { await document.change(.edit(commentID: comment.id, body: body)) }
+            }
+        }
     }
 
     @ViewBuilder private var content: some View {

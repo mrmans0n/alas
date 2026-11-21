@@ -9,11 +9,12 @@ enum ReviewMetrics {
     }
 }
 
-/// A file's pinned header: fold chevron, path, counts and the Viewed checkbox.
+/// A file's pinned header: fold chevron, path, counts, the file's menu and the Viewed checkbox.
 final class FileHeaderView: UICollectionReusableView {
     private let chevron = UIButton(type: .system)
     private let path = UILabel()
     private let counts = UILabel()
+    private let menuButton = UIButton(type: .system)
     private let viewed = UIButton(type: .system)
     private var onFold: (() -> Void)?
     private var onViewed: (() -> Void)?
@@ -29,11 +30,14 @@ final class FileHeaderView: UICollectionReusableView {
         counts.setContentHuggingPriority(.required, for: .horizontal)
         chevron.addAction(UIAction { [weak self] _ in self?.onFold?() }, for: .touchUpInside)
         viewed.addAction(UIAction { [weak self] _ in self?.onViewed?() }, for: .touchUpInside)
-        for button in [chevron, viewed] {
+        menuButton.setImage(UIImage(systemName: "ellipsis.circle"), for: .normal)
+        menuButton.tintColor = .secondaryLabel
+        menuButton.showsMenuAsPrimaryAction = true
+        for button in [chevron, menuButton, viewed] {
             button.setContentHuggingPriority(.required, for: .horizontal)
             button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
         }
-        let stack = UIStackView(arrangedSubviews: [chevron, path, counts, viewed])
+        let stack = UIStackView(arrangedSubviews: [chevron, path, counts, menuButton, viewed])
         stack.spacing = 6
         stack.alignment = .center
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -51,7 +55,9 @@ final class FileHeaderView: UICollectionReusableView {
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ entry: ReviewEntry, folded: Bool, isViewed: Bool, onFold: @escaping () -> Void, onViewed: @escaping () -> Void) {
+    /// `onComment` is nil when the file takes no comments.
+    func configure(_ entry: ReviewEntry, folded: Bool, isViewed: Bool, onFold: @escaping () -> Void,
+                   onViewed: @escaping () -> Void, onComment: (() -> Void)?) {
         self.onFold = onFold
         self.onViewed = onViewed
         let config = UIImage.SymbolConfiguration(textStyle: .footnote, scale: .medium)
@@ -65,6 +71,10 @@ final class FileHeaderView: UICollectionReusableView {
         counts.attributedText = text
         counts.isHidden = entry.add + entry.del == 0
         accessibilityLabel = "\(entry.id.path), \(entry.add) added, \(entry.del) removed" + (isViewed ? ", viewed" : "")
+        menuButton.isHidden = onComment == nil
+        menuButton.menu = onComment.map { comment in
+            UIMenu(children: [UIAction(title: "Comment on File", image: UIImage(systemName: "plus.bubble")) { _ in comment() }])
+        }
         accessibilityCustomActions = [
             UIAccessibilityCustomAction(name: folded ? "Unfold" : "Fold") { _ in
                 onFold()
@@ -74,7 +84,12 @@ final class FileHeaderView: UICollectionReusableView {
                 onViewed()
                 return true
             },
-        ]
+        ] + (onComment.map { comment in
+            [UIAccessibilityCustomAction(name: "Comment on File") { _ in
+                comment()
+                return true
+            }]
+        } ?? [])
     }
 }
 
@@ -167,8 +182,12 @@ final class LineCell: UICollectionViewCell {
         didSet { code.transform = CGAffineTransform(translationX: -codeOffset, y: 0) }
     }
 
+    /// Whether `point`, in the cell's coordinates, is on the line numbers rather than the code.
+    func isInGutter(_ point: CGPoint) -> Bool { point.x < codeClip.frame.minX }
+
     /// `digits` pads both numbers, so every line of a file has the same gutter.
-    func configure(_ line: RemoteDiffLine, spans: [HighlightSpan], digits: Int, wraps: Bool, offset: CGFloat, tokens: ThemeTokens) {
+    func configure(_ line: RemoteDiffLine, spans: [HighlightSpan], digits: Int, wraps: Bool, offset: CGFloat,
+                   tokens: ThemeTokens, selected: Bool) {
         let font = ReviewMetrics.codeFont
         minHeight.constant = ceil(font.lineHeight)
         let tint: UIColor? = line.kind == "add" ? .systemGreen : line.kind == "delete" ? .systemRed : nil
@@ -191,10 +210,11 @@ final class LineCell: UICollectionViewCell {
         code.lineBreakMode = wraps ? .byCharWrapping : .byClipping
         wrapTrailing.isActive = wraps
         codeOffset = wraps ? 0 : offset
-        contentView.backgroundColor = tint?.withAlphaComponent(0.12)
+        contentView.backgroundColor = selected ? tintColor.withAlphaComponent(0.18) : tint?.withAlphaComponent(0.12)
         let state = line.kind == "add" ? "added" : line.kind == "delete" ? "removed" : "unchanged"
         let number = (line.kind == "delete" ? line.oldNumber : line.newNumber) ?? line.oldNumber ?? 0
         accessibilityLabel = "line \(number), \(state), \(line.text)"
+        accessibilityTraits = selected ? .selected : []
     }
 }
 

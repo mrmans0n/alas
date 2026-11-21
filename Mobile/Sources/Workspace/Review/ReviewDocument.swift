@@ -16,6 +16,21 @@ enum ReviewSource: Equatable {
     }
 }
 
+/// A comment sheet the review screen shows.
+enum ReviewComposing: Identifiable {
+    case lines(ReviewEntryID, RemoteReviewAnchor, title: String, quote: String)
+    case file(ReviewEntryID)
+    case edit(RemoteReviewComment)
+
+    var id: String {
+        switch self {
+        case .lines(let entry, _, let title, _): "lines:\(entry.namespace):\(entry.path):\(title)"
+        case .file(let entry): "file:\(entry.namespace):\(entry.path)"
+        case .edit(let comment): "edit:\(comment.id)"
+        }
+    }
+}
+
 /// Every file of one change, each fetched as it nears the screen.
 @MainActor @Observable
 final class ReviewDocument {
@@ -30,8 +45,13 @@ final class ReviewDocument {
     var current: ReviewEntryID?
     /// Why the file list couldn't be read.
     var listError: String?
-    /// A hunk action's refusal.
+    /// A hunk or comment action's refusal.
     var error: String?
+    /// The lines picked to comment on.
+    var selection: ReviewSelection?
+    /// The review's draft comments, every file's.
+    var comments: [RemoteReviewComment] = []
+    var composing: ReviewComposing?
     private(set) var listLoaded = false
     /// The Mac capped the file list, so the review doesn't hold every file.
     private(set) var listTruncated = false
@@ -65,6 +85,7 @@ final class ReviewDocument {
         guard !listLoaded else { return }
         if let cached = cachedFiles() {
             replace(with: cached.entries, truncated: cached.truncated)
+            await loadComments()
         } else {
             await refresh()
         }
@@ -113,6 +134,7 @@ final class ReviewDocument {
         case .success(let fresh):
             replace(with: fresh.entries, truncated: fresh.truncated)
         }
+        await loadComments()
     }
 
     /// Takes `fresh` in the host's order, which keeps the order of the paths both lists hold.
@@ -131,6 +153,7 @@ final class ReviewDocument {
         }
         let ids = Set(fresh.map(\.id))
         folded = folded.intersection(ids)
+        if let selection, !ids.contains(selection.entry) { self.selection = nil }
         // The focused file opens unfolded: the user tapped it to read it.
         for entry in fresh where old[entry.id] == nil && (listLoaded || entry.id != focus)
             && (ReviewLayout.startsFolded(path: entry.id.path, add: entry.add, del: entry.del) || marks.hasMark(entry.id)) {
@@ -171,6 +194,8 @@ final class ReviewDocument {
         }
         let hash = ReviewViewedMarks.hash(of: Self.hunks(content))
         hashes[id] = hash
+        // Its line indexes point into the old diff.
+        if selection?.entry == id, entries[i].content != content { selection = nil }
         entries[i].content = content
         if case .failure = result {
             // No diff, so nothing to mark or to check a mark against; a tick waiting on it lapses.
@@ -254,6 +279,69 @@ final class ReviewDocument {
         if let message = await workspace.changeHunk(action, index: index, hunk, in: diffKey(id)) { error = message }
         // The hunk moves between the staged and unstaged entries.
         await refresh()
+    }
+
+    // MARK: Comments
+
+    /// Where comments go: the worktree's local-changes review. Branch changes and commits take none,
+    /// as no Mac review files comments under their entries.
+    var reviewSessionID: String? {
+        source == .localChanges && workspace.canReview ? workspace.localChangesReviewID : nil
+    }
+
+    func loadComments() async {
+        guard let session = reviewSessionID else { return }
+        // ponytail: a failed read keeps the comments shown; the next refresh tries again.
+        if case .success(let review) = await workspace.review(session) { comments = review.comments }
+    }
+
+    func select(_ entry: ReviewEntryID, hunk: Int, line: Int) {
+        selection = ReviewSelection(entry: entry, hunk: hunk, line: line)
+    }
+
+    /// Ignored outside the selection's hunk: a range never spans hunks or files.
+    func extendSelection(_ entry: ReviewEntryID, hunk: Int, line: Int) {
+        guard selection?.entry == entry else { return }
+        selection?.extend(to: line, inHunk: hunk)
+    }
+
+    /// A gutter tap: extends the selection within its hunk, else starts one; tapping the only selected line clears it.
+    func tapLine(_ entry: ReviewEntryID, hunk: Int, line: Int) {
+        guard let current = selection, current.entry == entry, current.hunk == hunk else {
+            return select(entry, hunk: hunk, line: line)
+        }
+        if current.start == line, current.end == line { selection = nil } else { extendSelection(entry, hunk: hunk, line: line) }
+    }
+
+    /// Opens the comment sheet on the selection, if its lines are still in the diff.
+    func composeSelection() {
+        guard let selection else { return }
+        let hunks = entries.first { $0.id == selection.entry }.map { Self.hunks($0.content) } ?? []
+        guard selection.isValid(in: hunks) else {
+            self.selection = nil
+            return
+        }
+        let hunk = hunks[selection.hunk]
+        let anchor = selection.anchor(in: hunk)
+        guard case .line(_, let start, let end) = anchor else { return }
+        let title = end.map { "Lines \(start)\u{2013}\($0)" } ?? "Line \(start)"
+        composing = .lines(selection.entry, anchor, title: title, quote: selection.quotedText(in: hunk))
+    }
+
+    func comment(on entry: ReviewEntryID, anchor: RemoteReviewAnchor, body: String) async {
+        guard let session = reviewSessionID else { return }
+        if let message = await workspace.comment(in: session, entry: entry, anchor: anchor, body: body) {
+            error = message
+            return
+        }
+        await loadComments()
+        if case .line = anchor { selection = nil }
+    }
+
+    func change(_ mutation: RemoteReviewMutation) async {
+        guard let session = reviewSessionID else { return }
+        if let message = await workspace.changeReview(session, mutation) { error = message }
+        await loadComments()
     }
 
     // MARK: Syntax

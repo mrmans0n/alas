@@ -358,6 +358,8 @@ struct CommentSheet: View {
     @State var text: String
     /// Asked before saving, for a comment others see at once.
     var confirmation: String?
+    /// The lines commented on, shown above the field.
+    var quote: String?
     let submit: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
@@ -366,6 +368,9 @@ struct CommentSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let quote {
+                    Text(quote).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(8)
+                }
                 TextField("Comment", text: $text, axis: .vertical).lineLimit(4...12).focused($focused)
             }
             .navigationTitle(title)
