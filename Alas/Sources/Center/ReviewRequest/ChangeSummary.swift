@@ -1,4 +1,5 @@
 import Foundation
+import AlasRemoteKit
 
 /// The deterministic facts a change summary describes. Counts, commit
 /// identities, diff statistics, and run results come from Git and Alas and are

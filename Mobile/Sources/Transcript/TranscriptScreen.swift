@@ -17,6 +17,7 @@ struct TranscriptScreen: View {
     @State private var visible = false
     @State private var mode = SessionMode.transcript
     @State private var showSettings = false
+    @State private var summarizing = false
     @State private var renaming = false
     @State private var newTitle = ""
     @State private var renamingBranch = false
@@ -217,6 +218,11 @@ struct TranscriptScreen: View {
                         renaming = true
                     }
                     Button("Session Settings", systemImage: "slider.horizontal.3") { showSettings = true }
+                }
+                if SessionRecapModel.isAvailable, !session.items.isEmpty {
+                    Button("Summarize Session", systemImage: "sparkles") { summarizing = true }
+                }
+                if !session.hasEnded {
                     if let branch = workspace.renamableBranch {
                         Button("Rename Branch…", systemImage: "arrow.triangle.branch") {
                             newBranch = branch
@@ -289,6 +295,7 @@ struct TranscriptScreen: View {
             }
             .disabled(progress != nil)
             .sheet(isPresented: $showSettings) { SessionSettingsSheet(session: session) }
+            .sheet(isPresented: $summarizing) { SessionRecapSheet(session: session) }
             .alert("Couldn't do that", isPresented: Binding { session.tabActionError != nil } set: { if !$0 { session.tabActionError = nil } }) {
                 Button("OK", role: .cancel) {}
             } message: {

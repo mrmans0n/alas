@@ -210,6 +210,8 @@ final class TranscriptSession {
 
     @ObservationIgnored private let hub: HostHub
     @ObservationIgnored private var state: RemoteTranscriptState<OpaqueHostMessage, OpaqueHostMessage>
+    /// Every visible message as a row, before folding: what a recap reads, whatever is expanded.
+    var transcriptRows: [RemoteTranscriptRow] { state.messages.map(RemoteTranscriptRow.init(message:)) }
     /// Which activity groups are open. Expansion shapes `items`, so a change republishes.
     @ObservationIgnored let seeds = ACPToolCallGroupExpansionSeeds()
     @ObservationIgnored private var shownFold: FoldKey?
