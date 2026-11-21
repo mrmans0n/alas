@@ -4,6 +4,7 @@ import AlasCore
 
 // Manager membership, projection and command admission are main-actor APIs.
 @MainActor
+@Suite(.timeLimit(.minutes(5)))
 struct ACPSessionManagerTests {
     @Test func incompleteAppQualificationKeepsProductionAdmissionEmpty() async throws {
         let fixture = try PreviewManagerFixture()
@@ -223,6 +224,7 @@ private final class PreviewManagerFixture {
             setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in probe.legacyFactoryCalls += 1
             throw ACPClientError.notRunning },
             brokerServiceFactory: { service })
+        manager.v2PreviewStartupTimeoutForTesting = .seconds(300)
         manager.v2PreviewAdmissionRecordsForTesting = ACPV2PreviewEligibility.qualificationEvidence
         manager.prepareV2PreviewLaunchForTesting = { agentId in
             probe.preparations += 1
