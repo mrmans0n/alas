@@ -582,6 +582,8 @@ enum DiffReviewInlineFeedbackMarkdown {
                 return (items.map { "[\($0.isChecked ? "x" : " ")] \($0.text)" }.joined(separator: " "), false)
             case .code(_, let body), .streamingCode(_, let body), .mermaid(let body), .visual(_, let body):
                 return (body, true)
+            case .chart(let chart):
+                return (chart.title ?? "Chart", true)
             case .image(let alt, let source):
                 return (alt.isEmpty ? source : alt, true)
             case .table(let header, let rows):
@@ -610,6 +612,8 @@ enum DiffReviewInlineFeedbackMarkdown {
                 return source
             case .visual(let title, _):
                 return title ?? "Visual"
+            case .chart(let chart):
+                return chart.title ?? "Chart"
             case .image(let alt, let source):
                 return alt.isEmpty ? source : alt
             case .table(let header, let rows):

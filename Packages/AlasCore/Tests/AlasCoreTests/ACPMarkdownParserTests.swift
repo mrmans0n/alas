@@ -82,14 +82,45 @@ struct ACPMarkdownParserTests {
         ("```visual\n\n```", [.code(language: "visual", body: "")]),
         ("```html\n<svg/>\n```", [.code(language: "html", body: "<svg/>")]),
         ("```visualize\n<svg/>\n```", [.code(language: "visualize", body: "<svg/>")]),
-        ("```chart line unit=ms label=\"Build & test\"\n{\"labels\":[\"a\"]}\n```", [.visual(
-            title: "Build & test",
-            html: "<alas-chart type=\"line\" unit=\"ms\" label=\"Build &amp; test\" data=\"{&quot;labels&quot;:[&quot;a&quot;]}\"></alas-chart>")]),
-        ("```chart\n{}\n```", [.visual(title: "Chart", html: "<alas-chart type=\"bar\" data=\"{}\"></alas-chart>")]),
         ("```chart\nnot json\n```", [.code(language: "chart", body: "not json")]),
     ] as [(String, [ACPMarkdownParser.Block])])
     func onlyClosedVisualFencesBecomeVisuals(source: String, expected: [ACPMarkdownParser.Block]) {
         #expect(ACPMarkdownParser.parse(source) == expected)
+    }
+
+    @Test(arguments: [
+        ("```chart line unit=ms height=120 label=\"Build time\"\n{\"labels\":[\"a\",\"b\"],\"series\":[{\"name\":\"p50\",\"values\":[1,2.5]}]}\n```",
+         ChartSpec(kind: .line, unit: "ms", title: "Build time", labels: ["a", "b"],
+                   series: [.init(name: "p50", values: [1, 2.5])], height: 120, showsLegend: true)),
+        ("```chart\n{\"values\":[3,4]}\n```",
+         ChartSpec(kind: .bar, unit: "", title: nil, labels: ["1", "2"],
+                   series: [.init(name: "Series 1", values: [3, 4])], height: 200, showsLegend: false)),
+        ("```chart hbar height=5000\n{\"labels\":[1,true],\"series\":[{\"values\":[1,2]},{\"name\":null,\"values\":[3,4]}]}\n```",
+         ChartSpec(kind: .hbar, unit: "", title: nil, labels: ["1", "true"],
+                   series: [.init(name: "Series 1", values: [1, 2]), .init(name: "Series 2", values: [3, 4])],
+                   height: 800, showsLegend: true)),
+        ("```chart\n{\"labels\":[\"a\"],\"values\":[1,2]}\n```", nil),
+        ("```chart\n{\"values\":[1,true]}\n```", nil),
+        ("```chart\n{\"values\":[1,\"2\"]}\n```", nil),
+        ("```chart\n{\"series\":[]}\n```", nil),
+    ] as [(String, ChartSpec?)])
+    func chartFencesFollowTheChartComponentsDataRules(source: String, expected: ChartSpec?) {
+        let blocks = ACPMarkdownParser.parse(source)
+        if let expected {
+            #expect(blocks == [.chart(expected)])
+        } else {
+            #expect(blocks.count == 1)
+            if case .code(let language, _) = blocks.first { #expect(language?.hasPrefix("chart") == true) }
+            else { Issue.record("Expected code, got \(blocks)") }
+        }
+    }
+
+    @Test(arguments: [
+        (0.0, "0"), (0.0012345, "0.00123"), (12.345, "12.3"), (99.5, "99.5"), (250.4, "250"),
+        (12_345, "12.3k"), (-2_500_000, "-2.5M"), (3e9, "3B"),
+    ])
+    func chartValuesFormatLikeTheChartComponent(value: Double, expected: String) {
+        #expect(ChartSpec.format(value) == expected)
     }
 
     @Test

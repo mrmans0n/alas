@@ -181,6 +181,8 @@ struct ACPMarkdownText: View {
             // HTML-derived id replaces the page when a message's visual is rewritten in place.
             ACPMarkdownVisualBlock(visual: visual, typography: typography)
                 .id(visual.id)
+        case .chart(let chart):
+            ACPMarkdownChart(chart: chart)
         case .image(let alt, let source):
             ACPMarkdownImageBlockView(alt: alt, source: source)
         case .table(let header, let rows):
@@ -359,7 +361,7 @@ struct ACPMarkdownText: View {
 private extension ACPMarkdownText.Block {
     var allowsNoninteractiveTapAction: Bool {
         switch self {
-        case .mermaid, .image, .visual:
+        case .mermaid, .image, .visual, .chart:
             false
         case .heading, .paragraph, .taskList, .quote, .alert, .code, .streamingCode, .table:
             true

@@ -287,6 +287,8 @@ private struct PluginMarkdownView: View {
                 .padding(scale.space[2])
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-2")))
+        case .chart(let chart):
+            ACPMarkdownChart(chart: chart)
         case .image(let alt, let source):
             Text(alt.isEmpty ? source : alt).foregroundColor(theme.color("fg-dim"))
         case .table(let header, let rows):
