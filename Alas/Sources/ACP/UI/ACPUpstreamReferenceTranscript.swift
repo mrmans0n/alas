@@ -45,7 +45,7 @@ extension ACPUpstreamReferenceChip {
 
         for block in ACPMarkdownText.parse(text) {
             let fragments: [String] = switch block {
-            case .heading(_, let text), .paragraph(let text), .quote(let text): [text]
+            case .heading(_, let text), .paragraph(let text), .quote(let text), .alert(_, let text): [text]
             case .taskList(let items): items.map(\.text)
             case .table(let header, let rows): header + rows.flatMap { $0 }
             case .code, .streamingCode, .mermaid, .visual, .image: []

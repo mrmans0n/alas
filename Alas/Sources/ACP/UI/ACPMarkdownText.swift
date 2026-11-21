@@ -128,6 +128,31 @@ struct ACPMarkdownText: View {
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: proseMaxWidth ?? .infinity, alignment: .leading)
+        case .alert(let kind, let text):
+            HStack(alignment: .top, spacing: 10) {
+                Rectangle()
+                    .fill(theme.color(kind.colorToken))
+                    .frame(width: 2)
+                VStack(alignment: .leading, spacing: scale.space[1]) {
+                    Label(kind.title, systemImage: kind.symbol)
+                        .font(.system(size: typography.paragraphSize, weight: .semibold))
+                        .foregroundStyle(theme.color(kind.colorToken))
+                    if !text.isEmpty {
+                        ACPMarkdownInlineText(
+                            source: text,
+                            typography: typography,
+                            role: .body,
+                            theme: theme,
+                            memoizesInlineMarkdown: renderBlock.memoizesInlineMarkdown
+                        )
+                            .lineSpacing(lineSpacing)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .accessibilityElement(children: .combine)
+            .frame(maxWidth: proseMaxWidth ?? .infinity, alignment: .leading)
         case .code(let lang, let body):
             CodeBlockView(
                 language: lang,
@@ -336,7 +361,7 @@ private extension ACPMarkdownText.Block {
         switch self {
         case .mermaid, .image, .visual:
             false
-        case .heading, .paragraph, .taskList, .quote, .code, .streamingCode, .table:
+        case .heading, .paragraph, .taskList, .quote, .alert, .code, .streamingCode, .table:
             true
         }
     }
@@ -365,6 +390,19 @@ private struct ACPMarkdownVisualDrawingLabel: View {
             .foregroundStyle(theme.color("fg-muted"))
             .acpNarrationShimmer(isActive: true)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+extension ACPMarkdownParser.AlertKind {
+    /// GitHub's colours, mapped onto the theme's tones.
+    var colorToken: String {
+        switch self {
+        case .note: "info"
+        case .tip: "add"
+        case .important: "accent-2"
+        case .warning: "warn"
+        case .caution: "del"
+        }
     }
 }
 

@@ -146,7 +146,7 @@ struct ACPTranscriptMarkdownLayout {
     /// The tallest line, so a vertical lookup can search on line tops alone.
     let maxLineHeight: CGFloat
 
-    /// Whether every block can be drawn here. Images, Mermaid diagrams, visuals and
+    /// Whether every block can be drawn here. Images, Mermaid diagrams, visuals, alerts and
     /// task lists need views of their own, and so do tables of more than
     /// `maxNativeTableColumns` columns. So does prose with an inline image:
     /// the SwiftUI renderer turns it into a text attachment that `CTLineDraw`
@@ -155,7 +155,7 @@ struct ACPTranscriptMarkdownLayout {
     static func supports(_ blocks: [ACPMarkdownParser.Block]) -> Bool {
         blocks.allSatisfy { block in
             switch block {
-            case .image, .mermaid, .visual, .taskList: false
+            case .image, .mermaid, .visual, .taskList, .alert: false
             case .streamingCode(let language, _): !VisualFence.isVisual(language: language)
             case .table(let header, let rows):
                 max(header.count, rows.map(\.count).max() ?? 0) <= maxNativeTableColumns
@@ -553,7 +553,7 @@ struct ACPTranscriptMarkdownLayout {
                 addCode(language: language, body: body, highlighted: false)
             case .table(let header, let rows):
                 addTable(header: header, rows: rows)
-            case .taskList, .image, .mermaid, .visual:
+            case .taskList, .image, .mermaid, .visual, .alert:
                 break
             }
         }

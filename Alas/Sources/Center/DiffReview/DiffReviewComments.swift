@@ -576,6 +576,8 @@ enum DiffReviewInlineFeedbackMarkdown {
             switch block {
             case .heading(_, let text), .paragraph(let text), .quote(let text):
                 return (text, false)
+            case .alert(let kind, let text):
+                return (text.isEmpty ? kind.title : "\(kind.title): \(text)", false)
             case .taskList(let items):
                 return (items.map { "[\($0.isChecked ? "x" : " ")] \($0.text)" }.joined(separator: " "), false)
             case .code(_, let body), .streamingCode(_, let body), .mermaid(let body), .visual(_, let body):
@@ -598,6 +600,8 @@ enum DiffReviewInlineFeedbackMarkdown {
             switch block {
             case .heading(_, let text), .paragraph(let text), .quote(let text):
                 return ACPMarkdownInlineRenderer.plainText(text)
+            case .alert(let kind, let text):
+                return kind.title + " " + ACPMarkdownInlineRenderer.plainText(text)
             case .taskList(let items):
                 return items.map { ACPMarkdownInlineRenderer.plainText($0.text) }.joined(separator: " ")
             case .code(_, let body), .streamingCode(_, let body):

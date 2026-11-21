@@ -264,6 +264,14 @@ private struct PluginMarkdownView: View {
                 .foregroundColor(theme.color("fg-dim"))
                 .padding(.leading, scale.space[3])
                 .overlay(alignment: .leading) { Rectangle().fill(theme.color("accent").opacity(0.55)).frame(width: 2) }
+        case .alert(let kind, let text):
+            VStack(alignment: .leading, spacing: scale.space[1]) {
+                Label(kind.title, systemImage: kind.symbol).fontWeight(.semibold)
+                if !text.isEmpty { Text(Self.inline(text)) }
+            }
+            .foregroundColor(theme.color("fg-dim"))
+            .padding(.leading, scale.space[3])
+            .overlay(alignment: .leading) { Rectangle().fill(theme.color(kind.colorToken)).frame(width: 2) }
         case .taskList(let items):
             VStack(alignment: .leading, spacing: scale.space[1]) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in

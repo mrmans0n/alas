@@ -12,6 +12,9 @@ public enum ACPMarkdownParser: Sendable {
         case paragraph(String)
         case taskList([TaskItem])
         case quote(String)
+        /// A GitHub alert: a blockquote whose first line is `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`
+        /// or `[!CAUTION]`. Text on the marker line is kept as the first line of the body.
+        case alert(kind: AlertKind, text: String)
         case code(language: String?, body: String)
         case streamingCode(language: String?, body: String)
         case mermaid(source: String)
@@ -20,6 +23,8 @@ public enum ACPMarkdownParser: Sendable {
         case image(alt: String, source: String)
         case table(header: [String], rows: [[String]])
     }
+
+    public typealias AlertKind = MarkdownAlert.Kind
 
     public struct TaskItem: Equatable, Sendable {
         public let isChecked: Bool
@@ -364,7 +369,11 @@ public enum ACPMarkdownParser: Sendable {
                     quoted.append(s)
                     i += 1
                 }
-                blocks.append(.quote(quoted.joined(separator: "\n")))
+                if let (kind, body) = MarkdownAlert.match(quoted) {
+                    blocks.append(.alert(kind: kind, text: body))
+                } else {
+                    blocks.append(.quote(quoted.joined(separator: "\n")))
+                }
                 continue
             }
 
