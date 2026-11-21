@@ -15,7 +15,7 @@ extension ACPNSTextView {
         at range: NSRange
     ) -> (range: NSRange, replacement: NSAttributedString)? {
         guard let textStorage, let context = upstreamReferenceContext,
-              let target = ACPUpstreamReferenceDetector.chipTarget(
+              let target = UpstreamReferenceText.chipTarget(
                   completingWith: text, at: range, in: textStorage.string, host: context.host
               )
         else { return nil }
@@ -52,8 +52,8 @@ extension ACPNSTextView {
         // by comparing against the closed-spans-only scan instead: an extra
         // range only shows up when the trailing run was left open through
         // the caret.
-        let closedRanges = ACPUpstreamReferenceDetector.codeRanges(in: prefix, unclosedRunsExtendToEnd: false)
-        let rangesThroughCaret = ACPUpstreamReferenceDetector.codeRanges(in: prefix, unclosedRunsExtendToEnd: true)
+        let closedRanges = UpstreamReferenceText.codeRanges(in: prefix, unclosedRunsExtendToEnd: false)
+        let rangesThroughCaret = UpstreamReferenceText.codeRanges(in: prefix, unclosedRunsExtendToEnd: true)
         guard rangesThroughCaret.count <= closedRanges.count else {
             removeUnchippedReferenceMarkers(in: fragment)
             return false
@@ -91,7 +91,7 @@ extension ACPNSTextView {
     /// would commit it under the user, and send finishes the job anyway.
     func chipUpstreamReferencesIfNeeded(includingCaretToken: Bool = false) {
         guard let textStorage, let context = upstreamReferenceContext, !hasMarkedText() else { return }
-        let matches = ACPUpstreamReferenceDetector.chippableMatches(
+        let matches = UpstreamReferenceText.chippableMatches(
             in: textStorage.string, host: context.host, caret: includingCaretToken ? nil : selectedRange()
         )
         for match in matches.reversed() {
@@ -118,7 +118,7 @@ extension ACPNSTextView {
     func chipPersistedUpstreamReferencesIfNeeded(recordUndo: Bool = true) {
         guard let textStorage, let context = upstreamReferenceContext else { return }
         guard !recordUndo || !hasMarkedText() else { return }
-        let detected = ACPUpstreamReferenceDetector.references(
+        let detected = UpstreamReferenceText.references(
             in: textStorage.string, host: context.host, unclosedRunsExtendToEnd: true
         )
         let full = NSRange(location: 0, length: textStorage.length)

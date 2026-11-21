@@ -228,4 +228,28 @@ struct ACPUpstreamReferenceStoreTests {
         #expect(a === b)
         #expect(a !== c)
     }
+
+    @Test("a peer's store takes its host's repository and answers, running neither git nor a CLI")
+    func peerStore() async throws {
+        let codeHost = RemoteCodeHost(kind: .gitlab, host: "gitlab.com", webURL: URL(string: "https://gitlab.com/group/sub/app")!)
+        let remote = try #require(CodeHostRemote(codeHost: codeHost))
+        #expect(remote.owner == "group/sub")
+        #expect(remote.repository == "app")
+        let missing = CodeHostReference(sigil: .bang, number: 99)
+        let store = ACPUpstreamReferenceStore(
+            worktreeRoot: URL(fileURLWithPath: "/peer/session"),
+            environment: .peer(remote: remote) { reference in
+                reference.number == 12
+                    ? .success(UpstreamReferenceFixtures.summary(.reviewRequest, 12))
+                    : .failure(.notFound(repository: "gitlab.com/group/sub/app"))
+            })
+        store.resolveRemote()
+        #expect(store.hostKind == .gitlab)
+
+        store.ensureLoaded(ref)
+        store.ensureLoaded(missing)
+        await store.waitForPendingLoads()
+        #expect(store.entry(for: ref) == .loaded(UpstreamReferenceFixtures.summary(.reviewRequest, 12)))
+        #expect(store.entry(for: missing) == .failed(.notFound(repository: "gitlab.com/group/sub/app")))
+    }
 }

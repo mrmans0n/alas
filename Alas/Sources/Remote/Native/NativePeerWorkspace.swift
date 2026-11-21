@@ -39,6 +39,8 @@ struct NativePeerWorkspace: Equatable {
         case stashDiff(file: GitStashFile, stash: HostStashRef)
         /// How `path` changed since a checkpoint; served over the host channel only.
         case checkpointDiff(path: String, checkpointID: CheckpointID)
+        /// A skill command's `SKILL.md`, which the session's host reads by command name.
+        case skill(command: String)
 
         /// What a host offers on hunk `index` of `count` of this document: stage
         /// and discard on an unstaged diff, unstage on a staged one. The last
@@ -57,6 +59,7 @@ struct NativePeerWorkspace: Equatable {
             switch self {
             case .diff(let path, _), .commitDiff(let path, _), .file(let path), .checkpointDiff(let path, _): path
             case .stashDiff(let file, _): file.path
+            case .skill(let command): String(command.drop { $0 == "/" }) + "/SKILL.md"
             }
         }
     }
@@ -257,7 +260,7 @@ struct NativePeerWorkspace: Equatable {
             // Whether either side is missing shows once they are read.
             resolution = ImageDiffPairResolver.Result(kind: .modified, oldPath: nil)
             revisions = (.checkpoint(id: id), nil)
-        case .file:
+        case .file, .skill:
             return nil
         }
         return ImageDiffPlan(
@@ -446,14 +449,16 @@ struct NativePeerWorkspace: Equatable {
             }
             documentContent = .failed(Self.describe(reason, message: message))
         case .fileContents(_, let path, let text, let truncated, let version):
-            guard document == .file(path: path) else { return true }
+            // A skill's reply names its command; the file is only shown, never edited.
+            let isSkill = document == .skill(command: path)
+            guard document == .file(path: path) || isSkill else { return true }
             // A known binary shows the card even when it reads as text, as it does locally.
-            if BinaryFileType.isKnownBinary(relativePath: path) {
+            if !isSkill, BinaryFileType.isKnownBinary(relativePath: path) {
                 documentContent = .loaded(.binary(byteSize: truncated ? nil : text.utf8.count, tooLarge: false))
                 documentVersion = nil
             } else {
                 documentContent = .loaded(.text(text, truncated: truncated))
-                documentVersion = version
+                documentVersion = isSkill ? nil : version
             }
         case .fileBytes(_, let path, let data, _):
             guard document == .file(path: path) else { return true }
@@ -461,7 +466,7 @@ struct NativePeerWorkspace: Equatable {
             // A poll's unchanged reply must not redraw the open preview.
             if documentContent != .loaded(.image(data)) { documentContent = .loaded(.image(data)) }
         case .fileUnavailable(_, let path, let reason, let byteSize, let message):
-            guard document == .file(path: path) else { return true }
+            guard document == .file(path: path) || document == .skill(command: path) else { return true }
             documentVersion = nil
             documentContent = Self.unavailableContent(path: path, reason: reason, byteSize: byteSize, message: message)
         default:

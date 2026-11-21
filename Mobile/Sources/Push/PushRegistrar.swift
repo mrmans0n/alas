@@ -47,8 +47,11 @@ final class PushRegistrar {
     func start() {
         guard !Self.relayURL.isEmpty, hub?.hosts.isEmpty == false else { return }
         let center = UNUserNotificationCenter.current()
-        center.setNotificationCategories([
+        let fixed: Set<UNNotificationCategory> = [
             UNNotificationCategory(identifier: "attention", actions: [], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "plan", actions: [
+                UNNotificationAction(identifier: "accept", title: "Accept", options: [.authenticationRequired]),
+            ], intentIdentifiers: []),
             UNNotificationCategory(identifier: "inbox", actions: [
                 UNNotificationAction(identifier: "dismiss", title: "Dismiss", options: []),
             ], intentIdentifiers: []),
@@ -56,8 +59,11 @@ final class PushRegistrar {
                 UNNotificationAction(identifier: "allow", title: "Allow", options: [.authenticationRequired]),
                 UNNotificationAction(identifier: "deny", title: "Deny", options: [.destructive, .authenticationRequired]),
             ], intentIdentifiers: []),
-        ])
+        ]
         Task {
+            // Keeps the question categories the notification extension registered.
+            let questions = await center.notificationCategories().filter { $0.identifier.hasPrefix("question-") }
+            center.setNotificationCategories(fixed.union(questions))
             guard (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) == true else { return }
             UIApplication.shared.registerForRemoteNotifications()
         }

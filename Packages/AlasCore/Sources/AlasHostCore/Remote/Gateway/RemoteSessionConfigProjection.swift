@@ -14,7 +14,8 @@ import AlasSessions
 /// emitter both call it, so the two can never drift.
 @MainActor
 public enum RemoteSessionConfigProjection: Sendable {
-    public static func config(sessionId: String, session: ACPSession) -> RemoteSessionConfig {
+    /// `codeHost` is the session's worktree repository, when it has one.
+    public static func config(sessionId: String, session: ACPSession, codeHost: RemoteCodeHost? = nil) -> RemoteSessionConfig {
         var config = RemoteSessionConfig(
             sessionId: sessionId,
             models: session.availableModels.map { RemoteModelInfo(id: $0.id, name: $0.name) },
@@ -26,13 +27,16 @@ public enum RemoteSessionConfigProjection: Sendable {
         config.chips = chips(session.chipState, configOptions: session.availableConfigOptions)
         config.supportsSteering = session.supportsSteering
         config.availableCommands = session.promptSuggestions.map {
-            RemoteSlashCommand(command: $0.command, description: $0.description, hint: $0.hint)
+            // The skill's path stays here; `readSkill` reads it by command.
+            let skill = $0.presentation.flatMap { $0.isSkill ? RemoteSkillInfo(hasFile: $0.skillPath != nil) : nil }
+            return RemoteSlashCommand(command: $0.command, description: $0.description, hint: $0.hint, skill: skill)
         }
         config.usage = usage(context: session.contextUsage, modelName: session.currentModelDisplayName,
                              lastTurn: session.lastTurnQuota, cumulative: session.sessionQuotaTotal)
         config.supportsQueueReorder = true
         config.supportsMentions = true
         config.agentIssue = agentIssue(session: session)
+        config.codeHost = codeHost
         return config
     }
 

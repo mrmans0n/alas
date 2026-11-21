@@ -51,11 +51,40 @@ struct FileReply {
 @MainActor @Observable
 final class SessionWorkspace {
     private(set) var changes: Load<ChangeListReply> = .idle
+    /// What Branch Changes and Commits compare against; nil follows the Mac's setting. Shared by every workspace.
+    var comparisonMode: ChangesComparisonMode? {
+        get { ChangesComparison.shared.mode }
+        set {
+            guard newValue != ChangesComparison.shared.mode else { return }
+            ChangesComparison.shared.mode = newValue
+            refreshIfComparisonChanged()
+        }
+    }
+    /// The mode the loaded changes were asked with.
+    @ObservationIgnored private var changesMode: ChangesComparisonMode?
+    @ObservationIgnored private var changesFlight = RemoteSingleFlight()
+
+    /// Notes the change list answered; true when a newer refresh was waiting and went out instead.
+    private func changeListLanded() -> Bool {
+        guard changesFlight.landed() else { return false }
+        refreshChanges()
+        return true
+    }
+
+    /// Reloads the changes, and an open working-tree diff, when another workspace changed the mode.
+    func refreshIfComparisonChanged() {
+        if case .idle = changes { return }
+        guard changesMode != comparisonMode else { return }
+        refreshChanges()
+        if let diff, diff.key.sha == nil { requestDiff(diff.key) }
+    }
     private(set) var diff: (key: DiffKey, Load<DiffReply>)?
     /// The commit whose files are open, pushed from the Commits section.
     private(set) var commit: (commit: RemoteCommit, Load<CommitFilesReply>)?
     private(set) var tree = RemoteFileTree()
     private(set) var file: (path: String, Load<FileReply>)?
+    /// The open file is a skill's `SKILL.md`, named by its command.
+    @ObservationIgnored private var fileIsSkill = false
     /// The screen that pushed the open diff or file. The session can be open in several tabs at once;
     /// only that screen's stack shows it.
     private(set) var pushedBy: UUID?
@@ -80,6 +109,8 @@ final class SessionWorkspace {
     private(set) var gitRunning: RemoteGitChange?
     /// Host requests awaiting their answer, by request id.
     @ObservationIgnored private var hostWaiters: [Int: CheckedContinuation<Result<OpaqueHostMessage, RemoteGitFailure>, Never>] = [:]
+    /// Cards waiting on a file's text, by path.
+    @ObservationIgnored private var peekWaiters: [String: [CheckedContinuation<String?, Never>]] = [:]
     /// The session's PR shepherd, once the host's session list said; nil without one.
     private(set) var shepherd: RemoteShepherd?
     /// Ship would publish a stack for this session, which has no shepherd yet.
@@ -145,6 +176,7 @@ final class SessionWorkspace {
 
     /// Asks again for whatever is open; the host forgot everything it was asked while away.
     private func replay() {
+        changesFlight.reset()
         if case .idle = changes {} else { refreshChanges() }
         if let commit { send(.listCommitFiles(sessionId: sessionId, sha: commit.commit.revision)) }
         if let diff { requestDiff(diff.key) }
@@ -153,7 +185,9 @@ final class SessionWorkspace {
         refreshRunScripts()
         if let file {
             self.file = (file.path, .loading)
-            send(.readFile(sessionId: sessionId, path: file.path))
+            // A skill's path is its command, which only `readSkill` reads.
+            send(fileIsSkill ? .readSkill(sessionId: sessionId, command: file.path)
+                : .readFile(sessionId: sessionId, path: file.path))
         }
     }
 
@@ -161,7 +195,9 @@ final class SessionWorkspace {
 
     func refreshChanges() {
         if case .loaded = changes {} else { changes = .loading }
-        send(.listChanges(sessionId: sessionId))
+        guard changesFlight.shouldSend() else { return }
+        changesMode = comparisonMode
+        send(.listChanges(sessionId: sessionId, comparisonMode: comparisonMode))
         refreshPullRequest()
     }
 
@@ -184,7 +220,7 @@ final class SessionWorkspace {
         if let sha = key.sha {
             send(.commitFileDiff(sessionId: sessionId, sha: sha, path: key.path))
         } else {
-            send(.fileDiff(sessionId: sessionId, path: key.path, stage: key.stage))
+            send(.fileDiff(sessionId: sessionId, path: key.path, stage: key.stage, comparisonMode: comparisonMode))
         }
     }
 
@@ -246,11 +282,35 @@ final class SessionWorkspace {
     func openFile(_ path: String, by owner: UUID) {
         pushedBy = owner
         file = (path, .loading)
+        fileIsSkill = false
         send(.readFile(sessionId: sessionId, path: path))
+    }
+
+    /// Opens a skill command's `SKILL.md`, which the host reads by command.
+    func openSkill(_ command: String, by owner: UUID) {
+        pushedBy = owner
+        file = (command, .loading)
+        fileIsSkill = true
+        send(.readSkill(sessionId: sessionId, command: command))
+    }
+
+    /// A file's text without opening it, for a card that shows part of it;
+    /// nil when the host can't read it or doesn't answer within 10 s.
+    func peekFile(_ path: String) async -> String? {
+        guard hub.state(of: hostID) == .online else { return nil }
+        if peekWaiters[path] == nil { send(.readFile(sessionId: sessionId, path: path)) }
+        let timeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled else { return }
+            self?.peekWaiters.removeValue(forKey: path)?.forEach { $0.resume(returning: nil) }
+        }
+        defer { timeout.cancel() }
+        return await withCheckedContinuation { peekWaiters[path, default: []].append($0) }
     }
 
     func closeFile() {
         file = nil
+        fileIsSkill = false
     }
 
     // MARK: Replies
@@ -528,10 +588,12 @@ final class SessionWorkspace {
             }
         case .changeList(let id, let ref, let metrics, let files, let staged, let unstaged, let commits,
                          let truncated, let commitsTruncated, _, _) where id == sessionId:
+            if changeListLanded() { return }
             changes = .loaded(ChangeListReply(
                 comparisonRef: ref, metricsAvailable: metrics, files: files, staged: staged, unstaged: unstaged,
                 commits: commits, truncated: truncated, commitsTruncated: commitsTruncated))
         case .changeListFailed(let id, let reason, let message) where id == sessionId:
+            if changeListLanded() { return }
             changes = .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil))
         case .fileDiffResult(let id, let path, let stage, let hunks, let truncated, let note) where id == sessionId:
             guard diff?.key == DiffKey(path: path, stage: stage) else { return }
@@ -563,13 +625,28 @@ final class SessionWorkspace {
             if let path, tree.children[path] == nil { tree.expanded.remove(path) }
             treeError = RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)
         case .fileContents(let id, let path, let text, let truncated, _) where id == sessionId:
+            peekWaiters.removeValue(forKey: path)?.forEach { $0.resume(returning: text) }
             guard file?.path == path else { return }
             file = (path, .loaded(FileReply(text: text, truncated: truncated)))
         case .fileUnavailable(let id, let path, let reason, let byteSize, let message) where id == sessionId:
+            peekWaiters.removeValue(forKey: path)?.forEach { $0.resume(returning: nil) }
             guard file?.path == path else { return }
             file = (path, .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: byteSize)))
         default:
             break
         }
+    }
+}
+
+/// The phone-wide Compare Against choice.
+@MainActor @Observable
+final class ChangesComparison {
+    static let shared = ChangesComparison()
+    private static let key = "changesComparisonMode"
+
+    var mode: ChangesComparisonMode? = UserDefaults.standard.string(forKey: key).flatMap(ChangesComparisonMode.init(rawValue:))
+        // Manual compares against the Mac's per-worktree pick, which the host doesn't forward; it isn't offered.
+        .flatMap { $0 == .manual ? nil : $0 } {
+        didSet { UserDefaults.standard.set(mode?.rawValue, forKey: Self.key) }
     }
 }

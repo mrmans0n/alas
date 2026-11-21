@@ -40,6 +40,8 @@ targets:
     sources:
       - path: Sources
       - path: ../Alas/Sources/UI/Boids.swift
+      # Shared with the Mac: the GitHub and GitLab marks reference chips draw.
+      - path: ../Alas/Sources/Icons/CodeHostGlyphs.swift
       - path: ../Alas/Sources/Remote/Native/PeerDeviceSession.swift
       - path: ../Alas/Sources/Remote/Native/PeerDevicePlayback.swift
       - path: ../Packages/AlasCore/Sources/AlasHostCore/Remote/Forward/PeerPortForwarder.swift
@@ -113,7 +115,7 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         NSLocalNetworkUsageDescription: Alas connects to your Macs on this network.
-        NSCameraUsageDescription: Scan a pairing code from your Mac.
+        NSCameraUsageDescription: Scan a pairing code from your Mac, and take photos to attach to a prompt.
         UIBackgroundModes:
           - remote-notification
         AlasPushRelayURL: $(ALAS_PUSH_RELAY_URL)
