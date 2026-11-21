@@ -286,6 +286,25 @@ extension VisualAidWebPolicyTests {
         #expect(tips as? [String] == expected)
     }
 
+    /// `@MainActor`: WKWebView needs the main thread.
+    @MainActor
+    @Test("chart ticks stay distinct at any scale", arguments: ["[1e-11,2e-11]", "[0.3,0.7]", "[120000,450000]"])
+    func chartTicksStayDistinct(values: String) async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(),
+            html: #"<alas-chart data='{"labels":["A","B"],"values":\#(values)}'></alas-chart>"#,
+            theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false, presentation: .embedded)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        let rows = try await page.webView.evaluateJavaScript(
+            "[...document.querySelectorAll('alas-chart line.alas-chart-grid')].map(l => l.getAttribute('y1'))",
+            in: nil, contentWorld: .page)
+        let positions = try #require(rows as? [String])
+        #expect(positions.count >= 3)
+        #expect(Set(positions).count == positions.count)
+    }
+
     /// Waits until the page leaves `.loading` and requires that it landed on `.ready`.
     @MainActor
     private func waitUntilReady(_ page: VisualAidWebPage) async throws {
