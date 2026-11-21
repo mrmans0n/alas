@@ -408,6 +408,33 @@ struct ACPElicitationCoordinatorTests {
         try await waitUntil { session.transcript.urlElicitationWaits.isEmpty }
     }
 
+    /// codex-acp 2.9.0 never completes a URL elicitation forwarded from Codex,
+    /// so its wait closes with the prompt it arrived under. Other adapters
+    /// keep it until `elicitation/complete`.
+    @Test("URL waits close with their prompt only for adapters that never complete them", arguments: [
+        ("@alas-ide/codex-acp", "2.9.0-alas.1", true),
+        ("@alas-ide/codex-acp", "2.8.0-alas.3", false),
+        ("@alas-ide/claude-agent-acp", "0.109.1-alas.1", false),
+    ])
+    func urlWaitsCloseWithTheirPrompt(adapter: String, version: String, closes: Bool) async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        session.agentInfo = .init(name: adapter, version: version)
+        coordinator.start()
+        for (id, promptID) in [(70, 7), (71, 8)] {
+            session.activeForegroundPromptID = { promptID }
+            client.emitElicitation(id: .number(id), params: try decodeParams(#"""
+            {"sessionId":"remote","mode":"url","message":"Sign in","elicitationId":"auth-\#(id)","url":"https://example.com/connect"}
+            """#))
+            try await waitUntil { session.transcript.pendingUserInputs.count == 1 }
+            let request = try #require(session.transcript.pendingUserInputs.first)
+            coordinator.respond(to: request.id, action: .submit([:]))
+        }
+
+        coordinator.foregroundPromptEnded(7)
+
+        #expect(session.transcript.urlElicitationWaits.map(\.id) == (closes ? ["auth-71"] : ["auth-70", "auth-71"]))
+    }
+
     @Test("URL mode stays pending when no browser can open the URL")
     func urlModeOpenFailure() async throws {
         var didNavigate = false
