@@ -21,4 +21,12 @@ struct RemoteSessionRecapTests {
         #expect(prompt.hasSuffix("- …\n\nUser: go on"))
         #expect(prompt.utf8.count <= RemoteSessionRecap.defaultByteLimit)
     }
+
+    @Test func aMessageLongerThanTheBudgetKeepsItsStart() throws {
+        let long = String(repeating: "कि", count: 1_500)
+        let rows: [RemoteTranscriptRow] = [.agent("earlier"), .user(long, checkpointID: nil)]
+        let prompt = try #require(RemoteSessionRecap.prompt(rows: rows, goal: nil))
+        #expect(prompt.hasPrefix("(Earlier messages omitted.)\n\nUser: कि"))
+        #expect(prompt.utf8.count <= RemoteSessionRecap.defaultByteLimit)
+    }
 }

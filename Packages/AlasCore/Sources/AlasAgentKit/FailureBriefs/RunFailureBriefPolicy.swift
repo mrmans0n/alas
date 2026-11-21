@@ -1,4 +1,5 @@
 import Foundation
+import AlasRemoteKit
 import AlasFoundation
 import AlasModel
 import AlasPlatform

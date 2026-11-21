@@ -1,6 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
 
 public enum LocalTextSafety: Sendable {
     public static func containsCredential(_ text: String) -> Bool {

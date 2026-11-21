@@ -1,4 +1,5 @@
 import Foundation
+import AlasRemoteKit
 
 /// The selected conflict hunk plus the deterministic file metadata the local
 /// model may see. Nothing else from the file or repository is sent.

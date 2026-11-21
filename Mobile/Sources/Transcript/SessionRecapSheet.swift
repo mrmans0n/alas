@@ -56,7 +56,8 @@ enum SessionRecapModel {
         let session = LanguageModelSession(instructions: RemoteSessionRecap.instructions)
         let options = GenerationOptions(temperature: 0, maximumResponseTokens: 600)
         guard let recap = try? await session.respond(to: prompt, generating: Recap.self, options: options).content,
-              recap.goal != nil || !recap.completed.isEmpty || !recap.blockers.isEmpty || recap.nextAction != nil
+              RemoteSessionRecap.permits(goal: recap.goal, completed: recap.completed,
+                                         blockers: recap.blockers, nextAction: recap.nextAction)
         else { return nil }
         return recap
     }
