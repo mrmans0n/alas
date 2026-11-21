@@ -263,12 +263,22 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
             in: nil, in: Self.bridgeWorld, completionHandler: nil)
     }
 
-    /// The page as drawn now, with the theme it is drawn in, or nil unless it is loaded and on screen:
-    /// WebKit cannot snapshot a page outside a window.
-    func snapshot() async -> (image: NSImage, theme: Theme)? {
+    /// The page as drawn now, with the theme it is drawn in, or nil unless it is loaded and on screen
+    /// (WebKit cannot snapshot a page outside a window) and WebKit answers within `timeout`. The page is
+    /// already outside the live-page budget while this runs, so a slow capture is abandoned, not awaited.
+    func snapshot(timeout: Duration = .milliseconds(500)) async -> (image: NSImage, theme: Theme)? {
         guard !isClosed, status == .ready, webView.window != nil, !webView.bounds.isEmpty else { return nil }
         let theme = theme
-        guard let image = try? await webView.takeSnapshot(configuration: nil), self.theme == theme else { return nil }
+        let webView = webView
+        let image: NSImage? = await withCheckedContinuation { continuation in
+            let once = VisualAidResumeOnce(continuation)
+            webView.takeSnapshot(with: nil) { image, _ in once.resume(image) }
+            Task { @MainActor in
+                try? await Task.sleep(for: timeout)
+                once.resume(nil)
+            }
+        }
+        guard let image, self.theme == theme else { return nil }
         return (image, theme)
     }
 
@@ -620,6 +630,21 @@ struct VisualAidScrollRouting: Equatable {
     }
 }
 
+/// Resumes a continuation with the first answer only: the snapshot or its timeout, whichever comes first.
+@MainActor
+private final class VisualAidResumeOnce {
+    private var continuation: CheckedContinuation<NSImage?, Never>?
+
+    init(_ continuation: CheckedContinuation<NSImage?, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ image: NSImage?) {
+        continuation?.resume(returning: image)
+        continuation = nil
+    }
+}
+
 /// What a visual looked like when its page last closed: its height, and an image when the page budget
 /// evicted it while on screen. Shown in place of a paused page, and used to size a page that reopens.
 @MainActor
@@ -634,6 +659,21 @@ final class VisualAidSnapshotStore {
     }
 
     private let cache = NSCache<NSUUID, Box>()
+    /// An evicted page stays live while its picture is taken, outside the page budget, so only this many
+    /// captures run at once; other evictions close their page straight away and keep just its height.
+    static let maxPendingCaptures = 1
+    private var pendingCaptures = 0
+
+    /// Claims a capture slot, or false when `maxPendingCaptures` are already running.
+    func beginCapture() -> Bool {
+        guard pendingCaptures < Self.maxPendingCaptures else { return false }
+        pendingCaptures += 1
+        return true
+    }
+
+    func endCapture() {
+        pendingCaptures = max(0, pendingCaptures - 1)
+    }
 
     private final class Box {
         let entry: Entry

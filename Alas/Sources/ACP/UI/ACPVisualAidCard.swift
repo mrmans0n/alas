@@ -368,11 +368,17 @@ struct ACPVisualAidCard: View {
         let visualID = visual.id
         let usesSnapshots = usesSnapshots
         VisualAidPageBudget.shared.admit(slot) {
-            // The budget has already let this slot go; the picture is taken before the page closes, and
-            // only if a later open or close has not replaced the page meanwhile.
+            // The budget has already let this slot go, so the page stays live only for a bounded capture:
+            // one at a time, abandoned after `snapshot`'s timeout. It is unset only if a later open or
+            // close has not replaced it meanwhile.
             Task { @MainActor in
                 if usesSnapshots {
-                    let captured = await page.snapshot()
+                    let store = VisualAidSnapshotStore.shared
+                    var captured: (image: NSImage, theme: Theme)?
+                    if store.beginCapture() {
+                        captured = await page.snapshot()
+                        store.endCapture()
+                    }
                     savedHeightBinding.wrappedValue = VisualAidSnapshotStore.shared.record(
                         visualID, height: page.contentHeight, image: captured?.image, theme: captured?.theme ?? page.theme
                     ).height
