@@ -32,6 +32,8 @@ struct TranscriptItem: Identifiable, Equatable {
     enum Kind: Equatable {
         case message
         case groupHeader(ACPTranscriptToolCallGroup, ACPToolCallGroupSummary, expanded: Bool, hiddenCount: Int)
+        /// The files a finished turn changed, under its answer.
+        case turnChanges(ACPTurnChanges)
     }
 
     let id: String
@@ -1085,14 +1087,19 @@ final class TranscriptSession {
         let rows = RemoteTranscriptFold.renderRows(
             messages: messages, items: foldItems, isTurnActive: isTurnActive,
             isExpanded: { [seeds] in seeds.isExpanded($0) }, memberLimit: { [seeds] in seeds.memberLimit($0) })
-        return rows.map { row in
+        return rows.flatMap { row -> [TranscriptItem] in
             switch row {
             case .message(let visible):
-                return base[visible.index]
+                let answer = base[visible.index]
+                guard let changes = ACPTurnChanges.forAnswer(
+                    at: visible.index, count: base.count, isTurnActive: isTurnActive,
+                    item: { [worktreeRoot] in Self.turnChangesItem(base[$0].row, worktreeRoot: worktreeRoot) })
+                else { return [answer] }
+                return [answer, TranscriptItem(header: .turnChanges(changes), id: "turn-changes:" + answer.id, first: answer)]
             case .toolCallGroupMember(let visible, _):
                 var member = base[visible.index]
                 member.isGroupMember = true
-                return member
+                return [member]
             case .toolCallGroup(let group), .toolCallGroupHeader(let group):
                 let members = group.members.map(\.stableId)
                 // Keeps a collapse or expand sticking while the run grows past what the user touched.
@@ -1103,9 +1110,19 @@ final class TranscriptSession {
                     kind: group.kind, isLive: group.isLive)
                 let expanded = if case .toolCallGroupHeader = row { true } else { false }
                 let hidden = expanded ? members.count - (seeds.memberLimit(group) ?? members.count) : 0
-                return TranscriptItem(header: .groupHeader(group, summary, expanded: expanded, hiddenCount: max(0, hidden)),
-                                      id: group.id, first: base[group.members[0].index])
+                return [TranscriptItem(header: .groupHeader(group, summary, expanded: expanded, hiddenCount: max(0, hidden)),
+                                       id: group.id, first: base[group.members[0].index])]
             }
+        }
+    }
+
+    private static func turnChangesItem(_ row: RemoteTranscriptRow, worktreeRoot: String?) -> ACPTurnChanges.Item {
+        switch row {
+        case .user: .user
+        case .agent: .agent
+        case .fileEdit(let edit): .fileEdit(.init(path: edit.path, added: edit.added, removed: edit.removed))
+        case .toolCall(let call): .toolCallEdits(ACPTurnChanges.written(by: call, worktreeRoot: worktreeRoot))
+        default: .other
         }
     }
 

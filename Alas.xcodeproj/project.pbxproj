@@ -730,6 +730,7 @@
 		59F39BAAD57023F090AEDA4F /* ACPImageStagingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A53358B7D4D68BE2471187D4 /* ACPImageStagingTests.swift */; };
 		5A0AE37CBA893BD09558C27E /* CIStatusStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8FAF07CCA81D986D1C30D05 /* CIStatusStrip.swift */; };
 		5A4E0AC26E28649FA00EE021 /* PluginFilesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4108290CAD16F9F1641A811 /* PluginFilesTests.swift */; };
+		5A79447DB28D0E2A68CB9DD2 /* ACPTurnChangesCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F90168572AA0BB5F8A23F48 /* ACPTurnChangesCard.swift */; };
 		5AB9EAF70AD5BC4168F50879 /* AppStateRunScheduleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 557D2AF77FB6A2FD7D662B20 /* AppStateRunScheduleTests.swift */; };
 		5ABD7DF29A68C38C8AA9EF37 /* MermaidRenderServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A107DA120039DD59C4F5CDD7 /* MermaidRenderServiceTests.swift */; };
 		5B02C8E213F6EA67BEB7E5BA /* ContentResultGroupViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97134381F91B44B46CAFE082 /* ContentResultGroupViewTests.swift */; };
@@ -2316,6 +2317,7 @@
 		1F46BB1AD2465E4DF056BD0E /* ACPSessionSummaryControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionSummaryControl.swift; sourceTree = "<group>"; };
 		1F54350E39EE34A0DEE7D481 /* RepoIconDisplayCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoIconDisplayCacheTests.swift; sourceTree = "<group>"; };
 		1F72D6E7296DF0ACA2C60BB4 /* WorkspaceLifecycleConfirmationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceLifecycleConfirmationTests.swift; sourceTree = "<group>"; };
+		1F90168572AA0BB5F8A23F48 /* ACPTurnChangesCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTurnChangesCard.swift; sourceTree = "<group>"; };
 		1F9B399B5355B20890D8E42C /* ACPAdapterUpdateBannerDeciderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAdapterUpdateBannerDeciderTests.swift; sourceTree = "<group>"; };
 		1FC5031E38C627E06C042E28 /* WorktreeUpstreamStatusStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeUpstreamStatusStore.swift; sourceTree = "<group>"; };
 		1FDD958CF56AA9AD319F6C6C /* AlasCLICommandRouterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasCLICommandRouterTests.swift; sourceTree = "<group>"; };
@@ -6081,6 +6083,7 @@
 				29668048169CB4846527D8B0 /* ACPTranscriptRenderCaches.swift */,
 				2FACC9A36AFADFB92DC240BD /* ACPTranscriptRowContent.swift */,
 				46D97A89C40731455D9EC2DA /* ACPTranscriptVisibleRow.swift */,
+				1F90168572AA0BB5F8A23F48 /* ACPTurnChangesCard.swift */,
 				B9E5B10C3760424D35418FD1 /* ACPUpstreamReferenceChip.swift */,
 				791A44F599AD12B254F9E2A6 /* ACPUpstreamReferenceHover.swift */,
 				6BA8F3F4BD11E6332C186EF8 /* ACPUpstreamReferenceTranscript.swift */,
@@ -7936,6 +7939,7 @@
 				39D5D6A30C7232D090066A89 /* ACPTranscriptScrollerView.swift in Sources */,
 				FD9F0F14E4EA5ACF408211A7 /* ACPTranscriptTilingController.swift in Sources */,
 				2472561EEB7160C90085B4C3 /* ACPTranscriptVisibleRow.swift in Sources */,
+				5A79447DB28D0E2A68CB9DD2 /* ACPTurnChangesCard.swift in Sources */,
 				B8804E262291D5C509C8C5B6 /* ACPUpstreamReferenceChip.swift in Sources */,
 				DD20128CD6A7F60EAAE66EBE /* ACPUpstreamReferenceHover.swift in Sources */,
 				B8EFDE5EBDB544C964806CCB /* ACPUpstreamReferenceTranscript.swift in Sources */,

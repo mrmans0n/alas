@@ -686,6 +686,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                    case .failureIncident = messages[row.index] {
                     specs[specs.count - 1].parksWhenReleased = false
                 }
+                // A finished turn's file changes follow its answer.
+                if case .message(let row) = renderRow,
+                   let changes = Self.turnChanges(
+                       answerIndex: row.index, messages: messages, isTurnActive: isTurnActive,
+                       worktreeRoot: host.trustedImageRoot?.path) {
+                    specs.append(Self.turnChangesSpec(host: host, answer: row, changes: changes))
+                }
                 // Fork divider follows its boundary row, as in the legacy list.
                 // Grouping breaks a run at that boundary (`groupingOptions`), so
                 // a bundle can end exactly there but never straddle it.
@@ -1310,6 +1317,37 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let fork: ACPSessionForkRecord
             let sourceAgentDisplayName: String
             let boundaryText: String?
+        }
+
+        static func turnChanges(
+            answerIndex: Int, messages: [ACPMessage], isTurnActive: Bool, worktreeRoot: String?
+        ) -> ACPTurnChanges? {
+            guard messages.indices.contains(answerIndex), case .agent = messages[answerIndex] else { return nil }
+            return ACPTurnChanges.forAnswer(at: answerIndex, count: messages.count, isTurnActive: isTurnActive) { index in
+                switch messages[index] {
+                case .user: .user
+                case .agent: .agent
+                case .fileEdit(_, let edit): .fileEdit(.init(path: edit.path, added: edit.added, removed: edit.removed))
+                case .toolCall(let call): .toolCallEdits(ACPTurnChanges.written(by: call, worktreeRoot: worktreeRoot))
+                default: .other
+                }
+            }
+        }
+
+        static func turnChangesSpec(
+            host: ACPTranscriptScroller,
+            answer: ACPTranscriptVisibleRow,
+            changes: ACPTurnChanges
+        ) -> ACPTranscriptRowSpec {
+            ACPTranscriptRowSpec(
+                id: "__turn_changes__" + answer.stableId,
+                equalityToken: token(changes, host: host),
+                build: {
+                    wrapRow(host: host) {
+                        ACPTurnChangesCard(changes: changes, onOpenDiff: host.onOpenDiff)
+                    }
+                }
+            )
         }
 
         /// Verbatim port of the fork divider inserted right after the fork

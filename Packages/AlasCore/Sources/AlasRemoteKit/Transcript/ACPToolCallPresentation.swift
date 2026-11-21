@@ -287,7 +287,7 @@ extension ACPToolCallPresentation {
         return content != diffs.map(\.flattenedText).joined(separator: "\n")
     }
 
-    private static func displayPath(_ path: String, worktreeRoot: String?) -> String {
+    static func displayPath(_ path: String, worktreeRoot: String?) -> String {
         guard let worktreeRoot else { return path }
         var root = worktreeRoot
         while root.count > 1, root.hasSuffix("/") { root.removeLast() }

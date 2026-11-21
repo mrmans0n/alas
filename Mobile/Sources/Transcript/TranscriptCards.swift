@@ -144,6 +144,52 @@ extension EnvironmentValues {
     @Entry var openSessionChanges: (() -> Void)? = nil
 }
 
+/// The files a finished turn changed, under its answer, as on the Mac.
+struct TurnChangesCard: View {
+    let changes: ACPTurnChanges
+    @Environment(\.openSessionChanges) private var openSessionChanges
+    @State private var showsAll = false
+
+    /// More files than this fold behind a "Show more" button.
+    static let collapsedFileCount = 5
+
+    var body: some View {
+        let files = showsAll ? changes.files[...] : changes.files.prefix(Self.collapsedFileCount)
+        let hidden = changes.files.count - files.count
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label(changes.files.count == 1 ? "1 file changed" : "\(changes.files.count) files changed",
+                      systemImage: "doc.on.doc")
+                    .font(.subheadline.weight(.semibold))
+                Spacer(minLength: 0)
+                counts(added: changes.added, removed: changes.removed)
+            }
+            ForEach(files, id: \.path) { file in
+                HStack(spacing: 8) {
+                    Text(file.path).font(.caption.monospaced()).lineLimit(1).truncationMode(.head)
+                    Spacer(minLength: 0)
+                    counts(added: file.added, removed: file.removed)
+                }
+            }
+            if hidden > 0 {
+                Button("Show \(hidden) more") { showsAll = true }.font(.footnote)
+            }
+            if let openSessionChanges {
+                Button("Review changes", action: openSessionChanges).font(.footnote)
+            }
+        }
+        .card()
+    }
+
+    private func counts(added: Int, removed: Int) -> some View {
+        HStack(spacing: 4) {
+            Text("+\(added)").foregroundStyle(.green)
+            Text("\u{2212}\(removed)").foregroundStyle(.red)
+        }
+        .font(.caption.monospacedDigit())
+    }
+}
+
 /// The phone's `PromptCardRow`: origin, title, facts and sections. A `.url` action goes to the system and
 /// `.reviewChanges` opens the session's Changes tab. A turn Alas sent also discloses its exact instruction.
 struct OutcomeCard: View {
