@@ -937,3 +937,7 @@ jobs:
       - name: Test remote web transcript markdown
         if: ${{ !cancelled() }}
         run: bash scripts/tests/remote-web-transcript-markdown/run.sh
+
+      - name: Test remote web turn changes
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/remote-web-turn-changes/run.sh
