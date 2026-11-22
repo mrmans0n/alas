@@ -51,13 +51,21 @@ extension AlasCoreContext {
     @_spi(Testing) public func remoteSessionRoot(sessionId: String) -> RemoteSessionRoot? {
         for mgr in sessionManagers.values
         where mgr.liveSession(for: sessionId) != nil || mgr.sessionRows.contains(where: { $0.id == sessionId }) {
-            if case .workspaceCheckout = mgr.owner {
-                return .checkout(root: URL(fileURLWithPath: mgr.worktreePath), attachmentsKey: mgr.worktreeId)
+            if case .workspaceCheckout(_, let location) = mgr.owner {
+                return .checkout(root: Self.checkoutSessionRoot(mgr.worktreePath, at: location), attachmentsKey: mgr.worktreeId)
             }
             guard case .found(let worktree) = remoteWorktreeContext(sessionId: sessionId) else { return nil }
             return .worktree(worktree)
         }
         return nil
+    }
+
+    /// A checkout session's root as Alas addresses it: a checkout on an SSH
+    /// host keeps its real remote path, so it becomes that host's virtual
+    /// path, which mention lookups and image reads send over SSH.
+    @_spi(Testing) public nonisolated static func checkoutSessionRoot(_ path: String, at location: ExecutionLocation) -> URL {
+        guard let host = location.sshHost, RemotePath.isValidHost(host) else { return URL(fileURLWithPath: path) }
+        return URL(fileURLWithPath: RemotePath.virtualizing(path, like: RemotePath.virtual(host: host, realPath: "/")))
     }
 
     /// Outcome of reading a worktree-relative file's raw bytes from a
