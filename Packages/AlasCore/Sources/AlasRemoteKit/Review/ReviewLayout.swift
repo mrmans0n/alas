@@ -66,7 +66,8 @@ public enum ReviewLayout {
             return [.note(entry: id, text: text)] + comments.map { .comment(entry: id, id: $0.id) }
         case let .hunks(hunks, truncated):
             if hunks.isEmpty {
-                return [.note(entry: id, text: "No changes to show")] + comments.map { .comment(entry: id, id: $0.id) }
+                let text = truncated ? "Diff truncated on the Mac" : "No changes to show"
+                return [.note(entry: id, text: text)] + comments.map { .comment(entry: id, id: $0.id) }
             }
             // Comment ids by the base row they follow; `comments` indexes the comment-free rows.
             var after: [Int: [String]] = [:]

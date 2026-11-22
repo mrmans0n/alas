@@ -164,4 +164,45 @@ struct ReviewLayoutTests {
         let binary = ReviewLayout.rows(for: Self.entry(.note("Binary file")), folded: false, comments: Array(placed.prefix(2)))
         #expect(binary == [.note(entry: id, text: "Binary file"), .comment(entry: id, id: "y"), .comment(entry: id, id: "x")])
     }
+
+    @Test func pullRequestDiffSplitsIntoEntries() {
+        let raw = """
+        diff --git a/a.swift b/a.swift
+        index 1..2 100644
+        --- a/a.swift
+        +++ b/a.swift
+        @@ -1,2 +1,2 @@
+         keep
+        -old
+        +new
+        diff --git a/old.txt b/new.txt
+        similarity index 100%
+        rename from old.txt
+        rename to new.txt
+        diff --git a/run.sh b/run.sh
+        old mode 100644
+        new mode 100755
+        diff --git a/img.png b/img.png
+        index 1..2 100644
+        Binary files a/img.png and b/img.png differ
+
+        """
+        let entries = PullRequestDiff.entries(raw: raw, namespace: "github-pr")
+        #expect(entries.map(\.id) == ["a.swift", "new.txt", "run.sh", "img.png"].map { ReviewEntryID(namespace: "github-pr", path: $0) })
+        #expect(entries.map(\.status) == ["M", "R", "M", "M"])
+        #expect(entries[1].renameFrom == "old.txt")
+        #expect(entries[0].add == 1 && entries[0].del == 1)
+        guard case let .hunks(hunks, truncated) = entries[0].content else { Issue.record("expected hunks")
+        return }
+        #expect(!truncated && hunks.count == 1)
+        #expect(hunks[0].lines.map(\.kind) == ["context", "delete", "add"])
+        #expect(hunks[0].lines.map(\.newNumber) == [1, nil, 2])
+        #expect(entries[1].content == .note("Renamed from old.txt to new.txt — no content changes."))
+        #expect(entries[2].content == .note("File mode changed from 100644 to 100755 — no content changes."))
+        #expect(entries[3].content == .note("Binary file"))
+        // Only a cut inside the last section's lines marks it: a trailing binary file leaves the rest whole.
+        #expect(PullRequestDiff.entries(raw: raw, namespace: "github-pr", truncated: true) == entries)
+        let cut = PullRequestDiff.entries(raw: raw.components(separatedBy: "diff --git a/old.txt")[0], namespace: "github-pr", truncated: true)
+        #expect(cut.map(\.content) == [.hunks(hunks, truncated: true)])
+    }
 }

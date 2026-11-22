@@ -93,6 +93,7 @@
 		E4947A2F3BC9605489AF746D /* cool-slate.json in Resources */ = {isa = PBXBuildFile; fileRef = 9F0B4947542B7AB2F010C5B2 /* cool-slate.json */; };
 		E55F6FE33979517F56313A84 /* ComposerBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57A94D2BB531632B6E5027AE /* ComposerBar.swift */; };
 		E77139BEB6A5145597C12214 /* HostHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */; };
+		E7D937BB47812A25E14C827F /* SubmitReviewSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59C6924F7C944114DB8C4FC0 /* SubmitReviewSheet.swift */; };
 		E933EBF392AE336776C2B2A9 /* BranchNameField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D428F50776808D0D66B1899 /* BranchNameField.swift */; };
 		EBF6C7E7768E637D9F235BB0 /* AlasRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = 3517313AC46E852EA7AE203C /* AlasRemoteKit */; };
 		EC970213412064871D907E2A /* LazyStackTranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */; };
@@ -168,6 +169,7 @@
 		5675178FB5741806BEB65930 /* InboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxView.swift; sourceTree = "<group>"; };
 		57A94D2BB531632B6E5027AE /* ComposerBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerBar.swift; sourceTree = "<group>"; };
 		57CF74CBCBAC2A5734FA01CA /* UsageRing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageRing.swift; sourceTree = "<group>"; };
+		59C6924F7C944114DB8C4FC0 /* SubmitReviewSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubmitReviewSheet.swift; sourceTree = "<group>"; };
 		5B1633AE6084EE45BCB8106F /* ElicitationFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElicitationFormView.swift; sourceTree = "<group>"; };
 		61BA32ECEBF540DADC9AC4A3 /* AlasMobile-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Debug.xcconfig"; sourceTree = "<group>"; };
 		62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostHub.swift; sourceTree = "<group>"; };
@@ -359,6 +361,7 @@
 				6708A42CEA3C6DE2D326B3D9 /* ReviewDocument.swift */,
 				A60DEED2729FB7C7A095127F /* ReviewPreferences.swift */,
 				342BF7CEB0DE2DF0F9156001 /* ReviewScreen.swift */,
+				59C6924F7C944114DB8C4FC0 /* SubmitReviewSheet.swift */,
 			);
 			path = Review;
 			sourceTree = "<group>";
@@ -778,6 +781,7 @@
 				C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */,
 				FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */,
 				144D4D88D96917B1FFFBEC15 /* SubagentCard.swift in Sources */,
+				E7D937BB47812A25E14C827F /* SubmitReviewSheet.swift in Sources */,
 				B77BD7D2A4E99D5E46F61EA2 /* TCP+Network.swift in Sources */,
 				A71335B1FFB31FD930FB376F /* TCP.swift in Sources */,
 				56AB129852CC6503F3A8D52F /* TerminalConsole.swift in Sources */,

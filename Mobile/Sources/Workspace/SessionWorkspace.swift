@@ -471,11 +471,12 @@ final class SessionWorkspace {
             || hub.supports(HostProtocolCapability.reviewsProviderV1, on: hostID))
     }
 
-    /// Review `sessionID`'s pull or merge request threads, fetched from its provider by the host.
-    func pullRequestThreads(_ sessionID: String) async -> Result<RemoteProviderReview, RemoteGitFailure> {
+    /// Review `sessionID`'s pull or merge request threads, fetched from its provider by the host; its raw diff too when `withDiff`.
+    func pullRequestReview(_ sessionID: String, withDiff: Bool) async -> Result<RemoteProviderReview, RemoteGitFailure> {
         guard let target = gitTarget else { return .failure(RemoteGitFailure("This pull request can't be read from here.")) }
         return await hostReply {
-            RemoteReviewRequest.readProvider(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID)
+            RemoteReviewRequest.readProvider(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID,
+                                             withDiff: withDiff)
         }
         .mapError { RemoteGitFailure(RemoteReviewRequest.providerFailureMessage($0.message)) }
         .flatMap { Self.readable(RemoteReviewRequest.providerReview(in: $0)) }
@@ -520,9 +521,10 @@ final class SessionWorkspace {
 
     /// Comments on `entry` in review `sessionID`, filed under its stage as the Mac's Review workspace files it.
     /// Returns the host's refusal, or nil.
-    func comment(in sessionID: String, entry: ReviewEntryID, anchor: RemoteReviewAnchor, body: String) async -> String? {
+    /// `originalPath`: a renamed file's old path, which a merge request comment needs to publish.
+    func comment(in sessionID: String, entry: ReviewEntryID, originalPath: String?, anchor: RemoteReviewAnchor, body: String) async -> String? {
         await changeReview(sessionID, .add(fileID: RemoteReviewFileID(namespace: entry.namespace, path: entry.path),
-                                           path: entry.path, anchor: anchor, body: body))
+                                           path: entry.path, originalPath: originalPath, anchor: anchor, body: body))
     }
 
     /// The worktree's local-changes review, where the Mac's Review workspace files working-tree comments.

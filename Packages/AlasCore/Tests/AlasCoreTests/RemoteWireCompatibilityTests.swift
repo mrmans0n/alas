@@ -146,8 +146,8 @@ import Testing
         #expect(try decode(RemoteReviewRequest.list(id: 1, projectID: "p", path: "/r")) == .listReviews(worktree: ref))
         #expect(try decode(RemoteReviewRequest.read(id: 1, projectID: "p", path: "/r", sessionID: "s")) == .readReview(worktree: ref, sessionID: "s"))
         let mutations: [(RemoteReviewMutation, HostReviewMutation)] = [
-            (.add(fileID: fileID, path: "a.swift", anchor: .line(side: "new", startLine: 3, endLine: 5), body: "Why?"),
-             .add(fileID: macFileID, path: "a.swift", originalPath: nil,
+            (.add(fileID: fileID, path: "a.swift", originalPath: "old.swift", anchor: .line(side: "new", startLine: 3, endLine: 5), body: "Why?"),
+             .add(fileID: macFileID, path: "a.swift", originalPath: "old.swift",
                   anchor: .line(side: .new, startLine: 3, endLine: 5, selectedText: nil), body: "Why?")),
             (.add(fileID: fileID, path: "a.swift", anchor: .file, body: "Split"),
              .add(fileID: macFileID, path: "a.swift", originalPath: nil, anchor: .file, body: "Split")),
@@ -190,6 +190,8 @@ import Testing
         let decode = { (m: OpaqueHostMessage) in try JSONDecoder().decode(HostClientMessage.self, from: m.json).request }
         #expect(try decode(RemoteReviewRequest.readProvider(id: 1, projectID: "p", path: "/r", sessionID: "s"))
             == .readProviderReview(worktree: ref, sessionID: "s", withDiff: false))
+        #expect(try decode(RemoteReviewRequest.readProvider(id: 1, projectID: "p", path: "/r", sessionID: "s", withDiff: true))
+            == .readProviderReview(worktree: ref, sessionID: "s", withDiff: true))
         #expect(try decode(RemoteReviewRequest.mutateThread(id: 1, projectID: "p", path: "/r", sessionID: "s", threadID: "t", .reply, body: "Done"))
             == .mutateReviewThread(worktree: ref, sessionID: "s", threadID: "t", kind: .reply, body: "Done"))
         #expect(try decode(RemoteReviewRequest.mutateThread(id: 1, projectID: "p", path: "/r", sessionID: "s", threadID: "t", .unresolve))
@@ -198,17 +200,27 @@ import Testing
             == .publishReview(worktree: ref, sessionID: "s",
                               publish: HostReviewPublish(decision: .requestChanges, body: "Fix it", draftIDs: nil, headSHA: "abc")))
 
-        let thread = ShepherdFixtures.thread("t1")
+        let base = ShepherdFixtures.thread("t1")
+        // GitLab's removed line: only the old side's numbers.
+        let thread = ReviewThread(
+            id: base.id, path: base.path, line: nil, startLine: nil, originalLine: 12, originalStartLine: 10, diffHunk: nil, diffSide: "LEFT",
+            isResolved: false, isOutdated: false, isFileLevel: false, comments: base.comments,
+            viewerCanResolve: true, viewerCanReply: true, url: base.url
+        )
+        let request = ShepherdFixtures.request(threads: [thread], threadsComplete: false)
         let review = HostProviderReview(
-            remote: ShepherdFixtures.remote(), request: ShepherdFixtures.request(threads: [thread], threadsComplete: false),
-            capabilities: .githubCLI, account: "me", diff: nil, diffTruncated: false
+            remote: ShepherdFixtures.remote(), request: request,
+            capabilities: .githubCLI, account: "me", diff: "diff --git a/x b/x\n", diffTruncated: true
         )
         let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 2, result: .providerReview(review: review))))
         let read = try #require(RemoteReviewRequest.providerReview(replying: 2, in: reply))
         #expect(read.account == "me" && read.canReply && read.canResolve && !read.areThreadsComplete)
         #expect(read.canComment && read.canSubmitReview && read.headSHA == ShepherdFixtures.head && read.displayName == "pull request #7")
         let phoneThread = try #require(read.threads.first)
-        #expect(phoneThread.id == "t1" && phoneThread.path == thread.path && phoneThread.line == 12 && !phoneThread.isResolved)
+        #expect(phoneThread.id == "t1" && phoneThread.path == thread.path && phoneThread.line == nil && !phoneThread.isResolved)
+        #expect(read.diff == "diff --git a/x b/x\n" && read.diffTruncated && read.baseSHA == request.baseSHA)
+        #expect(phoneThread.side == "LEFT" && phoneThread.originalLine == 12 && phoneThread.originalStartLine == 10)
+        #expect(phoneThread.anchor == .line(side: "old", startLine: 10, endLine: 12))
         #expect(phoneThread.comments.map(\.author) == ["maintainer"] && phoneThread.comments.map(\.body) == ["Please fix t1."])
 
         let published = ProviderReviewPublishResult(

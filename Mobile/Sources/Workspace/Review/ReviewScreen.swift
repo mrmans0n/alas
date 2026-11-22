@@ -16,6 +16,9 @@ struct ReviewScreen: View {
         case .localChanges: "Local Changes"
         case .branchChanges: "Branch Changes"
         case .commit(let sha): String(sha.prefix(7))
+        case .pullRequest:
+            // "pull request #12" as "Pull request #12".
+            document.pullRequest.map { $0.displayName.prefix(1).uppercased() + $0.displayName.dropFirst() } ?? "Pull Request"
         }
     }
 
@@ -68,7 +71,23 @@ struct ReviewScreen: View {
             CommentSheet(title: "Edit Comment", text: comment.body) { body in
                 Task { await document.change(.edit(commentID: comment.id, body: body)) }
             }
+        case .reply(let thread):
+            CommentSheet(title: "Reply", text: "",
+                         confirmation: "It's posted on the pull request, as \(document.pullRequest?.poster ?? "").") { body in
+                Task { await document.changeThread(thread, .reply, body: body) }
+            }
+        case .submit:
+            if let pullRequest = document.pullRequest {
+                SubmitReviewSheet(review: pullRequest, drafts: document.comments, poster: pullRequest.poster) { decision, body in
+                    await document.submit(decision, body: body)
+                }
+            }
         }
+    }
+
+    private var truncationNote: String {
+        if case .pullRequest = document.source { return "This pull request's diff is too big for the phone; some files are missing." }
+        return "Showing the first \(document.entries.count) files; the Mac capped this change."
     }
 
     @ViewBuilder private var content: some View {
@@ -82,6 +101,9 @@ struct ReviewScreen: View {
             }
         } else if !document.listLoaded {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if document.entries.isEmpty, document.listTruncated {
+            // The host's cap cut even the first file.
+            ContentUnavailableView(truncationNote, systemImage: "exclamationmark.triangle")
         } else if document.entries.isEmpty {
             ContentUnavailableView("No changes to review.", systemImage: "checkmark.circle")
         } else {
@@ -90,7 +112,7 @@ struct ReviewScreen: View {
                     VStack(spacing: 0) {
                         FileStrip(document: document)
                         if document.listTruncated {
-                            Text("Showing the first \(document.entries.count) files; the Mac capped this change.")
+                            Text(truncationNote)
                                 .font(.footnote).foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity).padding(.vertical, 4)
                                 .background(.bar)
@@ -143,17 +165,31 @@ private struct FileStrip: View {
     }
 }
 
-/// How far through the change the reviewer is.
+/// How far through the change the reviewer is, its drafts, and for a pull request **Submit…**.
 private struct ActionBar: View {
     let document: ReviewDocument
 
     var body: some View {
-        let viewed = document.entries.filter(document.isViewed).count
-        Text("\(viewed) of \(document.entries.count) files viewed")
-            .font(.footnote.monospacedDigit())
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .glassEffect(.regular, in: Capsule())
-            .padding(.bottom, 4)
+        HStack(spacing: 12) {
+            Text(summary)
+                .font(.footnote.monospacedDigit())
+                .foregroundStyle(.secondary)
+            if document.pullRequest != nil {
+                Button("Submit…") { document.composing = .submit }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(!document.canSubmit)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .glassEffect(.regular, in: Capsule())
+        .padding(.bottom, 4)
+    }
+
+    private var summary: String {
+        let viewed = "\(document.entries.filter(document.isViewed).count) of \(document.entries.count) files viewed"
+        guard document.reviewSessionID != nil else { return viewed }
+        let drafts = document.draftCount
+        return viewed + " · " + (drafts == 1 ? "1 draft" : "\(drafts) drafts")
     }
 }

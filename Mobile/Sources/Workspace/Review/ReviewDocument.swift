@@ -10,6 +10,8 @@ enum ReviewSource: Equatable {
     /// The branch's files against the comparison ref, the Changes tab's Branch Changes.
     case branchChanges
     case commit(sha: String)
+    /// A pull or merge request review's diff, read whole from its provider, with its threads.
+    case pullRequest(sessionID: String)
 
     var isCommit: Bool {
         if case .commit = self { true } else { false }
@@ -21,12 +23,16 @@ enum ReviewComposing: Identifiable {
     case lines(ReviewEntryID, RemoteReviewAnchor, title: String, quote: String)
     case file(ReviewEntryID)
     case edit(RemoteReviewComment)
+    case reply(RemoteProviderThread)
+    case submit
 
     var id: String {
         switch self {
         case .lines(let entry, _, let title, _): "lines:\(entry.namespace):\(entry.path):\(title)"
         case .file(let entry): "file:\(entry.namespace):\(entry.path)"
         case .edit(let comment): "edit:\(comment.id)"
+        case .reply(let thread): "reply:\(thread.id)"
+        case .submit: "submit"
         }
     }
 }
@@ -52,6 +58,10 @@ final class ReviewDocument {
     /// The review's draft comments, every file's.
     var comments: [RemoteReviewComment] = []
     var composing: ReviewComposing?
+    /// The pull request as its diff was read: its head, account and capabilities.
+    private(set) var pullRequest: RemoteProviderReview?
+    /// Its threads, re-read after a reply or a resolve.
+    private(set) var threads: [RemoteProviderThread] = []
     private(set) var listLoaded = false
     /// The Mac capped the file list, so the review doesn't hold every file.
     private(set) var listTruncated = false
@@ -74,6 +84,7 @@ final class ReviewDocument {
         switch source {
         case .localChanges, .branchChanges: scope = workspace.localChangesReviewID ?? "local." + workspace.sessionId
         case .commit(let sha): scope = "commit." + sha
+        case .pullRequest(let session): scope = "review." + session
         }
         marks = ReviewPreferences.shared.marks(for: scope)
     }
@@ -101,6 +112,7 @@ final class ReviewDocument {
             if let open = workspace.commit, open.commit.revision == sha, case .loaded(let reply) = open.1 {
                 return (entries(from: reply.files, namespace: "commit"), reply.truncated)
             }
+        case .pullRequest: break
         }
         return nil
     }
@@ -109,6 +121,13 @@ final class ReviewDocument {
         switch source {
         case .localChanges, .branchChanges: await workspace.loadChanges().map(files(from:))
         case .commit(let sha): await workspace.loadCommitFiles(sha).map { (entries(from: $0.files, namespace: "commit"), $0.truncated) }
+        case .pullRequest(let session):
+            await workspace.pullRequestReview(session, withDiff: true).map { pr in
+                pullRequest = pr
+                threads = pr.threads
+                let namespace = PullRequestDiff.namespace(provider: pr.provider)
+                return (PullRequestDiff.entries(raw: pr.diff ?? "", namespace: namespace, truncated: pr.diffTruncated), pr.diffTruncated)
+            }
         }
     }
 
@@ -130,7 +149,7 @@ final class ReviewDocument {
     func refresh() async {
         switch await fetchFiles() {
         case .failure(let failure):
-            if !listLoaded { listError = failure.message }
+            if !listLoaded { listError = failure.message } else if case .pullRequest = source { error = failure.message }
         case .success(let fresh):
             replace(with: fresh.entries, truncated: fresh.truncated)
         }
@@ -148,6 +167,7 @@ final class ReviewDocument {
         }
         entries = fresh.map { entry in
             var entry = entry
+            // A pull request's fresh diff lands below, through the same checks as a fetched one.
             if let kept = old[entry.id]?.content { entry.content = kept }
             return entry
         }
@@ -161,7 +181,11 @@ final class ReviewDocument {
         }
         listLoaded = true
         listError = nil
-        for id in refetch { Task { await fetch(id) } }
+        if case .pullRequest = source {
+            for entry in fresh { land(entry.id, entry.content, failed: false) }
+        } else {
+            for id in refetch { Task { await fetch(id) } }
+        }
     }
 
     // MARK: Diffs
@@ -173,6 +197,8 @@ final class ReviewDocument {
         case .localChanges: DiffKey(path: id.path, stage: id.namespace)
         case .branchChanges: DiffKey(path: id.path, stage: nil)
         case .commit(let sha): DiffKey(path: id.path, stage: nil, sha: sha)
+        // Never fetched: its entries arrive with their hunks.
+        case .pullRequest: DiffKey(path: id.path, stage: nil)
         }
     }
 
@@ -186,18 +212,23 @@ final class ReviewDocument {
     /// Fetches the entry's diff; what it showed stays until the reply.
     private func fetch(_ id: ReviewEntryID) async {
         let result = await workspace.loadDiff(diffKey(id))
-        guard let i = index(id) else { return }
         let content: ReviewEntryContent = switch result {
         case .success(let reply) where reply.hunks.isEmpty && reply.metadataNote != nil: .note(reply.metadataNote ?? "")
         case .success(let reply): .hunks(reply.hunks, truncated: reply.truncated)
         case .failure(let failure): .note(failure.message)
         }
+        land(id, content, failed: (try? result.get()) == nil)
+    }
+
+    /// Shows the entry's diff, checking its viewed mark and the selection against it.
+    private func land(_ id: ReviewEntryID, _ content: ReviewEntryContent, failed: Bool) {
+        guard let i = index(id) else { return }
         let hash = ReviewViewedMarks.hash(of: Self.hunks(content))
         hashes[id] = hash
         // Its line indexes point into the old diff.
         if selection?.entry == id, entries[i].content != content { selection = nil }
         entries[i].content = content
-        if case .failure = result {
+        if failed {
             // No diff, so nothing to mark or to check a mark against; a tick waiting on it lapses.
             if pendingViewed.remove(id) != nil { folded.remove(id) }
         } else if pendingViewed.remove(id) != nil {
@@ -283,11 +314,19 @@ final class ReviewDocument {
 
     // MARK: Comments
 
-    /// Where comments go: the worktree's local-changes review. Branch changes and commits take none,
-    /// as no Mac review files comments under their entries.
+    /// Where comments go: the worktree's local-changes review, or the pull request's. Branch changes and
+    /// commits take none, as no Mac review files comments under their entries.
     var reviewSessionID: String? {
-        source == .localChanges && workspace.canReview ? workspace.localChangesReviewID : nil
+        guard workspace.canReview else { return nil }
+        switch source {
+        case .localChanges: return workspace.localChangesReviewID
+        case .pullRequest(let session): return session
+        case .branchChanges, .commit: return nil
+        }
     }
+
+    /// Open drafts not yet on the provider.
+    var draftCount: Int { comments.count { $0.isOpen && !$0.isPublished } }
 
     func loadComments() async {
         guard let session = reviewSessionID else { return }
@@ -330,7 +369,9 @@ final class ReviewDocument {
 
     func comment(on entry: ReviewEntryID, anchor: RemoteReviewAnchor, body: String) async {
         guard let session = reviewSessionID else { return }
-        if let message = await workspace.comment(in: session, entry: entry, anchor: anchor, body: body) {
+        if let message = await workspace.comment(in: session, entry: entry,
+                                                    originalPath: entries.first { $0.id == entry }?.renameFrom,
+                                                    anchor: anchor, body: body) {
             error = message
             return
         }
@@ -342,6 +383,44 @@ final class ReviewDocument {
         guard let session = reviewSessionID else { return }
         if let message = await workspace.changeReview(session, mutation) { error = message }
         await loadComments()
+    }
+
+    // MARK: Pull request
+
+    var canSubmit: Bool {
+        guard let pullRequest else { return false }
+        return !RemoteReviewSubmission(pullRequest, drafts: comments).decisions.isEmpty
+    }
+
+    func changeThread(_ thread: RemoteProviderThread, _ action: RemoteProviderThreadAction, body: String? = nil) async {
+        guard case .pullRequest(let session) = source else { return }
+        if let message = await workspace.changeThread(session, threadID: thread.id, action, body: body) {
+            error = message
+            return
+        }
+        await reloadThreads()
+    }
+
+    /// Submits at the head the diff was read at. Returns why it failed, or nil once it's submitted.
+    func submit(_ decision: RemoteReviewDecision, body: String) async -> String? {
+        guard case .pullRequest(let session) = source, let pullRequest else { return nil }
+        switch await workspace.submitReview(session, decision, body: body, headSHA: pullRequest.headSHA) {
+        case .failure(let failure): return failure.message
+        case .success(let problems):
+            error = problems.map { "The review was submitted, but:\n\($0)" }
+            await loadComments()
+            await reloadThreads()
+            return nil
+        }
+    }
+
+    /// Threads only: the diff, and the head a submission pins to, stay as read.
+    private func reloadThreads() async {
+        guard case .pullRequest(let session) = source else { return }
+        switch await workspace.pullRequestReview(session, withDiff: false) {
+        case .success(let pr): threads = pr.threads
+        case .failure(let failure): error = failure.message
+        }
     }
 
     // MARK: Syntax
