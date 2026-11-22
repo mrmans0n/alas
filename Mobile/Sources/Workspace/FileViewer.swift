@@ -39,6 +39,20 @@ struct FileViewer: View {
                                     let relative = url.scheme == nil && url.host == nil && !url.path.hasPrefix("/")
                                     // A link to a heading of this document (`#install`) keeps it open.
                                     if relative, url.path.isEmpty { return .handled }
+                                    if let checkout = workspace.checkout {
+                                        // `path` is relative to the focused member; the agent's links resolve from the checkout root.
+                                        guard let owner = workspace.pushedBy else { return .handled }
+                                        let memberRoot = workspace.focusedMember?.worktree.path ?? checkout.rootPath
+                                        let target = relative ? URL(fileURLWithPath: RemoteTranscriptLink.worktreePath(url.path, besideFile: path),
+                                                                    relativeTo: URL(fileURLWithPath: memberRoot + "/"))
+                                            : url
+                                        switch RemoteTranscriptLink.route(target.absoluteURL, worktreeRoot: checkout.rootPath) {
+                                        case .file(let file):
+                                            return workspace.openCheckoutLink(rootRelative: file, by: owner) ? .handled : .discarded
+                                        case .system: return .systemAction
+                                        case .discard: return .discarded
+                                        }
+                                    }
                                     let target = relative ? URL(fileURLWithPath: RemoteTranscriptLink.worktreePath(url.path, besideFile: path),
                                                                 relativeTo: session.worktreeRoot.map { URL(fileURLWithPath: $0 + "/") })
                                         : url

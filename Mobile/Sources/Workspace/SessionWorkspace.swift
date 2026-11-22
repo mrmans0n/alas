@@ -353,6 +353,16 @@ final class SessionWorkspace {
         sendRead(.files(path: dir))
     }
 
+    /// Opens `path`, relative to the checkout's root, in the member that holds it. False when this is
+    /// no checkout or no member holds the path.
+    @discardableResult
+    func openCheckoutLink(rootRelative path: String, by owner: UUID) -> Bool {
+        guard let match = checkout?.memberFile(atRootRelative: path) else { return false }
+        focusMember(match.member.id)
+        openFile(match.relativePath, by: owner)
+        return true
+    }
+
     func openFile(_ path: String, by owner: UUID) {
         pushedBy = owner
         file = (path, .loading)
