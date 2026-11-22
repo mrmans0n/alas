@@ -655,9 +655,11 @@ final class SessionWorkspace {
 
     // MARK: Shepherd
 
-    /// A session this host runs itself, on a host that lets the phone shepherd it.
+    /// A session this host runs itself in its own worktree, on a host that lets the phone shepherd it.
+    /// A workspace checkout's session has no worktree of its own, and the shepherd refuses it, as on the Mac.
     var canShepherd: Bool {
-        hub.sessions(of: hostID).first { $0.id == sessionId }?.serverId == nil
+        guard let summary = hub.sessions(of: hostID).first(where: { $0.id == sessionId }) else { return false }
+        return summary.serverId == nil && summary.worktreeId != nil
             && hub.supports(HostProtocolCapability.shepherdsPhoneV1, on: hostID)
     }
 
