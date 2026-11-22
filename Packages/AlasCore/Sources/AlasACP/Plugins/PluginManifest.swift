@@ -357,6 +357,8 @@ public struct PluginManifest: Equatable, Sendable {
     /// Shown in Settings → Plugins only, so any API may declare them and a bad value is dropped, never refused.
     public var summary: String?
     public var author: String?
+    /// The author's GitHub login, for their avatar.
+    public var authorGitHub: String?
     /// An SF Symbol name.
     public var icon: String?
 
@@ -484,7 +486,7 @@ public struct PluginManifest: Equatable, Sendable {
             id: id, name: name, version: version, api: api, entry: entry,
             capabilities: capabilities, tabs: tabs, panels: panels, commands: commands, events: events,
             settings: settings, network: network, processes: processes, prompts: prompts, remote: remote, web: raw.web, requires: requires,
-            summary: raw.summary, author: raw.author, icon: raw.icon)
+            summary: raw.summary, author: raw.author, authorGitHub: raw.authorGitHub, icon: raw.icon)
     }
 
     /// Whether two relative paths can't both be files: the same name, or one a folder the other is in. Compared
@@ -691,7 +693,7 @@ public struct PluginManifest: Equatable, Sendable {
         return tabs
     }
 
-    public init(id: String, name: String, version: String, api: Int, entry: String, capabilities: [PluginCapability], tabs: [PluginTabContribution] = [], panels: [PluginPanelContribution] = [], commands: [PluginCommandContribution] = [], events: [PluginEvent] = [], settings: [PluginSetting] = [], network: [String] = [], processes: [PluginProcessContribution] = [], prompts: [PluginPromptContribution] = [], remote: Bool = false, web: String? = nil, requires: PluginRequirements = PluginRequirements(), summary: String? = nil, author: String? = nil, icon: String? = nil) {
+    public init(id: String, name: String, version: String, api: Int, entry: String, capabilities: [PluginCapability], tabs: [PluginTabContribution] = [], panels: [PluginPanelContribution] = [], commands: [PluginCommandContribution] = [], events: [PluginEvent] = [], settings: [PluginSetting] = [], network: [String] = [], processes: [PluginProcessContribution] = [], prompts: [PluginPromptContribution] = [], remote: Bool = false, web: String? = nil, requires: PluginRequirements = PluginRequirements(), summary: String? = nil, author: String? = nil, authorGitHub: String? = nil, icon: String? = nil) {
         self.id = id
         self.name = name
         self.version = version
@@ -711,6 +713,7 @@ public struct PluginManifest: Equatable, Sendable {
         self.requires = requires
         self.summary = summary
         self.author = author
+        self.authorGitHub = authorGitHub
         self.icon = icon
     }
 }
@@ -800,9 +803,10 @@ private struct Raw: Decodable {
     let contributesMalformed: Bool
     let summary: String?
     let author: String?
+    let authorGitHub: String?
     let icon: String?
 
-    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, processes, remote, web, requires, contributes, summary, author, icon }
+    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, processes, remote, web, requires, contributes, summary, author, authorGitHub, icon }
 
     package init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -832,6 +836,7 @@ private struct Raw: Decodable {
         }
         summary = display(.summary)
         author = display(.author)
+        authorGitHub = display(.authorGitHub)
         icon = display(.icon)
     }
 }

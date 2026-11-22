@@ -7,6 +7,8 @@ public struct PluginListing: Equatable, Sendable {
     public let version: String?
     public let summary: String?
     public let author: String?
+    /// The author's GitHub avatar; nil without a login, or with one GitHub could not have issued.
+    public let authorAvatar: URL?
     /// An SF Symbol name.
     public let icon: String?
     /// The release day of the installed version, or of the one Install would get; nil for a local build.
@@ -17,6 +19,7 @@ public struct PluginListing: Equatable, Sendable {
         name = manifest?.name ?? entry?.name ?? ""
         summary = manifest?.summary ?? entry?.summary
         author = manifest?.author ?? entry?.author
+        authorAvatar = (manifest?.authorGitHub ?? entry?.authorGitHub).flatMap(Self.avatar)
         icon = manifest?.icon ?? entry?.icon
         if let installed {
             version = installed.manifest.version
@@ -27,5 +30,11 @@ public struct PluginListing: Equatable, Sendable {
             version = offered?.version
             released = offered?.releasedDate
         }
+    }
+
+    /// The login is spliced into a URL, so only GitHub's own login alphabet gets through.
+    static func avatar(_ login: String) -> URL? {
+        guard login.count <= 39, login.wholeMatch(of: /[A-Za-z0-9](-?[A-Za-z0-9])*/) != nil else { return nil }
+        return URL(string: "https://github.com/\(login).png?size=64")
     }
 }

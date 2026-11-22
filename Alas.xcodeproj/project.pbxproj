@@ -288,6 +288,7 @@
 		238BBB5FC59949CE6ABAFBEF /* ACPCodeBlockHighlighterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81773A01826A91080F5A2E95 /* ACPCodeBlockHighlighterTests.swift */; };
 		239B5F18337203930900D06B /* DiffReviewImageStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86D12B948CADE546FFD3A54C /* DiffReviewImageStateTests.swift */; };
 		23B199FE56E8FDE6038478C2 /* AgentExecutionTargetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8908195EBC3D032ED6842212 /* AgentExecutionTargetTests.swift */; };
+		23F0C40CBDB538449E57EA14 /* AuthorAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F295C85A8D4CD126D68E9D5C /* AuthorAvatar.swift */; };
 		23F33B7C1AA2E35B7C55EF88 /* FrameRateBenchmarkSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DE552AE45CD57E6123BE42D /* FrameRateBenchmarkSupport.swift */; };
 		2400ED6F679E41641E2DE348 /* PluginRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE5F03CD9C8A0205CECC18B8 /* PluginRuntimeTests.swift */; };
 		241C661965785076CB3442DA /* ACPGoalPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4FAB28A45A3606C316044F3 /* ACPGoalPill.swift */; };
@@ -3934,6 +3935,7 @@
 		F205138E6ECCFA7DD392E3CE /* GGSplitPreviewRowPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGSplitPreviewRowPlanTests.swift; sourceTree = "<group>"; };
 		F226886130D09669EEEBD381 /* ACPDictationLocaleFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPDictationLocaleFormatterTests.swift; sourceTree = "<group>"; };
 		F226AB1F51ED675BC5171018 /* SidebarMaterialChoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarMaterialChoiceTests.swift; sourceTree = "<group>"; };
+		F295C85A8D4CD126D68E9D5C /* AuthorAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthorAvatar.swift; sourceTree = "<group>"; };
 		F2AC43D07BE4012DB52A2D1B /* ChatFontCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatFontCatalog.swift; sourceTree = "<group>"; };
 		F2C55C7FEAEBBB60A829C248 /* PairedTextEditorMarkdownStylingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedTextEditorMarkdownStylingTests.swift; sourceTree = "<group>"; };
 		F2C9F8BAEDB1D157E321A328 /* ReviewChangesScrollSpyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewChangesScrollSpyTests.swift; sourceTree = "<group>"; };
@@ -5087,6 +5089,7 @@
 				1C8F14A2CEAE4B8404213C73 /* AlasSegmentedControl.swift */,
 				A98D0A96093087BF4C284053 /* AlasSlider.swift */,
 				1841997CCBDB9611576B930C /* AlasToggle.swift */,
+				F295C85A8D4CD126D68E9D5C /* AuthorAvatar.swift */,
 				C1B00BCADC3CC09534A8BC39 /* Boids.swift */,
 				524926F2D16B1AD83FC234AB /* ChangeSummaryVisibility.swift */,
 				0E6600436B01C75D85C01FFA /* Clipboard.swift */,
@@ -8056,6 +8059,7 @@
 				4DE075F8DA19958C4D55D671 /* AttachIssueDialogModel.swift in Sources */,
 				597B1697EFF3B1CE03D538A3 /* AttentionInboxView.swift in Sources */,
 				30E541B95BEEE175E44224CC /* AttentionRollUpCard.swift in Sources */,
+				23F0C40CBDB538449E57EA14 /* AuthorAvatar.swift in Sources */,
 				4200B95D724A2433F50C1B7C /* BaseBranchSelector.swift in Sources */,
 				1B8AED038B80C06EDA6DBC20 /* BeautifulMermaidBackend.swift in Sources */,
 				67D9FD383A299A29780C3DE2 /* BinaryFileType.swift in Sources */,

@@ -185,9 +185,7 @@ struct PluginsPane: View {
                         Text(version).font(scale.meta.font(design: .monospaced)).foregroundColor(theme.color("fg-muted"))
                     }
                 }
-                if let meta = listing.meta() {
-                    Text(meta).font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
-                }
+                PluginMetaLine(listing: listing)
                 if let summary = listing.summary {
                     Text(summary).font(scale.bodyFont).fixedSize(horizontal: false, vertical: true).padding(.top, scale.space[1])
                 }
@@ -513,9 +511,7 @@ private struct PluginListRow<Trailing: View, Detail: View>: View {
                     }
                 }
                 .lineLimit(1)
-                if let meta = listing.meta() {
-                    Text(meta).font(scale.metaFont).foregroundColor(theme.color("fg-dim")).lineLimit(1)
-                }
+                PluginMetaLine(listing: listing)
                 if let status {
                     HStack(spacing: 4) {
                         if statusIsWarning { Image(systemName: "exclamationmark.triangle.fill") }
@@ -541,19 +537,37 @@ extension PluginListRow where Detail == EmptyView {
 }
 
 private extension PluginListing {
-    static let relative: RelativeDateTimeFormatter = {
+    @MainActor static let relative: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return formatter
     }()
 
     /// "author · Updated 3 days ago"; nil when neither is known.
-    func meta(now: Date = .now) -> String? {
+    @MainActor func meta(now: Date = .now) -> String? {
         let updated = released.map { date in
             now.timeIntervalSince(date) < 86_400 ? "Updated today" : "Updated " + Self.relative.localizedString(for: date, relativeTo: now)
         }
         let parts = [author, updated].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+/// "author · Updated 3 days ago", after the author's avatar.
+private struct PluginMetaLine: View {
+    let listing: PluginListing
+    @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
+
+    var body: some View {
+        if let meta = listing.meta() {
+            HStack(spacing: 5) {
+                if let author = listing.author {
+                    AuthorAvatar(name: author, image: listing.authorAvatar, size: 14)
+                }
+                Text(meta).font(scale.metaFont).foregroundColor(theme.color("fg-dim")).lineLimit(1)
+            }
+        }
     }
 }
 

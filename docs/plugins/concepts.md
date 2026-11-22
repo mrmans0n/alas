@@ -153,8 +153,10 @@ What it does not give you:
   rebuild; anything else is refused with a message that names both versions.
 - Unknown manifest fields are ignored, so a newer manifest still loads on an
   older Alas as long as its `api` is supported.
-- `summary`, `author`, and `icon` (an SF Symbol name) are optional strings that
-  Settings → Plugins shows in its list, at any `api`. A bad value is dropped,
-  never refused: an unknown symbol shows the name's initial instead.
+- `summary`, `author`, `authorGitHub`, and `icon` (an SF Symbol name) are
+  optional strings that Settings → Plugins shows in its list, at any `api`.
+  `author` is a display name; `authorGitHub` is a login whose GitHub avatar
+  shows beside it, over the name's initials. A bad value is dropped, never
+  refused: an unknown symbol shows the plugin name's initial instead.
 - New behaviour arrives as new methods, new fields on existing messages, or new
   capabilities. Plugins should ignore fields and notifications they do not know.

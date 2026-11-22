@@ -46,6 +46,8 @@ public struct PluginCatalogIndex: Decodable, Sendable, Equatable {
         public let summary: String?
         public let homepage: URL?
         public var author: String?
+        /// The author's GitHub login, for their avatar.
+        public var authorGitHub: String?
         /// An SF Symbol name.
         public var icon: String?
         public let versions: [Version]
@@ -56,12 +58,13 @@ public struct PluginCatalogIndex: Decodable, Sendable, Equatable {
                 .max { PluginCatalogIndex.isOlder($0.version, than: $1.version) }
         }
 
-        public init(id: String, name: String, summary: String?, homepage: URL?, author: String? = nil, icon: String? = nil, versions: [Version]) {
+        public init(id: String, name: String, summary: String?, homepage: URL?, author: String? = nil, authorGitHub: String? = nil, icon: String? = nil, versions: [Version]) {
             self.id = id
             self.name = name
             self.summary = summary
             self.homepage = homepage
             self.author = author
+            self.authorGitHub = authorGitHub
             self.icon = icon
             self.versions = versions
         }
