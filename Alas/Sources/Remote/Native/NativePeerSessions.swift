@@ -792,7 +792,11 @@ final class NativePeerSessions {
 
     var selectedRow: RemoteSessionSummary? {
         guard let selectedSessionId else { return nil }
-        return snapshot.groups.flatMap(\.sessions).first { $0.id == selectedSessionId }
+        return row(for: selectedSessionId)
+    }
+
+    func row(for sessionId: String) -> RemoteSessionSummary? {
+        snapshot.groups.flatMap(\.sessions).first { $0.id == sessionId }
     }
 
     var isPromptPending: Bool { pendingPrompt != nil }

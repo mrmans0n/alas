@@ -30,6 +30,7 @@ struct WorkspaceCheckoutCreationModel: Equatable {
         branch: String = "",
         rootPath: String = "",
         baseReference: String = "main",
+        defaultCloneFolder: String = "",
         branchTemplate: String? = nil,
         branchTemplateDate: Date = Date()
     ) {
@@ -40,6 +41,10 @@ struct WorkspaceCheckoutCreationModel: Equatable {
         self.branch = branch
         self.rootPath = rootPath
         self.baseReference = baseReference
+
+        if workspace.executionLocation == .local, rootPath.isEmpty, !defaultCloneFolder.isEmpty {
+            selectCheckoutParent(NSString(string: defaultCloneFolder).expandingTildeInPath)
+        }
     }
 
     /// Workspace checkouts share one branch, so only the global template applies.

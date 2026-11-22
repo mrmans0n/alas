@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The files a finished turn changed, under its answer: one line per file with its line counts,
-/// each opening the file's diff.
+/// each opening the file's diff where the files are on this Mac.
 struct ACPTurnChangesCard: View {
     /// Where the card's caption comes from, and what it is written from.
     struct Caption {
@@ -12,7 +12,8 @@ struct ACPTurnChangesCard: View {
 
     let changes: ACPTurnChanges
     let caption: Caption?
-    let onOpenDiff: (String) -> Void
+    /// Nil when the files live on another machine: the rows only list them.
+    let onOpenDiff: ((String) -> Void)?
     @Environment(\.theme) private var theme
     @Environment(\.acpMarkdownProseMaxWidth) private var proseMaxWidth
     @Environment(\.designScale) private var scale
@@ -29,21 +30,13 @@ struct ACPTurnChangesCard: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             ForEach(visibleFiles, id: \.path) { file in
-                Button { onOpenDiff(file.path) } label: {
-                    HStack(spacing: scale.space[2]) {
-                        Text(file.path)
-                            .font(scale.meta.font(weight: .regular, design: .monospaced))
-                            .foregroundStyle(theme.color("fg"))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer(minLength: scale.space[2])
-                        counts(added: file.added, removed: file.removed)
-                    }
-                    .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[1])
-                    .contentShape(Rectangle())
+                if let onOpenDiff {
+                    Button { onOpenDiff(file.path) } label: { fileRow(file) }
+                        .buttonStyle(.plain)
+                        .help("Open diff")
+                } else {
+                    fileRow(file)
                 }
-                .buttonStyle(.plain)
-                .help("Open diff")
             }
             let hidden = changes.files.count - visibleFiles.count
             if hidden > 0 {
@@ -58,6 +51,20 @@ struct ACPTurnChangesCard: View {
         .background(theme.color("bg-2").opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .frame(maxWidth: proseMaxWidth, alignment: .leading)
+    }
+
+    private func fileRow(_ file: ACPTurnChanges.File) -> some View {
+        HStack(spacing: scale.space[2]) {
+            Text(file.path)
+                .font(scale.meta.font(weight: .regular, design: .monospaced))
+                .foregroundStyle(theme.color("fg"))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: scale.space[2])
+            counts(added: file.added, removed: file.removed)
+        }
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[1])
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder

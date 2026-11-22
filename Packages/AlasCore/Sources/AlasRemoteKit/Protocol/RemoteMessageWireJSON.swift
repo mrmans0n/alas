@@ -422,6 +422,9 @@ public struct RemoteSessionSummary: Equatable, Sendable {
     /// Live-session detail for badge popovers. Nil for sessions without a
     /// runner and from hosts that predate it.
     public let detail: RemoteSessionDetail?
+    /// The Workspace checkout the session works in. Nil for a worktree's
+    /// session and from hosts that predate it.
+    public let checkout: RemoteSessionCheckout?
 
     public init(
         id: String,
@@ -438,7 +441,8 @@ public struct RemoteSessionSummary: Equatable, Sendable {
         serverId: String? = nil,
         serverName: String? = nil,
         parentSessionId: String? = nil,
-        detail: RemoteSessionDetail? = nil
+        detail: RemoteSessionDetail? = nil,
+        checkout: RemoteSessionCheckout? = nil
     ) {
         self.id = id
         self.title = title
@@ -455,13 +459,14 @@ public struct RemoteSessionSummary: Equatable, Sendable {
         self.serverName = serverName
         self.parentSessionId = parentSessionId
         self.detail = detail
+        self.checkout = checkout
     }
 }
 
 extension RemoteSessionSummary: Codable {
     private enum CodingKeys: String, CodingKey {
         case id, title, agentId, status, canDrive, isActive, tabIndex, projectId, worktreeId, updatedAt, worktree
-        case serverId, serverName, parentSessionId, detail
+        case serverId, serverName, parentSessionId, detail, checkout
     }
 
     public init(from decoder: Decoder) throws {
@@ -481,7 +486,8 @@ extension RemoteSessionSummary: Codable {
             serverId: try c.decodeIfPresent(String.self, forKey: .serverId),
             serverName: try c.decodeIfPresent(String.self, forKey: .serverName),
             parentSessionId: try c.decodeIfPresent(String.self, forKey: .parentSessionId),
-            detail: try c.decodeIfPresent(RemoteSessionDetail.self, forKey: .detail)
+            detail: try c.decodeIfPresent(RemoteSessionDetail.self, forKey: .detail),
+            checkout: try c.decodeIfPresent(RemoteSessionCheckout.self, forKey: .checkout)
         )
     }
 
@@ -502,6 +508,7 @@ extension RemoteSessionSummary: Codable {
         try c.encodeIfPresent(serverName, forKey: .serverName)
         try c.encodeIfPresent(parentSessionId, forKey: .parentSessionId)
         try c.encodeIfPresent(detail, forKey: .detail)
+        try c.encodeIfPresent(checkout, forKey: .checkout)
     }
 }
 

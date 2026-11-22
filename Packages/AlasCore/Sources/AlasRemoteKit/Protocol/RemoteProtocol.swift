@@ -1831,6 +1831,11 @@ public enum HostProtocolCapability: Sendable {
     /// device paired as the native phone app: only an app host, whose agent
     /// chats the review goes to.
     public static let reviewsAgentPhoneV1 = "host.reviews.agent.phone.v1"
+    /// Hosts whose session list describes a Workspace checkout session's
+    /// checkout and member worktrees, and that answer `readWorktree` for those
+    /// members from a device paired as the native phone app. The list block
+    /// goes to every client; the phone reads it only when this is advertised.
+    public static let workspacesPhoneV1 = "host.workspaces.phone.v1"
     /// Hosts that serve `readProviderReview`, `openProviderReview`,
     /// `mutateReviewThread` and `publishReview`: only a headless host.
     public static let reviewsProviderV1 = "host.reviews.provider.v1"

@@ -796,6 +796,95 @@ struct HostSessionsTests {
         #expect(fixture.core.sessionManagers[created.owner] == nil)
     }
 
+    /// A session of a Workspace checkout works at the checkout's root, which is
+    /// no git worktree: its mentions and transcript images resolve there.
+    @Test func aCheckoutSessionResolvesFileMentionsInsideItsRoot() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessionId = try await fixture.createCheckoutSession()
+        try FileManager.default.createDirectory(at: fixture.root.appendingPathComponent("a"), withIntermediateDirectories: true)
+        try Data("# notes".utf8).write(to: fixture.root.appendingPathComponent("a/notes.md"))
+
+        let mention = RemoteMention(kind: RemoteMention.file, value: "a/notes.md", name: "notes.md")
+        let attachments = try #require(await fixture.core.remoteMentionAttachments([mention], sessionId: sessionId))
+        #expect(attachments.count == 1)
+        let candidates = await fixture.core.remoteMentionCandidates(sessionId: sessionId, query: "notes")
+        #expect(candidates.mentions.contains { $0.value == "a/notes.md" })
+    }
+
+    /// A checkout session's row tells the phone which repositories it holds:
+    /// only members that are available and listed as worktrees.
+    @Test func aCheckoutSessionSummaryListsItsAvailableMembers() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let available = WorkspaceCheckoutMember(
+            workspaceMemberID: UUID(), projectID: "p", fallbackProjectName: "p", fallbackRepositoryRoot: fixture.root.path,
+            worktreePath: fixture.worktree.path.path, availability: .available
+        )
+        let missing = WorkspaceCheckoutMember(
+            workspaceMemberID: UUID(), projectID: "p", fallbackProjectName: "p", fallbackRepositoryRoot: fixture.root.path,
+            worktreePath: fixture.root.appendingPathComponent("gone").path, availability: .missing
+        )
+        let sessionId = try await fixture.createCheckoutSession(members: [available, missing])
+
+        let row = try #require(await fixture.core.remoteSessionSummaries(tabIndex: { _, _ in nil }).first { $0.id == sessionId })
+        #expect(row.checkout?.members.map(\.worktreeId) == [fixture.worktree.id])
+        #expect(row.checkout?.rootPath == fixture.root.path)
+        #expect(row.projectId == nil)
+    }
+
+    /// A checkout's root is listed in the form its members' worktree paths
+    /// are, so an SSH root reads `host:/path` like an SSH worktree does, and
+    /// its sessions read mentions and images from that host.
+    @Test(arguments: [
+        (ExecutionLocation.local, "/r", "/r"),
+        (ExecutionLocation.ssh("mini"), "/home/u/r", "mini:/home/u/r"),
+    ])
+    func aCheckoutRootIsListedInItsMembersPathForm(location: ExecutionLocation, rootPath: String, listed: String) {
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil, fallbackWorkspaceName: "w", executionLocation: location,
+            branch: "b", rootPath: rootPath, members: []
+        )
+        #expect(AlasCoreContext.remoteCheckoutRootPath(checkout) == listed)
+        let member = Worktree(
+            id: "w", projectId: "p", name: "app", branch: "b",
+            path: URL(fileURLWithPath: checkout.inAppWorktreePath(rootPath + "/app")), status: .clean, lastActivity: .distantPast
+        )
+        let memberPath = RemoteWorktreeSummaryBuilder.make(projectName: "p", worktree: member, isMain: false, metrics: .unavailable).path
+        #expect(memberPath == listed + "/app")
+        #expect(AlasCoreContext.checkoutSessionRoot(rootPath, at: location).path == checkout.inAppWorktreePath(rootPath))
+        #expect(AlasCoreContext.checkoutSessionRoot(rootPath, at: location).isRemoteAlasPath == (location.sshHost != nil))
+    }
+
+    @Test func aCheckoutSessionRejectsAMentionOutsideItsRoot() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessionId = try await fixture.createCheckoutSession()
+        let outside = fixture.root.deletingLastPathComponent().appendingPathComponent("escape-\(UUID().uuidString).md")
+        try Data("secret".utf8).write(to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let link = fixture.root.appendingPathComponent("link.md")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        for value in ["../" + outside.lastPathComponent, "link.md"] {
+            let mention = RemoteMention(kind: RemoteMention.file, value: value, name: "escape.md")
+            #expect(await fixture.core.remoteMentionAttachments([mention], sessionId: sessionId) == nil, "\(value)")
+        }
+    }
+
+    @Test func aCheckoutSessionReadsTranscriptImagesUnderItsRoot() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessionId = try await fixture.createCheckoutSession()
+        // A 1x1 PNG.
+        let png = try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="))
+        try png.write(to: fixture.root.appendingPathComponent("shot.png"))
+        guard case .success = await fixture.core.remoteTranscriptImage(sessionId: sessionId, path: "shot.png") else {
+            Issue.record("expected the image to be served")
+            return
+        }
+    }
+
     /// After another instance takes the session over, whatever this one still
     /// holds is refused: a setting the session drops, and an answer that would
     /// resume the agent beside the new writer.
@@ -1332,13 +1421,20 @@ struct HostSessionsTests {
             host = AlasHost(core: core)
         }
 
-        func addCheckout(operation: WorkspaceCheckoutOperation, location: ExecutionLocation) async throws -> UUID {
+        func addCheckout(
+            operation: WorkspaceCheckoutOperation, location: ExecutionLocation, members: [WorkspaceCheckoutMember] = []
+        ) async throws -> UUID {
             let checkout = WorkspaceCheckout(
                 workspaceID: nil, fallbackWorkspaceName: "w", executionLocation: location,
-                branch: "b", rootPath: root.path, operation: operation, members: []
+                branch: "b", rootPath: root.path, operation: operation, members: members
             )
             try await core.workspaceStore.mutate { $0.checkouts.append(checkout) }
             return checkout.id
+        }
+
+        func createCheckoutSession(members: [WorkspaceCheckoutMember] = []) async throws -> String {
+            let id = try await addCheckout(operation: .idle, location: .local, members: members)
+            return try await host.sessions.create(.workspaceCheckout(id: id), agentID: "gemini", caller: .app).id
         }
 
         func tearDown() {

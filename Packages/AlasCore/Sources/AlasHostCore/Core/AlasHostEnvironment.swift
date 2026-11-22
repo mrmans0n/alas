@@ -74,6 +74,9 @@ public protocol AlasHostEnvironment: AnyObject {
     /// The Workspace checkout `id` as the host has it loaded; nil where it
     /// keeps none loaded, which only callers in a checkout need.
     func workspaceCheckout(id: UUID) -> WorkspaceCheckout?
+    /// The name of Workspace `id` as the host has it loaded; nil where it
+    /// keeps none loaded.
+    func workspaceName(id: UUID) -> String?
     /// How commands reach a remote checkout's host.
     var workspaceRemoteTransport: WorkspaceRemoteTransport { get }
     /// Which instance of the host this is: session leases and delegations
@@ -165,6 +168,8 @@ extension AlasHostEnvironment {
     public func terminalSessionOwner(_ sessionID: String) -> SessionOwnerID? { nil }
 
     public func workspaceCheckout(id: UUID) -> WorkspaceCheckout? { nil }
+
+    public func workspaceName(id: UUID) -> String? { nil }
 
     public var workspaceRemoteTransport: WorkspaceRemoteTransport { WorkspaceRemoteTransport() }
 

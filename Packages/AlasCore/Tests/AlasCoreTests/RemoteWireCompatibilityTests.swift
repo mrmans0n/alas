@@ -56,6 +56,44 @@ import Testing
         #expect(!String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self).contains("\"detail\""))
     }
 
+    @Test func sessionCheckoutRoundTripsAndDecodesAbsentFromOlderHosts() throws {
+        let checkout = Self.checkout(memberPaths: ["/r/app", "/r/lib"])
+        let full = RemoteSessionSummary(id: "s", title: "T", agentId: "claude", status: "idle", canDrive: false, checkout: checkout)
+        #expect(try JSONDecoder().decode(RemoteSessionSummary.self, from: JSONEncoder().encode(full)) == full)
+
+        let legacy = Data(#"{"id":"s","title":"T","agentId":"claude","status":"idle","canDrive":false}"#.utf8)
+        #expect(try JSONDecoder().decode(RemoteSessionSummary.self, from: legacy).checkout == nil)
+    }
+
+    @Test(arguments: [
+        ("/r/app/src/a.swift", "/r/app", "src/a.swift"),
+        ("/r/app", "/r/app", ""),
+        ("/r/apple/x", "/r/apple", "x"),
+        ("/r/app/sub/x", "/r/app/sub", "x"),
+        ("/elsewhere/x", nil, nil),
+    ] as [(String, String?, String?)])
+    func aCheckoutPathResolvesToTheMemberHoldingIt(path: String, memberPath: String?, relativePath: String?) {
+        let match = Self.checkout(memberPaths: ["/r/app", "/r/apple", "/r/app/sub"]).member(containing: path)
+        #expect(match?.member.worktree.path == memberPath)
+        #expect(match?.relativePath == relativePath)
+    }
+
+    private static func checkout(memberPaths: [String]) -> RemoteSessionCheckout {
+        RemoteSessionCheckout(
+            id: "c", name: "Workspace", branch: "b", rootPath: "/r",
+            members: memberPaths.map { path in
+                let name = URL(fileURLWithPath: path).lastPathComponent
+                return RemoteSessionCheckout.Member(
+                    id: "m-\(name)", name: name, projectId: "p-\(name)", worktreeId: "w-\(name)",
+                    worktree: RemoteWorktreeSummary(
+                        projectName: name, worktreeName: "b", branch: "b", path: path, metricsAvailable: false,
+                        comparisonRef: nil, commitCount: 0, changedFileCount: 0, addedLines: 0, deletedLines: 0, conflictCount: 0
+                    )
+                )
+            }
+        )
+    }
+
     @Test func anUnknownPreviewKindDropsOnlyTheKind() throws {
         let json = Data(#"{"id":"s","title":"T","agentId":"claude","status":"idle","canDrive":false,"detail":{"model":"Opus","previewKind":"future","preview":"p"}}"#.utf8)
         let detail = try #require(JSONDecoder().decode(RemoteSessionSummary.self, from: json).detail)

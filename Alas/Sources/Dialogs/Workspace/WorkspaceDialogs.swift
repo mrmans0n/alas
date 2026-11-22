@@ -290,6 +290,7 @@ struct CreateWorkspaceCheckoutDialog: View {
         self._model = State(initialValue: .init(
             workspace: workspace,
             branchPrefix: state.config.worktrees.branchPrefix,
+            defaultCloneFolder: state.config.repositoryCloneRootPath,
             branchTemplate: state.config.worktrees.branchTemplate
         ))
     }
@@ -373,7 +374,11 @@ struct CreateWorkspaceCheckoutDialog: View {
             }
             DialogField(label: "Checkout folder") {
                 HStack(spacing: 8) {
-                    AlasField(text: Binding(get: { model.rootPath }, set: { model.setRootPath($0) }), placeholder: "/path/to/checkouts/my-change", monospaced: true)
+                    AlasField(
+                        text: Binding(get: { model.rootPath }, set: { model.setRootPath($0) }),
+                        placeholder: model.checkoutParentPath ?? "/path/to/checkouts/my-change",
+                        monospaced: true
+                    )
                     if workspace.executionLocation == .local {
                         ToolbarBtn(icon: "folder", tooltip: "Choose checkout parent folder", action: chooseCheckoutFolder)
                     }
@@ -495,6 +500,9 @@ struct CreateWorkspaceCheckoutDialog: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        if let parent = model.checkoutParentPath {
+            panel.directoryURL = URL(fileURLWithPath: parent, isDirectory: true)
+        }
         if panel.runModal() == .OK, let url = panel.url {
             model.selectCheckoutParent(url.path)
         }

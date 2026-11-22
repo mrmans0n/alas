@@ -1,0 +1,16 @@
+{
+  "version": "0.24.7",
+  "headline": {
+    "title": "Review pull requests on iPhone",
+    "body": "Open eligible GitHub and GitLab reviews from a compatible Alas app host. Read inline threads, draft comments, submit a review, or send open drafts to an agent.",
+    "media": "media/0.24.7-review-pull-requests.png"
+  },
+  "also": [
+    {
+      "title": "A better plugin store"
+    },
+    {
+      "title": "Workspace checkouts on iPhone"
+    }
+  ]
+}

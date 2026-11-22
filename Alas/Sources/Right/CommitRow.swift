@@ -295,12 +295,7 @@ struct CommitRow: View {
     }
 
     private var avatar: some View {
-        Text(commit.authorInitials)
-            .font(scale.caption.font(weight: .bold))
-            .foregroundColor(.white)
-            .frame(width: 16, height: 16)
-            .background(authorColor(commit.author))
-            .clipShape(Circle())
+        AuthorAvatar(name: commit.author, initials: commit.authorInitials)
     }
 
     /// The tag hues are tuned for dark surfaces; on light they are darkened
@@ -322,16 +317,6 @@ struct CommitRow: View {
         case "build":    return Color(hex: "9c8e6e")
         default:         return theme.color("fg-muted")
         }
-    }
-
-    /// Deterministic hash → one of a small preset palette.
-    private func authorColor(_ author: String) -> Color {
-        let palette = ["5fb7c4", "c89d6f", "9789c7", "7aa86a", "cf649a", "e0a04a", "5fa7d6"]
-        var hash: UInt64 = 5381
-        for byte in author.utf8 {
-            hash = ((hash &<< 5) &+ hash) &+ UInt64(byte)
-        }
-        return Color(hex: palette[Int(hash % UInt64(palette.count))])
     }
 
     private func copySHA() {

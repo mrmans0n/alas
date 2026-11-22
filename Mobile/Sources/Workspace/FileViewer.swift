@@ -10,6 +10,8 @@ struct FileViewer: View {
     let openPreview: (URL) -> OpenURLAction.Result?
     @State private var showSource = false
     @State private var showHistory = false
+    /// Why a link the user followed didn't open.
+    @State private var linkError: String?
     /// False once the viewer leaves the stack; a full-screen image over it leaves it true.
     @Environment(\.isPresented) private var isPresented
 
@@ -19,18 +21,19 @@ struct FileViewer: View {
         Group {
             if FileKind(path: path) == .image {
                 // Read as an image of the worktree, as the transcript reads one, not as text.
+                let source = workspace.imageSource(forRepositoryPath: path)
                 ScrollView {
-                    TranscriptImage(id: "file:\(path)", source: path, label: name, session: session).padding()
+                    TranscriptImage(id: "file:\(source)", source: source, label: name, session: session).padding()
                 }
                 // Read again on each opening, so an image changed since shows as it is now.
-                .task(id: path) { session.forgetHostImage(path) }
+                .task(id: source) { session.forgetHostImage(source) }
             } else {
                 switch workspace.file?.1 {
                 case .loaded(let reply):
                     if FileKind(path: path) == .markdown, !showSource {
                         ScrollView {
                             AgentMarkdown(id: "file:\(path)", text: reply.text, session: session,
-                                          resolve: { RemoteTranscriptLink.imageSource($0, besideFile: path) })
+                                          resolve: { workspace.imageSource(forRepositoryPath: RemoteTranscriptLink.imageSource($0, besideFile: path)) })
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding()
                                 // A file link opens in this viewer, a relative one taken from this file's folder.
@@ -39,6 +42,21 @@ struct FileViewer: View {
                                     let relative = url.scheme == nil && url.host == nil && !url.path.hasPrefix("/")
                                     // A link to a heading of this document (`#install`) keeps it open.
                                     if relative, url.path.isEmpty { return .handled }
+                                    if let checkout = workspace.checkout {
+                                        // `path` is relative to the focused member; the agent's links resolve from the checkout root.
+                                        guard let owner = workspace.pushedBy else { return .handled }
+                                        let memberRoot = workspace.focusedMember?.worktree.path ?? checkout.rootPath
+                                        let target = relative ? URL(fileURLWithPath: RemoteTranscriptLink.worktreePath(url.path, besideFile: path),
+                                                                    relativeTo: URL(fileURLWithPath: memberRoot + "/"))
+                                            : url
+                                        switch RemoteTranscriptLink.route(target.absoluteURL, worktreeRoot: checkout.rootPath) {
+                                        case .file(let file):
+                                            if !workspace.openCheckoutLink(rootRelative: file, by: owner) { linkError = SessionWorkspace.linkOutsideMembers }
+                                            return .handled
+                                        case .system: return .systemAction
+                                        case .discard: return .discarded
+                                        }
+                                    }
                                     let target = relative ? URL(fileURLWithPath: RemoteTranscriptLink.worktreePath(url.path, besideFile: path),
                                                                 relativeTo: session.worktreeRoot.map { URL(fileURLWithPath: $0 + "/") })
                                         : url
@@ -81,6 +99,11 @@ struct FileViewer: View {
         }
         .background(Color(.systemBackground))
         .navigationDestination(isPresented: $showHistory) { FileHistoryView(workspace: workspace, path: path) }
+        .alert("Couldn't open that", isPresented: Binding { linkError != nil } set: { if !$0 { linkError = nil } }) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(linkError ?? "")
+        }
         // Backstop for a pop that skips the destination binding (a stack reset to the root).
         .onDisappear {
             guard !isPresented else { return }

@@ -15464,6 +15464,8 @@ class AppHostEnvironment: AlasHostEnvironment {
 
     func workspaceCheckout(id: UUID) -> WorkspaceCheckout? { app?.workspacesManager.checkout(id: id) }
 
+    func workspaceName(id: UUID) -> String? { app?.workspacesManager.workspaces.first { $0.id == id }?.name }
+
     var workspaceRemoteTransport: WorkspaceRemoteTransport { app?.workspaceRemoteTransport ?? WorkspaceRemoteTransport() }
 
     var instanceID: String { app?.instanceId ?? "" }

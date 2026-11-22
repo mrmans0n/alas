@@ -134,6 +134,10 @@ final class SessionWorkspace {
     private(set) var runScripts: [RemoteRunScript] = []
     @ObservationIgnored private var runScriptsId: Int?
     @ObservationIgnored private var shepherdListId: Int?
+    /// `readWorktree` requests awaiting their answer: what each asked, and of which member's worktree.
+    @ObservationIgnored private var memberReads: [Int: (read: RemoteWorktreeRead.Read, worktreeId: String)] = [:]
+    /// The member worktree the loaded changes, tree and open views belong to; nil outside a checkout.
+    @ObservationIgnored private var memberStateOwner: String?
 
     init(hub: HostHub, hostID: UUID, sessionId: String) {
         self.hub = hub
@@ -154,9 +158,12 @@ final class SessionWorkspace {
         if holders == 1 {
             listener = hub.addListener(hostID) { [weak self] in self?.receive($0) }
             hostWasOnline = hub.state(of: hostID) == .online
+            // The focus may have moved while nobody listened; drop what the previous member showed first.
+            followFocus(reload: false)
             if hostWasOnline { replay() }
             watchGeneration += 1
             watchHost(generation: watchGeneration)
+            watchFocus(generation: watchGeneration)
             pollShepherd(generation: watchGeneration)
         }
         return ListenerToken { [weak self] in
@@ -187,21 +194,34 @@ final class SessionWorkspace {
         }
     }
 
+    /// Follows the focused member while the session is open: the host can drop the focused one from
+    /// its list, or a pick land, and the focus moves without `focusMember`.
+    private func watchFocus(generation: Int) {
+        guard generation == watchGeneration else { return }
+        withObservationTracking {
+            _ = focusedMember?.worktreeId
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.watchFocus(generation: generation) }
+        }
+        followFocus()
+    }
+
     /// Asks again for whatever is open; the host forgot everything it was asked while away.
     private func replay() {
         changesFlight.reset()
+        // The host forgot the reads it was asked; each is asked again below.
+        memberReads.removeAll()
         if case .idle = changes {} else { refreshChanges() }
-        if let commit { send(.listCommitFiles(sessionId: sessionId, sha: commit.commit.revision)) }
+        if let commit { sendRead(.commitFiles(sha: commit.commit.revision)) }
         for key in diffWaiters.keys { requestDiff(key) }
-        for sha in commitFilesWaiters.keys where sha != commit?.commit.revision { send(.listCommitFiles(sessionId: sessionId, sha: sha)) }
+        for sha in commitFilesWaiters.keys where sha != commit?.commit.revision { sendRead(.commitFiles(sha: sha)) }
         if treeRequested { loadTree() }
         refreshShepherd()
         refreshRunScripts()
         if let file {
             self.file = (file.path, .loading)
             // A skill's path is its command, which only `readSkill` reads.
-            send(fileIsSkill ? .readSkill(sessionId: sessionId, command: file.path)
-                : .readFile(sessionId: sessionId, path: file.path))
+            if fileIsSkill { send(.readSkill(sessionId: sessionId, command: file.path)) } else { sendRead(.file(path: file.path)) }
         }
     }
 
@@ -211,13 +231,13 @@ final class SessionWorkspace {
         if case .loaded = changes {} else { changes = .loading }
         guard changesFlight.shouldSend() else { return }
         changesMode = comparisonMode
-        send(.listChanges(sessionId: sessionId, comparisonMode: comparisonMode))
+        sendRead(.changes(comparisonMode: comparisonMode))
         refreshPullRequest()
     }
 
     /// Asks the host to read the worktree's pull request again; its answer replaces `pullRequest`.
     private func refreshPullRequest() {
-        guard canUseGit, let target = gitTarget, hub.state(of: hostID) == .online else { return }
+        guard canUseGit, let target = repositoryTarget, hub.state(of: hostID) == .online else { return }
         let id = hub.nextHostRequestId()
         reviewStatusId = id
         send(.host(RemoteGitRequest.reviewStatus(id: id, projectID: target.projectID, path: target.worktree.path)))
@@ -240,7 +260,7 @@ final class SessionWorkspace {
 
     /// A commit's files, without opening it.
     func loadCommitFiles(_ sha: String) async -> Result<CommitFilesReply, RemoteGitFailure> {
-        await wait(\.commitFilesWaiters, sha) { send(.listCommitFiles(sessionId: sessionId, sha: sha)) }
+        await wait(\.commitFilesWaiters, sha) { sendRead(.commitFiles(sha: sha)) }
     }
 
     /// Refreshes the change list and returns it once it lands.
@@ -275,16 +295,16 @@ final class SessionWorkspace {
 
     private func requestDiff(_ key: DiffKey) {
         if let sha = key.sha {
-            send(.commitFileDiff(sessionId: sessionId, sha: sha, path: key.path))
+            sendRead(.commitDiff(sha: sha, path: key.path))
         } else {
-            send(.fileDiff(sessionId: sessionId, path: key.path, stage: key.stage, comparisonMode: comparisonMode))
+            sendRead(.fileDiff(path: key.path, stage: key.stage, comparisonMode: comparisonMode))
         }
     }
 
     func openCommit(_ commit: RemoteCommit, by owner: UUID) {
         pushedBy = owner
         self.commit = (commit, .loading)
-        send(.listCommitFiles(sessionId: sessionId, sha: commit.revision))
+        sendRead(.commitFiles(sha: commit.revision))
     }
 
     func closeCommit() {
@@ -321,21 +341,42 @@ final class SessionWorkspace {
 
     func loadTree() {
         treeRequested = true
-        send(.listFiles(sessionId: sessionId, path: nil, comparisonMode: nil))
+        sendRead(.files(path: nil))
     }
 
     func toggle(_ dir: String) {
         if tree.expanded.remove(dir) != nil { return }
         tree.expanded.insert(dir)
         // Always re-lists: a collapsed directory misses the refreshes, so its cached listing shows only until the reply.
-        send(.listFiles(sessionId: sessionId, path: dir, comparisonMode: nil))
+        sendRead(.files(path: dir))
+    }
+
+    /// What a checkout's link to a file in none of its members tells the user.
+    static let linkOutsideMembers = "This file isn't in one of the workspace's repositories."
+
+    /// Opens `path`, relative to the checkout's root, in the member that holds it. False when this is
+    /// no checkout or no member holds the path.
+    @discardableResult
+    func openCheckoutLink(rootRelative path: String, by owner: UUID) -> Bool {
+        guard let match = checkout?.memberFile(atRootRelative: path) else { return false }
+        focusMember(match.member.id)
+        openFile(match.relativePath, by: owner)
+        return true
+    }
+
+    /// `path`, an image's path in the repository the viewer shows, as the host's transcript image reader
+    /// takes it. A checkout session's images are read against the checkout's root, not the member's, so a
+    /// member's file is named by its absolute path; a URL or an absolute path stays as it is.
+    func imageSource(forRepositoryPath path: String) -> String {
+        guard let member = focusedMember, !path.hasPrefix("/"), URL(string: path)?.scheme == nil else { return path }
+        return member.worktree.path + "/" + path
     }
 
     func openFile(_ path: String, by owner: UUID) {
         pushedBy = owner
         file = (path, .loading)
         fileIsSkill = false
-        send(.readFile(sessionId: sessionId, path: path))
+        sendRead(.file(path: path))
     }
 
     /// Opens a skill command's `SKILL.md`, which the host reads by command.
@@ -346,11 +387,21 @@ final class SessionWorkspace {
         send(.readSkill(sessionId: sessionId, command: command))
     }
 
-    /// A file's text without opening it, for a card that shows part of it;
-    /// nil when the host can't read it or doesn't answer within 10 s.
-    func peekFile(_ path: String) async -> String? {
+    /// A file's text without opening it, for a card that shows part of it; `sessionPath` is relative
+    /// to where the session works, a checkout's root in a workspace checkout. Nil when the host can't
+    /// read it or doesn't answer within 10 s, and in a checkout when the file isn't in the focused
+    /// member: peeking never moves the focus.
+    func peekFile(_ sessionPath: String) async -> String? {
         guard hub.state(of: hostID) == .online else { return nil }
-        if peekWaiters[path] == nil { send(.readFile(sessionId: sessionId, path: path)) }
+        let path: String
+        if let checkout {
+            guard let found = checkout.memberFile(atRootRelative: sessionPath),
+                  found.member.id == focusedMemberID else { return nil }
+            path = found.relativePath
+        } else {
+            path = sessionPath
+        }
+        if peekWaiters[path] == nil { sendRead(.file(path: path)) }
         let timeout = Task { [weak self] in
             try? await Task.sleep(for: .seconds(10))
             guard !Task.isCancelled else { return }
@@ -365,27 +416,183 @@ final class SessionWorkspace {
         fileIsSkill = false
     }
 
+    // MARK: Workspace checkout
+
+    /// The workspace checkout the session works in, keeping only the members this connection can
+    /// name; nil for a session in a worktree of its own, or one a gateway relays from another Mac.
+    var checkout: RemoteSessionCheckout? {
+        guard let summary = hub.sessions(of: hostID).first(where: { $0.id == sessionId }), summary.serverId == nil,
+              let checkout = summary.checkout,
+              // Without `readWorktree` the host answers only for the session, as it did before checkouts.
+              hub.supports(HostProtocolCapability.worktreesReadV1, on: hostID),
+              hub.supports(HostProtocolCapability.workspacesPhoneV1, on: hostID) else { return nil }
+        // An SSH member's summary carries a display path (`host:/repo`), as `ownWorktreeTarget` notes.
+        return RemoteSessionCheckout(id: checkout.id, name: checkout.name, branch: checkout.branch, rootPath: checkout.rootPath,
+                                     members: checkout.members.filter { $0.worktree.path.hasPrefix("/") })
+    }
+
+    /// The member repository Changes and Files read: the one last picked for this checkout, in any
+    /// session of it, while it's still listed, else the first.
+    var focusedMember: RemoteSessionCheckout.Member? {
+        guard let checkout else { return nil }
+        let preferred = CheckoutFocus.shared.member(of: checkout.id)
+        return checkout.members.first { $0.id == preferred } ?? checkout.members.first
+    }
+
+    var focusedMemberID: String? { focusedMember?.id }
+
+    /// Reads member `id` from now on, here and in every other open session of the checkout. What the
+    /// previous member showed is dropped, and any reply still on its way for it is ignored; the
+    /// loaded tabs ask again.
+    func focusMember(_ id: String) {
+        guard let checkout, id != focusedMemberID, checkout.members.contains(where: { $0.id == id }) else { return }
+        CheckoutFocus.shared.setMember(id, of: checkout.id)
+        followFocus()
+    }
+
+    /// Resets what the previous member showed when the focused member's worktree is no longer the
+    /// one it was loaded for.
+    /// `reload`: ask again now; else the next `replay` does.
+    private func followFocus(reload: Bool = true) {
+        let current = focusedMember?.worktreeId
+        guard current != memberStateOwner else { return }
+        memberStateOwner = current
+        resetMemberState(reload: reload)
+    }
+
+    /// Drops what the previous member showed, failing the waits on it, and asks again for whatever
+    /// tab was loaded. Replies still on their way for the previous member are ignored.
+    private func resetMemberState(reload: Bool) {
+        let changesWereLoaded = if case .idle = changes { false } else { true }
+        // Forgetting the reads in flight drops their replies, which name the previous member's worktree.
+        memberReads.removeAll()
+        changesFlight.reset()
+        changesMode = nil
+        changes = .idle
+        refreshTask?.cancel()
+        refreshDeferred = false
+        tree = RemoteFileTree()
+        truncatedDirs = []
+        treeError = nil
+        review = nil
+        commit = nil
+        file = nil
+        fileIsSkill = false
+        pullRequest = nil
+        runScripts = []
+        let switched = RemoteGitFailure("You switched to another repository.")
+        for key in Array(diffWaiters.keys) { resume(\.diffWaiters, key, .failure(switched)) }
+        for sha in Array(commitFilesWaiters.keys) { resume(\.commitFilesWaiters, sha, .failure(switched)) }
+        for waiters in peekWaiters.values { waiters.forEach { $0.resume(returning: nil) } }
+        peekWaiters.removeAll()
+        guard reload, hub.state(of: hostID) == .online else {
+            // Not idle, so the replay asks for them again.
+            if changesWereLoaded { changes = .loading }
+            return
+        }
+        if changesWereLoaded { refreshChanges() } else { refreshPullRequest() }
+        if treeRequested { loadTree() }
+        refreshRunScripts()
+    }
+
+    /// The repository the session's reads name: the focused member in a workspace checkout, else the
+    /// session's own worktree.
+    var repositoryTarget: (projectID: String, worktreeId: String?, worktree: RemoteWorktreeSummary)? {
+        if checkout != nil {
+            guard let member = focusedMember else { return nil }
+            return (member.projectId, member.worktreeId, member.worktree)
+        }
+        guard let target = ownWorktreeTarget else { return nil }
+        return (target.projectID, hub.sessions(of: hostID).first { $0.id == sessionId }?.worktreeId, target.worktree)
+    }
+
+    /// Asks for `read`: of the session's own worktree by its id, or, in a workspace checkout, of the
+    /// focused member's through `readWorktree`.
+    private func sendRead(_ read: RemoteWorktreeRead.Read) {
+        guard checkout != nil else {
+            if let message = sessionRead(read) { send(message) }
+            return
+        }
+        guard let target = repositoryTarget, let worktreeId = target.worktreeId else {
+            // Answered on the next turn, so a wait that asked has registered for it.
+            Task { @MainActor [weak self] in
+                self?.refuse(read, RemoteGitFailure("This workspace checkout has no repository the phone can open."))
+            }
+            return
+        }
+        let id = hub.nextHostRequestId()
+        memberReads[id] = (read, worktreeId)
+        send(.host(RemoteWorktreeRead.request(id: id, projectID: target.projectID, path: target.worktree.path, read: read)))
+    }
+
+    /// `read` as the session-addressed message a host answers for the session's own worktree.
+    private func sessionRead(_ read: RemoteWorktreeRead.Read) -> PhoneClientMessage? {
+        switch read {
+        case .changes(let mode): .listChanges(sessionId: sessionId, comparisonMode: mode)
+        case .fileDiff(let path, let stage, let mode): .fileDiff(sessionId: sessionId, path: path, stage: stage, comparisonMode: mode)
+        case .files(let path): .listFiles(sessionId: sessionId, path: path, comparisonMode: nil)
+        case .commitFiles(let sha): .listCommitFiles(sessionId: sessionId, sha: sha)
+        case .commitDiff(let sha, let path): .commitFileDiff(sessionId: sessionId, sha: sha, path: path)
+        case .file(let path): .readFile(sessionId: sessionId, path: path)
+        // File history goes through its own host request.
+        case .fileHistory: nil
+        }
+    }
+
+    /// Shows the host's refusal of `read` where its reply would have landed.
+    private func refuse(_ read: RemoteWorktreeRead.Read, _ failure: RemoteGitFailure) {
+        switch read {
+        case .changes:
+            if changeListLanded() { return }
+            changes = .failed(failure.message)
+            resume(\.changesWaiters, true, .failure(failure))
+        case .fileDiff(let path, let stage, _):
+            resume(\.diffWaiters, DiffKey(path: path, stage: stage), .failure(failure))
+        case .commitDiff(let sha, let path):
+            resume(\.diffWaiters, DiffKey(path: path, stage: nil, sha: sha), .failure(failure))
+        case .commitFiles(let sha):
+            resume(\.commitFilesWaiters, sha, .failure(failure))
+            guard let open = commit?.commit, open.revision == sha else { return }
+            commit = (open, .failed(failure.message))
+        case .files(let path):
+            if let path, tree.children[path] == nil { tree.expanded.remove(path) }
+            treeError = failure.message
+        case .file(let path):
+            peekWaiters.removeValue(forKey: path)?.forEach { $0.resume(returning: nil) }
+            guard file?.path == path, !fileIsSkill else { return }
+            file = (path, .failed(failure.message))
+        case .fileHistory:
+            break
+        }
+    }
+
+    /// Whether a reply addressed to `id` is this session's: its own, or the focused member's worktree.
+    private func accepts(_ id: String) -> Bool {
+        id == sessionId || id == focusedMember?.worktreeId
+    }
+
     // MARK: Replies
 
     // MARK: Git
 
-    /// The session's own worktree on its host, which git actions name. A session a gateway relays
-    /// lives on another Mac, whose worktrees this connection can't name; nor can it name one in an
-    /// SSH project, whose summary carries a display path (`host:/repo`), not the stored one.
-    private var gitTarget: (projectID: String, worktree: RemoteWorktreeSummary)? {
+    /// The session's own worktree on its host, the only one the phone renames, archives or deletes;
+    /// git, reviews and runs name `repositoryTarget`. A session a gateway relays lives on another Mac,
+    /// whose worktrees this connection can't name; nor can it name one in an SSH project, whose
+    /// summary carries a display path (`host:/repo`), not the stored one.
+    private var ownWorktreeTarget: (projectID: String, worktree: RemoteWorktreeSummary)? {
         guard let summary = hub.sessions(of: hostID).first(where: { $0.id == sessionId }), summary.serverId == nil,
               let projectID = summary.projectId, let worktree = summary.worktree, worktree.path.hasPrefix("/") else { return nil }
         return (projectID, worktree)
     }
 
     var canUseGit: Bool {
-        gitTarget != nil && (hub.supports(HostProtocolCapability.worktreesGitPhoneV1, on: hostID)
+        repositoryTarget != nil && (hub.supports(HostProtocolCapability.worktreesGitPhoneV1, on: hostID)
             || hub.supports(HostProtocolCapability.worktreesGitV1, on: hostID))
     }
 
     /// Whether working-tree hunks can be staged, unstaged or discarded one by one.
     var canChangeHunks: Bool {
-        guard gitTarget != nil else { return false }
+        guard repositoryTarget != nil else { return false }
         return hub.supports(HostProtocolCapability.worktreesHunksPhoneV1, on: hostID)
             || hub.supports(HostProtocolCapability.worktreesHunksV1, on: hostID) && hub.supports(HostProtocolCapability.worktreesGitV1, on: hostID)
     }
@@ -396,10 +603,10 @@ final class SessionWorkspace {
         return await git(.hunk(path: key.path, index: index, header: hunk.header, linesHash: hunk.linesHash, action: action))
     }
 
-    /// Runs `change` on the session's worktree and refreshes the change list. Returns the host's
+    /// Runs `change` on the repository the session works on and refreshes the change list. Returns the host's
     /// refusal, worded for the user, or nil once it succeeded.
     func git(_ change: RemoteGitChange) async -> String? {
-        guard gitRunning == nil, let target = gitTarget else { return "This worktree can't be changed from here." }
+        guard gitRunning == nil, let target = repositoryTarget else { return "This worktree can't be changed from here." }
         gitRunning = change
         defer {
             gitRunning = nil
@@ -413,12 +620,12 @@ final class SessionWorkspace {
 
     /// What the host suggests a message for the staged change from; nil when it couldn't say.
     var canReadFileHistory: Bool {
-        gitTarget != nil && hub.supports(HostProtocolCapability.worktreesFileHistoryV1, on: hostID)
+        repositoryTarget != nil && hub.supports(HostProtocolCapability.worktreesFileHistoryV1, on: hostID)
     }
 
     /// The commits that touched `path`, newest first.
     func fileHistory(_ path: String) async -> Result<(entries: [HostFileHistoryEntry], truncated: Bool), RemoteGitFailure> {
-        guard let target = gitTarget else { return .failure(RemoteGitFailure("This worktree's history isn't available here.")) }
+        guard let target = repositoryTarget else { return .failure(RemoteGitFailure("This worktree's history isn't available here.")) }
         var id = 0
         let reply = await hostReply(timeout: .seconds(30)) {
             id = $0
@@ -436,7 +643,7 @@ final class SessionWorkspace {
     }
 
     func commitMessageInput() async -> CommitMessageSuggestionInput? {
-        guard canUseGit, let target = gitTarget,
+        guard canUseGit, let target = repositoryTarget,
               case .success(let reply) = await hostReply(timeout: .seconds(30), {
                   RemoteGitRequest.commitMessageInput(id: $0, projectID: target.projectID, path: target.worktree.path)
               }) else { return nil }
@@ -445,20 +652,20 @@ final class SessionWorkspace {
 
     // MARK: Reviews
 
-    /// The Mac's draft reviews of this worktree, its comments readable and changeable from here.
+    /// The Mac's draft reviews of the repository's worktree, its comments readable and changeable from here.
     var canReview: Bool {
-        gitTarget != nil && (hub.supports(HostProtocolCapability.reviewsPhoneV1, on: hostID)
+        repositoryTarget != nil && (hub.supports(HostProtocolCapability.reviewsPhoneV1, on: hostID)
             || hub.supports(HostProtocolCapability.reviewsV1, on: hostID))
     }
 
     func reviews() async -> Result<[RemoteReviewSummary], RemoteGitFailure> {
-        guard let target = gitTarget else { return .failure(RemoteGitFailure("This worktree's reviews can't be read from here.")) }
+        guard let target = repositoryTarget else { return .failure(RemoteGitFailure("This worktree's reviews can't be read from here.")) }
         return await hostReply { RemoteReviewRequest.list(id: $0, projectID: target.projectID, path: target.worktree.path) }
             .flatMap { Self.readable(RemoteReviewRequest.reviews(in: $0)) }
     }
 
     func review(_ sessionID: String) async -> Result<RemoteReview, RemoteGitFailure> {
-        guard let target = gitTarget else { return .failure(RemoteGitFailure("This worktree's reviews can't be read from here.")) }
+        guard let target = repositoryTarget else { return .failure(RemoteGitFailure("This worktree's reviews can't be read from here.")) }
         return await hostReply {
             RemoteReviewRequest.read(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID)
         }
@@ -467,13 +674,13 @@ final class SessionWorkspace {
 
     /// Whether the host reads and answers a pull or merge request review's threads for the phone.
     var canReadPullRequestThreads: Bool {
-        gitTarget != nil && (hub.supports(HostProtocolCapability.reviewsProviderPhoneV1, on: hostID)
+        repositoryTarget != nil && (hub.supports(HostProtocolCapability.reviewsProviderPhoneV1, on: hostID)
             || hub.supports(HostProtocolCapability.reviewsProviderV1, on: hostID))
     }
 
     /// Review `sessionID`'s pull or merge request threads, fetched from its provider by the host; its raw diff too when `withDiff`.
     func pullRequestReview(_ sessionID: String, withDiff: Bool) async -> Result<RemoteProviderReview, RemoteGitFailure> {
-        guard let target = gitTarget else { return .failure(RemoteGitFailure("This pull request can't be read from here.")) }
+        guard let target = repositoryTarget else { return .failure(RemoteGitFailure("This pull request can't be read from here.")) }
         return await hostReply {
             RemoteReviewRequest.readProvider(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID,
                                              withDiff: withDiff)
@@ -485,7 +692,7 @@ final class SessionWorkspace {
     /// Replies to, resolves or unresolves a thread on the provider, as the host's user.
     /// Returns the host's refusal, worded for the user, or nil once it's done.
     func changeThread(_ sessionID: String, threadID: String, _ action: RemoteProviderThreadAction, body: String? = nil) async -> String? {
-        guard let target = gitTarget else { return "This pull request can't be changed from here." }
+        guard let target = repositoryTarget else { return "This pull request can't be changed from here." }
         return await hostRequest {
             RemoteReviewRequest.mutateThread(id: $0, projectID: target.projectID, path: target.worktree.path,
                                              sessionID: sessionID, threadID: threadID, action, body: body)
@@ -497,7 +704,7 @@ final class SessionWorkspace {
     /// pinned to `headSHA`, the head the phone showed. Succeeds with what it couldn't post, if anything.
     func submitReview(_ sessionID: String, _ decision: RemoteReviewDecision, body: String,
                       headSHA: String?) async -> Result<String?, RemoteGitFailure> {
-        guard let target = gitTarget else { return .failure(RemoteGitFailure("This review can't be submitted from here.")) }
+        guard let target = repositoryTarget else { return .failure(RemoteGitFailure("This review can't be submitted from here.")) }
         // Each draft may be its own provider call; a phone giving up early would invite a duplicate submission.
         return await hostReply(timeout: .seconds(300)) {
             RemoteReviewRequest.publish(id: $0, projectID: target.projectID, path: target.worktree.path,
@@ -509,12 +716,12 @@ final class SessionWorkspace {
 
     /// Whether the host sends a review's comments to an agent chat for the phone.
     var canSendReviewToAgent: Bool {
-        gitTarget != nil && hub.supports(HostProtocolCapability.reviewsAgentPhoneV1, on: hostID)
+        repositoryTarget != nil && hub.supports(HostProtocolCapability.reviewsAgentPhoneV1, on: hostID)
     }
 
     /// Where the Mac would send review `sessionID`, this chat first.
     func reviewAgentTargets(_ sessionID: String) async -> Result<[RemoteAgentTarget], RemoteGitFailure> {
-        guard let target = gitTarget else { return .failure(RemoteGitFailure("This review can't be sent from here.")) }
+        guard let target = repositoryTarget else { return .failure(RemoteGitFailure("This review can't be sent from here.")) }
         return await hostReply {
             RemoteReviewRequest.agentTargets(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID)
         }
@@ -529,7 +736,7 @@ final class SessionWorkspace {
     /// Sends review `sessionID`'s open comments to `agent`; the Mac marks them sent.
     /// Returns the host's refusal, worded for the user, or nil once the agent took them.
     func sendReview(_ sessionID: String, to agent: RemoteAgentTarget) async -> String? {
-        guard let target = gitTarget else { return "This review can't be sent from here." }
+        guard let target = repositoryTarget else { return "This review can't be sent from here." }
         // A new chat on the Mac can take a while to start; a phone giving up early would invite a second send.
         return await hostFailure(timeout: .seconds(300)) {
             RemoteReviewRequest.sendToAgent(id: $0, projectID: target.projectID, path: target.worktree.path,
@@ -543,7 +750,7 @@ final class SessionWorkspace {
 
     /// Returns the host's refusal, worded for the user, or nil once the comment changed.
     func changeReview(_ sessionID: String, _ mutation: RemoteReviewMutation) async -> String? {
-        guard let target = gitTarget else { return "This worktree's reviews can't be changed from here." }
+        guard let target = repositoryTarget else { return "This worktree's reviews can't be changed from here." }
         return await hostRequest {
             RemoteReviewRequest.mutate(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID, mutation)
         }
@@ -557,10 +764,9 @@ final class SessionWorkspace {
                                            path: entry.path, originalPath: originalPath, anchor: anchor, body: body))
     }
 
-    /// The worktree's local-changes review, where the Mac's Review workspace files working-tree comments.
+    /// The repository worktree's local-changes review, where the Mac's Review workspace files working-tree comments.
     var localChangesReviewID: String? {
-        guard let target = gitTarget,
-              let worktreeID = hub.sessions(of: hostID).first(where: { $0.id == sessionId })?.worktreeId else { return nil }
+        guard let target = repositoryTarget, let worktreeID = target.worktreeId else { return nil }
         return RemoteReviewRequest.localChangesSessionID(worktreeID: worktreeID, worktreePath: target.worktree.path)
     }
 
@@ -568,13 +774,13 @@ final class SessionWorkspace {
 
     /// The branch the session's worktree is on, when the host lets the phone rename it.
     var renamableBranch: String? {
-        hub.supports(HostProtocolCapability.worktreesRenameBranchV1, on: hostID) ? gitTarget?.worktree.branch : nil
+        hub.supports(HostProtocolCapability.worktreesRenameBranchV1, on: hostID) ? ownWorktreeTarget?.worktree.branch : nil
     }
 
     /// Renames the worktree's branch `from`, the one the user saw, so the host refuses a checkout
     /// switched since; then refreshes the changes. Returns the host's refusal, or nil.
     func renameBranch(from: String, to branch: String) async -> String? {
-        guard let target = gitTarget else { return "This worktree can't be changed from here." }
+        guard let target = ownWorktreeTarget else { return "This worktree can't be changed from here." }
         defer { refreshChanges() }
         return await hostRequest {
             RemoteGitRequest.renameBranch(id: $0, projectID: target.projectID, path: target.worktree.path,
@@ -601,10 +807,10 @@ final class SessionWorkspace {
         let worktree: RemoteWorktreeSummary
     }
 
-    /// The session's worktree, when removable: not the main checkout or a folder, and one the host
+    /// The session's own worktree, never a checkout member, when removable: not the main checkout or a folder, and one the host
     /// can tell apart from a replacement.
     var removalTarget: RemovalTarget? {
-        guard let target = gitTarget, target.worktree.isMain != true, target.worktree.isFolder != true,
+        guard let target = ownWorktreeTarget, target.worktree.isMain != true, target.worktree.isFolder != true,
               target.worktree.lineageID != nil, hub.supports(HostProtocolCapability.worktreesLifecycleV1, on: hostID)
         else { return nil }
         return RemovalTarget(projectID: target.projectID, worktree: target.worktree)
@@ -631,10 +837,10 @@ final class SessionWorkspace {
     // MARK: Runs
 
     /// A worktree this host lists, on a host that lists its run scripts.
-    var canRun: Bool { gitTarget != nil && hub.supports(HostProtocolCapability.runsScriptsV1, on: hostID) }
+    var canRun: Bool { repositoryTarget != nil && hub.supports(HostProtocolCapability.runsScriptsV1, on: hostID) }
 
     func refreshRunScripts() {
-        guard canRun, let target = gitTarget, hub.state(of: hostID) == .online else { return }
+        guard canRun, let target = repositoryTarget, hub.state(of: hostID) == .online else { return }
         let id = hub.nextHostRequestId()
         runScriptsId = id
         send(.host(RemoteGitRequest.listRunScripts(id: id, projectID: target.projectID, path: target.worktree.path)))
@@ -642,7 +848,7 @@ final class SessionWorkspace {
 
     /// Follows an accepted launch by its run ID, independently of the screen that asked for it.
     func run(_ action: RemoteRunAction, _ script: RemoteRunScript, openConsole: @escaping PhoneRunTracker.OpenConsole) async -> String? {
-        guard let target = gitTarget else { return "This worktree can't run scripts from here." }
+        guard let target = repositoryTarget else { return "This worktree can't run scripts from here." }
         let result = await hostReply {
             RemoteGitRequest.run(id: $0, action, scriptKey: script.key, projectID: target.projectID, path: target.worktree.path)
         }
@@ -656,9 +862,11 @@ final class SessionWorkspace {
 
     // MARK: Shepherd
 
-    /// A session this host runs itself, on a host that lets the phone shepherd it.
+    /// A session this host runs itself in its own worktree, on a host that lets the phone shepherd it.
+    /// A workspace checkout's session has no worktree of its own, and the shepherd refuses it, as on the Mac.
     var canShepherd: Bool {
-        hub.sessions(of: hostID).first { $0.id == sessionId }?.serverId == nil
+        guard let summary = hub.sessions(of: hostID).first(where: { $0.id == sessionId }) else { return false }
+        return summary.serverId == nil && summary.worktreeId != nil
             && hub.supports(HostProtocolCapability.shepherdsPhoneV1, on: hostID)
     }
 
@@ -742,6 +950,16 @@ final class SessionWorkspace {
     private func receive(_ message: PhoneServerMessage) {
         switch message {
         case .host(let reply):
+            if !memberReads.isEmpty, let id = RemoteGitRequest.responseID(in: reply), memberReads[id] != nil,
+               let result = RemoteWorktreeRead.reply(to: id, in: reply), let pending = memberReads.removeValue(forKey: id) {
+                // A member the focus left since, as when it's no longer listed.
+                guard pending.worktreeId == focusedMember?.worktreeId else { return }
+                switch result {
+                case .success(let inner): receive(inner)
+                case .failure(let failure): refuse(pending.read, failure)
+                }
+                return
+            }
             if let id = runScriptsId, let found = RemoteGitRequest.runScripts(replying: id, in: reply) {
                 runScripts = found
                 return
@@ -760,52 +978,52 @@ final class SessionWorkspace {
                 if let result = RemoteGitRequest.reply(to: id, in: reply) { return finishHostRequest(id, result.map { reply }) }
             }
         case .changeList(let id, let ref, let metrics, let files, let staged, let unstaged, let commits,
-                         let truncated, let commitsTruncated, _, _) where id == sessionId:
+                         let truncated, let commitsTruncated, _, _) where accepts(id):
             if changeListLanded() { return }
             let reply = ChangeListReply(
                 comparisonRef: ref, metricsAvailable: metrics, files: files, staged: staged, unstaged: unstaged,
                 commits: commits, truncated: truncated, commitsTruncated: commitsTruncated)
             changes = .loaded(reply)
             resume(\.changesWaiters, true, .success(reply))
-        case .changeListFailed(let id, let reason, let message) where id == sessionId:
+        case .changeListFailed(let id, let reason, let message) where accepts(id):
             if changeListLanded() { return }
             let text = RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)
             changes = .failed(text)
             resume(\.changesWaiters, true, .failure(RemoteGitFailure(text)))
-        case .fileDiffResult(let id, let path, let stage, let hunks, let truncated, let note) where id == sessionId:
+        case .fileDiffResult(let id, let path, let stage, let hunks, let truncated, let note) where accepts(id):
             resume(\.diffWaiters, DiffKey(path: path, stage: stage), .success(DiffReply(hunks: hunks, truncated: truncated, metadataNote: note)))
-        case .fileDiffFailed(let id, let path, let stage, let reason, let message) where id == sessionId:
+        case .fileDiffFailed(let id, let path, let stage, let reason, let message) where accepts(id):
             resume(\.diffWaiters, DiffKey(path: path, stage: stage),
                    .failure(RemoteGitFailure(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil))))
-        case .commitFiles(let id, let sha, let files, let truncated) where id == sessionId:
+        case .commitFiles(let id, let sha, let files, let truncated) where accepts(id):
             let reply = CommitFilesReply(files: files, truncated: truncated)
             resume(\.commitFilesWaiters, sha, .success(reply))
             guard let open = commit?.commit, open.revision == sha else { return }
             commit = (open, .loaded(reply))
-        case .commitFilesFailed(let id, let sha, let reason, let message) where id == sessionId:
+        case .commitFilesFailed(let id, let sha, let reason, let message) where accepts(id):
             let text = RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)
             resume(\.commitFilesWaiters, sha, .failure(RemoteGitFailure(text)))
             guard let open = commit?.commit, open.revision == sha else { return }
             commit = (open, .failed(text))
-        case .commitDiffResult(let id, let sha, let path, let hunks, let truncated, let note) where id == sessionId:
+        case .commitDiffResult(let id, let sha, let path, let hunks, let truncated, let note) where accepts(id):
             resume(\.diffWaiters, DiffKey(path: path, stage: nil, sha: sha), .success(DiffReply(hunks: hunks, truncated: truncated, metadataNote: note)))
-        case .commitDiffFailed(let id, let sha, let path, let reason, let message) where id == sessionId:
+        case .commitDiffFailed(let id, let sha, let path, let reason, let message) where accepts(id):
             resume(\.diffWaiters, DiffKey(path: path, stage: nil, sha: sha),
                    .failure(RemoteGitFailure(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil))))
-        case .fileTree(let id, let path, let nodes, let truncated) where id == sessionId:
+        case .fileTree(let id, let path, let nodes, let truncated) where accepts(id):
             tree.apply(path: path, nodes: nodes)
             treeError = nil
             if truncated { truncatedDirs.insert(path ?? "") } else { truncatedDirs.remove(path ?? "") }
-            if path == nil { for dir in tree.pathsToRefresh() { send(.listFiles(sessionId: sessionId, path: dir, comparisonMode: nil)) } }
-        case .fileTreeFailed(let id, let path, let reason, let message) where id == sessionId:
+            if path == nil { for dir in tree.pathsToRefresh() { sendRead(.files(path: dir)) } }
+        case .fileTreeFailed(let id, let path, let reason, let message) where accepts(id):
             // A directory that failed to list must not stay open and empty.
             if let path, tree.children[path] == nil { tree.expanded.remove(path) }
             treeError = RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)
-        case .fileContents(let id, let path, let text, let truncated, _) where id == sessionId:
+        case .fileContents(let id, let path, let text, let truncated, _) where accepts(id):
             peekWaiters.removeValue(forKey: path)?.forEach { $0.resume(returning: text) }
             guard file?.path == path else { return }
             file = (path, .loaded(FileReply(text: text, truncated: truncated)))
-        case .fileUnavailable(let id, let path, let reason, let byteSize, let message) where id == sessionId:
+        case .fileUnavailable(let id, let path, let reason, let byteSize, let message) where accepts(id):
             peekWaiters.removeValue(forKey: path)?.forEach { $0.resume(returning: nil) }
             guard file?.path == path else { return }
             file = (path, .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: byteSize)))
@@ -826,4 +1044,25 @@ final class ChangesComparison {
         .flatMap { $0 == .manual ? nil : $0 } {
         didSet { UserDefaults.standard.set(mode?.rawValue, forKey: Self.key) }
     }
+}
+
+/// The member each workspace checkout's sessions read, by checkout id: one pick for every session of
+/// a checkout, observed so an open session follows a pick made in another. Remembered across launches.
+@MainActor @Observable
+final class CheckoutFocus {
+    static let shared = CheckoutFocus()
+
+    /// Picks made since launch; earlier ones are read from the defaults.
+    private var picked: [String: String] = [:]
+
+    func member(of checkoutID: String) -> String? {
+        picked[checkoutID] ?? UserDefaults.standard.string(forKey: Self.key(checkoutID))
+    }
+
+    func setMember(_ memberID: String, of checkoutID: String) {
+        picked[checkoutID] = memberID
+        UserDefaults.standard.set(memberID, forKey: Self.key(checkoutID))
+    }
+
+    private static func key(_ checkoutID: String) -> String { "checkoutFocus.\(checkoutID)" }
 }

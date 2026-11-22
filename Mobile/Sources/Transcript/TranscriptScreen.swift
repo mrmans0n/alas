@@ -103,8 +103,12 @@ struct TranscriptScreen: View {
 
     private func openPreview(_ url: URL, in session: TranscriptSession) -> OpenURLAction.Result? {
         guard RemoteRunPreview.isLoopbackWebURL(url) else { return nil }
-        guard let summary = session.summary, summary.serverId == nil, let worktreeID = summary.worktreeId else {
-            actionError = "Open this worktree directly on its paired host to preview its runs."
+        // A workspace checkout's session has no worktree of its own; its runs are the focused member's.
+        guard let summary = session.summary, summary.serverId == nil,
+              let worktreeID = summary.worktreeId ?? workspace?.repositoryTarget?.worktreeId else {
+            actionError = session.summary?.serverId == nil && session.summary?.worktreeId == nil
+                ? "Run previews aren't available for workspace sessions yet."
+                : "Open this worktree directly on its paired host to preview its runs."
             return .handled
         }
         preview = RunPreviewSession(hub: registry.hub, hostID: hostID, worktreeID: worktreeID, endpoint: url)
@@ -195,6 +199,11 @@ struct TranscriptScreen: View {
                 if let result = openPreview(url, in: session) { return result }
                 switch RemoteTranscriptLink.route(url, worktreeRoot: session.worktreeRoot) {
                 case .file(let path):
+                    // A checkout's relative links start at its root: open the one in the member that holds it.
+                    if workspace.checkout != nil {
+                        if !workspace.openCheckoutLink(rootRelative: path, by: screenID) { actionError = SessionWorkspace.linkOutsideMembers }
+                        return .handled
+                    }
                     workspace.openFile(path, by: screenID)
                     return .handled
                 case .system: return .systemAction

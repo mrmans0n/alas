@@ -64,8 +64,12 @@ public enum ReviewCommentPlacement {
             let (all, index) = side == "new" ? (newLines, newIndex) : (oldLines, oldIndex)
             let byNumber = ReviewPlacedComment(id: item.id, row: index[end].map { all[$0].row })
             guard let quoted = item.selectedText, side == "new" || side == "old" else { return byNumber }
-            let wanted = quoted.trimmingCharacters(in: .newlines).split(separator: "\n", omittingEmptySubsequences: false).map(trimmed)
-            guard wanted.count == end - start + 1, wanted.contains(where: { !$0.isEmpty }) else { return byNumber }
+            let span = end - start + 1
+            var quotedLines = quoted.split(separator: "\n", omittingEmptySubsequences: false)
+            // A blank last line counts while the quote spans its lines; past that it's the newline the Mac trims.
+            while quotedLines.count > span, quotedLines.last?.isEmpty == true { quotedLines.removeLast() }
+            let wanted = quotedLines.map(trimmed)
+            guard wanted.count == span, wanted.contains(where: { !$0.isEmpty }) else { return byNumber }
             // Whether the lines from `all[i]` on are consecutive and read `wanted`.
             func reads(at i: Int) -> Bool {
                 i + wanted.count <= all.count && wanted.indices.allSatisfy { k in

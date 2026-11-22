@@ -1293,6 +1293,19 @@ struct ACPComposerPillChrome: ViewModifier {
     @Environment(\.designScale) private var scale
 
     func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            let shape = RoundedRectangle(cornerRadius: scale.radius.medium)
+            // Glass draws its own edge and lift, so only the focus ring stays.
+            content
+                .clipShape(shape)
+                .glassEffect(.regular, in: shape)
+                .overlay(shape.strokeBorder(theme.color("add").opacity(focused ? 0.7 : 0), lineWidth: 0.75))
+        } else {
+            legacyChrome(content)
+        }
+    }
+
+    private func legacyChrome(_ content: Content) -> some View {
         content
             .background {
                 // Two layered BACKGROUNDS — both sit behind the content. An

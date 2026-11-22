@@ -4,6 +4,49 @@ import Testing
 @testable import AlasHostCore
 
 struct HostProtocolTests {
+    /// The phone's `readWorktree` request decodes as the host's own, for every read.
+    @Test(arguments: [nil, ChangesComparisonMode.branchUpstream])
+    func aPhoneWorktreeReadDecodesAsTheHostsRead(mode: ChangesComparisonMode?) throws {
+        let hostMode = mode.flatMap { AppConfig.Changes.ChangesComparisonMode(rawValue: $0.rawValue) }
+        #expect((mode == nil) == (hostMode == nil))
+        let cases: [(RemoteWorktreeRead.Read, HostWorktreeRead)] = [
+            (.changes(comparisonMode: mode), .changes(comparisonMode: hostMode)),
+            (.fileDiff(path: "a.swift", stage: "staged", comparisonMode: mode), .fileDiff(path: "a.swift", stage: "staged", comparisonMode: hostMode)),
+            (.fileDiff(path: "a.swift", stage: nil, comparisonMode: mode), .fileDiff(path: "a.swift", stage: nil, comparisonMode: hostMode)),
+            (.files(path: "src"), .files(path: "src", comparisonMode: nil)),
+            (.files(path: nil), .files(path: nil, comparisonMode: nil)),
+            (.commitFiles(sha: "abc"), .commitFiles(sha: "abc")),
+            (.commitDiff(sha: "abc", path: "a.swift"), .commitDiff(sha: "abc", path: "a.swift")),
+            (.file(path: "a.swift"), .file(path: "a.swift")),
+        ]
+        for (read, expected) in cases {
+            let request = RemoteWorktreeRead.request(id: 9, projectID: "p", path: "/r", read: read)
+            #expect(try JSONDecoder().decode(HostClientMessage.self, from: request.json)
+                == HostClientMessage(id: 9, request: .readWorktree(worktree: WorktreeRef(projectID: "p", path: "/r"), read: expected)))
+        }
+    }
+
+    @Test func aWorktreeReadReplyDecodesToItsInnerMessage() throws {
+        let list = RemoteServerMessage.changeList(
+            sessionId: "p|/r", comparisonRef: nil, metricsAvailable: true,
+            files: [RemoteChangedFile(path: "a.txt", status: "M", add: 1, del: 0, conflict: nil, renameFrom: nil)],
+            staged: [], unstaged: [], commits: [], truncated: false
+        )
+        func message(_ id: Int) throws -> OpaqueHostMessage {
+            OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: id, result: .worktreeRead(reply: list))))
+        }
+        guard case .success(.changeList(let sessionId, _, _, let files, _, _, _, _, _, _, _))? = RemoteWorktreeRead.reply(to: 4, in: try message(4)) else {
+            Issue.record("expected a changeList")
+            return
+        }
+        #expect(sessionId == "p|/r" && files.map(\.path) == ["a.txt"])
+        #expect(RemoteGitRequest.responseID(in: try message(4)) == 4)
+        #expect(RemoteWorktreeRead.reply(to: 5, in: try message(4)) == nil)
+        // An answer to the request that doesn't decode still ends the wait for it.
+        let unreadable = OpaqueHostMessage(json: Data(#"{"response":{"id":4,"result":{"worktreeRead":{"reply":{"unknownKind":{}}}}}}"#.utf8))
+        #expect(RemoteWorktreeRead.reply(to: 4, in: unreadable) == .failure(RemoteGitFailure("The machine's answer couldn't be read.")))
+    }
+
     /// A preview at the cap, all `/`-heavy base64 that JSON escapes,
     /// still fits the send budget inside its host reply envelope.
     @Test func aFileBytesReplyAtTheCapFitsOneFrame() throws {
@@ -412,7 +455,7 @@ struct HostProtocolTests {
             Issue.record("expected hello")
             return
         }
-        #expect(caps == console + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1, PushRelayCapability.v1, HostProtocolCapability.worktreesGitPhoneV1, HostProtocolCapability.worktreesHunksPhoneV1, HostProtocolCapability.shepherdsPhoneV1, HostProtocolCapability.attentionPhoneV1, HostProtocolCapability.reviewsPhoneV1, HostProtocolCapability.reviewsProviderPhoneV1, PeerToolTerminalCapability.v1, PeerSubagentCapability.v1] + HostProtocolCapability.served)
+        #expect(caps == console + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1, PushRelayCapability.v1, HostProtocolCapability.worktreesGitPhoneV1, HostProtocolCapability.worktreesHunksPhoneV1, HostProtocolCapability.shepherdsPhoneV1, HostProtocolCapability.attentionPhoneV1, HostProtocolCapability.reviewsPhoneV1, HostProtocolCapability.reviewsProviderPhoneV1, HostProtocolCapability.workspacesPhoneV1, PeerToolTerminalCapability.v1, PeerSubagentCapability.v1] + HostProtocolCapability.served)
         // An app host keeps git to the user at it; only a headless host adds it.
         #expect(Set(caps).isDisjoint(with: HostProtocolCapability.headlessOnly))
     }
