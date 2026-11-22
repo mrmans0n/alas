@@ -264,7 +264,7 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             let placed = ReviewCommentPlacement.place(threads.map(Self.placeable) + comments.map(Self.placeable), in: hunks)
             for (thread, place) in zip(threads, placed) {
                 let id = Self.rowID(thread)
-                if thread.isOutdated || (place.row == nil && thread.line != nil) { outdated.insert(id) } else { outdated.remove(id) }
+                if thread.isOutdated || (place.row == nil && thread.anchor != nil) { outdated.insert(id) } else { outdated.remove(id) }
             }
             for (comment, place) in zip(comments, placed.dropFirst(threads.count)) {
                 if place.row == nil, case .line = comment.anchor { outdated.insert(comment.id) } else { outdated.remove(comment.id) }
@@ -312,21 +312,14 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
 
     /// An outdated thread goes to the top of its file: the provider no longer places it on these lines.
     private static func placeable(_ thread: RemoteProviderThread) -> ReviewPlaceable {
-        guard !thread.isOutdated, let line = thread.line else {
+        guard !thread.isOutdated, case .line(let side, let start, let end)? = thread.anchor else {
             return ReviewPlaceable(id: rowID(thread), side: nil, line: nil, endLine: nil)
         }
-        return ReviewPlaceable(id: rowID(thread), side: side(thread), line: thread.startLine ?? line, endLine: line)
-    }
-
-    /// GitHub says `LEFT` for a removed line; GitLab says nothing for an added or kept one.
-    private static func side(_ thread: RemoteProviderThread) -> String {
-        thread.side?.uppercased() == "LEFT" ? "old" : "new"
+        return ReviewPlaceable(id: rowID(thread), side: side, line: start, endLine: end)
     }
 
     private func configure(_ cell: ReviewCommentCell, thread: RemoteProviderThread, outdated: Bool) {
-        let location = thread.line.map {
-            Self.location(.line(side: Self.side(thread), startLine: thread.startLine ?? $0, endLine: $0))
-        } ?? "File"
+        let location = thread.anchor.map(Self.location) ?? "File"
         var badges: [String] = []
         if outdated { badges.append("Outdated") }
         if thread.isResolved { badges.append("Resolved") }

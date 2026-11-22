@@ -149,6 +149,9 @@ public struct RemoteProviderThread: Decodable, Equatable, Identifiable, Sendable
     public let path: String?
     public let line: Int?
     public let startLine: Int?
+    /// The old side's lines: what GitLab gives for a removed line, with `line` nil.
+    public let originalLine: Int?
+    public let originalStartLine: Int?
     /// The provider's diff side, `LEFT` for a removed line; nil when it didn't say.
     public let side: String?
     public let isResolved: Bool
@@ -159,8 +162,15 @@ public struct RemoteProviderThread: Decodable, Equatable, Identifiable, Sendable
     public let viewerCanReply: Bool
 
     private enum CodingKeys: String, CodingKey {
-        case id, path, line, startLine, isResolved, isOutdated, comments, viewerCanResolve, viewerCanUnresolve, viewerCanReply
+        case id, path, line, startLine, originalLine, originalStartLine, isResolved, isOutdated, comments, viewerCanResolve, viewerCanUnresolve, viewerCanReply
         case side = "diffSide"
+    }
+
+    /// The lines it's on, read as the Mac's diff surface reads them (`DiffReviewSurface`); nil for a file-level thread.
+    public var anchor: RemoteReviewAnchor? {
+        let old = side.map { $0.uppercased() == "LEFT" } ?? (line == nil && originalLine != nil)
+        guard let end = line ?? originalLine else { return nil }
+        return .line(side: old ? "old" : "new", startLine: (old ? originalStartLine : startLine) ?? end, endLine: end)
     }
 }
 

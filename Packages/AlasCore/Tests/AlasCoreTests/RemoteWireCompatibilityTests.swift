@@ -201,8 +201,9 @@ import Testing
                               publish: HostReviewPublish(decision: .requestChanges, body: "Fix it", draftIDs: nil, headSHA: "abc")))
 
         let base = ShepherdFixtures.thread("t1")
+        // GitLab's removed line: only the old side's numbers.
         let thread = ReviewThread(
-            id: base.id, path: base.path, line: 12, startLine: 10, originalLine: nil, diffHunk: nil, diffSide: "LEFT",
+            id: base.id, path: base.path, line: nil, startLine: nil, originalLine: 12, originalStartLine: 10, diffHunk: nil, diffSide: "LEFT",
             isResolved: false, isOutdated: false, isFileLevel: false, comments: base.comments,
             viewerCanResolve: true, viewerCanReply: true, url: base.url
         )
@@ -216,9 +217,10 @@ import Testing
         #expect(read.account == "me" && read.canReply && read.canResolve && !read.areThreadsComplete)
         #expect(read.canComment && read.canSubmitReview && read.headSHA == ShepherdFixtures.head && read.displayName == "pull request #7")
         let phoneThread = try #require(read.threads.first)
-        #expect(phoneThread.id == "t1" && phoneThread.path == thread.path && phoneThread.line == 12 && !phoneThread.isResolved)
+        #expect(phoneThread.id == "t1" && phoneThread.path == thread.path && phoneThread.line == nil && !phoneThread.isResolved)
         #expect(read.diff == "diff --git a/x b/x\n" && read.diffTruncated && read.baseSHA == request.baseSHA)
-        #expect(phoneThread.side == "LEFT" && phoneThread.startLine == 10)
+        #expect(phoneThread.side == "LEFT" && phoneThread.originalLine == 12 && phoneThread.originalStartLine == 10)
+        #expect(phoneThread.anchor == .line(side: "old", startLine: 10, endLine: 12))
         #expect(phoneThread.comments.map(\.author) == ["maintainer"] && phoneThread.comments.map(\.body) == ["Please fix t1."])
 
         let published = ProviderReviewPublishResult(
