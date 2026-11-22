@@ -15,6 +15,8 @@ extension AlasCoreContext {
     func remoteSessionSummaries(tabIndex: @MainActor (_ sessionID: String, _ owner: SessionOwnerID) -> Int?) async -> [RemoteSessionSummary] {
         var summariesByIdentity: [String: RemoteSessionSummaryCandidate] = [:]
         var identities: [String] = []
+        // Read once, and only when a checkout owns sessions.
+        var workspaceState: WorkspaceStateFile??
 
         for (owner, mgr) in sessionManagers {
             let resolved = owner.worktreeID.flatMap(projectAndWorktree(withWorktreeId:))
@@ -22,6 +24,13 @@ extension AlasCoreContext {
                 await remoteWorktreeSummary(project: resolved.project, worktree: resolved.worktree)
             } else {
                 RemoteWorktreeSummary?.none
+            }
+            var checkout: RemoteSessionCheckout?
+            if case .workspaceCheckout(let id, _) = owner {
+                if workspaceState == nil {
+                    workspaceState = if case .loaded(let state) = await workspaceStore.load() { state } else { .some(nil) }
+                }
+                checkout = await remoteSessionCheckout(id: id, state: workspaceState ?? nil)
             }
 
             for row in mgr.sessionRows where !row.archived {
@@ -40,7 +49,8 @@ extension AlasCoreContext {
                     projectId: resolved?.project.id,
                     worktreeId: resolved?.worktree.id,
                     worktree: worktreeSummary,
-                    detail: mgr.runners[row.id].map { Self.remoteSessionDetail(of: $0.session) }
+                    detail: mgr.runners[row.id].map { Self.remoteSessionDetail(of: $0.session) },
+                    checkout: checkout
                 )
                 let identity = Self.remoteSessionListIdentity(owner: owner, row: effectiveRow)
                 if let existing = summariesByIdentity[identity] {
@@ -52,6 +62,36 @@ extension AlasCoreContext {
             }
         }
         return identities.compactMap { summariesByIdentity[$0]?.summary(parents: delegatedSessionParents) }
+    }
+
+    /// Checkout `id` with its available members that are listed as worktrees,
+    /// as the host has it loaded or else as stored. Nil when it is unknown or
+    /// archived.
+    private func remoteSessionCheckout(id: UUID, state: WorkspaceStateFile?) async -> RemoteSessionCheckout? {
+        guard let checkout = environment.workspaceCheckout(id: id) ?? state?.checkouts.first(where: { $0.id == id }),
+              checkout.archivedAt == nil
+        else { return nil }
+        let projectIDs = Set(checkout.members.map(\.projectID))
+        let worktrees = projectIDs.flatMap { projects.worktrees(projectId: $0) }
+        let resolved = WorkspaceMemberWorktreeResolver.resolvedWorktreeIDs(checkout: checkout, worktrees: worktrees)
+        var members: [RemoteSessionCheckout.Member] = []
+        for member in checkout.members {
+            guard let worktreeID = resolved[member.id],
+                  let worktree = worktrees.first(where: { $0.id == worktreeID }),
+                  let project = projects.projects.first(where: { $0.id == member.projectID })
+            else { continue }
+            members.append(RemoteSessionCheckout.Member(
+                id: member.id.uuidString, name: project.name, projectId: project.id, worktreeId: worktree.id,
+                worktree: await remoteWorktreeSummary(project: project, worktree: worktree)
+            ))
+        }
+        let name = checkout.workspaceID.flatMap { workspaceID in
+            state?.workspaces.first { $0.id == workspaceID }?.name
+        } ?? checkout.fallbackWorkspaceName
+        return RemoteSessionCheckout(
+            id: checkout.id.uuidString, name: name, branch: checkout.branch,
+            rootPath: checkout.inAppWorktreePath(checkout.rootPath), members: members
+        )
     }
 
     /// Live-session facts a peer's badge popover shows.
@@ -109,6 +149,7 @@ private struct RemoteSessionSummaryCandidate {
     let worktreeId: String?
     let worktree: RemoteWorktreeSummary?
     var detail: RemoteSessionDetail?
+    let checkout: RemoteSessionCheckout?
 
     init(
         row: ACPSessionRow,
@@ -119,7 +160,8 @@ private struct RemoteSessionSummaryCandidate {
         projectId: String?,
         worktreeId: String?,
         worktree: RemoteWorktreeSummary?,
-        detail: RemoteSessionDetail?
+        detail: RemoteSessionDetail?,
+        checkout: RemoteSessionCheckout?
     ) {
         self.operationalRow = row
         self.displayRow = row
@@ -131,6 +173,7 @@ private struct RemoteSessionSummaryCandidate {
         self.worktreeId = worktreeId
         self.worktree = worktree
         self.detail = detail
+        self.checkout = checkout
     }
 
     var isActive: Bool { tabIndex != nil }
@@ -149,7 +192,8 @@ private struct RemoteSessionSummaryCandidate {
             updatedAt: displayRow.updatedAt,
             worktree: worktree,
             parentSessionId: parents[operationalRow.id],
-            detail: detail
+            detail: detail,
+            checkout: checkout
         )
     }
 

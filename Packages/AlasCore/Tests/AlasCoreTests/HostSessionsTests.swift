@@ -812,6 +812,27 @@ struct HostSessionsTests {
         #expect(candidates.mentions.contains { $0.value == "a/notes.md" })
     }
 
+    /// A checkout session's row tells the phone which repositories it holds:
+    /// only members that are available and listed as worktrees.
+    @Test func aCheckoutSessionSummaryListsItsAvailableMembers() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let available = WorkspaceCheckoutMember(
+            workspaceMemberID: UUID(), projectID: "p", fallbackProjectName: "p", fallbackRepositoryRoot: fixture.root.path,
+            worktreePath: fixture.worktree.path.path, availability: .available
+        )
+        let missing = WorkspaceCheckoutMember(
+            workspaceMemberID: UUID(), projectID: "p", fallbackProjectName: "p", fallbackRepositoryRoot: fixture.root.path,
+            worktreePath: fixture.root.appendingPathComponent("gone").path, availability: .missing
+        )
+        let sessionId = try await fixture.createCheckoutSession(members: [available, missing])
+
+        let row = try #require(await fixture.core.remoteSessionSummaries(tabIndex: { _, _ in nil }).first { $0.id == sessionId })
+        #expect(row.checkout?.members.map(\.worktreeId) == [fixture.worktree.id])
+        #expect(row.checkout?.rootPath == fixture.root.path)
+        #expect(row.projectId == nil)
+    }
+
     @Test func aCheckoutSessionRejectsAMentionOutsideItsRoot() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
@@ -1377,17 +1398,19 @@ struct HostSessionsTests {
             host = AlasHost(core: core)
         }
 
-        func addCheckout(operation: WorkspaceCheckoutOperation, location: ExecutionLocation) async throws -> UUID {
+        func addCheckout(
+            operation: WorkspaceCheckoutOperation, location: ExecutionLocation, members: [WorkspaceCheckoutMember] = []
+        ) async throws -> UUID {
             let checkout = WorkspaceCheckout(
                 workspaceID: nil, fallbackWorkspaceName: "w", executionLocation: location,
-                branch: "b", rootPath: root.path, operation: operation, members: []
+                branch: "b", rootPath: root.path, operation: operation, members: members
             )
             try await core.workspaceStore.mutate { $0.checkouts.append(checkout) }
             return checkout.id
         }
 
-        func createCheckoutSession() async throws -> String {
-            let id = try await addCheckout(operation: .idle, location: .local)
+        func createCheckoutSession(members: [WorkspaceCheckoutMember] = []) async throws -> String {
+            let id = try await addCheckout(operation: .idle, location: .local, members: members)
             return try await host.sessions.create(.workspaceCheckout(id: id), agentID: "gemini", caller: .app).id
         }
 
