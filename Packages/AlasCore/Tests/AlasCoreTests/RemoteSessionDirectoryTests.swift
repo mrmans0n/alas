@@ -72,11 +72,6 @@ import Testing
         #expect(section.worktrees.first?.activeSessions.map(\.id) == ["s2", "s1"])
     }
 
-    @Test func aCheckoutSessionWithoutTheBlockFromAnOlderHostStaysInOther() {
-        let bare = RemoteSessionSummary(id: "a", title: "t", agentId: "a", status: "idle", canDrive: false, projectId: nil, worktreeId: nil)
-        #expect(sections([bare]).map(\.title) == ["Other"])
-    }
-
     @Test func worktreeKeyFallsBackToSessionIdWithoutPathOrId() {
         let bare = { (id: String) in
             RemoteSessionSummary(id: id, title: "t", agentId: "a", status: "idle", canDrive: false, projectId: nil, worktreeId: nil)

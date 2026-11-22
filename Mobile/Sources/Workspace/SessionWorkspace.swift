@@ -134,8 +134,6 @@ final class SessionWorkspace {
     private(set) var runScripts: [RemoteRunScript] = []
     @ObservationIgnored private var runScriptsId: Int?
     @ObservationIgnored private var shepherdListId: Int?
-    /// The checkout member the user picked here; nil follows the one last picked for the checkout.
-    private var chosenMemberID: String?
     /// `readWorktree` requests awaiting their answer: what each asked, and of which member's worktree.
     @ObservationIgnored private var memberReads: [Int: (read: RemoteWorktreeRead.Read, worktreeId: String)] = [:]
     /// The member worktree the loaded changes, tree and open views belong to; nil outside a checkout.
@@ -353,6 +351,9 @@ final class SessionWorkspace {
         sendRead(.files(path: dir))
     }
 
+    /// What a checkout's link to a file in none of its members tells the user.
+    static let linkOutsideMembers = "This file isn't in one of the workspace's repositories."
+
     /// Opens `path`, relative to the checkout's root, in the member that holds it. False when this is
     /// no checkout or no member holds the path.
     @discardableResult
@@ -378,10 +379,20 @@ final class SessionWorkspace {
         send(.readSkill(sessionId: sessionId, command: command))
     }
 
-    /// A file's text without opening it, for a card that shows part of it;
-    /// nil when the host can't read it or doesn't answer within 10 s.
-    func peekFile(_ path: String) async -> String? {
+    /// A file's text without opening it, for a card that shows part of it; `sessionPath` is relative
+    /// to where the session works, a checkout's root in a workspace checkout. Nil when the host can't
+    /// read it or doesn't answer within 10 s, and in a checkout when the file isn't in the focused
+    /// member: peeking never moves the focus.
+    func peekFile(_ sessionPath: String) async -> String? {
         guard hub.state(of: hostID) == .online else { return nil }
+        let path: String
+        if let checkout {
+            guard let found = checkout.memberFile(atRootRelative: sessionPath),
+                  found.member.id == focusedMemberID else { return nil }
+            path = found.relativePath
+        } else {
+            path = sessionPath
+        }
         if peekWaiters[path] == nil { sendRead(.file(path: path)) }
         let timeout = Task { [weak self] in
             try? await Task.sleep(for: .seconds(10))
@@ -405,30 +416,29 @@ final class SessionWorkspace {
         guard let summary = hub.sessions(of: hostID).first(where: { $0.id == sessionId }), summary.serverId == nil,
               let checkout = summary.checkout,
               // Without `readWorktree` the host answers only for the session, as it did before checkouts.
-              hub.supports(HostProtocolCapability.worktreesReadV1, on: hostID) else { return nil }
+              hub.supports(HostProtocolCapability.worktreesReadV1, on: hostID),
+              hub.supports(HostProtocolCapability.workspacesPhoneV1, on: hostID) else { return nil }
         // An SSH member's summary carries a display path (`host:/repo`), as `ownWorktreeTarget` notes.
         return RemoteSessionCheckout(id: checkout.id, name: checkout.name, branch: checkout.branch, rootPath: checkout.rootPath,
                                      members: checkout.members.filter { $0.worktree.path.hasPrefix("/") })
     }
 
-    /// The member repository Changes and Files read: the one picked here, else the one last picked
-    /// for this checkout while it's still listed, else the first.
+    /// The member repository Changes and Files read: the one last picked for this checkout, in any
+    /// session of it, while it's still listed, else the first.
     var focusedMember: RemoteSessionCheckout.Member? {
         guard let checkout else { return nil }
-        let preferred = chosenMemberID ?? UserDefaults.standard.string(forKey: Self.focusKey(checkout.id))
+        let preferred = CheckoutFocus.shared.member(of: checkout.id)
         return checkout.members.first { $0.id == preferred } ?? checkout.members.first
     }
 
     var focusedMemberID: String? { focusedMember?.id }
 
-    private static func focusKey(_ checkoutID: String) -> String { "checkoutFocus.\(checkoutID)" }
-
-    /// Reads member `id` from now on. What the previous member showed is dropped, and any reply
-    /// still on its way for it is ignored; the loaded tabs ask again.
+    /// Reads member `id` from now on, here and in every other open session of the checkout. What the
+    /// previous member showed is dropped, and any reply still on its way for it is ignored; the
+    /// loaded tabs ask again.
     func focusMember(_ id: String) {
         guard let checkout, id != focusedMemberID, checkout.members.contains(where: { $0.id == id }) else { return }
-        UserDefaults.standard.set(id, forKey: Self.focusKey(checkout.id))
-        chosenMemberID = id
+        CheckoutFocus.shared.setMember(id, of: checkout.id)
         followFocus()
     }
 
@@ -931,8 +941,8 @@ final class SessionWorkspace {
     private func receive(_ message: PhoneServerMessage) {
         switch message {
         case .host(let reply):
-            if !memberReads.isEmpty, let id = RemoteGitRequest.responseID(in: reply),
-               let pending = memberReads.removeValue(forKey: id), let result = RemoteWorktreeRead.reply(to: id, in: reply) {
+            if !memberReads.isEmpty, let id = RemoteGitRequest.responseID(in: reply), memberReads[id] != nil,
+               let result = RemoteWorktreeRead.reply(to: id, in: reply), let pending = memberReads.removeValue(forKey: id) {
                 // A member the focus left since, as when it's no longer listed.
                 guard pending.worktreeId == focusedMember?.worktreeId else { return }
                 switch result {
@@ -1025,4 +1035,25 @@ final class ChangesComparison {
         .flatMap { $0 == .manual ? nil : $0 } {
         didSet { UserDefaults.standard.set(mode?.rawValue, forKey: Self.key) }
     }
+}
+
+/// The member each workspace checkout's sessions read, by checkout id: one pick for every session of
+/// a checkout, observed so an open session follows a pick made in another. Remembered across launches.
+@MainActor @Observable
+final class CheckoutFocus {
+    static let shared = CheckoutFocus()
+
+    /// Picks made since launch; earlier ones are read from the defaults.
+    private var picked: [String: String] = [:]
+
+    func member(of checkoutID: String) -> String? {
+        picked[checkoutID] ?? UserDefaults.standard.string(forKey: Self.key(checkoutID))
+    }
+
+    func setMember(_ memberID: String, of checkoutID: String) {
+        picked[checkoutID] = memberID
+        UserDefaults.standard.set(memberID, forKey: Self.key(checkoutID))
+    }
+
+    private static func key(_ checkoutID: String) -> String { "checkoutFocus.\(checkoutID)" }
 }

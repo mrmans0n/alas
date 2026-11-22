@@ -10,6 +10,8 @@ struct FileViewer: View {
     let openPreview: (URL) -> OpenURLAction.Result?
     @State private var showSource = false
     @State private var showHistory = false
+    /// Why a link the user followed didn't open.
+    @State private var linkError: String?
     /// False once the viewer leaves the stack; a full-screen image over it leaves it true.
     @Environment(\.isPresented) private var isPresented
 
@@ -48,7 +50,8 @@ struct FileViewer: View {
                                             : url
                                         switch RemoteTranscriptLink.route(target.absoluteURL, worktreeRoot: checkout.rootPath) {
                                         case .file(let file):
-                                            return workspace.openCheckoutLink(rootRelative: file, by: owner) ? .handled : .discarded
+                                            if !workspace.openCheckoutLink(rootRelative: file, by: owner) { linkError = SessionWorkspace.linkOutsideMembers }
+                                            return .handled
                                         case .system: return .systemAction
                                         case .discard: return .discarded
                                         }
@@ -95,6 +98,11 @@ struct FileViewer: View {
         }
         .background(Color(.systemBackground))
         .navigationDestination(isPresented: $showHistory) { FileHistoryView(workspace: workspace, path: path) }
+        .alert("Couldn't open that", isPresented: Binding { linkError != nil } set: { if !$0 { linkError = nil } }) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(linkError ?? "")
+        }
         // Backstop for a pop that skips the destination binding (a stack reset to the root).
         .onDisappear {
             guard !isPresented else { return }

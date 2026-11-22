@@ -201,7 +201,8 @@ struct TranscriptScreen: View {
                 case .file(let path):
                     // A checkout's relative links start at its root: open the one in the member that holds it.
                     if workspace.checkout != nil {
-                        return workspace.openCheckoutLink(rootRelative: path, by: screenID) ? .handled : .discarded
+                        if !workspace.openCheckoutLink(rootRelative: path, by: screenID) { actionError = SessionWorkspace.linkOutsideMembers }
+                        return .handled
                     }
                     workspace.openFile(path, by: screenID)
                     return .handled
