@@ -18,8 +18,8 @@ extension AlasCoreContext {
     @_spi(Testing) public func remoteMentionCandidates(
         sessionId: String, query: String, cachedSessions: [ACPSessionMentionCandidate]? = nil
     ) async -> (mentions: [RemoteMention], sessions: [ACPSessionMentionCandidate]) {
-        guard case .found(let worktree) = remoteWorktreeContext(sessionId: sessionId) else { return ([], []) }
-        let root = worktree.path
+        guard let sessionRoot = remoteSessionRoot(sessionId: sessionId) else { return ([], []) }
+        let (root, projectId, isFolder) = mentionScope(of: sessionRoot)
         // A bare `@` opens the picker: list files and sessions afresh then,
         // as the local picker does on open, and reuse both while the query
         // grows.
@@ -27,7 +27,6 @@ extension AlasCoreContext {
         if opening {
             await environment.fileIndex.invalidate(forWorktreePath: root)
         }
-        let isFolder = isFolderWorktree(worktree)
         var fileSymbols: [SymbolEntry] = []
         if case .file(let file, _) = MentionSymbolQuery.parse(query.trimmingCharacters(in: .whitespaces)) {
             fileSymbols = await ACPSymbolMentionSource.symbols(
@@ -35,10 +34,14 @@ extension AlasCoreContext {
         }
         let paths = ((try? await environment.fileIndex.entries(forWorktreePath: root, isFolder: isFolder)) ?? []).map(\.relativePath)
         let sessions: [ACPSessionMentionCandidate]
-        if !opening, let cachedSessions {
-            sessions = cachedSessions
+        if let projectId {
+            if !opening, let cachedSessions {
+                sessions = cachedSessions
+            } else {
+                sessions = await acpSessionMentionCandidates(projectId: projectId, excluding: sessionId)
+            }
         } else {
-            sessions = await acpSessionMentionCandidates(projectId: worktree.projectId, excluding: sessionId)
+            sessions = []
         }
         // An SSH worktree's files can't be checked without a round trip per
         // file; a missing one still fails safely, as a dangling link.
@@ -48,12 +51,22 @@ extension AlasCoreContext {
         return (mentions, sessions)
     }
 
+    /// Where a session's `@` mentions resolve: its root, the project whose
+    /// sessions it can mention (none for a Workspace checkout, which is no git
+    /// repo and has session mentions off), and whether it is a folder.
+    private func mentionScope(of sessionRoot: RemoteSessionRoot) -> (root: URL, projectId: String?, isFolder: Bool) {
+        switch sessionRoot {
+        case .worktree(let worktree): (worktree.path, worktree.projectId, isFolderWorktree(worktree))
+        case .checkout(let root, _): (root, nil, true)
+        }
+    }
+
     /// The prompt attachments for a viewer's mentions, or nil when any of
     /// them doesn't resolve inside the session's project.
     @_spi(Testing) public func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {
         guard !mentions.isEmpty else { return [] }
-        guard case .found(let worktree) = remoteWorktreeContext(sessionId: sessionId) else { return nil }
-        let root = worktree.path
+        guard let sessionRoot = remoteSessionRoot(sessionId: sessionId) else { return nil }
+        let (root, projectId, _) = mentionScope(of: sessionRoot)
         var attachments: [ACPMessage.Attachment] = []
         for mention in mentions {
             guard let attachment = await RemoteMentions.attachment(
@@ -69,7 +82,9 @@ extension AlasCoreContext {
                         host: host, path: root.appendingPathComponent(path).path, worktreeRoot: root.path)) != nil
                 },
                 isProjectSession: { [weak self] id in
-                    await self?.acpSessionMentionCandidate(sessionId: id)?.projectId == worktree.projectId
+                    // The Mac turns session mentions off for a checkout.
+                    guard let projectId else { return false }
+                    return await self?.acpSessionMentionCandidate(sessionId: id)?.projectId == projectId
                 })
             else { return nil }
             attachments.append(attachment)

@@ -9,6 +9,10 @@ struct ChangesView: View {
     @State private var showingReviews = false
 
     var body: some View {
+        CheckoutScope(workspace: workspace) { tab }
+    }
+
+    private var tab: some View {
         Group {
             switch workspace.changes {
             case .idle, .loading:

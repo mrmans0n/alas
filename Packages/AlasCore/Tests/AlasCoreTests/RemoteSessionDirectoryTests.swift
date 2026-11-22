@@ -7,8 +7,8 @@ import Testing
         RemoteWorktreeSummary(projectName: project, worktreeName: name, branch: branch, path: path, metricsAvailable: true, comparisonRef: nil, commitCount: 0, changedFileCount: changed, addedLines: 0, deletedLines: 0, conflictCount: 0)
     }
 
-    private func session(_ id: String, title: String = "t", status: String = "idle", active: Bool = true, project: String? = "p1", worktreeId: String? = "w1", at: Int64 = 1, worktree: RemoteWorktreeSummary? = nil, serverId: String? = nil, serverName: String? = nil, parent: String? = nil) -> RemoteSessionSummary {
-        RemoteSessionSummary(id: id, title: title, agentId: "a", status: status, canDrive: false, isActive: active, projectId: project, worktreeId: worktreeId, updatedAt: at, worktree: worktree ?? wt(), serverId: serverId, serverName: serverName, parentSessionId: parent)
+    private func session(_ id: String, title: String = "t", status: String = "idle", active: Bool = true, project: String? = "p1", worktreeId: String? = "w1", at: Int64 = 1, worktree: RemoteWorktreeSummary? = nil, serverId: String? = nil, serverName: String? = nil, parent: String? = nil, checkout: RemoteSessionCheckout? = nil) -> RemoteSessionSummary {
+        RemoteSessionSummary(id: id, title: title, agentId: "a", status: status, canDrive: false, isActive: active, projectId: project, worktreeId: worktreeId, updatedAt: at, worktree: worktree ?? wt(), serverId: serverId, serverName: serverName, parentSessionId: parent, checkout: checkout)
     }
 
     private func sections(_ s: [RemoteSessionSummary]) -> [RemoteRepoSection] {
@@ -53,6 +53,23 @@ import Testing
         let result = sections([session("s1"), session("s2", project: "p-mini", worktreeId: "w2", worktree: remote)])
         #expect(result.count == 1)
         #expect(result[0].worktrees.count == 2)
+    }
+
+    @Test func aWorkspaceCheckoutsSessionsShareOneRowTitledByItsBranch() throws {
+        let checkout = RemoteSessionCheckout(id: "c1", name: "Shop", branch: "feat/x", rootPath: "/w/shop", members: [])
+        let result = sections([
+            RemoteSessionSummary(id: "s1", title: "t", agentId: "a", status: "idle", canDrive: false, projectId: nil, worktreeId: nil, updatedAt: 2, checkout: checkout),
+            RemoteSessionSummary(id: "s2", title: "t", agentId: "a", status: "idle", canDrive: false, projectId: nil, worktreeId: nil, updatedAt: 3, checkout: checkout),
+            session("s3"),
+        ])
+        #expect(result.count == 2)
+        let section = try #require(result.first { $0.id == "|workspace:Shop" })
+        #expect(section.title == "Shop")
+        #expect(section.repositoryKey == nil)
+        #expect(section.worktrees.map(\.id) == ["checkout:c1"])
+        #expect(section.worktrees.first?.title == "feat/x")
+        #expect(section.worktrees.first?.summary == nil)
+        #expect(section.worktrees.first?.activeSessions.map(\.id) == ["s2", "s1"])
     }
 
     @Test func worktreeKeyFallsBackToSessionIdWithoutPathOrId() {

@@ -38,6 +38,36 @@ extension AlasCoreContext {
         return .sessionUnknown
     }
 
+    /// Where a session's files live: a worktree, or a Workspace checkout's
+    /// root, which holds one worktree per member and is itself no git repo.
+    @_spi(Testing) public enum RemoteSessionRoot {
+        case worktree(Worktree)
+        case checkout(root: URL, attachmentsKey: String)
+    }
+
+    /// The root a session reads files from, for what is not tied to a git
+    /// worktree: its `@` mentions and the images of its transcript. Nil when
+    /// the session is unknown or its worktree is gone.
+    @_spi(Testing) public func remoteSessionRoot(sessionId: String) -> RemoteSessionRoot? {
+        for mgr in sessionManagers.values
+        where mgr.liveSession(for: sessionId) != nil || mgr.sessionRows.contains(where: { $0.id == sessionId }) {
+            if case .workspaceCheckout(_, let location) = mgr.owner {
+                return .checkout(root: Self.checkoutSessionRoot(mgr.worktreePath, at: location), attachmentsKey: mgr.worktreeId)
+            }
+            guard case .found(let worktree) = remoteWorktreeContext(sessionId: sessionId) else { return nil }
+            return .worktree(worktree)
+        }
+        return nil
+    }
+
+    /// A checkout session's root as Alas addresses it: a checkout on an SSH
+    /// host keeps its real remote path, so it becomes that host's virtual
+    /// path, which mention lookups and image reads send over SSH.
+    @_spi(Testing) public nonisolated static func checkoutSessionRoot(_ path: String, at location: ExecutionLocation) -> URL {
+        guard let host = location.sshHost, RemotePath.isValidHost(host) else { return URL(fileURLWithPath: path) }
+        return URL(fileURLWithPath: RemotePath.virtualizing(path, like: RemotePath.virtual(host: host, realPath: "/")))
+    }
+
     /// Outcome of reading a worktree-relative file's raw bytes from a
     /// registered SSH host, mirroring the containment + read pipeline
     /// `ACPRemoteFileServer.read` uses for editor reads — but surfacing raw
@@ -782,7 +812,11 @@ extension AlasCoreContext {
     }
 
     @_spi(Testing) public func remoteTranscriptImage(sessionId: String, path: String) async -> RemoteFileBytesResult {
-        await remoteTranscriptImage(in: remoteWorktreeContext(sessionId: sessionId), path: path)
+        if case .checkout(let root, let attachmentsKey)? = remoteSessionRoot(sessionId: sessionId) {
+            return await transcriptImage(path, root: TranscriptImageFile.readRoot(
+                for: path, worktreeRoot: root, attachments: Paths.acpAttachmentsDir(forWorktreeId: attachmentsKey)))
+        }
+        return await remoteTranscriptImage(in: remoteWorktreeContext(sessionId: sessionId), path: path)
     }
 
     func remoteTranscriptImage(in context: RemoteWorktreeContextResult, path: String) async -> RemoteFileBytesResult {
@@ -794,6 +828,10 @@ extension AlasCoreContext {
         }
         let root = TranscriptImageFile.readRoot(
             for: path, worktreeRoot: worktree.path, attachments: Paths.acpAttachmentsDir(forWorktreeId: worktree.id))
+        return await transcriptImage(path, root: root)
+    }
+
+    private func transcriptImage(_ path: String, root: URL) async -> RemoteFileBytesResult {
         guard TranscriptImageFile.resolve(path, root: root) != nil else {
             return .failure(reason: .pathRejected, byteSize: nil, message: nil)
         }
