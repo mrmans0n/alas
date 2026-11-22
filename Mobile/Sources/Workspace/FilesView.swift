@@ -10,8 +10,12 @@ struct FilesView: View {
     @State private var query = ""
 
     var body: some View {
+        CheckoutScope(workspace: workspace) { tab }
+    }
+
+    private var tab: some View {
         let rows = workspace.tree.rows()
-        Group {
+        return Group {
             if !query.isEmpty {
                 results
             } else if rows.isEmpty {

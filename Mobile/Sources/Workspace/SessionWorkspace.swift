@@ -134,6 +134,10 @@ final class SessionWorkspace {
     private(set) var runScripts: [RemoteRunScript] = []
     @ObservationIgnored private var runScriptsId: Int?
     @ObservationIgnored private var shepherdListId: Int?
+    /// The checkout member the user picked here; nil follows the one last picked for the checkout.
+    private var chosenMemberID: String?
+    /// `readWorktree` requests awaiting their answer: what each asked, and of which member's worktree.
+    @ObservationIgnored private var memberReads: [Int: (read: RemoteWorktreeRead.Read, worktreeId: String)] = [:]
 
     init(hub: HostHub, hostID: UUID, sessionId: String) {
         self.hub = hub
@@ -190,18 +194,19 @@ final class SessionWorkspace {
     /// Asks again for whatever is open; the host forgot everything it was asked while away.
     private func replay() {
         changesFlight.reset()
+        // The host forgot the reads it was asked; each is asked again below.
+        memberReads.removeAll()
         if case .idle = changes {} else { refreshChanges() }
-        if let commit { send(.listCommitFiles(sessionId: sessionId, sha: commit.commit.revision)) }
+        if let commit { sendRead(.commitFiles(sha: commit.commit.revision)) }
         for key in diffWaiters.keys { requestDiff(key) }
-        for sha in commitFilesWaiters.keys where sha != commit?.commit.revision { send(.listCommitFiles(sessionId: sessionId, sha: sha)) }
+        for sha in commitFilesWaiters.keys where sha != commit?.commit.revision { sendRead(.commitFiles(sha: sha)) }
         if treeRequested { loadTree() }
         refreshShepherd()
         refreshRunScripts()
         if let file {
             self.file = (file.path, .loading)
             // A skill's path is its command, which only `readSkill` reads.
-            send(fileIsSkill ? .readSkill(sessionId: sessionId, command: file.path)
-                : .readFile(sessionId: sessionId, path: file.path))
+            if fileIsSkill { send(.readSkill(sessionId: sessionId, command: file.path)) } else { sendRead(.file(path: file.path)) }
         }
     }
 
@@ -211,7 +216,7 @@ final class SessionWorkspace {
         if case .loaded = changes {} else { changes = .loading }
         guard changesFlight.shouldSend() else { return }
         changesMode = comparisonMode
-        send(.listChanges(sessionId: sessionId, comparisonMode: comparisonMode))
+        sendRead(.changes(comparisonMode: comparisonMode))
         refreshPullRequest()
     }
 
@@ -240,7 +245,7 @@ final class SessionWorkspace {
 
     /// A commit's files, without opening it.
     func loadCommitFiles(_ sha: String) async -> Result<CommitFilesReply, RemoteGitFailure> {
-        await wait(\.commitFilesWaiters, sha) { send(.listCommitFiles(sessionId: sessionId, sha: sha)) }
+        await wait(\.commitFilesWaiters, sha) { sendRead(.commitFiles(sha: sha)) }
     }
 
     /// Refreshes the change list and returns it once it lands.
@@ -275,16 +280,16 @@ final class SessionWorkspace {
 
     private func requestDiff(_ key: DiffKey) {
         if let sha = key.sha {
-            send(.commitFileDiff(sessionId: sessionId, sha: sha, path: key.path))
+            sendRead(.commitDiff(sha: sha, path: key.path))
         } else {
-            send(.fileDiff(sessionId: sessionId, path: key.path, stage: key.stage, comparisonMode: comparisonMode))
+            sendRead(.fileDiff(path: key.path, stage: key.stage, comparisonMode: comparisonMode))
         }
     }
 
     func openCommit(_ commit: RemoteCommit, by owner: UUID) {
         pushedBy = owner
         self.commit = (commit, .loading)
-        send(.listCommitFiles(sessionId: sessionId, sha: commit.revision))
+        sendRead(.commitFiles(sha: commit.revision))
     }
 
     func closeCommit() {
@@ -321,21 +326,21 @@ final class SessionWorkspace {
 
     func loadTree() {
         treeRequested = true
-        send(.listFiles(sessionId: sessionId, path: nil, comparisonMode: nil))
+        sendRead(.files(path: nil))
     }
 
     func toggle(_ dir: String) {
         if tree.expanded.remove(dir) != nil { return }
         tree.expanded.insert(dir)
         // Always re-lists: a collapsed directory misses the refreshes, so its cached listing shows only until the reply.
-        send(.listFiles(sessionId: sessionId, path: dir, comparisonMode: nil))
+        sendRead(.files(path: dir))
     }
 
     func openFile(_ path: String, by owner: UUID) {
         pushedBy = owner
         file = (path, .loading)
         fileIsSkill = false
-        send(.readFile(sessionId: sessionId, path: path))
+        sendRead(.file(path: path))
     }
 
     /// Opens a skill command's `SKILL.md`, which the host reads by command.
@@ -350,7 +355,7 @@ final class SessionWorkspace {
     /// nil when the host can't read it or doesn't answer within 10 s.
     func peekFile(_ path: String) async -> String? {
         guard hub.state(of: hostID) == .online else { return nil }
-        if peekWaiters[path] == nil { send(.readFile(sessionId: sessionId, path: path)) }
+        if peekWaiters[path] == nil { sendRead(.file(path: path)) }
         let timeout = Task { [weak self] in
             try? await Task.sleep(for: .seconds(10))
             guard !Task.isCancelled else { return }
@@ -363,6 +368,138 @@ final class SessionWorkspace {
     func closeFile() {
         file = nil
         fileIsSkill = false
+    }
+
+    // MARK: Workspace checkout
+
+    /// The workspace checkout the session works in, keeping only the members this connection can
+    /// name; nil for a session in a worktree of its own, or one a gateway relays from another Mac.
+    var checkout: RemoteSessionCheckout? {
+        guard let summary = hub.sessions(of: hostID).first(where: { $0.id == sessionId }), summary.serverId == nil,
+              let checkout = summary.checkout else { return nil }
+        // An SSH member's summary carries a display path (`host:/repo`), as `gitTarget` notes.
+        return RemoteSessionCheckout(id: checkout.id, name: checkout.name, branch: checkout.branch, rootPath: checkout.rootPath,
+                                     members: checkout.members.filter { $0.worktree.path.hasPrefix("/") })
+    }
+
+    /// The member repository Changes and Files read: the one picked here, else the one last picked
+    /// for this checkout while it's still listed, else the first.
+    var focusedMember: RemoteSessionCheckout.Member? {
+        guard let checkout else { return nil }
+        let preferred = chosenMemberID ?? UserDefaults.standard.string(forKey: Self.focusKey(checkout.id))
+        return checkout.members.first { $0.id == preferred } ?? checkout.members.first
+    }
+
+    var focusedMemberID: String? { focusedMember?.id }
+
+    private static func focusKey(_ checkoutID: String) -> String { "checkoutFocus.\(checkoutID)" }
+
+    /// Reads member `id` from now on. What the previous member showed is dropped, and any reply
+    /// still on its way for it is ignored; the loaded tabs ask again.
+    func focusMember(_ id: String) {
+        guard let checkout, id != focusedMemberID, checkout.members.contains(where: { $0.id == id }) else { return }
+        UserDefaults.standard.set(id, forKey: Self.focusKey(checkout.id))
+        chosenMemberID = id
+        let changesWereLoaded = if case .idle = changes { false } else { true }
+        // Forgetting the reads in flight drops their replies, which name the previous member's worktree.
+        memberReads.removeAll()
+        changesFlight.reset()
+        changesMode = nil
+        changes = .idle
+        refreshTask?.cancel()
+        refreshDeferred = false
+        tree = RemoteFileTree()
+        truncatedDirs = []
+        treeError = nil
+        review = nil
+        commit = nil
+        file = nil
+        fileIsSkill = false
+        pullRequest = nil
+        runScripts = []
+        let switched = RemoteGitFailure("You switched to another repository.")
+        for key in Array(diffWaiters.keys) { resume(\.diffWaiters, key, .failure(switched)) }
+        for sha in Array(commitFilesWaiters.keys) { resume(\.commitFilesWaiters, sha, .failure(switched)) }
+        for waiters in peekWaiters.values { waiters.forEach { $0.resume(returning: nil) } }
+        peekWaiters.removeAll()
+        if changesWereLoaded { refreshChanges() }
+        if treeRequested { loadTree() }
+    }
+
+    /// The repository the session's reads name: the focused member in a workspace checkout, else the
+    /// session's own worktree.
+    var repositoryTarget: (projectID: String, worktreeId: String?, worktree: RemoteWorktreeSummary)? {
+        if checkout != nil {
+            guard let member = focusedMember else { return nil }
+            return (member.projectId, member.worktreeId, member.worktree)
+        }
+        guard let target = gitTarget else { return nil }
+        return (target.projectID, hub.sessions(of: hostID).first { $0.id == sessionId }?.worktreeId, target.worktree)
+    }
+
+    /// Asks for `read`: of the session's own worktree by its id, or, in a workspace checkout, of the
+    /// focused member's through `readWorktree`.
+    private func sendRead(_ read: RemoteWorktreeRead.Read) {
+        guard checkout != nil, hub.supports(HostProtocolCapability.worktreesReadV1, on: hostID) else {
+            if let message = sessionRead(read) { send(message) }
+            return
+        }
+        guard let target = repositoryTarget, let worktreeId = target.worktreeId else {
+            // Answered on the next turn, so a wait that asked has registered for it.
+            Task { @MainActor [weak self] in
+                self?.refuse(read, RemoteGitFailure("This workspace checkout has no repository the phone can open."))
+            }
+            return
+        }
+        let id = hub.nextHostRequestId()
+        memberReads[id] = (read, worktreeId)
+        send(.host(RemoteWorktreeRead.request(id: id, projectID: target.projectID, path: target.worktree.path, read: read)))
+    }
+
+    /// `read` as the session-addressed message a host answers for the session's own worktree.
+    private func sessionRead(_ read: RemoteWorktreeRead.Read) -> PhoneClientMessage? {
+        switch read {
+        case .changes(let mode): .listChanges(sessionId: sessionId, comparisonMode: mode)
+        case .fileDiff(let path, let stage, let mode): .fileDiff(sessionId: sessionId, path: path, stage: stage, comparisonMode: mode)
+        case .files(let path): .listFiles(sessionId: sessionId, path: path, comparisonMode: nil)
+        case .commitFiles(let sha): .listCommitFiles(sessionId: sessionId, sha: sha)
+        case .commitDiff(let sha, let path): .commitFileDiff(sessionId: sessionId, sha: sha, path: path)
+        case .file(let path): .readFile(sessionId: sessionId, path: path)
+        // File history goes through its own host request.
+        case .fileHistory: nil
+        }
+    }
+
+    /// Shows the host's refusal of `read` where its reply would have landed.
+    private func refuse(_ read: RemoteWorktreeRead.Read, _ failure: RemoteGitFailure) {
+        switch read {
+        case .changes:
+            if changeListLanded() { return }
+            changes = .failed(failure.message)
+            resume(\.changesWaiters, true, .failure(failure))
+        case .fileDiff(let path, let stage, _):
+            resume(\.diffWaiters, DiffKey(path: path, stage: stage), .failure(failure))
+        case .commitDiff(let sha, let path):
+            resume(\.diffWaiters, DiffKey(path: path, stage: nil, sha: sha), .failure(failure))
+        case .commitFiles(let sha):
+            resume(\.commitFilesWaiters, sha, .failure(failure))
+            guard let open = commit?.commit, open.revision == sha else { return }
+            commit = (open, .failed(failure.message))
+        case .files(let path):
+            if let path, tree.children[path] == nil { tree.expanded.remove(path) }
+            treeError = failure.message
+        case .file(let path):
+            peekWaiters.removeValue(forKey: path)?.forEach { $0.resume(returning: nil) }
+            guard file?.path == path, !fileIsSkill else { return }
+            file = (path, .failed(failure.message))
+        case .fileHistory:
+            break
+        }
+    }
+
+    /// Whether a reply addressed to `id` is this session's: its own, or the focused member's worktree.
+    private func accepts(_ id: String) -> Bool {
+        id == sessionId || id == focusedMember?.worktreeId
     }
 
     // MARK: Replies
@@ -743,6 +880,17 @@ final class SessionWorkspace {
     private func receive(_ message: PhoneServerMessage) {
         switch message {
         case .host(let reply):
+            for (id, pending) in memberReads {
+                guard let result = RemoteWorktreeRead.reply(to: id, in: reply) else { continue }
+                memberReads[id] = nil
+                // A member the focus left since, as when it's no longer listed.
+                guard pending.worktreeId == focusedMember?.worktreeId else { return }
+                switch result {
+                case .success(let inner): receive(inner)
+                case .failure(let failure): refuse(pending.read, failure)
+                }
+                return
+            }
             if let id = runScriptsId, let found = RemoteGitRequest.runScripts(replying: id, in: reply) {
                 runScripts = found
                 return
@@ -761,52 +909,52 @@ final class SessionWorkspace {
                 if let result = RemoteGitRequest.reply(to: id, in: reply) { return finishHostRequest(id, result.map { reply }) }
             }
         case .changeList(let id, let ref, let metrics, let files, let staged, let unstaged, let commits,
-                         let truncated, let commitsTruncated, _, _) where id == sessionId:
+                         let truncated, let commitsTruncated, _, _) where accepts(id):
             if changeListLanded() { return }
             let reply = ChangeListReply(
                 comparisonRef: ref, metricsAvailable: metrics, files: files, staged: staged, unstaged: unstaged,
                 commits: commits, truncated: truncated, commitsTruncated: commitsTruncated)
             changes = .loaded(reply)
             resume(\.changesWaiters, true, .success(reply))
-        case .changeListFailed(let id, let reason, let message) where id == sessionId:
+        case .changeListFailed(let id, let reason, let message) where accepts(id):
             if changeListLanded() { return }
             let text = RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)
             changes = .failed(text)
             resume(\.changesWaiters, true, .failure(RemoteGitFailure(text)))
-        case .fileDiffResult(let id, let path, let stage, let hunks, let truncated, let note) where id == sessionId:
+        case .fileDiffResult(let id, let path, let stage, let hunks, let truncated, let note) where accepts(id):
             resume(\.diffWaiters, DiffKey(path: path, stage: stage), .success(DiffReply(hunks: hunks, truncated: truncated, metadataNote: note)))
-        case .fileDiffFailed(let id, let path, let stage, let reason, let message) where id == sessionId:
+        case .fileDiffFailed(let id, let path, let stage, let reason, let message) where accepts(id):
             resume(\.diffWaiters, DiffKey(path: path, stage: stage),
                    .failure(RemoteGitFailure(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil))))
-        case .commitFiles(let id, let sha, let files, let truncated) where id == sessionId:
+        case .commitFiles(let id, let sha, let files, let truncated) where accepts(id):
             let reply = CommitFilesReply(files: files, truncated: truncated)
             resume(\.commitFilesWaiters, sha, .success(reply))
             guard let open = commit?.commit, open.revision == sha else { return }
             commit = (open, .loaded(reply))
-        case .commitFilesFailed(let id, let sha, let reason, let message) where id == sessionId:
+        case .commitFilesFailed(let id, let sha, let reason, let message) where accepts(id):
             let text = RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)
             resume(\.commitFilesWaiters, sha, .failure(RemoteGitFailure(text)))
             guard let open = commit?.commit, open.revision == sha else { return }
             commit = (open, .failed(text))
-        case .commitDiffResult(let id, let sha, let path, let hunks, let truncated, let note) where id == sessionId:
+        case .commitDiffResult(let id, let sha, let path, let hunks, let truncated, let note) where accepts(id):
             resume(\.diffWaiters, DiffKey(path: path, stage: nil, sha: sha), .success(DiffReply(hunks: hunks, truncated: truncated, metadataNote: note)))
-        case .commitDiffFailed(let id, let sha, let path, let reason, let message) where id == sessionId:
+        case .commitDiffFailed(let id, let sha, let path, let reason, let message) where accepts(id):
             resume(\.diffWaiters, DiffKey(path: path, stage: nil, sha: sha),
                    .failure(RemoteGitFailure(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil))))
-        case .fileTree(let id, let path, let nodes, let truncated) where id == sessionId:
+        case .fileTree(let id, let path, let nodes, let truncated) where accepts(id):
             tree.apply(path: path, nodes: nodes)
             treeError = nil
             if truncated { truncatedDirs.insert(path ?? "") } else { truncatedDirs.remove(path ?? "") }
-            if path == nil { for dir in tree.pathsToRefresh() { send(.listFiles(sessionId: sessionId, path: dir, comparisonMode: nil)) } }
-        case .fileTreeFailed(let id, let path, let reason, let message) where id == sessionId:
+            if path == nil { for dir in tree.pathsToRefresh() { sendRead(.files(path: dir)) } }
+        case .fileTreeFailed(let id, let path, let reason, let message) where accepts(id):
             // A directory that failed to list must not stay open and empty.
             if let path, tree.children[path] == nil { tree.expanded.remove(path) }
             treeError = RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)
-        case .fileContents(let id, let path, let text, let truncated, _) where id == sessionId:
+        case .fileContents(let id, let path, let text, let truncated, _) where accepts(id):
             peekWaiters.removeValue(forKey: path)?.forEach { $0.resume(returning: text) }
             guard file?.path == path else { return }
             file = (path, .loaded(FileReply(text: text, truncated: truncated)))
-        case .fileUnavailable(let id, let path, let reason, let byteSize, let message) where id == sessionId:
+        case .fileUnavailable(let id, let path, let reason, let byteSize, let message) where accepts(id):
             peekWaiters.removeValue(forKey: path)?.forEach { $0.resume(returning: nil) }
             guard file?.path == path else { return }
             file = (path, .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: byteSize)))
