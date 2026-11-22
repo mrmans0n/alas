@@ -153,9 +153,10 @@ struct ReviewLayoutTests {
         #expect(ReviewCommentPlacement.place([item], in: Self.commentHunks) == [ReviewPlacedComment(id: "a", row: row)])
     }
 
-    /// Rows: header 0; new lines 1 "a" (40), 2 "b" (41), 3 "keep" (42), 4 "a" (43), 5 "b" (44), 6 "c" (45).
+    /// Rows: header 0; new lines 1 "a" (40), 2 "b" (41), 3 "keep" (42), 4 "a" (43), 5 "b" (44), 6 "c" (45), 7 "code" (46),
+    /// 8 "" (47).
     private static let movedHunks = [
-        RemoteDiffHunk(header: "@@ +40,6 @@", oldStart: 1, newStart: 40, lines: ["a", "b", "keep", "a", "b", "c"].enumerated().map {
+        RemoteDiffHunk(header: "@@ +40,8 @@", oldStart: 1, newStart: 40, lines: ["a", "b", "keep", "a", "b", "c", "code", ""].enumerated().map {
             RemoteDiffLine(kind: "add", text: $1, oldNumber: nil, newNumber: 40 + $0)
         }),
     ]
@@ -165,6 +166,8 @@ struct ReviewLayoutTests {
         ("keep  ", 42, 42, 3, nil),
         // Its code moved down: the one run that reads it (a trailing newline aside).
         ("b\nc\n", 10, 11, 6, 44...45),
+        // A blank last line is part of the quote when its lines count it.
+        ("code\n", 10, 11, 8, 46...47),
         // Two runs read it: Outdated.
         ("a\nb", 10, 11, nil, nil),
         // Gone.
