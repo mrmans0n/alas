@@ -796,6 +796,44 @@ struct HostSessionsTests {
         #expect(fixture.core.sessionManagers[created.owner] == nil)
     }
 
+    /// A session of a Workspace checkout works at the checkout's root, which is
+    /// no git worktree: its mentions and transcript images resolve there.
+    @Test func aCheckoutSessionResolvesFileMentionsInsideItsRoot() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessionId = try await fixture.createCheckoutSession()
+        try FileManager.default.createDirectory(at: fixture.root.appendingPathComponent("a"), withIntermediateDirectories: true)
+        try Data("# notes".utf8).write(to: fixture.root.appendingPathComponent("a/notes.md"))
+
+        let mention = RemoteMention(kind: RemoteMention.file, value: "a/notes.md", name: "notes.md")
+        let attachments = try #require(await fixture.core.remoteMentionAttachments([mention], sessionId: sessionId))
+        #expect(attachments.count == 1)
+        let candidates = await fixture.core.remoteMentionCandidates(sessionId: sessionId, query: "notes")
+        #expect(candidates.mentions.contains { $0.value == "a/notes.md" })
+    }
+
+    @Test func aCheckoutSessionRejectsAMentionOutsideItsRoot() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessionId = try await fixture.createCheckoutSession()
+        let mention = RemoteMention(kind: RemoteMention.file, value: "../escape.md", name: "escape.md")
+        #expect(await fixture.core.remoteMentionAttachments([mention], sessionId: sessionId) == nil)
+    }
+
+    @Test func aCheckoutSessionReadsTranscriptImagesUnderItsRoot() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessionId = try await fixture.createCheckoutSession()
+        // A 1x1 PNG.
+        let png = try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="))
+        try png.write(to: fixture.root.appendingPathComponent("shot.png"))
+        guard case .success = await fixture.core.remoteTranscriptImage(sessionId: sessionId, path: "shot.png") else {
+            Issue.record("expected the image to be served")
+            return
+        }
+    }
+
     /// After another instance takes the session over, whatever this one still
     /// holds is refused: a setting the session drops, and an answer that would
     /// resume the agent beside the new writer.
@@ -1339,6 +1377,11 @@ struct HostSessionsTests {
             )
             try await core.workspaceStore.mutate { $0.checkouts.append(checkout) }
             return checkout.id
+        }
+
+        func createCheckoutSession() async throws -> String {
+            let id = try await addCheckout(operation: .idle, location: .local)
+            return try await host.sessions.create(.workspaceCheckout(id: id), agentID: "gemini", caller: .app).id
         }
 
         func tearDown() {
