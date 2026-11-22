@@ -9,7 +9,8 @@ public struct RemoteSessionCheckout: Codable, Equatable, Sendable {
     /// The Workspace's name, or the name it had when the Workspace is gone.
     public let name: String
     public let branch: String
-    /// The checkout's root as the host's app sees it: virtual on an SSH host.
+    /// The checkout's root in the form member worktree paths take: `host:/path`
+    /// for an SSH checkout, an absolute path for a local one.
     public let rootPath: String
     /// The members that are available and listed as worktrees.
     public let members: [Member]

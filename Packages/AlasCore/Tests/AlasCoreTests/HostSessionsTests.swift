@@ -833,6 +833,26 @@ struct HostSessionsTests {
         #expect(row.projectId == nil)
     }
 
+    /// A checkout's root is listed in the form its members' worktree paths
+    /// are, so an SSH root reads `host:/path` like an SSH worktree does.
+    @Test(arguments: [
+        (ExecutionLocation.local, "/r", "/r"),
+        (ExecutionLocation.ssh("mini"), "/home/u/r", "mini:/home/u/r"),
+    ])
+    func aCheckoutRootIsListedInItsMembersPathForm(location: ExecutionLocation, rootPath: String, listed: String) {
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil, fallbackWorkspaceName: "w", executionLocation: location,
+            branch: "b", rootPath: rootPath, members: []
+        )
+        #expect(AlasCoreContext.remoteCheckoutRootPath(checkout) == listed)
+        let member = Worktree(
+            id: "w", projectId: "p", name: "app", branch: "b",
+            path: URL(fileURLWithPath: checkout.inAppWorktreePath(rootPath + "/app")), status: .clean, lastActivity: .distantPast
+        )
+        let memberPath = RemoteWorktreeSummaryBuilder.make(projectName: "p", worktree: member, isMain: false, metrics: .unavailable).path
+        #expect(memberPath == listed + "/app")
+    }
+
     @Test func aCheckoutSessionRejectsAMentionOutsideItsRoot() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }

@@ -69,10 +69,11 @@ import Testing
         ("/r/app/src/a.swift", "/r/app", "src/a.swift"),
         ("/r/app", "/r/app", ""),
         ("/r/apple/x", "/r/apple", "x"),
+        ("/r/app/sub/x", "/r/app/sub", "x"),
         ("/elsewhere/x", nil, nil),
     ] as [(String, String?, String?)])
     func aCheckoutPathResolvesToTheMemberHoldingIt(path: String, memberPath: String?, relativePath: String?) {
-        let match = Self.checkout(memberPaths: ["/r/app", "/r/apple"]).member(containing: path)
+        let match = Self.checkout(memberPaths: ["/r/app", "/r/apple", "/r/app/sub"]).member(containing: path)
         #expect(match?.member.worktree.path == memberPath)
         #expect(match?.relativePath == relativePath)
     }
