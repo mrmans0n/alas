@@ -2638,6 +2638,7 @@ struct HostProtocolServerTests {
         let refused = HostResponse.failure(error: .invalidRequest(reason: "This host can't send reviews to agents."))
         #expect(await request(targets) == refused)
         #expect(await request(send) == refused)
+        #expect(!fixture.host.servedCapabilities.contains(HostProtocolCapability.reviewsAgentPhoneV1))
 
         let sent = Mutex<[[String]]>([])
         fixture.core.reviewAgents = ReviewAgentSeam(
@@ -2646,6 +2647,7 @@ struct HostProtocolServerTests {
         )
         #expect(await request(targets) == .reviewAgentTargets(targets: [.newChat(agentID: "codex", title: "New chat \(worktree.id)")]))
         #expect(await request(send) == .reviewSentToAgent)
+        #expect(fixture.host.servedCapabilities.contains(HostProtocolCapability.reviewsAgentPhoneV1))
         #expect(sent.withLock { $0 } == [[worktree.id, sessionID, target.id]])
         #expect(await request(.sendReviewToAgent(worktree: ref, sessionID: "other", target: target))
             == .failure(error: .notFound(what: "review other")))

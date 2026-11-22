@@ -1160,7 +1160,7 @@ final class AppState {
             // same reason `syncRemotePeers` does.
             peers: remoteServer != nil ? remotePeers.helloPeers : [],
             consoleCapabilities: PeerConsoleCapability.appHost + [PeerPortForwardCapability.v1],
-            hostCapabilities: HostProtocolCapability.served
+            hostCapabilities: host.servedCapabilities
                 + [HostProtocolCapability.worktreesAutoBranchNameV1, HostProtocolCapability.sessionsNextPromptV1]
         )
     }
