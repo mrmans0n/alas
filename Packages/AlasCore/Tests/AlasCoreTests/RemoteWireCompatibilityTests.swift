@@ -146,8 +146,8 @@ import Testing
         #expect(try decode(RemoteReviewRequest.list(id: 1, projectID: "p", path: "/r")) == .listReviews(worktree: ref))
         #expect(try decode(RemoteReviewRequest.read(id: 1, projectID: "p", path: "/r", sessionID: "s")) == .readReview(worktree: ref, sessionID: "s"))
         let mutations: [(RemoteReviewMutation, HostReviewMutation)] = [
-            (.add(fileID: fileID, path: "a.swift", anchor: .line(side: "new", startLine: 3, endLine: 5), body: "Why?"),
-             .add(fileID: macFileID, path: "a.swift", originalPath: nil,
+            (.add(fileID: fileID, path: "a.swift", originalPath: "old.swift", anchor: .line(side: "new", startLine: 3, endLine: 5), body: "Why?"),
+             .add(fileID: macFileID, path: "a.swift", originalPath: "old.swift",
                   anchor: .line(side: .new, startLine: 3, endLine: 5, selectedText: nil), body: "Why?")),
             (.add(fileID: fileID, path: "a.swift", anchor: .file, body: "Split"),
              .add(fileID: macFileID, path: "a.swift", originalPath: nil, anchor: .file, body: "Split")),

@@ -131,7 +131,8 @@ public struct RemoteReview: Equatable, Sendable {
 
 /// A change to a review's comments, as the phone offers them (`HostReviewMutation`).
 public enum RemoteReviewMutation: Equatable, Sendable {
-    case add(fileID: RemoteReviewFileID, path: String, anchor: RemoteReviewAnchor, body: String)
+    /// `originalPath`: a renamed file's old path, which GitLab needs to place a published comment.
+    case add(fileID: RemoteReviewFileID, path: String, originalPath: String? = nil, anchor: RemoteReviewAnchor, body: String)
     case edit(commentID: String, body: String)
     case delete(commentID: String)
     case resolve(commentID: String)
@@ -374,14 +375,16 @@ public enum RemoteReviewRequest {
 
     private static func encode(_ mutation: RemoteReviewMutation) -> [String: Any] {
         switch mutation {
-        case .add(let fileID, let path, let anchor, let body):
+        case .add(let fileID, let path, let originalPath, let anchor, let body):
             let anchor: [String: Any] = switch anchor {
             case .file, .image: ["file": [String: Any]()]
             case .line(let side, let startLine, let endLine):
                 ["line": ["side": side, "startLine": startLine, "endLine": endLine ?? startLine]]
             }
-            return ["add": ["fileID": ["namespace": fileID.namespace, "path": fileID.path], "path": path,
-                            "anchor": anchor, "body": body]]
+            var add: [String: Any] = ["fileID": ["namespace": fileID.namespace, "path": fileID.path], "path": path,
+                                      "anchor": anchor, "body": body]
+            add["originalPath"] = originalPath
+            return ["add": add]
         case .edit(let commentID, let body): return ["edit": ["commentID": commentID, "body": body]]
         case .delete(let commentID): return ["delete": ["commentID": commentID]]
         case .resolve(let commentID): return ["resolve": ["commentID": commentID]]

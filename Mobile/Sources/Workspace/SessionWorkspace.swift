@@ -521,9 +521,10 @@ final class SessionWorkspace {
 
     /// Comments on `entry` in review `sessionID`, filed under its stage as the Mac's Review workspace files it.
     /// Returns the host's refusal, or nil.
-    func comment(in sessionID: String, entry: ReviewEntryID, anchor: RemoteReviewAnchor, body: String) async -> String? {
+    /// `originalPath`: a renamed file's old path, which a merge request comment needs to publish.
+    func comment(in sessionID: String, entry: ReviewEntryID, originalPath: String?, anchor: RemoteReviewAnchor, body: String) async -> String? {
         await changeReview(sessionID, .add(fileID: RemoteReviewFileID(namespace: entry.namespace, path: entry.path),
-                                           path: entry.path, anchor: anchor, body: body))
+                                           path: entry.path, originalPath: originalPath, anchor: anchor, body: body))
     }
 
     /// The worktree's local-changes review, where the Mac's Review workspace files working-tree comments.

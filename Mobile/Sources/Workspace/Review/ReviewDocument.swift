@@ -369,7 +369,9 @@ final class ReviewDocument {
 
     func comment(on entry: ReviewEntryID, anchor: RemoteReviewAnchor, body: String) async {
         guard let session = reviewSessionID else { return }
-        if let message = await workspace.comment(in: session, entry: entry, anchor: anchor, body: body) {
+        if let message = await workspace.comment(in: session, entry: entry,
+                                                    originalPath: entries.first { $0.id == entry }?.renameFrom,
+                                                    anchor: anchor, body: body) {
             error = message
             return
         }
