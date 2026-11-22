@@ -5,6 +5,7 @@ import SwiftUI
 struct ReviewScreen: View {
     let workspace: SessionWorkspace
     @State private var document: ReviewDocument
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     init(workspace: SessionWorkspace, source: ReviewSource, focus: ReviewEntryID?) {
         self.workspace = workspace
@@ -27,6 +28,9 @@ struct ReviewScreen: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .background(Color(.systemBackground))
+            // As in the session it opens from: on the iPhone the action bar takes the tab bar's place. Set here
+            // because a pull request's review pushes from the Reviews list, past the session's own setting.
+            .toolbar(sizeClass == .compact ? .hidden : .automatic, for: .tabBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     let wraps = ReviewPreferences.shared.wrapsLines
