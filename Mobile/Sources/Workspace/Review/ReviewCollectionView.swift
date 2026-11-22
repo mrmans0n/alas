@@ -238,6 +238,7 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         // Comments only show where they can be written: the local-changes review.
         let byFile = document.reviewSessionID == nil ? [:] : Dictionary(grouping: document.comments, by: \.fileID)
         commentsByID = Dictionary(document.comments.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        moved = moved.filter { commentsByID[$0.key] != nil }
         // A pull request's threads by file; a conversation thread, on no file, stays in the Reviews list.
         let threadsByPath = Dictionary(grouping: document.threads.filter { $0.path != nil }, by: { $0.path ?? "" })
         threadsByID = Dictionary(document.threads.map { (Self.rowID($0), $0) }, uniquingKeysWith: { a, _ in a })

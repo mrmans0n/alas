@@ -163,14 +163,16 @@ struct ReviewLayoutTests {
     @Test(arguments: [
         // Still reads the same at its anchor, trailing whitespace aside.
         ("keep  ", 42, 42, 3, nil),
-        // Its code moved down: the one run that reads it.
-        ("b\nc", 10, 11, 6, 44...45),
+        // Its code moved down: the one run that reads it (a trailing newline aside).
+        ("b\nc\n", 10, 11, 6, 44...45),
         // Two runs read it: Outdated.
         ("a\nb", 10, 11, nil, nil),
         // Gone.
         ("zzz", 42, nil, nil, nil),
         // No quote: by line numbers, whatever the code there reads now.
         (nil, 41, nil, 2, nil),
+        // A quote of more rows than its lines (a mixed selection on the Mac): by line numbers.
+        ("gone\nkeep", 42, nil, 3, nil),
     ] as [(String?, Int, Int?, Int?, ClosedRange<Int>?)])
     func quotedCommentsFollowTheirCode(quote: String?, line: Int, endLine: Int?, row: Int?, movedTo: ClosedRange<Int>?) {
         let item = ReviewPlaceable(id: "a", side: "new", line: line, endLine: endLine, selectedText: quote)
