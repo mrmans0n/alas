@@ -6,7 +6,7 @@ public enum PullRequestDiff {
     /// (`ReviewRequestDiffLoader.namespace(for:)`).
     public static func namespace(provider: String) -> String { provider == "gitlab" ? "gitlab-mr" : "github-pr" }
 
-    /// `truncated`: the host cut the diff short, so the last file with lines may be missing some.
+    /// `truncated`: the host cut the diff short, so the last file may be missing lines.
     public static func entries(raw: String, namespace: String, truncated: Bool = false) -> [ReviewEntry] {
         var sections: [[String]] = []
         for line in raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
@@ -14,9 +14,9 @@ public enum PullRequestDiff {
             if !sections.isEmpty { sections[sections.count - 1].append(line) }
         }
         var entries = sections.compactMap { entry(lines: $0, namespace: namespace) }
-        if truncated, let last = entries.lastIndex(where: { if case .hunks = $0.content { true } else { false } }),
-           case .hunks(let hunks, _) = entries[last].content {
-            entries[last].content = .hunks(hunks, truncated: true)
+        // The cut fell inside the last section; a binary or metadata-only one has no lines to lose.
+        if truncated, case .hunks(let hunks, _)? = entries.last?.content {
+            entries[entries.count - 1].content = .hunks(hunks, truncated: true)
         }
         return entries
     }
@@ -42,7 +42,10 @@ public enum PullRequestDiff {
         return ReviewEntry(
             id: ReviewEntryID(namespace: namespace, path: path), status: status,
             add: all.count { $0.kind == .add }, del: all.count { $0.kind == .delete }, renameFrom: renameFrom,
-            content: parsed.isBinary ? .note("Binary file") : .hunks(hunks, truncated: false)
+            // As a local diff: a rename or mode change with no lines shows its summary.
+            content: parsed.isBinary ? .note("Binary file")
+                : hunks.isEmpty && parsed.metadataSummary != nil ? .note(parsed.metadataSummary ?? "")
+                : .hunks(hunks, truncated: false)
         )
     }
 

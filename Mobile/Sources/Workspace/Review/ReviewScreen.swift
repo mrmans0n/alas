@@ -101,6 +101,9 @@ struct ReviewScreen: View {
             }
         } else if !document.listLoaded {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if document.entries.isEmpty, document.listTruncated {
+            // The host's cap cut even the first file.
+            ContentUnavailableView(truncationNote, systemImage: "exclamationmark.triangle")
         } else if document.entries.isEmpty {
             ContentUnavailableView("No changes to review.", systemImage: "checkmark.circle")
         } else {
