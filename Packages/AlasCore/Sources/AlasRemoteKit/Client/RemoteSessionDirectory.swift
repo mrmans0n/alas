@@ -110,12 +110,31 @@ public enum RemoteSessionDirectory {
         }
         var buckets: [String: SectionBucket] = [:]
         for s in sessions {
-            // A Machine checkout's sessions join its local project's section.
-            let project = s.worktree?.linkedProjectId ?? s.projectId ?? s.worktree?.projectName ?? "Other"
-            let sectionKey = "\(s.serverId ?? "")|\(project)"
-            let worktreeKey = s.worktreeId ?? s.worktree?.path ?? s.id
-            var section = buckets[sectionKey] ?? SectionBucket(title: s.worktree?.projectName ?? project, hostName: s.serverId == nil ? nil : s.serverName)
-            var wt = section.worktrees[worktreeKey] ?? WorktreeBucket(title: s.worktree?.worktreeName ?? s.title, summary: s.worktree)
+            // A Workspace checkout's sessions share one row in a section named
+            // after the Workspace; it is no repository, so the section has no
+            // repositoryKey and stays apart from real repos.
+            let sectionKey: String
+            let sectionTitle: String
+            let worktreeKey: String
+            let worktreeTitle: String
+            let worktreeSummary: RemoteWorktreeSummary?
+            if let checkout = s.checkout {
+                sectionKey = "\(s.serverId ?? "")|workspace:\(checkout.name)"
+                sectionTitle = checkout.name
+                worktreeKey = "checkout:\(checkout.id)"
+                worktreeTitle = checkout.branch
+                worktreeSummary = nil
+            } else {
+                // A Machine checkout's sessions join its local project's section.
+                let project = s.worktree?.linkedProjectId ?? s.projectId ?? s.worktree?.projectName ?? "Other"
+                sectionKey = "\(s.serverId ?? "")|\(project)"
+                sectionTitle = s.worktree?.projectName ?? project
+                worktreeKey = s.worktreeId ?? s.worktree?.path ?? s.id
+                worktreeTitle = s.worktree?.worktreeName ?? s.title
+                worktreeSummary = s.worktree
+            }
+            var section = buckets[sectionKey] ?? SectionBucket(title: sectionTitle, hostName: s.serverId == nil ? nil : s.serverName)
+            var wt = section.worktrees[worktreeKey] ?? WorktreeBucket(title: worktreeTitle, summary: worktreeSummary)
             if s.isActive { wt.active.append(s) } else { wt.closed.append(s) }
             section.worktrees[worktreeKey] = wt
             buckets[sectionKey] = section
