@@ -317,7 +317,7 @@ private struct ReviewDetailView: View {
 
 private extension RemoteReviewComment {
     var line: Int {
-        if case .line(_, let start, _) = anchor { return start }
+        if case .line(_, let start, _, _) = anchor { return start }
         return 0
     }
 }
@@ -356,7 +356,7 @@ private struct CommentRow: View {
         switch comment.anchor {
         case .file: return "File"
         case .image: return "Image"
-        case .line(let side, let start, let end):
+        case .line(let side, let start, let end, _):
             let range = end.flatMap { $0 != start ? "L\(start)–\($0)" : nil } ?? "L\(start)"
             return range + (side == "old" ? " (old)" : "")
         }

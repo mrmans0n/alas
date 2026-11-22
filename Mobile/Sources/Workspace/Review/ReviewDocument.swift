@@ -362,7 +362,7 @@ final class ReviewDocument {
         }
         let hunk = hunks[selection.hunk]
         let anchor = selection.anchor(in: hunk)
-        guard case .line(_, let start, let end) = anchor else { return }
+        guard case .line(_, let start, let end, _) = anchor else { return }
         let title = end.map { "Lines \(start)\u{2013}\($0)" } ?? "Line \(start)"
         composing = .lines(selection.entry, anchor, title: title, quote: selection.quotedText(in: hunk))
     }

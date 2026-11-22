@@ -53,6 +53,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     private var commentsByID: [String: RemoteReviewComment] = [:]
     private var threadsByID: [String: RemoteProviderThread] = [:]
     private var outdated: Set<String> = []
+    /// Comments whose quoted code moved, by id: the lines it now sits on.
+    private var moved: [String: RemoteReviewAnchor] = [:]
     /// A long press's finger, in the controller's view, and the edge auto-scroll it drives.
     private var pressPoint: CGPoint = .zero
     private var autoScroller: CADisplayLink?
@@ -145,7 +147,7 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             var badges: [String] = []
             if !comment.isOpen { badges.append(comment.state.capitalized) }
             if outdated.contains(cid) { badges.append("Outdated") }
-            cell.configure(author: comment.author, location: Self.location(comment.anchor), body: comment.body, badges: badges,
+            cell.configure(author: comment.author, location: Self.location(moved[cid] ?? comment.anchor), body: comment.body, badges: badges,
                            replies: comment.replies.map { .init(author: $0.author, body: $0.body) }, dimmed: !comment.isOpen)
         }
         let note = UICollectionView.CellRegistration<NoteCell, ReviewRow> { cell, _, row in
@@ -273,6 +275,12 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             }
             for (comment, place) in zip(comments, placed.dropFirst(threads.count)) {
                 if place.row == nil, case .line = comment.anchor { outdated.insert(comment.id) } else { outdated.remove(comment.id) }
+                if let lines = place.movedTo, case .line(let side, _, _, let quoted) = comment.anchor {
+                    moved[comment.id] = .line(side: side, startLine: lines.lowerBound,
+                                              endLine: lines.count > 1 ? lines.upperBound : nil, selectedText: quoted)
+                } else {
+                    moved[comment.id] = nil
+                }
             }
             let rows = ReviewLayout.rows(for: entry, folded: state.folded, comments: placed)
             if rows != sectionRows[id] { reshaped.append(id) }
@@ -318,17 +326,17 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     }
 
     private static func placeable(_ comment: RemoteReviewComment) -> ReviewPlaceable {
-        guard case .line(let side, let start, let end) = comment.anchor else {
+        guard case .line(let side, let start, let end, let quoted) = comment.anchor else {
             return ReviewPlaceable(id: comment.id, side: nil, line: nil, endLine: nil)
         }
-        return ReviewPlaceable(id: comment.id, side: side, line: start, endLine: end)
+        return ReviewPlaceable(id: comment.id, side: side, line: start, endLine: end, selectedText: quoted)
     }
 
     private static func rowID(_ thread: RemoteProviderThread) -> String { "thread:" + thread.id }
 
     /// An outdated thread goes to the top of its file: the provider no longer places it on these lines.
     private static func placeable(_ thread: RemoteProviderThread) -> ReviewPlaceable {
-        guard !thread.isOutdated, case .line(let side, let start, let end)? = thread.anchor else {
+        guard !thread.isOutdated, case .line(let side, let start, let end, _)? = thread.anchor else {
             return ReviewPlaceable(id: rowID(thread), side: nil, line: nil, endLine: nil)
         }
         return ReviewPlaceable(id: rowID(thread), side: side, line: start, endLine: end)
@@ -349,7 +357,7 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         switch anchor {
         case .file: return "File"
         case .image: return "Image"
-        case .line(let side, let start, let end):
+        case .line(let side, let start, let end, _):
             let range = end.flatMap { $0 != start ? "L\(start)\u{2013}\($0)" : nil } ?? "L\(start)"
             return range + (side == "old" ? " (old)" : "")
         }

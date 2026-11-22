@@ -75,21 +75,21 @@ struct ReviewLayoutTests {
         #expect(!marks.isViewed(Self.id, hunks: Self.hunks))
     }
 
-    private static func line(_ kind: String, old: Int? = nil, new: Int? = nil) -> RemoteDiffLine {
-        RemoteDiffLine(kind: kind, text: "x", oldNumber: old, newNumber: new)
+    private static func line(_ kind: String, old: Int? = nil, new: Int? = nil, text: String = "x") -> RemoteDiffLine {
+        RemoteDiffLine(kind: kind, text: text, oldNumber: old, newNumber: new)
     }
 
     private static let selectionCases: [([RemoteDiffLine], RemoteReviewAnchor)] = [
-        ([line("add", new: 42)], .line(side: "new", startLine: 42, endLine: nil)),
-        ([line("add", new: 42), line("add", new: 43)], .line(side: "new", startLine: 42, endLine: 43)),
-        ([line("delete", old: 10), line("delete", old: 11)], .line(side: "old", startLine: 10, endLine: 11)),
+        ([line("add", new: 42)], .line(side: "new", startLine: 42, endLine: nil, selectedText: "x")),
+        ([line("add", new: 42), line("add", new: 43)], .line(side: "new", startLine: 42, endLine: 43, selectedText: "x\nx")),
+        ([line("delete", old: 10), line("delete", old: 11)], .line(side: "old", startLine: 10, endLine: 11, selectedText: "x\nx")),
         (
-            [line("delete", old: 10), line("add", new: 10), line("add", new: 11)],
-            .line(side: "new", startLine: 10, endLine: 11)
+            [line("delete", old: 10, text: "gone"), line("add", new: 10), line("add", new: 11)],
+            .line(side: "new", startLine: 10, endLine: 11, selectedText: "x\nx")
         ),
         (
             [line("context", old: 5, new: 5), line("context", old: 6, new: 6), line("context", old: 7, new: 7)],
-            .line(side: "new", startLine: 5, endLine: 7)
+            .line(side: "new", startLine: 5, endLine: 7, selectedText: "x\nx\nx")
         ),
     ]
 
@@ -151,6 +151,30 @@ struct ReviewLayoutTests {
     ] as [(ReviewPlaceable, Int?)])
     func commentsPlaceUnderTheirLastLine(item: ReviewPlaceable, row: Int?) {
         #expect(ReviewCommentPlacement.place([item], in: Self.commentHunks) == [ReviewPlacedComment(id: "a", row: row)])
+    }
+
+    /// Rows: header 0; new lines 1 "a" (40), 2 "b" (41), 3 "keep" (42), 4 "a" (43), 5 "b" (44), 6 "c" (45).
+    private static let movedHunks = [
+        RemoteDiffHunk(header: "@@ +40,6 @@", oldStart: 1, newStart: 40, lines: ["a", "b", "keep", "a", "b", "c"].enumerated().map {
+            RemoteDiffLine(kind: "add", text: $1, oldNumber: nil, newNumber: 40 + $0)
+        }),
+    ]
+
+    @Test(arguments: [
+        // Still reads the same at its anchor, trailing whitespace aside.
+        ("keep  ", 42, 42, 3, nil),
+        // Its code moved down: the one run that reads it.
+        ("b\nc", 10, 11, 6, 44...45),
+        // Two runs read it: Outdated.
+        ("a\nb", 10, 11, nil, nil),
+        // Gone.
+        ("zzz", 42, nil, nil, nil),
+        // No quote: by line numbers, whatever the code there reads now.
+        (nil, 41, nil, 2, nil),
+    ] as [(String?, Int, Int?, Int?, ClosedRange<Int>?)])
+    func quotedCommentsFollowTheirCode(quote: String?, line: Int, endLine: Int?, row: Int?, movedTo: ClosedRange<Int>?) {
+        let item = ReviewPlaceable(id: "a", side: "new", line: line, endLine: endLine, selectedText: quote)
+        #expect(ReviewCommentPlacement.place([item], in: Self.movedHunks) == [ReviewPlacedComment(id: "a", row: row, movedTo: movedTo)])
     }
 
     @Test
