@@ -49,8 +49,9 @@ final class FileHeaderView: UICollectionReusableView {
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             stack.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
         ])
-        isAccessibilityElement = true
-        accessibilityTraits = .header
+        // VoiceOver reaches the chevron, the menu and the checkbox on their own; the path is the heading.
+        path.accessibilityTraits = .header
+        counts.isAccessibilityElement = false
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
@@ -70,26 +71,15 @@ final class FileHeaderView: UICollectionReusableView {
         text.append(NSAttributedString(string: " \u{2212}\(entry.del)", attributes: [.foregroundColor: UIColor.systemRed]))
         counts.attributedText = text
         counts.isHidden = entry.add + entry.del == 0
-        accessibilityLabel = "\(entry.id.path), \(entry.add) added, \(entry.del) removed" + (isViewed ? ", viewed" : "")
+        path.accessibilityLabel = "\(entry.id.path), \(entry.add) added, \(entry.del) removed"
+        chevron.accessibilityLabel = (folded ? "Unfold " : "Fold ") + entry.id.path
+        menuButton.accessibilityLabel = "More for \(entry.id.path)"
+        viewed.accessibilityLabel = isViewed ? "Viewed" : "Not viewed"
+        viewed.accessibilityTraits = isViewed ? [.button, .toggleButton, .selected] : [.button, .toggleButton]
         menuButton.isHidden = onComment == nil
         menuButton.menu = onComment.map { comment in
             UIMenu(children: [UIAction(title: "Comment on File", image: UIImage(systemName: "plus.bubble")) { _ in comment() }])
         }
-        accessibilityCustomActions = [
-            UIAccessibilityCustomAction(name: folded ? "Unfold" : "Fold") { _ in
-                onFold()
-                return true
-            },
-            UIAccessibilityCustomAction(name: isViewed ? "Mark as Not Viewed" : "Mark as Viewed") { _ in
-                onViewed()
-                return true
-            },
-        ] + (onComment.map { comment in
-            [UIAccessibilityCustomAction(name: "Comment on File") { _ in
-                comment()
-                return true
-            }]
-        } ?? [])
     }
 }
 
@@ -211,9 +201,9 @@ final class LineCell: UICollectionViewCell {
         wrapTrailing.isActive = wraps
         codeOffset = wraps ? 0 : offset
         contentView.backgroundColor = selected ? tintColor.withAlphaComponent(0.18) : tint?.withAlphaComponent(0.12)
-        let state = line.kind == "add" ? "added" : line.kind == "delete" ? "removed" : "unchanged"
+        let state = line.kind == "add" ? "Added, line" : line.kind == "delete" ? "Removed, line" : "Line"
         let number = (line.kind == "delete" ? line.oldNumber : line.newNumber) ?? line.oldNumber ?? 0
-        accessibilityLabel = "line \(number), \(state), \(line.text)"
+        accessibilityLabel = "\(state) \(number): \(line.text)"
         accessibilityTraits = selected ? .selected : []
     }
 }

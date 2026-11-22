@@ -132,8 +132,9 @@ private struct FileStrip: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
+                    let names = Self.names(document.entries.map(\.id.path))
                     ForEach(document.entries, id: \.id) { entry in
-                        chip(entry).id(entry.id)
+                        chip(entry, name: names[entry.id.path] ?? entry.id.path).id(entry.id)
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 6)
@@ -146,13 +147,28 @@ private struct FileStrip: View {
         .background(.bar)
     }
 
-    private func chip(_ entry: ReviewEntry) -> some View {
+    /// Each path's file name, or where names collide the nearest folder that tells them apart:
+    /// "Mobile/…/Package.resolved".
+    /// ponytail: compares every pair of paths, fine for a review's file count.
+    static func names(_ paths: [String]) -> [String: String] {
+        Dictionary(paths.map { path in
+            let parts = path.split(separator: "/")
+            let depth = (1...max(parts.count, 1)).first { k in
+                let tail = parts.suffix(k).joined(separator: "/")
+                return !paths.contains { $0 != path && ($0 == tail || $0.hasSuffix("/" + tail)) }
+            } ?? parts.count
+            let name = parts.last.map(String.init) ?? path
+            return (path, depth <= 1 ? name : depth == 2 ? parts.suffix(2).joined(separator: "/") : "\(parts[parts.count - depth])/…/\(name)")
+        }, uniquingKeysWith: { a, _ in a })
+    }
+
+    private func chip(_ entry: ReviewEntry, name: String) -> some View {
         let current = entry.id == document.current
         let viewed = document.isViewed(entry)
         return Button { document.scrollTo?(entry.id) } label: {
             HStack(spacing: 4) {
                 if viewed { Image(systemName: "checkmark").font(.caption2.weight(.bold)) }
-                Text(entry.id.path.split(separator: "/").last.map(String.init) ?? entry.id.path).lineLimit(1)
+                Text(name).lineLimit(1)
             }
             .font(.caption)
             .padding(.horizontal, 10).padding(.vertical, 6)

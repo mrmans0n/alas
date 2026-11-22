@@ -575,24 +575,28 @@ extension ReviewCollectionController {
         extendToPress()
     }
 
-    /// VoiceOver's way to select: each action checks the selection when it runs, not when the row was drawn.
+    /// VoiceOver's way to select. Rows redraw when the selection changes, so each offers only what applies now.
     fileprivate func lineActions(_ id: ReviewEntryID, hunk: Int, line: Int) -> [UIAccessibilityCustomAction] {
-        [
+        let selection = document.selection
+        var actions = [
             UIAccessibilityCustomAction(name: "Select line") { [weak self] _ in
                 self?.document.select(id, hunk: hunk, line: line)
                 return true
             },
-            UIAccessibilityCustomAction(name: "Extend selection to here") { [weak self] _ in
-                guard let self, let selection = document.selection, selection.entry == id, selection.hunk == hunk else { return false }
-                document.extendSelection(id, hunk: hunk, line: line)
-                return true
-            },
-            UIAccessibilityCustomAction(name: "Comment on selection") { [weak self] _ in
-                guard let self, document.selection != nil else { return false }
-                document.composeSelection()
-                return true
-            },
         ]
+        if selection?.entry == id, selection?.hunk == hunk {
+            actions.append(UIAccessibilityCustomAction(name: "Extend selection to here") { [weak self] _ in
+                self?.document.extendSelection(id, hunk: hunk, line: line)
+                return true
+            })
+        }
+        if selection != nil {
+            actions.append(UIAccessibilityCustomAction(name: "Comment on selection") { [weak self] _ in
+                self?.document.composeSelection()
+                return true
+            })
+        }
+        return actions
     }
 
     fileprivate func makePill() -> UIView {
