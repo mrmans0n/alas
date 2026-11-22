@@ -45,6 +45,14 @@ for (const body of ['not json', '{"labels":["a"],"values":[1,2]}', '{"values":[1
   assert.deepEqual(types("```chart\n" + body + "\n```"), ["markdown"], body);
 }
 
+// Reference definitions reach every prose segment around a visual; without a visual the text is untouched.
+const linked = tm.splitVisualFences("See [the report][r].\n```visual\n<svg/>\n```\n[r]: https://example.com/report");
+assert.equal(linked[0].text, "See [the report][r].\n\n[r]: https://example.com/report");
+assert.equal(linked[2].text, "[r]: https://example.com/report\n\n[r]: https://example.com/report");
+assert.deepEqual(tm.splitVisualFences("[a][r]\n\n[r]: https://x.y"), [{ type: "markdown", text: "[a][r]\n\n[r]: https://x.y" }]);
+// A definition-looking line inside a code block is code, not a definition.
+assert.equal(tm.splitVisualFences("```\n[r]: https://x.y\n```\n```visual\n<svg/>\n```")[0].text, "```\n[r]: https://x.y\n```");
+
 // --- ids ----------------------------------------------------------------------
 
 const id = tm.stableVisualId("row:0:<svg/>");

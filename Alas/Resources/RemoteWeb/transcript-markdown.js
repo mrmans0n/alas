@@ -74,12 +74,15 @@ function chartHTML(info, body) {
 }
 
 const FENCE_OPEN = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+const REFERENCE_DEFINITION = /^ {0,3}\[[^\]]+\]:\s*\S/;
 
 // Splits agent markdown at its top-level ```visual and ```chart fences. Returns segments in order:
 //   { type: "markdown", text }  prose and every other fence, for the markdown renderer
 //   { type: "visual", title, html }  a closed fence drawn as an embedded visual
 //   { type: "drawing", title }  a visual or chart fence still streaming
 // A fence whose body draws nothing (an empty visual, chart data the component rejects) stays markdown.
+// Each markdown segment renders on its own, so when the text has a visual, every one of them also gets
+// the text's link reference definitions: a [link][ref] before a visual keeps its definition after it.
 function splitVisualFences(text) {
   const lines = String(text || "").split("\n");
   const segments = [];
@@ -88,11 +91,17 @@ function splitVisualFences(text) {
     if (prose.length) segments.push({ type: "markdown", text: prose.join("\n") });
     prose = [];
   };
+  const definitions = [];
   let i = 0;
   while (i < lines.length) {
     const open = FENCE_OPEN.exec(lines[i]);
     // A backtick fence's info string cannot hold a backtick.
-    if (!open || (open[2][0] === "`" && open[3].includes("`"))) { prose.push(lines[i]); i++; continue; }
+    if (!open || (open[2][0] === "`" && open[3].includes("`"))) {
+      if (REFERENCE_DEFINITION.test(lines[i])) definitions.push(lines[i].trim());
+      prose.push(lines[i]);
+      i++;
+      continue;
+    }
     const marker = open[2];
     const close = new RegExp("^ {0,3}" + (marker[0] === "`" ? "`" : "~") + "{" + marker.length + ",}\\s*$");
     let end = i + 1;
@@ -122,6 +131,11 @@ function splitVisualFences(text) {
     i = end + 1;
   }
   flush();
+  if (definitions.length && segments.some((segment) => segment.type !== "markdown")) {
+    for (const segment of segments) {
+      if (segment.type === "markdown") segment.text += "\n\n" + definitions.join("\n");
+    }
+  }
   return segments;
 }
 
