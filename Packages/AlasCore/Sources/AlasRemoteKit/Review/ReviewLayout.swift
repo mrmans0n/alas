@@ -53,20 +53,35 @@ public enum ReviewLayout {
         "Podfile.lock", "Gemfile.lock", "go.sum", "poetry.lock",
     ]
 
-    public static func rows(for entry: ReviewEntry, folded: Bool) -> [ReviewRow] {
+    public static func rows(
+        for entry: ReviewEntry, folded: Bool, comments: [ReviewPlacedComment] = []
+    ) -> [ReviewRow] {
         if folded { return [] }
         let id = entry.id
         switch entry.content {
         case .notLoaded, .loading:
             return [.placeholder(entry: id)]
         case let .note(text):
-            return [.note(entry: id, text: text)]
+            // With no lines to sit under, every comment goes under the note, so none vanish.
+            return [.note(entry: id, text: text)] + comments.map { .comment(entry: id, id: $0.id) }
         case let .hunks(hunks, truncated):
-            if hunks.isEmpty { return [.note(entry: id, text: "No changes to show")] }
+            if hunks.isEmpty {
+                return [.note(entry: id, text: "No changes to show")] + comments.map { .comment(entry: id, id: $0.id) }
+            }
+            // Comment ids by the base row they follow; `comments` indexes the comment-free rows.
+            var after: [Int: [String]] = [:]
+            let last = hunks.count + hunks.reduce(0) { $0 + $1.lines.count } - 1
+            for c in comments { after[min(c.row ?? 0, last), default: []].append(c.id) }
             var rows: [ReviewRow] = []
+            var base = 0
+            func add(_ row: ReviewRow) {
+                rows.append(row)
+                for cid in after[base] ?? [] { rows.append(.comment(entry: id, id: cid)) }
+                base += 1
+            }
             for (h, hunk) in hunks.enumerated() {
-                rows.append(.hunkHeader(entry: id, hunk: h))
-                for l in hunk.lines.indices { rows.append(.line(entry: id, hunk: h, line: l)) }
+                add(.hunkHeader(entry: id, hunk: h))
+                for l in hunk.lines.indices { add(.line(entry: id, hunk: h, line: l)) }
             }
             if truncated { rows.append(.note(entry: id, text: "Diff truncated on the Mac")) }
             return rows

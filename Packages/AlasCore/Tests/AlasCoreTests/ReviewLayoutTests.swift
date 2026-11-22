@@ -63,4 +63,105 @@ struct ReviewLayoutTests {
         marks.unmark(Self.id)
         #expect(!marks.isViewed(Self.id, hunks: Self.hunks))
     }
+
+    private static func line(_ kind: String, old: Int? = nil, new: Int? = nil) -> RemoteDiffLine {
+        RemoteDiffLine(kind: kind, text: "x", oldNumber: old, newNumber: new)
+    }
+
+    private static let selectionCases: [([RemoteDiffLine], RemoteReviewAnchor)] = [
+        ([line("add", new: 42)], .line(side: "new", startLine: 42, endLine: nil)),
+        ([line("add", new: 42), line("add", new: 43)], .line(side: "new", startLine: 42, endLine: 43)),
+        ([line("delete", old: 10), line("delete", old: 11)], .line(side: "old", startLine: 10, endLine: 11)),
+        (
+            [line("delete", old: 10), line("add", new: 10), line("add", new: 11)],
+            .line(side: "new", startLine: 10, endLine: 11)
+        ),
+        (
+            [line("context", old: 5, new: 5), line("context", old: 6, new: 6), line("context", old: 7, new: 7)],
+            .line(side: "new", startLine: 5, endLine: 7)
+        ),
+    ]
+
+    @Test(arguments: selectionCases)
+    func selectionAnchorsToOneSide(lines: [RemoteDiffLine], expected: RemoteReviewAnchor) {
+        let hunk = RemoteDiffHunk(header: "@@", oldStart: 1, newStart: 1, lines: lines)
+        var selection = ReviewSelection(entry: Self.id, hunk: 0, line: 0)
+        selection.extend(to: lines.count - 1, inHunk: 0)
+        #expect(selection.anchor(in: hunk) == expected)
+    }
+
+    @Test
+    func extendingStaysInItsHunk() {
+        var selection = ReviewSelection(entry: Self.id, hunk: 0, line: 3)
+        selection.extend(to: 9, inHunk: 1)
+        #expect((selection.start, selection.end) == (3, 3))
+        selection.extend(to: 1, inHunk: 0)
+        #expect((selection.start, selection.end) == (1, 3))
+        var drag = ReviewSelection(entry: Self.id, hunk: 0, line: 10)
+        drag.extend(to: 15, inHunk: 0)
+        drag.extend(to: 12, inHunk: 0)
+        #expect((drag.start, drag.end) == (10, 12))
+        drag.extend(to: 8, inHunk: 0)
+        #expect((drag.start, drag.end) == (8, 10))
+    }
+
+    @Test
+    func selectionDropsWhenItsLinesAreGone() {
+        var selection = ReviewSelection(entry: Self.id, hunk: 0, line: 0)
+        selection.extend(to: 1, inHunk: 0)
+        #expect(selection.isValid(in: Self.hunks))
+        selection.extend(to: 2, inHunk: 0)
+        #expect(!selection.isValid(in: Self.hunks))
+        #expect(!ReviewSelection(entry: Self.id, hunk: 2, line: 0).isValid(in: Self.hunks))
+    }
+
+    @Test
+    func quotedTextPrefixesEachLineBySign() {
+        let hunk = Self.hunks[0]
+        var selection = ReviewSelection(entry: Self.id, hunk: 0, line: 0)
+        selection.extend(to: 1, inHunk: 0)
+        #expect(selection.quotedText(in: hunk) == "  a\n+ b")
+    }
+
+    private static let commentHunks = [
+        RemoteDiffHunk(header: "@@ -10,2 +41,3 @@", oldStart: 10, newStart: 41, lines: [
+            RemoteDiffLine(kind: "context", text: "a", oldNumber: 10, newNumber: 41),
+            RemoteDiffLine(kind: "add", text: "b", oldNumber: nil, newNumber: 42),
+            RemoteDiffLine(kind: "add", text: "c", oldNumber: nil, newNumber: 43),
+            RemoteDiffLine(kind: "delete", text: "d", oldNumber: 11, newNumber: nil),
+        ]),
+    ]
+
+    @Test(arguments: [
+        (ReviewPlaceable(id: "a", side: "new", line: 42, endLine: 43), 3),
+        (ReviewPlaceable(id: "a", side: "old", line: 10, endLine: nil), 1),
+        (ReviewPlaceable(id: "a", side: "new", line: 999, endLine: nil), nil),
+        (ReviewPlaceable(id: "a", side: nil, line: nil, endLine: nil), nil),
+    ] as [(ReviewPlaceable, Int?)])
+    func commentsPlaceUnderTheirLastLine(item: ReviewPlaceable, row: Int?) {
+        #expect(ReviewCommentPlacement.place([item], in: Self.commentHunks) == [ReviewPlacedComment(id: "a", row: row)])
+    }
+
+    @Test
+    func commentRowsKeepInputOrderAndOutdatedOnesGoToTheTop() {
+        let items = [
+            ReviewPlaceable(id: "y", side: "new", line: 43, endLine: nil),
+            ReviewPlaceable(id: "x", side: "new", line: 43, endLine: nil),
+            ReviewPlaceable(id: "z", side: nil, line: nil, endLine: nil),
+            ReviewPlaceable(id: "b", side: nil, line: nil, endLine: nil),
+        ]
+        var placed = ReviewCommentPlacement.place(items, in: Self.commentHunks)
+        placed.append(ReviewPlacedComment(id: "late", row: 99))
+        let entry = Self.entry(.hunks(Self.commentHunks, truncated: false))
+        let rows = ReviewLayout.rows(for: entry, folded: false, comments: placed)
+        let id = Self.id
+        #expect(rows == [
+            .hunkHeader(entry: id, hunk: 0), .comment(entry: id, id: "z"), .comment(entry: id, id: "b"),
+            .line(entry: id, hunk: 0, line: 0), .line(entry: id, hunk: 0, line: 1),
+            .line(entry: id, hunk: 0, line: 2), .comment(entry: id, id: "y"), .comment(entry: id, id: "x"),
+            .line(entry: id, hunk: 0, line: 3), .comment(entry: id, id: "late"),
+        ])
+        let binary = ReviewLayout.rows(for: Self.entry(.note("Binary file")), folded: false, comments: Array(placed.prefix(2)))
+        #expect(binary == [.note(entry: id, text: "Binary file"), .comment(entry: id, id: "y"), .comment(entry: id, id: "x")])
+    }
 }
