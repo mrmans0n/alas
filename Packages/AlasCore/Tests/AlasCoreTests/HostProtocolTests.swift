@@ -4,8 +4,7 @@ import Testing
 @testable import AlasHostCore
 
 struct HostProtocolTests {
-    /// A preview at the cap, all `/`-heavy base64 that JSON escapes,
-    /// still fits the send budget inside its host reply envelope.
+    /// The phone's `readWorktree` request decodes as the host's own, for every read.
     @Test(arguments: [nil, ChangesComparisonMode.branchUpstream])
     func aPhoneWorktreeReadDecodesAsTheHostsRead(mode: ChangesComparisonMode?) throws {
         let hostMode = mode.flatMap { AppConfig.Changes.ChangesComparisonMode(rawValue: $0.rawValue) }
@@ -44,6 +43,8 @@ struct HostProtocolTests {
         #expect(RemoteWorktreeRead.reply(to: 5, in: try message(4)) == nil)
     }
 
+    /// A preview at the cap, all `/`-heavy base64 that JSON escapes,
+    /// still fits the send budget inside its host reply envelope.
     @Test func aFileBytesReplyAtTheCapFitsOneFrame() throws {
         let data = Data(repeating: 0xFF, count: RemoteWorktreeFileAccess.maxPreviewBytes)
         let reply = RemoteServerMessage.host(.response(id: Int.max, result: .worktreeRead(reply: .fileBytes(
