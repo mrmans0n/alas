@@ -89,6 +89,18 @@ public enum ReviewLayout {
         }
     }
 
+    /// Where the selection's Comment pill floats, in content coordinates: above the selection's first line
+    /// when that fits under the visible top, so it hides neither the selection nor the code after it; else under
+    /// its last line. Either way no lower than the visible bottom (the action bar's edge), so it stays reachable.
+    public static func selectionPillY(selectionTop: Double, selectionBottom: Double, pillHeight: Double,
+                                      visibleTop: Double, visibleBottom: Double) -> Double {
+        let gap = 4.0
+        let lowest = visibleBottom - pillHeight - 2 * gap
+        let above = selectionTop - gap - pillHeight
+        if above >= visibleTop { return min(above, lowest) }
+        return max(min(selectionBottom + gap, lowest), above)
+    }
+
     public static func startsFolded(path: String, add: Int, del: Int) -> Bool {
         let name = path.split(separator: "/").last.map(String.init) ?? path
         if generatedNames.contains(name) { return true }
