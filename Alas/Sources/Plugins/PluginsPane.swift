@@ -39,25 +39,32 @@ struct PluginsPane: View {
     /// Install or update failures, by catalog entry id, until the next attempt.
     @State private var installFailures: [String: String] = [:]
     @State private var busy: Set<String> = []
+    @State private var tab = PluginListTab.installed
+    /// The installed plugin whose page replaces the list; a sheet would hide the approval and configure sheets.
+    @State private var selected: String?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Plugins").font(SettingsPaneStyle.titleFont)
-                Text("Plugins run sandboxed, with only the capabilities you approve.")
-                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, scale.space[3])
-                SettingsRow(name: "Enable plugins", desc: "Runs approved plugins. Turning this off stops them all.") {
-                    AlasToggle(on: Binding(
-                        get: { state.config.pluginsEnabled },
-                        set: { enabled in Task { @MainActor in await state.setPluginsEnabled(enabled) } }))
-                }
-                .padding(.bottom, scale.space[3])
-                if let manager = state.pluginManager {
-                    content(manager)
+                if let manager = state.pluginManager, let id = selected, let plugin = manager.plugin(id: id) {
+                    detail(manager, plugin)
                 } else {
-                    Text("Plugins are off. Nothing is loaded or run, and the plugin catalog is not fetched.")
+                    Text("Plugins").font(SettingsPaneStyle.titleFont)
+                    Text("Plugins run sandboxed, with only the capabilities you approve.")
                         .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                        .padding(.bottom, scale.space[3])
+                    SettingsRow(name: "Enable plugins", desc: "Runs approved plugins. Turning this off stops them all.") {
+                        AlasToggle(on: Binding(
+                            get: { state.config.pluginsEnabled },
+                            set: { enabled in Task { @MainActor in await state.setPluginsEnabled(enabled) } }))
+                    }
+                    .padding(.bottom, scale.space[3])
+                    if let manager = state.pluginManager {
+                        content(manager)
+                    } else {
+                        Text("Plugins are off. Nothing is loaded or run, and the plugin catalog is not fetched.")
+                            .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    }
                 }
             }
             .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
@@ -91,41 +98,149 @@ struct PluginsPane: View {
         if !updates.isEmpty {
             updatesBanner(manager, updates)
         }
-        if manager.plugins.isEmpty {
-            SettingsRow(name: "No plugins installed.", desc: nil) { }
-        }
-        ForEach(manager.plugins) { plugin in
-            let hosts = manager.hosts(for: plugin)
-            SettingsGroup(title: "\(plugin.manifest.name) \(plugin.manifest.version)", verticalPadding: scale.space[2]) {
-                SettingsRow(name: plugin.id, desc: PluginStatusText.make(
-                    approved: manager.isApproved(plugin), enabled: manager.isEnabled(plugin),
-                    hostStates: hosts.map(\.host.state))) {
-                    pluginControls(manager, plugin, updates)
+        let available = (manager.catalog.index?.plugins ?? []).filter { manager.plugin(id: $0.id) == nil }
+        AlasSegmentedControl(selection: tab, options: [
+            AlasSegmentedOption(id: .installed, label: "Installed \(manager.plugins.count)"),
+            AlasSegmentedOption(id: .available, label: manager.catalog.index == nil ? "Available" : "Available \(available.count)"),
+            AlasSegmentedOption(id: .updates, label: "Updates \(updates.count)"),
+        ]) { tab = $0 }
+        .fixedSize()
+        .padding(.bottom, scale.space[2])
+        Group {
+            switch tab {
+            case .installed:
+                if manager.plugins.isEmpty {
+                    emptyRow("No plugins installed.")
                 }
-                if manager.isApproved(plugin), !plugin.manifest.settings.isEmpty {
-                    PluginSettingsForm(settings: manager.settings(for: plugin))
-                }
-                ForEach(hosts.filter(\.host.state.isFailed), id: \.key) { entry in
-                    hostRow(manager, entry)
-                }
-                if !hosts.isEmpty {
-                    PaneDisclosure(title: "All hosts (\(hosts.count))") {
-                        ForEach(hosts, id: \.key) { entry in
-                            hostRow(manager, entry)
+                ForEach(manager.plugins) { installedRow(manager, $0, updates) }
+                if !manager.invalid.isEmpty {
+                    SettingsGroup(title: "Not loaded") {
+                        ForEach(manager.invalid) { entry in
+                            SettingsRow(name: entry.folder.lastPathComponent, desc: entry.reason, selectable: true) { }
                         }
-                        .padding(.leading, scale.space[4])
                     }
                 }
-            }
-        }
-        catalogSection(manager)
-        if !manager.invalid.isEmpty {
-            SettingsGroup(title: "Not loaded") {
-                ForEach(manager.invalid) { entry in
-                    SettingsRow(name: entry.folder.lastPathComponent, desc: entry.reason, selectable: true) { }
+            case .available:
+                availableList(manager, available)
+            case .updates:
+                if updates.isEmpty {
+                    emptyRow("Everything is up to date.")
                 }
+                ForEach(updates.compactMap { manager.plugin(id: $0.entry.id) }) { installedRow(manager, $0, updates) }
             }
         }
+        .task { await manager.catalog.refresh() }
+    }
+
+    private func emptyRow(_ text: String) -> some View {
+        Text(text).font(scale.metaFont).foregroundColor(theme.color("fg-dim")).padding(.vertical, scale.space[3])
+    }
+
+    private func catalogEntry(_ manager: PluginManager, _ id: String) -> PluginCatalogIndex.Entry? {
+        manager.catalog.index?.plugins.first { $0.id == id }
+    }
+
+    // MARK: Installed
+
+    private func installedRow(_ manager: PluginManager, _ plugin: PluginManager.Plugin, _ updates: [Update]) -> some View {
+        let listing = PluginListing(installed: plugin, entry: catalogEntry(manager, plugin.id))
+        let failed = manager.hosts(for: plugin).filter(\.host.state.isFailed).count
+        let status: String? = !manager.isApproved(plugin) ? "Not approved"
+            : !manager.isEnabled(plugin) ? "Disabled"
+            : failed > 0 ? "Stopped in \(failed) \(failed == 1 ? "project" : "projects")" : nil
+        return PluginListRow(listing: listing, status: status, statusIsWarning: failed > 0, open: { selected = plugin.id }) {
+            if busy.contains(plugin.id) {
+                Spinner().frame(width: 14, height: 14).accessibilityLabel("Updating")
+            } else if let update = updates.first(where: { $0.entry.id == plugin.id }) {
+                AlasButton(title: "Update", style: .primary) { Task { await install(manager, update.entry, update.version) } }
+                    .fixedSize()
+                    .help("Update to \(update.version.version)")
+            } else if manager.isApproved(plugin) {
+                AlasToggle(on: Binding(
+                    get: { manager.isEnabled(plugin) },
+                    set: { enabled in Task { await manager.setEnabled(plugin, enabled) } }))
+            } else {
+                approveButton(manager, plugin)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func detail(_ manager: PluginManager, _ plugin: PluginManager.Plugin) -> some View {
+        let entry = catalogEntry(manager, plugin.id)
+        let listing = PluginListing(installed: plugin, entry: entry)
+        let hosts = manager.hosts(for: plugin)
+        let updates = manager.catalogUpdates
+        let row = entry.map(manager.catalogRow)
+        AlasButton(title: "Plugins", icon: "chevron.left", style: .subtle) { selected = nil }
+            .fixedSize()
+            .keyboardShortcut(.cancelAction)
+            .padding(.bottom, scale.space[3])
+        HStack(alignment: .top, spacing: scale.space[3]) {
+            PluginIconTile(listing: listing, size: 56)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(listing.name).font(SettingsPaneStyle.titleFont)
+                    if let version = listing.version {
+                        Text(version).font(scale.meta.font(design: .monospaced)).foregroundColor(theme.color("fg-muted"))
+                    }
+                }
+                if let meta = listing.meta() {
+                    Text(meta).font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                }
+                if let summary = listing.summary {
+                    Text(summary).font(scale.bodyFont).fixedSize(horizontal: false, vertical: true).padding(.top, scale.space[1])
+                }
+                HStack(spacing: scale.space[3]) {
+                    Text(plugin.id).font(scale.meta.font(design: .monospaced)).textSelection(.enabled)
+                    if let homepage = entry?.homepage { Link("Homepage", destination: homepage).font(scale.metaFont) }
+                }
+                .foregroundColor(theme.color("fg-muted"))
+                .padding(.top, scale.space[1])
+            }
+        }
+        .padding(.bottom, scale.space[4])
+        SettingsRow(name: "Status", desc: PluginStatusText.make(
+            approved: manager.isApproved(plugin), enabled: manager.isEnabled(plugin), hostStates: hosts.map(\.host.state))) {
+            pluginControls(manager, plugin, updates)
+        }
+        SettingsRow(name: "Permissions", desc: Self.permissions(plugin.manifest)) { }
+        let fromCatalog = Self.isFromCatalog(row)
+        SettingsRow(name: "Source", desc: fromCatalog ? "Installed from the catalog." : "Installed locally; the catalog leaves it alone.") {
+            if fromCatalog { removeButton(manager, plugin.id) }
+        }
+        if let failure = installFailures[plugin.id] {
+            Text("Failed: \(failure)").font(scale.metaFont).foregroundStyle(theme.color("warn")).textSelection(.enabled)
+        }
+        if manager.isApproved(plugin), !plugin.manifest.settings.isEmpty {
+            SettingsGroup(title: "Settings", verticalPadding: scale.space[2]) {
+                PluginSettingsForm(settings: manager.settings(for: plugin))
+            }
+        }
+        ForEach(hosts.filter(\.host.state.isFailed), id: \.key) { entry in
+            hostRow(manager, entry)
+        }
+        if !hosts.isEmpty {
+            PaneDisclosure(title: "All hosts (\(hosts.count))") {
+                ForEach(hosts, id: \.key) { entry in
+                    hostRow(manager, entry)
+                }
+                .padding(.leading, scale.space[4])
+            }
+        }
+    }
+
+    /// Only the catalog's own copy can be removed from here.
+    private static func isFromCatalog(_ row: PluginCatalogRow?) -> Bool {
+        switch row {
+        case .installed, .update: true
+        case .installedLocally, .install, .incompatible, nil: false
+        }
+    }
+
+    private static func permissions(_ manifest: PluginManifest) -> String {
+        let lines = manifest.capabilities.map(\.summary) + [manifest.webSummary].compactMap { $0 }
+        return lines.isEmpty ? "None requested." : lines.joined(separator: "\n")
     }
 
     /// The row's buttons on one line when the column is wide enough, stacked otherwise, so no title is cut short.
@@ -205,24 +320,56 @@ struct PluginsPane: View {
         }
     }
 
+    // MARK: Available
+
     @ViewBuilder
-    private func catalogSection(_ manager: PluginManager) -> some View {
+    private func availableList(_ manager: PluginManager, _ available: [PluginCatalogIndex.Entry]) -> some View {
         let catalog = manager.catalog
-        SettingsGroup(title: "Available") {
-            switch catalog.state {
-            case .idle, .loading:
-                SettingsRow(name: "Loading the plugin catalog…", desc: nil) { }
-            case .failed(let reason):
+        // The last index stays listed through a refresh and its failure.
+        if catalog.index == nil {
+            if case .failed(let reason) = catalog.state {
                 SettingsRow(name: "Catalog unavailable", desc: reason, selectable: true) {
                     AlasButton(title: "Retry", style: .subtle) { Task { await catalog.refresh(force: true) } }
                 }
-            case .loaded(let index):
-                ForEach(index.plugins) { entry in
-                    catalogRow(manager, entry, manager.catalogRow(entry))
-                }
+            } else {
+                emptyRow("Loading the plugin catalog…")
+            }
+        } else {
+            if available.isEmpty {
+                emptyRow("Everything in the catalog is installed.")
+            }
+            ForEach(available) { entry in
+                availableRow(manager, entry, manager.catalogRow(entry))
             }
         }
-        .task { await catalog.refresh() }
+    }
+
+    private func availableRow(_ manager: PluginManager, _ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow) -> some View {
+        PluginListRow(listing: PluginListing(installed: nil, entry: entry), status: nil, statusIsWarning: false, open: nil) {
+            if busy.contains(entry.id) {
+                Spinner().frame(width: 14, height: 14).accessibilityLabel("Installing")
+            } else {
+                switch row {
+                case .install(let version):
+                    AlasButton(title: "Install", style: .normal) { Task { await install(manager, entry, version) } }
+                        .fixedSize()
+                case .incompatible:
+                    Text("Needs a newer Alas").font(scale.metaFont).foregroundColor(theme.color("fg-muted"))
+                case .installed, .update, .installedLocally:
+                    // A copy elsewhere in the folder holds this id.
+                    Text("Installed locally").font(scale.metaFont).foregroundColor(theme.color("fg-muted"))
+                }
+            }
+        } detail: {
+            if let failure = installFailures[entry.id] {
+                Text("Failed: \(failure)")
+                    .font(scale.metaFont)
+                    .foregroundStyle(theme.color("warn"))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            capabilitiesLine(row)
+        }
     }
 
     private typealias Update = PluginManager.CatalogUpdate
@@ -252,35 +399,6 @@ struct PluginsPane: View {
                 Task { await install(manager, update.entry, update.version) }
             }
             .fixedSize()
-        }
-    }
-
-    private func catalogRow(_ manager: PluginManager, _ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow) -> some View {
-        SettingsRow(name: entry.name, desc: Self.catalogDescription(entry, row), selectable: true) {
-            if let failure = installFailures[entry.id] {
-                Text("Failed: \(failure)")
-                    .font(scale.metaFont)
-                    .foregroundStyle(theme.color("warn"))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            capabilitiesLine(row)
-        } control: {
-            if busy.contains(entry.id) {
-                Spinner().frame(width: 14, height: 14).accessibilityLabel("Loading")
-            } else {
-                switch row {
-                case .install(let version):
-                    AlasButton(title: "Install \(version.version)", style: .normal) { Task { await install(manager, entry, version) } }
-                case .update(let version):
-                    AlasButton(title: "Update to \(version.version)", style: .normal) { Task { await install(manager, entry, version) } }
-                    removeButton(manager, entry.id)
-                case .installed:
-                    removeButton(manager, entry.id)
-                case .installedLocally, .incompatible:
-                    EmptyView()
-                }
-            }
         }
     }
 
@@ -349,16 +467,115 @@ struct PluginsPane: View {
         }
         busy.remove(entry.id)
     }
+}
 
-    private static func catalogDescription(_ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow) -> String? {
-        var lines = [entry.summary].compactMap { $0 }
-        switch row {
-        case .install, .update: break
-        case .installed: lines.append("Installed from the catalog.")
-        case .installedLocally: lines.append("Installed locally; the catalog leaves it alone.")
-        case .incompatible: lines.append("No version runs on this Alas.")
+private enum PluginListTab: Hashable { case installed, available, updates }
+
+/// An app-store style row: icon, name and version, author and release day, summary, and one action on the right.
+private struct PluginListRow<Trailing: View, Detail: View>: View {
+    let listing: PluginListing
+    /// Shown instead of the summary line when something needs the user: not approved, disabled, stopped.
+    let status: String?
+    let statusIsWarning: Bool
+    /// Opens the plugin's page; nil for a row with no page.
+    let open: (() -> Void)?
+    @ViewBuilder let trailing: () -> Trailing
+    @ViewBuilder var detail: () -> Detail
+    @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
+
+    var body: some View {
+        HStack(alignment: .center, spacing: scale.space[3]) {
+            if let open {
+                Button(action: open) { info.contentShape(Rectangle()) }.buttonStyle(.plain)
+            } else {
+                info
+            }
+            trailing()
+            if let open {
+                Button(action: open) { Icon(name: "chevron.right", size: 11) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Details")
+            }
         }
-        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+        .padding(.vertical, scale.space[2])
+        .overlay(Divider().opacity(0.5), alignment: .top)
+    }
+
+    private var info: some View {
+        HStack(alignment: .center, spacing: scale.space[3]) {
+            PluginIconTile(listing: listing, size: 36)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(listing.name).font(scale.emphasisFont).foregroundColor(theme.color("fg"))
+                    if let version = listing.version {
+                        Text(version).font(scale.caption.font(design: .monospaced)).foregroundColor(theme.color("fg-muted"))
+                    }
+                }
+                .lineLimit(1)
+                if let meta = listing.meta() {
+                    Text(meta).font(scale.metaFont).foregroundColor(theme.color("fg-dim")).lineLimit(1)
+                }
+                if let status {
+                    HStack(spacing: 4) {
+                        if statusIsWarning { Image(systemName: "exclamationmark.triangle.fill") }
+                        Text(status)
+                    }
+                    .font(scale.metaFont)
+                    .foregroundColor(theme.color(statusIsWarning ? "warn" : "fg-muted"))
+                } else if let summary = listing.summary {
+                    Text(summary).font(scale.metaFont).foregroundColor(theme.color("fg-muted")).lineLimit(1)
+                        .help(summary)
+                }
+                detail()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+extension PluginListRow where Detail == EmptyView {
+    init(listing: PluginListing, status: String?, statusIsWarning: Bool, open: (() -> Void)?, @ViewBuilder trailing: @escaping () -> Trailing) {
+        self.init(listing: listing, status: status, statusIsWarning: statusIsWarning, open: open, trailing: trailing, detail: { EmptyView() })
+    }
+}
+
+private extension PluginListing {
+    static let relative: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter
+    }()
+
+    /// "author · Updated 3 days ago"; nil when neither is known.
+    func meta(now: Date = .now) -> String? {
+        let updated = released.map { date in
+            now.timeIntervalSince(date) < 86_400 ? "Updated today" : "Updated " + Self.relative.localizedString(for: date, relativeTo: now)
+        }
+        let parts = [author, updated].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+/// The plugin's SF Symbol, or its initial when it declares none or one this macOS lacks.
+private struct PluginIconTile: View {
+    let listing: PluginListing
+    let size: CGFloat
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        let symbol = listing.icon.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil ? $0 : nil }
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.24, style: .continuous).fill(theme.color("accent-soft"))
+            if let symbol {
+                Image(systemName: symbol).font(.system(size: size * 0.46, weight: .medium)) // design-literal: scales with the tile
+            } else {
+                Text(listing.name.prefix(1).uppercased()).font(.system(size: size * 0.44, weight: .semibold, design: .rounded)) // design-literal: scales with the tile
+            }
+        }
+        .foregroundColor(theme.color("accent"))
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }
 

@@ -354,6 +354,11 @@ public struct PluginManifest: Equatable, Sendable {
     public var web: String?
     /// Projects the plugin runs in (API 17).
     public var requires = PluginRequirements()
+    /// Shown in Settings → Plugins only, so any API may declare them and a bad value is dropped, never refused.
+    public var summary: String?
+    public var author: String?
+    /// An SF Symbol name.
+    public var icon: String?
 
     /// The panel Settings → Plugins opens with Configure… (API 9).
     public var configurePanel: PluginPanelContribution? { panels.first { $0.location == .configure } }
@@ -478,7 +483,8 @@ public struct PluginManifest: Equatable, Sendable {
         return PluginManifest(
             id: id, name: name, version: version, api: api, entry: entry,
             capabilities: capabilities, tabs: tabs, panels: panels, commands: commands, events: events,
-            settings: settings, network: network, processes: processes, prompts: prompts, remote: remote, web: raw.web, requires: requires)
+            settings: settings, network: network, processes: processes, prompts: prompts, remote: remote, web: raw.web, requires: requires,
+            summary: raw.summary, author: raw.author, icon: raw.icon)
     }
 
     /// Whether two relative paths can't both be files: the same name, or one a folder the other is in. Compared
@@ -685,7 +691,7 @@ public struct PluginManifest: Equatable, Sendable {
         return tabs
     }
 
-    public init(id: String, name: String, version: String, api: Int, entry: String, capabilities: [PluginCapability], tabs: [PluginTabContribution] = [], panels: [PluginPanelContribution] = [], commands: [PluginCommandContribution] = [], events: [PluginEvent] = [], settings: [PluginSetting] = [], network: [String] = [], processes: [PluginProcessContribution] = [], prompts: [PluginPromptContribution] = [], remote: Bool = false, web: String? = nil, requires: PluginRequirements = PluginRequirements()) {
+    public init(id: String, name: String, version: String, api: Int, entry: String, capabilities: [PluginCapability], tabs: [PluginTabContribution] = [], panels: [PluginPanelContribution] = [], commands: [PluginCommandContribution] = [], events: [PluginEvent] = [], settings: [PluginSetting] = [], network: [String] = [], processes: [PluginProcessContribution] = [], prompts: [PluginPromptContribution] = [], remote: Bool = false, web: String? = nil, requires: PluginRequirements = PluginRequirements(), summary: String? = nil, author: String? = nil, icon: String? = nil) {
         self.id = id
         self.name = name
         self.version = version
@@ -703,6 +709,9 @@ public struct PluginManifest: Equatable, Sendable {
         self.remote = remote
         self.web = web
         self.requires = requires
+        self.summary = summary
+        self.author = author
+        self.icon = icon
     }
 }
 
@@ -789,8 +798,11 @@ private struct Raw: Decodable {
     let requires: RawRequires?
     let contributes: RawContributes?
     let contributesMalformed: Bool
+    let summary: String?
+    let author: String?
+    let icon: String?
 
-    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, processes, remote, web, requires, contributes }
+    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, processes, remote, web, requires, contributes, summary, author, icon }
 
     package init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -813,5 +825,13 @@ private struct Raw: Decodable {
         contributes = (try? container.decodeIfPresent(RawContributes.self, forKey: .contributes)) ?? nil
         contributesMalformed = contributes == nil && container.contains(.contributes)
             && !((try? container.decodeNil(forKey: .contributes)) ?? false)
+        func display(_ key: CodingKeys) -> String? {
+            let value = ((try? container.decodeIfPresent(String.self, forKey: key)) ?? nil)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return value?.isEmpty == false ? value : nil
+        }
+        summary = display(.summary)
+        author = display(.author)
+        icon = display(.icon)
     }
 }

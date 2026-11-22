@@ -101,6 +101,32 @@ struct PluginCatalogTests {
         #expect(PluginCatalogRow(entry: entry, installed: installed, quarantined: c.quarantined) == c.expected)
     }
 
+    /// The manifest wins over the catalog, and only a byte-for-byte release carries its release day.
+    @Test(arguments: [
+        (nil as (String, String)?, "0.3.0", "2026-11-20" as String?),
+        (("0.2.0", "old"), "0.2.0", "2026-10-01"),
+        (("0.2.0", "edited"), "0.2.0", nil),
+    ])
+    func listingMergesTheManifestWithTheCatalog(installed: (version: String, hash: String)?, version: String, released: String?) throws {
+        let index = try JSONDecoder().decode(PluginCatalogIndex.self, from: Data(#"""
+        {"format":1,"plugins":[{"id":"io.x.p","name":"P","summary":"From the catalog","homepage":null,"author":"cat","icon":"star",
+          "versions":[
+            {"version":"0.3.0","api":4,"capabilities":[],"manifest":"https://e.com/m","entry":"https://e.com/e","hash":"new","released":"2026-11-20"},
+            {"version":"0.2.0","api":4,"capabilities":[],"manifest":"https://e.com/m","entry":"https://e.com/e","hash":"old","released":"2026-10-01"}]}]}
+        """#.utf8))
+        let manifest = try PluginManifest.parse(Data(#"{"id":"io.x.p","name":"P","version":"\#(installed?.version ?? "")","api":4,"entry":"plugin.js","author":" me ","icon":""}"#.utf8))
+        let plugin = installed.map {
+            PluginManager.Plugin(folder: URL(filePath: "/tmp/Plugins/io.x.p"), manifest: manifest, source: Data(), hash: $0.hash)
+        }
+        let listing = PluginListing(installed: plugin, entry: index.plugins.first)
+        let day = released.map { try! Date($0, strategy: Date.ISO8601FormatStyle().year().month().day()) }
+        #expect(listing.version == version)
+        #expect(listing.released == day)
+        #expect(listing.summary == "From the catalog")
+        #expect(listing.author == (installed == nil ? "cat" : "me"))
+        #expect(listing.icon == "star")
+    }
+
     /// A plugins folder and a manager whose catalog serves one valid 0.3.0 release of `io.x.p`.
     @MainActor
     final class Fixture {

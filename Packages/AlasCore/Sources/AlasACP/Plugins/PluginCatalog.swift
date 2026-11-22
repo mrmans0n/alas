@@ -20,8 +20,15 @@ public struct PluginCatalogIndex: Decodable, Sendable, Equatable {
         /// `PluginTrust.hash` of the release's files, so a download is verified before it is written: v2 when the
         /// release has `web`, v1 otherwise.
         public let hash: String
+        /// The release day, `yyyy-MM-dd`.
+        public var released: String?
 
-        public init(version: String, api: Int, capabilities: [String], manifest: URL, entry: URL?, web: URL? = nil, hash: String) {
+        /// `released` as midnight UTC, or nil when missing or malformed.
+        public var releasedDate: Date? {
+            released.flatMap { try? Date($0, strategy: Date.ISO8601FormatStyle().year().month().day()) }
+        }
+
+        public init(version: String, api: Int, capabilities: [String], manifest: URL, entry: URL?, web: URL? = nil, hash: String, released: String? = nil) {
             self.version = version
             self.api = api
             self.capabilities = capabilities
@@ -29,6 +36,7 @@ public struct PluginCatalogIndex: Decodable, Sendable, Equatable {
             self.entry = entry
             self.web = web
             self.hash = hash
+            self.released = released
         }
     }
 
@@ -37,6 +45,9 @@ public struct PluginCatalogIndex: Decodable, Sendable, Equatable {
         public let name: String
         public let summary: String?
         public let homepage: URL?
+        public var author: String?
+        /// An SF Symbol name.
+        public var icon: String?
         public let versions: [Version]
 
         /// The newest version this Alas can run.
@@ -45,11 +56,13 @@ public struct PluginCatalogIndex: Decodable, Sendable, Equatable {
                 .max { PluginCatalogIndex.isOlder($0.version, than: $1.version) }
         }
 
-        public init(id: String, name: String, summary: String?, homepage: URL?, versions: [Version]) {
+        public init(id: String, name: String, summary: String?, homepage: URL?, author: String? = nil, icon: String? = nil, versions: [Version]) {
             self.id = id
             self.name = name
             self.summary = summary
             self.homepage = homepage
+            self.author = author
+            self.icon = icon
             self.versions = versions
         }
     }
