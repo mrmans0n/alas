@@ -161,15 +161,7 @@ struct ACPMessageList: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(theme.color("fg"))
-        .background(
-            Circle()
-                .fill(theme.color("bg-1").opacity(0.95))
-                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-        )
-        .overlay(
-            Circle()
-                .strokeBorder(theme.color("line").opacity(0.9), lineWidth: 0.5)
-        )
+        .goToNewestChrome(theme: theme)
         .accessibilityLabel("Go to newest message")
         .help("Go to newest message")
         .padding(.trailing, scale.space[4])
@@ -191,5 +183,25 @@ struct ACPMessageList: View {
         gap: CGFloat
     ) -> CGFloat {
         composerSpacerHeight + gap
+    }
+}
+
+private extension View {
+    /// Liquid Glass on macOS 26+, the opaque themed disc before it.
+    @ViewBuilder
+    func goToNewestChrome(theme: Theme) -> some View {
+        if #available(macOS 26, *) {
+            glassEffect(.regular.interactive(), in: Circle())
+        } else {
+            background(
+                Circle()
+                    .fill(theme.color("bg-1").opacity(0.95))
+                    .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+            )
+            .overlay(
+                Circle()
+                    .strokeBorder(theme.color("line").opacity(0.9), lineWidth: 0.5)
+            )
+        }
     }
 }
