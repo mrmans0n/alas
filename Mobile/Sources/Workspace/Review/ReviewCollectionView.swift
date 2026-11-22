@@ -34,6 +34,7 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         let folded: Bool
         let hasSpans: Bool
         let comments: [RemoteReviewComment]
+        let threads: [RemoteProviderThread]
         let selection: ReviewSelection?
     }
     private var drawn: [ReviewEntryID: Drawn] = [:]
@@ -48,8 +49,9 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     private var widest: [ReviewEntryID: CGFloat] = [:]
     private var panning: (id: ReviewEntryID, start: CGFloat, limit: CGFloat)?
 
-    /// The comments drawn, by id, and those whose lines left the diff.
+    /// The comments and threads drawn, by row id, and those whose lines left the diff.
     private var commentsByID: [String: RemoteReviewComment] = [:]
+    private var threadsByID: [String: RemoteProviderThread] = [:]
     private var outdated: Set<String> = []
     /// A long press's finger, in the controller's view, and the edge auto-scroll it drives.
     private var pressPoint: CGPoint = .zero
@@ -132,7 +134,9 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             cell.accessibilityCustomActions = document.reviewSessionID == nil ? nil : lineActions(id, hunk: h, line: l)
         }
         let comment = UICollectionView.CellRegistration<ReviewCommentCell, ReviewRow> { [weak self] cell, _, row in
-            guard let self, case .comment(_, let cid) = row, let comment = commentsByID[cid] else { return }
+            guard let self, case .comment(_, let cid) = row else { return }
+            if let thread = threadsByID[cid] { return configure(cell, thread: thread, outdated: outdated.contains(cid)) }
+            guard let comment = commentsByID[cid] else { return }
             var badges: [String] = []
             if !comment.isOpen { badges.append(comment.state.capitalized) }
             if outdated.contains(cid) { badges.append("Outdated") }
@@ -227,6 +231,9 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         // Comments only show where they can be written: the local-changes review.
         let byFile = document.reviewSessionID == nil ? [:] : Dictionary(grouping: document.comments, by: \.fileID)
         commentsByID = Dictionary(document.comments.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        // A pull request's threads by file; a conversation thread, on no file, stays in the Reviews list.
+        let threadsByPath = Dictionary(grouping: document.threads.filter { $0.path != nil }, by: { $0.path ?? "" })
+        threadsByID = Dictionary(document.threads.map { (Self.rowID($0), $0) }, uniquingKeysWith: { a, _ in a })
         let selection = document.selection
         let wrapsChanged = wraps != self.wraps
         self.wraps = wraps
@@ -238,9 +245,10 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         for entry in entries {
             let id = entry.id
             let comments = byFile[RemoteReviewFileID(namespace: id.namespace, path: id.path)] ?? []
+            let threads = threadsByPath[id.path] ?? []
             let state = Drawn(content: entry.content, folded: document.folded.contains(id),
                               hasSpans: document.spanKey(entry).map { document.spans[$0] != nil } ?? false,
-                              comments: comments, selection: selection?.entry == id ? selection : nil)
+                              comments: comments, threads: threads, selection: selection?.entry == id ? selection : nil)
             guard drawn[id] != state else { continue }
             if drawn[id] != nil { redrawn.append(id) }
             if drawn[id]?.content != state.content {
@@ -252,8 +260,13 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             // Without hunks (a note in place of the diff) every comment is unplaced, so shown under the note.
             var hunks: [RemoteDiffHunk] = []
             if case .hunks(let found, _) = entry.content { hunks = found }
-            let placed = ReviewCommentPlacement.place(comments.map(Self.placeable), in: hunks)
-            for (comment, place) in zip(comments, placed) {
+            // Threads first: under the same line, the provider's conversation reads before the drafts answering it.
+            let placed = ReviewCommentPlacement.place(threads.map(Self.placeable) + comments.map(Self.placeable), in: hunks)
+            for (thread, place) in zip(threads, placed) {
+                let id = Self.rowID(thread)
+                if thread.isOutdated || (place.row == nil && thread.line != nil) { outdated.insert(id) } else { outdated.remove(id) }
+            }
+            for (comment, place) in zip(comments, placed.dropFirst(threads.count)) {
                 if place.row == nil, case .line = comment.anchor { outdated.insert(comment.id) } else { outdated.remove(comment.id) }
             }
             let rows = ReviewLayout.rows(for: entry, folded: state.folded, comments: placed)
@@ -293,6 +306,34 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             return ReviewPlaceable(id: comment.id, side: nil, line: nil, endLine: nil)
         }
         return ReviewPlaceable(id: comment.id, side: side, line: start, endLine: end)
+    }
+
+    private static func rowID(_ thread: RemoteProviderThread) -> String { "thread:" + thread.id }
+
+    /// An outdated thread goes to the top of its file: the provider no longer places it on these lines.
+    private static func placeable(_ thread: RemoteProviderThread) -> ReviewPlaceable {
+        guard !thread.isOutdated, let line = thread.line else {
+            return ReviewPlaceable(id: rowID(thread), side: nil, line: nil, endLine: nil)
+        }
+        return ReviewPlaceable(id: rowID(thread), side: side(thread), line: thread.startLine ?? line, endLine: line)
+    }
+
+    /// GitHub says `LEFT` for a removed line; GitLab says nothing for an added or kept one.
+    private static func side(_ thread: RemoteProviderThread) -> String {
+        thread.side?.uppercased() == "LEFT" ? "old" : "new"
+    }
+
+    private func configure(_ cell: ReviewCommentCell, thread: RemoteProviderThread, outdated: Bool) {
+        let location = thread.line.map {
+            Self.location(.line(side: Self.side(thread), startLine: thread.startLine ?? $0, endLine: $0))
+        } ?? "File"
+        var badges: [String] = []
+        if outdated { badges.append("Outdated") }
+        if thread.isResolved { badges.append("Resolved") }
+        let first = thread.comments.first
+        cell.configure(author: first?.author ?? "Unknown", location: location, body: first?.body ?? "", badges: badges,
+                       replies: thread.comments.dropFirst().map { .init(author: $0.author ?? "Unknown", body: $0.body) },
+                       dimmed: thread.isResolved || outdated)
     }
 
     private static func location(_ anchor: RemoteReviewAnchor) -> String {
@@ -542,9 +583,42 @@ extension ReviewCollectionController {
 
     @objc func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
                         point: CGPoint) -> UIContextMenuConfiguration? {
-        guard indexPaths.count == 1, case .comment(_, let cid)? = dataSource.itemIdentifier(for: indexPaths[0]),
-              let comment = commentsByID[cid] else { return nil }
+        guard indexPaths.count == 1, case .comment(_, let cid)? = dataSource.itemIdentifier(for: indexPaths[0]) else { return nil }
+        if let thread = threadsByID[cid] {
+            guard let menu = menu(for: thread) else { return nil }
+            return UIContextMenuConfiguration(actionProvider: { _ in menu })
+        }
+        guard let comment = commentsByID[cid] else { return nil }
         return UIContextMenuConfiguration(actionProvider: { [weak self] _ in self?.menu(for: comment) })
+    }
+
+    /// As the Reviews list's thread rows: reply, resolve or unresolve, as the provider lets the host's user.
+    private func menu(for thread: RemoteProviderThread) -> UIMenu? {
+        guard let pullRequest = document.pullRequest else { return nil }
+        var items: [UIMenuElement] = []
+        if pullRequest.canReply, thread.viewerCanReply {
+            items.append(UIAction(title: "Reply…", image: UIImage(systemName: "arrowshape.turn.up.left")) { [weak self] _ in
+                self?.document.composing = .reply(thread)
+            })
+        }
+        if pullRequest.canResolve, thread.isResolved ? thread.viewerCanUnresolve : thread.viewerCanResolve {
+            items.append(UIAction(title: thread.isResolved ? "Unresolve…" : "Resolve…",
+                                  image: UIImage(systemName: thread.isResolved ? "arrow.uturn.backward" : "checkmark")) { [weak self] _ in
+                    self?.confirmResolve(thread, poster: pullRequest.poster)
+                })
+        }
+        return items.isEmpty ? nil : UIMenu(children: items)
+    }
+
+    private func confirmResolve(_ thread: RemoteProviderThread, poster: String) {
+        let resolved = thread.isResolved
+        let alert = UIAlertController(title: resolved ? "Unresolve this thread?" : "Resolve this thread?",
+                                      message: "It changes on the pull request, as \(poster).", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: resolved ? "Unresolve" : "Resolve", style: .default) { [weak self] _ in
+            Task { await self?.document.changeThread(thread, resolved ? .unresolve : .resolve) }
+        })
+        present(alert, animated: true)
     }
 
     /// As the Reviews list: edit, resolve and dismiss an open comment; delete any.

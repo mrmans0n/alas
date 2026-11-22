@@ -471,11 +471,12 @@ final class SessionWorkspace {
             || hub.supports(HostProtocolCapability.reviewsProviderV1, on: hostID))
     }
 
-    /// Review `sessionID`'s pull or merge request threads, fetched from its provider by the host.
-    func pullRequestThreads(_ sessionID: String) async -> Result<RemoteProviderReview, RemoteGitFailure> {
+    /// Review `sessionID`'s pull or merge request threads, fetched from its provider by the host; its raw diff too when `withDiff`.
+    func pullRequestReview(_ sessionID: String, withDiff: Bool) async -> Result<RemoteProviderReview, RemoteGitFailure> {
         guard let target = gitTarget else { return .failure(RemoteGitFailure("This pull request can't be read from here.")) }
         return await hostReply {
-            RemoteReviewRequest.readProvider(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID)
+            RemoteReviewRequest.readProvider(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID,
+                                             withDiff: withDiff)
         }
         .mapError { RemoteGitFailure(RemoteReviewRequest.providerFailureMessage($0.message)) }
         .flatMap { Self.readable(RemoteReviewRequest.providerReview(in: $0)) }

@@ -6,13 +6,19 @@ public enum PullRequestDiff {
     /// (`ReviewRequestDiffLoader.namespace(for:)`).
     public static func namespace(provider: String) -> String { provider == "gitlab" ? "gitlab-mr" : "github-pr" }
 
-    public static func entries(raw: String, namespace: String) -> [ReviewEntry] {
+    /// `truncated`: the host cut the diff short, so the last file with lines may be missing some.
+    public static func entries(raw: String, namespace: String, truncated: Bool = false) -> [ReviewEntry] {
         var sections: [[String]] = []
         for line in raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
             if line.hasPrefix("diff --git ") { sections.append([]) }
             if !sections.isEmpty { sections[sections.count - 1].append(line) }
         }
-        return sections.compactMap { entry(lines: $0, namespace: namespace) }
+        var entries = sections.compactMap { entry(lines: $0, namespace: namespace) }
+        if truncated, let last = entries.lastIndex(where: { if case .hunks = $0.content { true } else { false } }),
+           case .hunks(let hunks, _) = entries[last].content {
+            entries[last].content = .hunks(hunks, truncated: true)
+        }
+        return entries
     }
 
     private static func entry(lines: [String], namespace: String) -> ReviewEntry? {

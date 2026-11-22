@@ -196,5 +196,7 @@ struct ReviewLayoutTests {
         #expect(hunks[0].lines.map(\.newNumber) == [1, nil, 2])
         #expect(entries[1].content == .hunks([], truncated: false))
         #expect(entries[2].content == .note("Binary file"))
+        // A cut-off diff marks its last file with lines, not a trailing binary one.
+        #expect(PullRequestDiff.entries(raw: raw, namespace: "github-pr", truncated: true)[1].content == .hunks([], truncated: true))
     }
 }
