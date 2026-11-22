@@ -148,12 +148,20 @@ public struct RemoteProviderThread: Decodable, Equatable, Identifiable, Sendable
     public let id: String
     public let path: String?
     public let line: Int?
+    public let startLine: Int?
+    /// The provider's diff side, `LEFT` for a removed line; nil when it didn't say.
+    public let side: String?
     public let isResolved: Bool
     public let isOutdated: Bool
     public let comments: [Comment]
     public let viewerCanResolve: Bool
     public let viewerCanUnresolve: Bool
     public let viewerCanReply: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case id, path, line, startLine, isResolved, isOutdated, comments, viewerCanResolve, viewerCanUnresolve, viewerCanReply
+        case side = "diffSide"
+    }
 }
 
 /// A pull or merge request's threads, and what the host's user may do to them (`HostProviderReview`).
@@ -172,6 +180,11 @@ public struct RemoteProviderReview: Decodable, Equatable, Sendable {
     public let number: Int
     /// The head the threads were read at, which a submission pins its comments to.
     public let headSHA: String?
+    /// The base the diff is taken against.
+    public let baseSHA: String?
+    /// The raw provider diff; nil unless the request asked for it.
+    public let diff: String?
+    public let diffTruncated: Bool
 
     /// E.g. "pull request #12" or "merge request !12".
     public var displayName: String {
@@ -182,7 +195,7 @@ public struct RemoteProviderReview: Decodable, Equatable, Sendable {
 
     private enum Keys: String, CodingKey {
         case request, capabilities, account, threads, areThreadsComplete, canReply, canResolve, canComment, canSubmitReview
-        case remote, kind, number, headSHA
+        case remote, kind, number, headSHA, baseSHA, diff, diffTruncated
     }
 
     public init(from decoder: Decoder) throws {
@@ -199,6 +212,9 @@ public struct RemoteProviderReview: Decodable, Equatable, Sendable {
         provider = try review.nestedContainer(keyedBy: Keys.self, forKey: .remote).decode(String.self, forKey: .kind)
         number = try request.decode(Int.self, forKey: .number)
         headSHA = try request.decodeIfPresent(String.self, forKey: .headSHA)
+        baseSHA = try request.decodeIfPresent(String.self, forKey: .baseSHA)
+        diff = try review.decodeIfPresent(String.self, forKey: .diff)
+        diffTruncated = try review.decodeIfPresent(Bool.self, forKey: .diffTruncated) ?? false
     }
 }
 
@@ -265,10 +281,11 @@ public enum RemoteReviewRequest {
         }.joined(separator: "\u{1f}")
     }
 
-    /// A pull or merge request review's threads (`host.reviews.provider.phone.v1`), without its diff.
-    public static func readProvider(id: Int, projectID: String, path: String, sessionID: String) -> OpaqueHostMessage {
+    /// A pull or merge request review's threads (`host.reviews.provider.phone.v1`), with its diff when `withDiff`.
+    public static func readProvider(id: Int, projectID: String, path: String, sessionID: String,
+                                    withDiff: Bool = false) -> OpaqueHostMessage {
         RemoteGitRequest.envelope(id: id, ["readProviderReview": [
-            "worktree": ["projectID": projectID, "path": path], "sessionID": sessionID, "withDiff": false,
+            "worktree": ["projectID": projectID, "path": path], "sessionID": sessionID, "withDiff": withDiff,
         ]])
     }
 

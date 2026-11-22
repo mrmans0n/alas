@@ -190,6 +190,8 @@ import Testing
         let decode = { (m: OpaqueHostMessage) in try JSONDecoder().decode(HostClientMessage.self, from: m.json).request }
         #expect(try decode(RemoteReviewRequest.readProvider(id: 1, projectID: "p", path: "/r", sessionID: "s"))
             == .readProviderReview(worktree: ref, sessionID: "s", withDiff: false))
+        #expect(try decode(RemoteReviewRequest.readProvider(id: 1, projectID: "p", path: "/r", sessionID: "s", withDiff: true))
+            == .readProviderReview(worktree: ref, sessionID: "s", withDiff: true))
         #expect(try decode(RemoteReviewRequest.mutateThread(id: 1, projectID: "p", path: "/r", sessionID: "s", threadID: "t", .reply, body: "Done"))
             == .mutateReviewThread(worktree: ref, sessionID: "s", threadID: "t", kind: .reply, body: "Done"))
         #expect(try decode(RemoteReviewRequest.mutateThread(id: 1, projectID: "p", path: "/r", sessionID: "s", threadID: "t", .unresolve))
@@ -198,10 +200,16 @@ import Testing
             == .publishReview(worktree: ref, sessionID: "s",
                               publish: HostReviewPublish(decision: .requestChanges, body: "Fix it", draftIDs: nil, headSHA: "abc")))
 
-        let thread = ShepherdFixtures.thread("t1")
+        let base = ShepherdFixtures.thread("t1")
+        let thread = ReviewThread(
+            id: base.id, path: base.path, line: 12, startLine: 10, originalLine: nil, diffHunk: nil, diffSide: "LEFT",
+            isResolved: false, isOutdated: false, isFileLevel: false, comments: base.comments,
+            viewerCanResolve: true, viewerCanReply: true, url: base.url
+        )
+        let request = ShepherdFixtures.request(threads: [thread], threadsComplete: false)
         let review = HostProviderReview(
-            remote: ShepherdFixtures.remote(), request: ShepherdFixtures.request(threads: [thread], threadsComplete: false),
-            capabilities: .githubCLI, account: "me", diff: nil, diffTruncated: false
+            remote: ShepherdFixtures.remote(), request: request,
+            capabilities: .githubCLI, account: "me", diff: "diff --git a/x b/x\n", diffTruncated: true
         )
         let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 2, result: .providerReview(review: review))))
         let read = try #require(RemoteReviewRequest.providerReview(replying: 2, in: reply))
@@ -209,6 +217,8 @@ import Testing
         #expect(read.canComment && read.canSubmitReview && read.headSHA == ShepherdFixtures.head && read.displayName == "pull request #7")
         let phoneThread = try #require(read.threads.first)
         #expect(phoneThread.id == "t1" && phoneThread.path == thread.path && phoneThread.line == 12 && !phoneThread.isResolved)
+        #expect(read.diff == "diff --git a/x b/x\n" && read.diffTruncated && read.baseSHA == request.baseSHA)
+        #expect(phoneThread.side == "LEFT" && phoneThread.startLine == 10)
         #expect(phoneThread.comments.map(\.author) == ["maintainer"] && phoneThread.comments.map(\.body) == ["Please fix t1."])
 
         let published = ProviderReviewPublishResult(
