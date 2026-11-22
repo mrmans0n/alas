@@ -49,6 +49,17 @@ struct ReviewLayoutTests {
         #expect(ReviewLayout.startsFolded(path: path, add: add, del: del) == folded)
     }
 
+    /// Pill 30 tall, the visible band 100...600.
+    @Test(arguments: [
+        (300.0, 340.0, 266.0), // Room above the selection: there, clear of it and the lines after it.
+        (110.0, 150.0, 154.0), // No room above: under the last line.
+        (110.0, 590.0, 562.0), // Under would sink behind the action bar: held above the visible bottom.
+    ])
+    func selectionPillAvoidsTheSelectionAndTheActionBar(top: Double, bottom: Double, expected: Double) {
+        #expect(ReviewLayout.selectionPillY(selectionTop: top, selectionBottom: bottom, pillHeight: 30,
+                                            visibleTop: 100, visibleBottom: 600) == expected)
+    }
+
     @Test
     func viewedMarkClearsWhenTheDiffChanges() {
         let changed = [RemoteDiffHunk(header: "@@ -1,2 +1,2 @@", oldStart: 1, newStart: 1, lines: [

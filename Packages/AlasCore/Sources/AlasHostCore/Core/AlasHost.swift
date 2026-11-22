@@ -38,6 +38,8 @@ public final class AlasHost {
     public var servedCapabilities: [String] {
         HostProtocolCapability.served + (core.environment.servesWorktreeGit ? HostProtocolCapability.headlessOnly : [])
             + (selfUpdate == nil ? [] : [HostProtocolCapability.updateV1])
+            // Only a host with agent chats to send to: the app installs the seam.
+            + (core.reviewAgents == nil ? [] : [HostProtocolCapability.reviewsAgentPhoneV1])
     }
 
     /// Upgrades this host and restarts it on the new version; set by a
