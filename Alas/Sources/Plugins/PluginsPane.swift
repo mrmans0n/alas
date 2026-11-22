@@ -162,6 +162,20 @@ struct PluginsPane: View {
             } else {
                 approveButton(manager, plugin)
             }
+        } detail: {
+            failureLine(plugin.id)
+        }
+    }
+
+    /// The last install, update or remove of this plugin that failed, shown where it was started.
+    @ViewBuilder
+    private func failureLine(_ id: String) -> some View {
+        if let failure = installFailures[id] {
+            Text("Failed: \(failure)")
+                .font(scale.metaFont)
+                .foregroundStyle(theme.color("warn"))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -207,9 +221,7 @@ struct PluginsPane: View {
         SettingsRow(name: "Source", desc: fromCatalog ? "Installed from the catalog." : "Installed locally; the catalog leaves it alone.") {
             if fromCatalog { removeButton(manager, plugin.id) }
         }
-        if let failure = installFailures[plugin.id] {
-            Text("Failed: \(failure)").font(scale.metaFont).foregroundStyle(theme.color("warn")).textSelection(.enabled)
-        }
+        failureLine(plugin.id)
         if manager.isApproved(plugin), !plugin.manifest.settings.isEmpty {
             SettingsGroup(title: "Settings", verticalPadding: scale.space[2]) {
                 PluginSettingsForm(settings: manager.settings(for: plugin))
@@ -359,13 +371,7 @@ struct PluginsPane: View {
                 }
             }
         } detail: {
-            if let failure = installFailures[entry.id] {
-                Text("Failed: \(failure)")
-                    .font(scale.metaFont)
-                    .foregroundStyle(theme.color("warn"))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            failureLine(entry.id)
             capabilitiesLine(row)
         }
     }
