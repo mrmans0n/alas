@@ -530,10 +530,11 @@ final class SessionWorkspace {
     /// Returns the host's refusal, worded for the user, or nil once the agent took them.
     func sendReview(_ sessionID: String, to agent: RemoteAgentTarget) async -> String? {
         guard let target = gitTarget else { return "This review can't be sent from here." }
-        return await hostRequest {
+        // A new chat on the Mac can take a while to start; a phone giving up early would invite a second send.
+        return await hostFailure(timeout: .seconds(300)) {
             RemoteReviewRequest.sendToAgent(id: $0, projectID: target.projectID, path: target.worktree.path,
                                             sessionID: sessionID, target: agent)
-        }
+        }?.message
     }
 
     private static func readable<T>(_ value: T?) -> Result<T, RemoteGitFailure> {

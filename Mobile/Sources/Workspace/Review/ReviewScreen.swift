@@ -185,21 +185,28 @@ private struct ActionBar: View {
                     sent = nil
                 }
             if canSendToAgent {
-                Button("Send to Agent") { Task { await chooseTarget() } }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(sending)
-                    .confirmationDialog("Send \(commentCount) to", isPresented: $choosing, titleVisibility: .visible) {
-                        ForEach(targets, id: \.self) { target in
-                            Button(label(target)) { Task { await send(to: target) } }
-                        }
+                Button {
+                    // Set before the task starts, so a second tap can't start another.
+                    sending = true
+                    Task { await chooseTarget() }
+                } label: {
+                    if sending { ProgressView().controlSize(.mini) } else { Text("Send to Agent") }
+                }
+                .accessibilityLabel("Send to Agent")
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(sending)
+                .confirmationDialog("Send \(commentCount) to", isPresented: $choosing, titleVisibility: .visible) {
+                    ForEach(targets, id: \.self) { target in
+                        Button(label(target)) { startSending(to: target) }
                     }
-                    .alert(confirming.map { "Send \(commentCount) to \(label($0))?" } ?? "",
-                           isPresented: Binding { confirming != nil } set: { if !$0 { confirming = nil } },
-                           presenting: confirming) { target in
-                        Button("Send") { Task { await send(to: target) } }
-                        Button("Cancel", role: .cancel) {}
-                    }
+                }
+                .alert(confirming.map { "Send \(commentCount) to \(label($0))?" } ?? "",
+                       isPresented: Binding { confirming != nil } set: { if !$0 { confirming = nil } },
+                       presenting: confirming) { target in
+                    Button("Send") { startSending(to: target) }
+                    Button("Cancel", role: .cancel) {}
+                }
             }
             if document.pullRequest != nil {
                 Button("Submit…") { document.composing = .submit }
@@ -229,9 +236,8 @@ private struct ActionBar: View {
     }
 
     private func chooseTarget() async {
-        guard let session = document.reviewSessionID else { return }
-        sending = true
         defer { sending = false }
+        guard let session = document.reviewSessionID else { return }
         switch await document.workspace.reviewAgentTargets(session) {
         case .failure(let failure): document.error = failure.message
         case .success(let found) where found.isEmpty:
@@ -243,10 +249,15 @@ private struct ActionBar: View {
         }
     }
 
-    private func send(to target: RemoteAgentTarget) async {
-        guard let session = document.reviewSessionID else { return }
+    private func startSending(to target: RemoteAgentTarget) {
+        guard !sending else { return }
         sending = true
+        Task { await send(to: target) }
+    }
+
+    private func send(to target: RemoteAgentTarget) async {
         defer { sending = false }
+        guard let session = document.reviewSessionID else { return }
         if let message = await document.workspace.sendReview(session, to: target) {
             document.error = message
             return
