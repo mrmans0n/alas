@@ -36,16 +36,7 @@ extension ReviewSessionLoadedContext {
         reviewedWorkingTree: String? = nil
     ) {
         self.session = session
-        self.feedbackTarget = ReviewFeedbackTarget(
-            title: target.title,
-            repositoryPath: target.repositoryPath.path,
-            providerDescription: target.providerDescription,
-            sourceDescription: target.sourceDescription,
-            sessionDescription: "Review session: \(target.title)",
-            revisionDescription: target.revisionDescription,
-            priorHandoffDescription: nil,
-            reopenAction: .reviewSession(target)
-        )
+        self.feedbackTarget = ReviewFeedbackTarget(reviewSession: target)
         self.providerContext = providerContext
         self.reviewedWorkingTree = reviewedWorkingTree
     }
@@ -56,6 +47,21 @@ extension ReviewSessionLoadedContext {
             target: target,
             providerContext: providerContext,
             reviewedWorkingTree: reviewedWorkingTree
+        )
+    }
+}
+
+extension ReviewFeedbackTarget {
+    init(reviewSession target: ReviewSessionTarget) {
+        self.init(
+            title: target.title,
+            repositoryPath: target.repositoryPath.path,
+            providerDescription: target.providerDescription,
+            sourceDescription: target.sourceDescription,
+            sessionDescription: "Review session: \(target.title)",
+            revisionDescription: target.revisionDescription,
+            priorHandoffDescription: nil,
+            reopenAction: .reviewSession(target)
         )
     }
 }

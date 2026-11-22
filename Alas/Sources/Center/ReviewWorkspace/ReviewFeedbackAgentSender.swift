@@ -241,13 +241,84 @@ struct ReviewFeedbackAgentSender {
     }
 }
 
+extension ReviewFeedbackAgentSender {
+    /// The phone's Send to agent, sending a review's open draft comments as
+    /// the Review workspace does when its user sends them.
+    static func reviewAgentSeam(appState: AppState) -> ReviewAgentSeam {
+        ReviewAgentSeam(
+            targets: { @MainActor [weak appState] worktreeID in
+                guard let appState else { return [] }
+                return production(appState: appState, worktreeID: worktreeID).availableTargets()
+            },
+            send: { @MainActor [weak appState] worktreeID, sessionID, target in
+                guard let appState else { throw ReviewFeedbackAgentSendError.rejected }
+                try await sendDrafts(appState: appState, worktreeID: worktreeID, sessionID: sessionID, target: target)
+            }
+        )
+    }
+
+    @MainActor
+    private static func sendDrafts(
+        appState: AppState, worktreeID: String, sessionID: String, target: ReviewFeedbackAgentTarget
+    ) async throws {
+        let store = appState.core.reviewSessions
+        guard let draftID = ReviewDraftSessionID(rawValue: sessionID) else { throw ReviewFeedbackAgentSendError.rejected }
+        // The local-changes review is listed before it is saved.
+        var record = try store.list(worktreeID: worktreeID).first { $0.target.draftSessionID == draftID }
+        if record == nil, let worktree = projectAndWorktree(appState: appState, worktreeID: worktreeID)?.worktree {
+            let localChanges = ReviewSessionTarget.localChanges(worktreeID: worktreeID, repositoryPath: worktree.path, scope: .all)
+            if localChanges.draftSessionID == draftID {
+                record = ReviewSessionRecord(id: localChanges.id, target: localChanges, createdAt: Date(), updatedAt: Date())
+            }
+        }
+        guard let record else { throw ReviewFeedbackAgentSendError.rejected }
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(reviewSession: record.target),
+            comments: try appState.core.reviewDrafts.load(sessionID: draftID)
+        )
+        guard !bundle.activeComments.isEmpty else { throw ReviewFeedbackAgentSendError.noOpenComments }
+        let sender = production(appState: appState, worktreeID: worktreeID)
+        // Only where the review pane would offer to send, not a chat elsewhere.
+        guard sender.availableTargets().contains(where: { $0.id == target.id }) else {
+            throw ReviewFeedbackAgentSendError.unavailableTarget
+        }
+        // No `recordingReviewedWorkingTree`: a snapshot taken now would mark edits the phone never showed as reviewed.
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            ReviewFeedbackPromptActions.sendToAgent(
+                bundle, target: target, sender: sender, sessionID: record.id,
+                recordHandoff: { handoff in
+                    _ = ReviewSessionHandoffPersistence.record(
+                        handoff, currentRecord: record, sessionStore: store, persistsState: true, now: Date.init
+                    )
+                    // An open review pane reloads the record instead of saving its stale copy over it.
+                    NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+                    continuation.resume()
+                },
+                recordSendFailure: { error in
+                    _ = ReviewSessionHandoffPersistence.recordSendFailure(
+                        error, currentRecord: record, sessionStore: store, persistsState: true, now: Date.init
+                    )
+                    NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+                    continuation.resume(throwing: error)
+                }
+            )
+        }
+    }
+}
+
 enum ReviewFeedbackAgentSendError: LocalizedError, Equatable {
     case rejected
+    case noOpenComments
+    case unavailableTarget
 
     var errorDescription: String? {
         switch self {
         case .rejected:
             "Agent rejected the prompt."
+        case .noOpenComments:
+            "This review has no open comments to send."
+        case .unavailableTarget:
+            "That agent is no longer available on the Mac."
         }
     }
 }

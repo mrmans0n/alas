@@ -55,6 +55,39 @@ public struct RemoteReviewSummary: Decodable, Equatable, Identifiable, Sendable 
     }
 }
 
+/// Where Send to agent can deliver a review (`ReviewFeedbackAgentTarget`).
+public struct RemoteAgentTarget: Decodable, Hashable, Sendable {
+    public enum Kind: String, Sendable { case newChat, existingSession }
+
+    public let kind: Kind
+    /// The agent a new chat runs, or the worktree an existing chat is in.
+    public let id: String
+    public let title: String
+    /// The existing chat's session; nil for a new chat.
+    public let sessionID: String?
+
+    public init(kind: Kind, id: String, title: String, sessionID: String? = nil) {
+        self.kind = kind
+        self.id = id
+        self.title = title
+        self.sessionID = sessionID
+    }
+
+    private enum Keys: String, CodingKey { case newChat, existingSession, agentID, worktreeID, sessionID, title }
+
+    public init(from decoder: Decoder) throws {
+        let target = try decoder.container(keyedBy: Keys.self)
+        if target.contains(.newChat) {
+            let chat = try target.nestedContainer(keyedBy: Keys.self, forKey: .newChat)
+            self.init(kind: .newChat, id: try chat.decode(String.self, forKey: .agentID), title: try chat.decode(String.self, forKey: .title))
+        } else {
+            let chat = try target.nestedContainer(keyedBy: Keys.self, forKey: .existingSession)
+            self.init(kind: .existingSession, id: try chat.decode(String.self, forKey: .worktreeID),
+                      title: try chat.decode(String.self, forKey: .title), sessionID: try chat.decode(String.self, forKey: .sessionID))
+        }
+    }
+}
+
 /// One draft comment (`ReviewDraftComment`), its replies included.
 public struct RemoteReviewComment: Decodable, Equatable, Identifiable, Sendable {
     public struct Reply: Equatable, Sendable {
@@ -318,6 +351,30 @@ public enum RemoteReviewRequest {
         return RemoteGitRequest.envelope(id: id, ["publishReview": [
             "worktree": ["projectID": projectID, "path": path], "sessionID": sessionID, "publish": publish,
         ]])
+    }
+
+    /// The agent chats review `sessionID` can go to (`host.reviews.agent.phone.v1`).
+    public static func agentTargets(id: Int, projectID: String, path: String, sessionID: String) -> OpaqueHostMessage {
+        RemoteGitRequest.envelope(id: id, ["reviewAgentTargets": [
+            "worktree": ["projectID": projectID, "path": path], "sessionID": sessionID,
+        ]])
+    }
+
+    /// Sends review `sessionID`'s open comments to `target`; answered as a git action is.
+    public static func sendToAgent(id: Int, projectID: String, path: String, sessionID: String,
+                                   target: RemoteAgentTarget) -> OpaqueHostMessage {
+        let encoded: [String: Any] = switch target.kind {
+        case .newChat: ["newChat": ["agentID": target.id, "title": target.title]]
+        case .existingSession:
+            ["existingSession": ["worktreeID": target.id, "sessionID": target.sessionID ?? "", "title": target.title]]
+        }
+        return RemoteGitRequest.envelope(id: id, ["sendReviewToAgent": [
+            "worktree": ["projectID": projectID, "path": path], "sessionID": sessionID, "target": encoded,
+        ]])
+    }
+
+    public static func agentTargets(replying id: Int? = nil, in message: OpaqueHostMessage) -> [RemoteAgentTarget]? {
+        decode([Lenient<RemoteAgentTarget>].self, at: "reviewAgentTargets", "targets", replying: id, in: message)?.compactMap(\.value)
     }
 
     /// What a submission couldn't post, worded for the user; nil when it all went through.

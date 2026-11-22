@@ -494,6 +494,14 @@ public final class HostProtocolConnection {
             return .reviewPublished(result: try await host.reviews.publish(
                 publish, sessionID: sessionID, in: try providerReviewWorktree(ref, servesPhone: true), caller: caller
             ))
+        case .reviewAgentTargets(let ref, let sessionID):
+            let (seam, listed) = try reviewAgentWorktree(ref, sessionID: sessionID)
+            return .reviewAgentTargets(targets: await seam.targets(listed.id))
+        case .sendReviewToAgent(let ref, let sessionID, let target):
+            let (seam, listed) = try reviewAgentWorktree(ref, sessionID: sessionID)
+            caller.log("reviews.sendToAgent", "\(sessionID) \(target.id)")
+            try await seam.send(listed.id, sessionID, target)
+            return .reviewSentToAgent
         case .listStashes(let ref):
             // Reads, outside the gate as `readWorktree` is.
             return .stashes(stashes: try await host.core.stashes(in: try servedWorktree(ref, capability: HostProtocolCapability.worktreesStashV1)))
@@ -721,6 +729,17 @@ public final class HostProtocolConnection {
             throw HostError.invalidRequest(reason: "This host does not serve pull request reviews.")
         }
         return try visibleWorktree(ref)
+    }
+
+    /// The app's Send to agent and the worktree of review `sessionID`, for
+    /// the phone. A headless host has no agent chats to send to.
+    private func reviewAgentWorktree(_ ref: WorktreeRef, sessionID: String) throws -> (ReviewAgentSeam, Worktree) {
+        let listed = try reviewWorktree(ref)
+        guard let seam = host.core.reviewAgents else {
+            throw HostError.invalidRequest(reason: "This host can't send reviews to agents.")
+        }
+        _ = try host.reviews.read(sessionID, in: listed)
+        return (seam, listed)
     }
 
     /// The refusals `host.worktrees.lifecycle.v1` added, as a message for a

@@ -2610,6 +2610,47 @@ struct HostProtocolServerTests {
         }
     }
 
+    /// The phone lists where a review can go and sends it through the app's
+    /// seam; a host without one refuses both.
+    @Test func thePhoneSendsAReviewToAnAgentThroughTheApp() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (_, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let sessionID = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all).rawValue
+        let server = HostProtocolServer(host: fixture.host)
+        server.delegationPairing = RemotePairingService(store: MemoryDeviceStore(devices: [RemoteDevice(
+            id: "d1", name: "d1", tokenHash: "d1", createdAt: .distantPast, lastSeenAt: nil, kind: .phone
+        )]))
+        let client = Client()
+        let connection = server.connect(caller: .remotePeer(deviceID: "d1"), send: client.receive)
+        var nextID = 0
+        func request(_ request: HostRequest) async -> HostResponse? {
+            nextID += 1
+            await connection.receive(HostClientMessage(id: nextID, request: request))
+            guard case .response(nextID, let result) = client.messages.last else { return nil }
+            return result
+        }
+        let target = ReviewFeedbackAgentTarget.existingSession(worktreeID: worktree.id, sessionID: "chat", title: "Codex")
+        let targets = HostRequest.reviewAgentTargets(worktree: ref, sessionID: sessionID)
+        let send = HostRequest.sendReviewToAgent(worktree: ref, sessionID: sessionID, target: target)
+
+        let refused = HostResponse.failure(error: .invalidRequest(reason: "This host can't send reviews to agents."))
+        #expect(await request(targets) == refused)
+        #expect(await request(send) == refused)
+
+        let sent = Mutex<[[String]]>([])
+        fixture.core.reviewAgents = ReviewAgentSeam(
+            targets: { [.newChat(agentID: "codex", title: "New chat \($0)")] },
+            send: { worktreeID, sessionID, target in sent.withLock { $0.append([worktreeID, sessionID, target.id]) } }
+        )
+        #expect(await request(targets) == .reviewAgentTargets(targets: [.newChat(agentID: "codex", title: "New chat \(worktree.id)")]))
+        #expect(await request(send) == .reviewSentToAgent)
+        #expect(sent.withLock { $0 } == [[worktree.id, sessionID, target.id]])
+        #expect(await request(.sendReviewToAgent(worktree: ref, sessionID: "other", target: target))
+            == .failure(error: .notFound(what: "review other")))
+    }
+
     /// A Mac opens a worktree's pull request review, reusing the open one,
     /// and reads it from the provider as the host's user.
     @Test func aMacOpensAndReadsAPullRequestReview() async throws {

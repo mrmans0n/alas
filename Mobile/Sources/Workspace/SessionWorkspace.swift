@@ -507,6 +507,35 @@ final class SessionWorkspace {
         .mapError { RemoteGitFailure(RemoteReviewRequest.providerFailureMessage($0.message)) }
     }
 
+    /// Whether the host sends a review's comments to an agent chat for the phone.
+    var canSendReviewToAgent: Bool {
+        gitTarget != nil && hub.supports(HostProtocolCapability.reviewsAgentPhoneV1, on: hostID)
+    }
+
+    /// Where the Mac would send review `sessionID`, this chat first.
+    func reviewAgentTargets(_ sessionID: String) async -> Result<[RemoteAgentTarget], RemoteGitFailure> {
+        guard let target = gitTarget else { return .failure(RemoteGitFailure("This review can't be sent from here.")) }
+        return await hostReply {
+            RemoteReviewRequest.agentTargets(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID)
+        }
+        .flatMap { Self.readable(RemoteReviewRequest.agentTargets(in: $0)) }
+        .map { targets in targets.filter(isThisChat) + targets.filter { !isThisChat($0) } }
+    }
+
+    func isThisChat(_ target: RemoteAgentTarget) -> Bool {
+        target.kind == .existingSession && target.sessionID == sessionId
+    }
+
+    /// Sends review `sessionID`'s open comments to `agent`; the Mac marks them sent.
+    /// Returns the host's refusal, worded for the user, or nil once the agent took them.
+    func sendReview(_ sessionID: String, to agent: RemoteAgentTarget) async -> String? {
+        guard let target = gitTarget else { return "This review can't be sent from here." }
+        return await hostRequest {
+            RemoteReviewRequest.sendToAgent(id: $0, projectID: target.projectID, path: target.worktree.path,
+                                            sessionID: sessionID, target: agent)
+        }
+    }
+
     private static func readable<T>(_ value: T?) -> Result<T, RemoteGitFailure> {
         value.map(Result.success) ?? .failure(RemoteGitFailure("The machine's answer couldn't be read."))
     }

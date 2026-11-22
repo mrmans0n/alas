@@ -116,6 +116,9 @@ public final class AlasCoreContext {
     @ObservationIgnored public var worktreeDestinationExistence: @Sendable (URL, String?) async -> ScheduledWorktreeDestination.PathState = {
         await ScheduledWorktreeDestination.existence(of: $0, onHost: $1)
     }
+    /// Sends a review's draft comments to an agent chat for the phone; nil
+    /// where nothing can, as on a headless host.
+    @ObservationIgnored public var reviewAgents: ReviewAgentSeam?
     /// One per project: a free-name creation holds it from picking a free
     /// name until the worktree exists, so the next pick sees it.
     @ObservationIgnored var freeNameGates: [String: SerialGate] = [:]
@@ -615,5 +618,19 @@ public final class AlasCoreContext {
         manager.admitsNewWork = { [weak self] in self?.isHeldByCheckpointRestore(owner) == false }
         sessionManagers[owner] = manager
         return manager
+    }
+}
+
+/// The app's Send to agent of a review, which the core can't reach itself.
+public struct ReviewAgentSeam: Sendable {
+    public var targets: @Sendable (_ worktreeID: String) async -> [ReviewFeedbackAgentTarget]
+    public var send: @Sendable (_ worktreeID: String, _ sessionID: String, _ target: ReviewFeedbackAgentTarget) async throws -> Void
+
+    public init(
+        targets: @escaping @Sendable (_ worktreeID: String) async -> [ReviewFeedbackAgentTarget],
+        send: @escaping @Sendable (_ worktreeID: String, _ sessionID: String, _ target: ReviewFeedbackAgentTarget) async throws -> Void
+    ) {
+        self.targets = targets
+        self.send = send
     }
 }

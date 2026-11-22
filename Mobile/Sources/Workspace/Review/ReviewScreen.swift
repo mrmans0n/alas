@@ -165,15 +165,42 @@ private struct FileStrip: View {
     }
 }
 
-/// How far through the change the reviewer is, its drafts, and for a pull request **Submit…**.
+/// How far through the change the reviewer is, its drafts, **Send to Agent** and for a pull request **Submit…**.
 private struct ActionBar: View {
     let document: ReviewDocument
+    @State private var targets: [RemoteAgentTarget] = []
+    @State private var choosing = false
+    @State private var confirming: RemoteAgentTarget?
+    @State private var sending = false
+    @State private var sent: String?
 
     var body: some View {
         HStack(spacing: 12) {
-            Text(summary)
+            Text(sent.map { "Sent to \($0)" } ?? summary)
                 .font(.footnote.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .task(id: sent) {
+                    guard sent != nil else { return }
+                    try? await Task.sleep(for: .seconds(3))
+                    sent = nil
+                }
+            if canSendToAgent {
+                Button("Send to Agent") { Task { await chooseTarget() } }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(sending)
+                    .confirmationDialog("Send \(commentCount) to", isPresented: $choosing, titleVisibility: .visible) {
+                        ForEach(targets, id: \.self) { target in
+                            Button(label(target)) { Task { await send(to: target) } }
+                        }
+                    }
+                    .alert(confirming.map { "Send \(commentCount) to \(label($0))?" } ?? "",
+                           isPresented: Binding { confirming != nil } set: { if !$0 { confirming = nil } },
+                           presenting: confirming) { target in
+                        Button("Send") { Task { await send(to: target) } }
+                        Button("Cancel", role: .cancel) {}
+                    }
+            }
             if document.pullRequest != nil {
                 Button("Submit…") { document.composing = .submit }
                     .buttonStyle(.borderedProminent)
@@ -184,6 +211,48 @@ private struct ActionBar: View {
         .padding(.horizontal, 16).padding(.vertical, 10)
         .glassEffect(.regular, in: Capsule())
         .padding(.bottom, 4)
+    }
+
+    /// Only where the Mac takes a phone's send (`reviewsAgentPhoneV1`), and with a draft to send.
+    private var canSendToAgent: Bool {
+        document.workspace.canSendReviewToAgent && document.reviewSessionID != nil && document.draftCount > 0
+    }
+
+    /// What the Mac sends: every open comment.
+    private var commentCount: String {
+        let count = document.comments.count(where: \.isOpen)
+        return count == 1 ? "1 comment" : "\(count) comments"
+    }
+
+    private func label(_ target: RemoteAgentTarget) -> String {
+        document.workspace.isThisChat(target) ? target.title + " (this chat)" : target.title
+    }
+
+    private func chooseTarget() async {
+        guard let session = document.reviewSessionID else { return }
+        sending = true
+        defer { sending = false }
+        switch await document.workspace.reviewAgentTargets(session) {
+        case .failure(let failure): document.error = failure.message
+        case .success(let found) where found.isEmpty:
+            document.error = "No agent to send to. Open an agent chat in this worktree, or pick an available agent in Settings → Changes."
+        case .success(let found) where found.count == 1: confirming = found[0]
+        case .success(let found):
+            targets = found
+            choosing = true
+        }
+    }
+
+    private func send(to target: RemoteAgentTarget) async {
+        guard let session = document.reviewSessionID else { return }
+        sending = true
+        defer { sending = false }
+        if let message = await document.workspace.sendReview(session, to: target) {
+            document.error = message
+            return
+        }
+        sent = target.title
+        await document.loadComments()
     }
 
     private var summary: String {

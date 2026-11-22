@@ -76,7 +76,7 @@ struct RemoteProtocolTests {
             return
         }
         #expect(hostVersion == "0.41.0")
-        #expect(capabilities == PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1, PushRelayCapability.v1, HostProtocolCapability.worktreesGitPhoneV1, HostProtocolCapability.worktreesHunksPhoneV1, HostProtocolCapability.shepherdsPhoneV1, HostProtocolCapability.attentionPhoneV1, HostProtocolCapability.reviewsPhoneV1, HostProtocolCapability.reviewsProviderPhoneV1, PeerToolTerminalCapability.v1, PeerSubagentCapability.v1] + HostProtocolCapability.served)
+        #expect(capabilities == PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1, PushRelayCapability.v1, HostProtocolCapability.worktreesGitPhoneV1, HostProtocolCapability.worktreesHunksPhoneV1, HostProtocolCapability.shepherdsPhoneV1, HostProtocolCapability.attentionPhoneV1, HostProtocolCapability.reviewsPhoneV1, HostProtocolCapability.reviewsProviderPhoneV1, HostProtocolCapability.reviewsAgentPhoneV1, PeerToolTerminalCapability.v1, PeerSubagentCapability.v1] + HostProtocolCapability.served)
     }
 
     @Test func sessionTabAndAdapterInstallMessagesRoundTripAndKeepTheirSessionScope() throws {
