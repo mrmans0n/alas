@@ -103,7 +103,9 @@ struct TranscriptScreen: View {
 
     private func openPreview(_ url: URL, in session: TranscriptSession) -> OpenURLAction.Result? {
         guard RemoteRunPreview.isLoopbackWebURL(url) else { return nil }
-        guard let summary = session.summary, summary.serverId == nil, let worktreeID = summary.worktreeId else {
+        // A workspace checkout's session has no worktree of its own; its runs are the focused member's.
+        guard let summary = session.summary, summary.serverId == nil,
+              let worktreeID = summary.worktreeId ?? workspace?.repositoryTarget?.worktreeId else {
             actionError = session.summary?.serverId == nil && session.summary?.worktreeId == nil
                 ? "Run previews aren't available for workspace sessions yet."
                 : "Open this worktree directly on its paired host to preview its runs."

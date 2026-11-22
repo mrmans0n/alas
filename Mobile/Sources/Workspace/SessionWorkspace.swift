@@ -239,7 +239,7 @@ final class SessionWorkspace {
 
     /// Asks the host to read the worktree's pull request again; its answer replaces `pullRequest`.
     private func refreshPullRequest() {
-        guard canUseGit, let target = gitTarget, hub.state(of: hostID) == .online else { return }
+        guard canUseGit, let target = repositoryTarget, hub.state(of: hostID) == .online else { return }
         let id = hub.nextHostRequestId()
         reviewStatusId = id
         send(.host(RemoteGitRequest.reviewStatus(id: id, projectID: target.projectID, path: target.worktree.path)))
@@ -396,7 +396,7 @@ final class SessionWorkspace {
               let checkout = summary.checkout,
               // Without `readWorktree` the host answers only for the session, as it did before checkouts.
               hub.supports(HostProtocolCapability.worktreesReadV1, on: hostID) else { return nil }
-        // An SSH member's summary carries a display path (`host:/repo`), as `gitTarget` notes.
+        // An SSH member's summary carries a display path (`host:/repo`), as `ownWorktreeTarget` notes.
         return RemoteSessionCheckout(id: checkout.id, name: checkout.name, branch: checkout.branch, rootPath: checkout.rootPath,
                                      members: checkout.members.filter { $0.worktree.path.hasPrefix("/") })
     }
@@ -474,7 +474,7 @@ final class SessionWorkspace {
             guard let member = focusedMember else { return nil }
             return (member.projectId, member.worktreeId, member.worktree)
         }
-        guard let target = gitTarget else { return nil }
+        guard let target = ownWorktreeTarget else { return nil }
         return (target.projectID, hub.sessions(of: hostID).first { $0.id == sessionId }?.worktreeId, target.worktree)
     }
 
@@ -547,23 +547,24 @@ final class SessionWorkspace {
 
     // MARK: Git
 
-    /// The session's own worktree on its host, which git actions name. A session a gateway relays
-    /// lives on another Mac, whose worktrees this connection can't name; nor can it name one in an
-    /// SSH project, whose summary carries a display path (`host:/repo`), not the stored one.
-    private var gitTarget: (projectID: String, worktree: RemoteWorktreeSummary)? {
+    /// The session's own worktree on its host, the only one the phone renames, archives or deletes;
+    /// git, reviews and runs name `repositoryTarget`. A session a gateway relays lives on another Mac,
+    /// whose worktrees this connection can't name; nor can it name one in an SSH project, whose
+    /// summary carries a display path (`host:/repo`), not the stored one.
+    private var ownWorktreeTarget: (projectID: String, worktree: RemoteWorktreeSummary)? {
         guard let summary = hub.sessions(of: hostID).first(where: { $0.id == sessionId }), summary.serverId == nil,
               let projectID = summary.projectId, let worktree = summary.worktree, worktree.path.hasPrefix("/") else { return nil }
         return (projectID, worktree)
     }
 
     var canUseGit: Bool {
-        gitTarget != nil && (hub.supports(HostProtocolCapability.worktreesGitPhoneV1, on: hostID)
+        repositoryTarget != nil && (hub.supports(HostProtocolCapability.worktreesGitPhoneV1, on: hostID)
             || hub.supports(HostProtocolCapability.worktreesGitV1, on: hostID))
     }
 
     /// Whether working-tree hunks can be staged, unstaged or discarded one by one.
     var canChangeHunks: Bool {
-        guard gitTarget != nil else { return false }
+        guard repositoryTarget != nil else { return false }
         return hub.supports(HostProtocolCapability.worktreesHunksPhoneV1, on: hostID)
             || hub.supports(HostProtocolCapability.worktreesHunksV1, on: hostID) && hub.supports(HostProtocolCapability.worktreesGitV1, on: hostID)
     }
@@ -574,10 +575,10 @@ final class SessionWorkspace {
         return await git(.hunk(path: key.path, index: index, header: hunk.header, linesHash: hunk.linesHash, action: action))
     }
 
-    /// Runs `change` on the session's worktree and refreshes the change list. Returns the host's
+    /// Runs `change` on the repository the session works on and refreshes the change list. Returns the host's
     /// refusal, worded for the user, or nil once it succeeded.
     func git(_ change: RemoteGitChange) async -> String? {
-        guard gitRunning == nil, let target = gitTarget else { return "This worktree can't be changed from here." }
+        guard gitRunning == nil, let target = repositoryTarget else { return "This worktree can't be changed from here." }
         gitRunning = change
         defer {
             gitRunning = nil
@@ -591,12 +592,12 @@ final class SessionWorkspace {
 
     /// What the host suggests a message for the staged change from; nil when it couldn't say.
     var canReadFileHistory: Bool {
-        gitTarget != nil && hub.supports(HostProtocolCapability.worktreesFileHistoryV1, on: hostID)
+        repositoryTarget != nil && hub.supports(HostProtocolCapability.worktreesFileHistoryV1, on: hostID)
     }
 
     /// The commits that touched `path`, newest first.
     func fileHistory(_ path: String) async -> Result<(entries: [HostFileHistoryEntry], truncated: Bool), RemoteGitFailure> {
-        guard let target = gitTarget else { return .failure(RemoteGitFailure("This worktree's history isn't available here.")) }
+        guard let target = repositoryTarget else { return .failure(RemoteGitFailure("This worktree's history isn't available here.")) }
         var id = 0
         let reply = await hostReply(timeout: .seconds(30)) {
             id = $0
@@ -614,7 +615,7 @@ final class SessionWorkspace {
     }
 
     func commitMessageInput() async -> CommitMessageSuggestionInput? {
-        guard canUseGit, let target = gitTarget,
+        guard canUseGit, let target = repositoryTarget,
               case .success(let reply) = await hostReply(timeout: .seconds(30), {
                   RemoteGitRequest.commitMessageInput(id: $0, projectID: target.projectID, path: target.worktree.path)
               }) else { return nil }
@@ -623,20 +624,20 @@ final class SessionWorkspace {
 
     // MARK: Reviews
 
-    /// The Mac's draft reviews of this worktree, its comments readable and changeable from here.
+    /// The Mac's draft reviews of the repository's worktree, its comments readable and changeable from here.
     var canReview: Bool {
-        gitTarget != nil && (hub.supports(HostProtocolCapability.reviewsPhoneV1, on: hostID)
+        repositoryTarget != nil && (hub.supports(HostProtocolCapability.reviewsPhoneV1, on: hostID)
             || hub.supports(HostProtocolCapability.reviewsV1, on: hostID))
     }
 
     func reviews() async -> Result<[RemoteReviewSummary], RemoteGitFailure> {
-        guard let target = gitTarget else { return .failure(RemoteGitFailure("This worktree's reviews can't be read from here.")) }
+        guard let target = repositoryTarget else { return .failure(RemoteGitFailure("This worktree's reviews can't be read from here.")) }
         return await hostReply { RemoteReviewRequest.list(id: $0, projectID: target.projectID, path: target.worktree.path) }
             .flatMap { Self.readable(RemoteReviewRequest.reviews(in: $0)) }
     }
 
     func review(_ sessionID: String) async -> Result<RemoteReview, RemoteGitFailure> {
-        guard let target = gitTarget else { return .failure(RemoteGitFailure("This worktree's reviews can't be read from here.")) }
+        guard let target = repositoryTarget else { return .failure(RemoteGitFailure("This worktree's reviews can't be read from here.")) }
         return await hostReply {
             RemoteReviewRequest.read(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID)
         }
@@ -645,13 +646,13 @@ final class SessionWorkspace {
 
     /// Whether the host reads and answers a pull or merge request review's threads for the phone.
     var canReadPullRequestThreads: Bool {
-        gitTarget != nil && (hub.supports(HostProtocolCapability.reviewsProviderPhoneV1, on: hostID)
+        repositoryTarget != nil && (hub.supports(HostProtocolCapability.reviewsProviderPhoneV1, on: hostID)
             || hub.supports(HostProtocolCapability.reviewsProviderV1, on: hostID))
     }
 
     /// Review `sessionID`'s pull or merge request threads, fetched from its provider by the host; its raw diff too when `withDiff`.
     func pullRequestReview(_ sessionID: String, withDiff: Bool) async -> Result<RemoteProviderReview, RemoteGitFailure> {
-        guard let target = gitTarget else { return .failure(RemoteGitFailure("This pull request can't be read from here.")) }
+        guard let target = repositoryTarget else { return .failure(RemoteGitFailure("This pull request can't be read from here.")) }
         return await hostReply {
             RemoteReviewRequest.readProvider(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID,
                                              withDiff: withDiff)
@@ -663,7 +664,7 @@ final class SessionWorkspace {
     /// Replies to, resolves or unresolves a thread on the provider, as the host's user.
     /// Returns the host's refusal, worded for the user, or nil once it's done.
     func changeThread(_ sessionID: String, threadID: String, _ action: RemoteProviderThreadAction, body: String? = nil) async -> String? {
-        guard let target = gitTarget else { return "This pull request can't be changed from here." }
+        guard let target = repositoryTarget else { return "This pull request can't be changed from here." }
         return await hostRequest {
             RemoteReviewRequest.mutateThread(id: $0, projectID: target.projectID, path: target.worktree.path,
                                              sessionID: sessionID, threadID: threadID, action, body: body)
@@ -675,7 +676,7 @@ final class SessionWorkspace {
     /// pinned to `headSHA`, the head the phone showed. Succeeds with what it couldn't post, if anything.
     func submitReview(_ sessionID: String, _ decision: RemoteReviewDecision, body: String,
                       headSHA: String?) async -> Result<String?, RemoteGitFailure> {
-        guard let target = gitTarget else { return .failure(RemoteGitFailure("This review can't be submitted from here.")) }
+        guard let target = repositoryTarget else { return .failure(RemoteGitFailure("This review can't be submitted from here.")) }
         // Each draft may be its own provider call; a phone giving up early would invite a duplicate submission.
         return await hostReply(timeout: .seconds(300)) {
             RemoteReviewRequest.publish(id: $0, projectID: target.projectID, path: target.worktree.path,
@@ -687,12 +688,12 @@ final class SessionWorkspace {
 
     /// Whether the host sends a review's comments to an agent chat for the phone.
     var canSendReviewToAgent: Bool {
-        gitTarget != nil && hub.supports(HostProtocolCapability.reviewsAgentPhoneV1, on: hostID)
+        repositoryTarget != nil && hub.supports(HostProtocolCapability.reviewsAgentPhoneV1, on: hostID)
     }
 
     /// Where the Mac would send review `sessionID`, this chat first.
     func reviewAgentTargets(_ sessionID: String) async -> Result<[RemoteAgentTarget], RemoteGitFailure> {
-        guard let target = gitTarget else { return .failure(RemoteGitFailure("This review can't be sent from here.")) }
+        guard let target = repositoryTarget else { return .failure(RemoteGitFailure("This review can't be sent from here.")) }
         return await hostReply {
             RemoteReviewRequest.agentTargets(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID)
         }
@@ -707,7 +708,7 @@ final class SessionWorkspace {
     /// Sends review `sessionID`'s open comments to `agent`; the Mac marks them sent.
     /// Returns the host's refusal, worded for the user, or nil once the agent took them.
     func sendReview(_ sessionID: String, to agent: RemoteAgentTarget) async -> String? {
-        guard let target = gitTarget else { return "This review can't be sent from here." }
+        guard let target = repositoryTarget else { return "This review can't be sent from here." }
         return await hostRequest {
             RemoteReviewRequest.sendToAgent(id: $0, projectID: target.projectID, path: target.worktree.path,
                                             sessionID: sessionID, target: agent)
@@ -720,7 +721,7 @@ final class SessionWorkspace {
 
     /// Returns the host's refusal, worded for the user, or nil once the comment changed.
     func changeReview(_ sessionID: String, _ mutation: RemoteReviewMutation) async -> String? {
-        guard let target = gitTarget else { return "This worktree's reviews can't be changed from here." }
+        guard let target = repositoryTarget else { return "This worktree's reviews can't be changed from here." }
         return await hostRequest {
             RemoteReviewRequest.mutate(id: $0, projectID: target.projectID, path: target.worktree.path, sessionID: sessionID, mutation)
         }
@@ -734,10 +735,9 @@ final class SessionWorkspace {
                                            path: entry.path, originalPath: originalPath, anchor: anchor, body: body))
     }
 
-    /// The worktree's local-changes review, where the Mac's Review workspace files working-tree comments.
+    /// The repository worktree's local-changes review, where the Mac's Review workspace files working-tree comments.
     var localChangesReviewID: String? {
-        guard let target = gitTarget,
-              let worktreeID = hub.sessions(of: hostID).first(where: { $0.id == sessionId })?.worktreeId else { return nil }
+        guard let target = repositoryTarget, let worktreeID = target.worktreeId else { return nil }
         return RemoteReviewRequest.localChangesSessionID(worktreeID: worktreeID, worktreePath: target.worktree.path)
     }
 
@@ -745,13 +745,13 @@ final class SessionWorkspace {
 
     /// The branch the session's worktree is on, when the host lets the phone rename it.
     var renamableBranch: String? {
-        hub.supports(HostProtocolCapability.worktreesRenameBranchV1, on: hostID) ? gitTarget?.worktree.branch : nil
+        hub.supports(HostProtocolCapability.worktreesRenameBranchV1, on: hostID) ? ownWorktreeTarget?.worktree.branch : nil
     }
 
     /// Renames the worktree's branch `from`, the one the user saw, so the host refuses a checkout
     /// switched since; then refreshes the changes. Returns the host's refusal, or nil.
     func renameBranch(from: String, to branch: String) async -> String? {
-        guard let target = gitTarget else { return "This worktree can't be changed from here." }
+        guard let target = ownWorktreeTarget else { return "This worktree can't be changed from here." }
         defer { refreshChanges() }
         return await hostRequest {
             RemoteGitRequest.renameBranch(id: $0, projectID: target.projectID, path: target.worktree.path,
@@ -778,10 +778,10 @@ final class SessionWorkspace {
         let worktree: RemoteWorktreeSummary
     }
 
-    /// The session's worktree, when removable: not the main checkout or a folder, and one the host
+    /// The session's own worktree, never a checkout member, when removable: not the main checkout or a folder, and one the host
     /// can tell apart from a replacement.
     var removalTarget: RemovalTarget? {
-        guard let target = gitTarget, target.worktree.isMain != true, target.worktree.isFolder != true,
+        guard let target = ownWorktreeTarget, target.worktree.isMain != true, target.worktree.isFolder != true,
               target.worktree.lineageID != nil, hub.supports(HostProtocolCapability.worktreesLifecycleV1, on: hostID)
         else { return nil }
         return RemovalTarget(projectID: target.projectID, worktree: target.worktree)
@@ -808,10 +808,10 @@ final class SessionWorkspace {
     // MARK: Runs
 
     /// A worktree this host lists, on a host that lists its run scripts.
-    var canRun: Bool { gitTarget != nil && hub.supports(HostProtocolCapability.runsScriptsV1, on: hostID) }
+    var canRun: Bool { repositoryTarget != nil && hub.supports(HostProtocolCapability.runsScriptsV1, on: hostID) }
 
     func refreshRunScripts() {
-        guard canRun, let target = gitTarget, hub.state(of: hostID) == .online else { return }
+        guard canRun, let target = repositoryTarget, hub.state(of: hostID) == .online else { return }
         let id = hub.nextHostRequestId()
         runScriptsId = id
         send(.host(RemoteGitRequest.listRunScripts(id: id, projectID: target.projectID, path: target.worktree.path)))
@@ -819,7 +819,7 @@ final class SessionWorkspace {
 
     /// Follows an accepted launch by its run ID, independently of the screen that asked for it.
     func run(_ action: RemoteRunAction, _ script: RemoteRunScript, openConsole: @escaping PhoneRunTracker.OpenConsole) async -> String? {
-        guard let target = gitTarget else { return "This worktree can't run scripts from here." }
+        guard let target = repositoryTarget else { return "This worktree can't run scripts from here." }
         let result = await hostReply {
             RemoteGitRequest.run(id: $0, action, scriptKey: script.key, projectID: target.projectID, path: target.worktree.path)
         }
