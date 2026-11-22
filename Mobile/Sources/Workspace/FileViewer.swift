@@ -21,18 +21,19 @@ struct FileViewer: View {
         Group {
             if FileKind(path: path) == .image {
                 // Read as an image of the worktree, as the transcript reads one, not as text.
+                let source = workspace.imageSource(forRepositoryPath: path)
                 ScrollView {
-                    TranscriptImage(id: "file:\(path)", source: path, label: name, session: session).padding()
+                    TranscriptImage(id: "file:\(source)", source: source, label: name, session: session).padding()
                 }
                 // Read again on each opening, so an image changed since shows as it is now.
-                .task(id: path) { session.forgetHostImage(path) }
+                .task(id: source) { session.forgetHostImage(source) }
             } else {
                 switch workspace.file?.1 {
                 case .loaded(let reply):
                     if FileKind(path: path) == .markdown, !showSource {
                         ScrollView {
                             AgentMarkdown(id: "file:\(path)", text: reply.text, session: session,
-                                          resolve: { RemoteTranscriptLink.imageSource($0, besideFile: path) })
+                                          resolve: { workspace.imageSource(forRepositoryPath: RemoteTranscriptLink.imageSource($0, besideFile: path)) })
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding()
                                 // A file link opens in this viewer, a relative one taken from this file's folder.

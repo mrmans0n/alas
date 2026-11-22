@@ -364,6 +364,14 @@ final class SessionWorkspace {
         return true
     }
 
+    /// `path`, an image's path in the repository the viewer shows, as the host's transcript image reader
+    /// takes it. A checkout session's images are read against the checkout's root, not the member's, so a
+    /// member's file is named by its absolute path; a URL or an absolute path stays as it is.
+    func imageSource(forRepositoryPath path: String) -> String {
+        guard let member = focusedMember, !path.hasPrefix("/"), URL(string: path)?.scheme == nil else { return path }
+        return member.worktree.path + "/" + path
+    }
+
     func openFile(_ path: String, by owner: UUID) {
         pushedBy = owner
         file = (path, .loading)
