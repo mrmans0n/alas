@@ -6,6 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.7] - 2026-11-22
+
+### ✨ Features
+
+- Render GitHub-style alerts and top-level `visual` and valid `chart` fences in agent messages in the web transcript, with a drawing placeholder for incomplete fences and code fallback for empty or invalid ones ([#2675](https://github.com/mrmans0n/alas/pull/2675)).
+- On iPhone, open eligible GitHub or GitLab review requests from compatible hosts and review their diffs with inline threads, draft comments, replies, resolution, and review submission ([#2676](https://github.com/mrmans0n/alas/pull/2676)).
+- Send open draft review comments from iPhone to an available agent chat for the same worktree through a compatible Alas app host ([#2677](https://github.com/mrmans0n/alas/pull/2677)).
+- After a finished turn makes two or more edits, show its files and line totals beneath the answer in the web transcript and open selected files in Changes ([#2679](https://github.com/mrmans0n/alas/pull/2679)).
+- Show multi-edit file summaries beneath finished answers when viewing peer sessions on Mac ([#2681](https://github.com/mrmans0n/alas/pull/2681)).
+- On iPhone, keep quoted review comments with uniquely moved code, mark ambiguous matches as outdated, and improve the review screen's VoiceOver labels and structure ([#2682](https://github.com/mrmans0n/alas/pull/2682)).
+- Redesign Settings > Plugins on Mac with Installed, Available, and Updates tabs, clearer status actions, and detail pages for installed plugins ([#2683](https://github.com/mrmans0n/alas/pull/2683)).
+- On iPhone, group workspace checkout sessions under their workspace and, with a compatible local Mac host, switch Changes, Files, git, reviews, pull-request status, and runs between member repositories ([#2684](https://github.com/mrmans0n/alas/pull/2684)).
+
+### 🐛 Fixes
+
+- Keep the iPhone review screen's position when wrapping lines or jumping between files, refresh syntax colours after theme changes, preserve rejected comment text, and prevent duplicate Send to Agent requests ([#2678](https://github.com/mrmans0n/alas/pull/2678)).
+- Default new local workspace checkouts under the configured Default clone folder, with their generated path following the shared branch name until edited manually ([#2680](https://github.com/mrmans0n/alas/pull/2680)).
+
+### 🏗️ Internal
+
+- Default manual iOS TestFlight dispatches to nightly versioning while keeping reusable workflows and release tags on their explicit settings ([`b058180`](https://github.com/mrmans0n/alas/commit/b058180342c1bc6bd9fc645536a0fb2ff1f973a8)).
+
 ## [0.24.6] - 2026-11-22
 
 ### ✨ Features
