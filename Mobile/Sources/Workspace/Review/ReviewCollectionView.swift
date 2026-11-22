@@ -56,12 +56,10 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     /// A long press's finger, in the controller's view, and the edge auto-scroll it drives.
     private var pressPoint: CGPoint = .zero
     private var autoScroller: CADisplayLink?
-    /// A file jumped to whose header couldn't reach the top (the content ended first); it stays
-    /// the current one until the user scrolls.
+    /// The file last jumped to. It stays the current one, and the jump is redone as rows reshape, until the
+    /// user scrolls (a drag, the status bar, the selection's edge auto-scroll): whether its header reached the
+    /// top is only known once rows below finish self-sizing, and a file the content ends too soon after never does.
     private var jumpedTo: ReviewEntryID?
-    /// Set while `settle` scrolls, so any other scroll (a drag, the status bar, the edge auto-scroll,
-    /// VoiceOver) drops `jumpedTo`.
-    private var settling = false
     private lazy var pill = makePill()
 
     init(document: ReviewDocument) {
@@ -308,7 +306,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             settle { self.dataSource.indexPath(for: anchor).flatMap(self.rowTop) }
             reportCurrent()
         } else if let pending = jumpedTo, idsChanged || !reshaped.isEmpty {
-            // Diffs landing below it may make the room it lacked (the focused file, opened over placeholders).
+            // Rows landing above or below it move it, or make the room it lacked (the focused file, opened
+            // over placeholders).
             scroll(to: pending)
         }
         for indexPath in collectionView.indexPathsForVisibleSupplementaryElements(ofKind: UICollectionView.elementKindSectionHeader) {
@@ -379,17 +378,16 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
 
     // MARK: Scrolling
 
-    /// Puts the entry's header at the top of the list; where the content ends first, as far as it goes,
-    /// and the entry still becomes the current one.
+    /// Puts the entry's header at the top of the list, or where the content ends first, as far as it goes;
+    /// either way the entry becomes the current one.
     private func scroll(to id: ReviewEntryID) {
         guard let section = sectionIDs.firstIndex(of: id) else { return }
-        jumpedTo = nil
-        let reached = settle {
+        jumpedTo = id
+        settle {
             if self.collectionView.numberOfItems(inSection: section) > 0 { return self.rowTop(IndexPath(item: 0, section: section)) }
             return self.collectionView.layoutAttributesForSupplementaryElement(
                 ofKind: UICollectionView.elementKindSectionHeader, at: IndexPath(item: 0, section: section))?.frame.minY
         }
-        if !reached { jumpedTo = id }
         reportCurrent()
     }
 
@@ -402,12 +400,9 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         return row.frame.minY - (header?.frame.height ?? 0)
     }
 
-    /// Scrolls until `target`, a content y read afresh each pass, is the list's top edge. Returns false
-    /// when the content ends before it can get there.
-    @discardableResult private func settle(at target: () -> CGFloat?) -> Bool {
-        var reached = true
-        settling = true
-        defer { settling = false }
+    /// Scrolls until `target`, a content y read afresh each pass, is the list's top edge, or as near as the
+    /// content allows.
+    private func settle(at target: () -> CGFloat?) {
         // Until it holds: rows between here and there self-size on the way and move the target.
         for _ in 0 ..< 6 {
             collectionView.layoutIfNeeded()
@@ -417,11 +412,9 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             let bottom = max(top, collectionView.contentSize.height + inset.bottom - collectionView.bounds.height)
             let wanted = y - inset.top
             let offset = min(max(wanted, top), bottom)
-            reached = offset > wanted - 1
             guard abs(collectionView.contentOffset.y - offset) >= 0.5 else { break }
             collectionView.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
         }
-        return reached
     }
 
     /// The row just under the pinned header at the list's top.
@@ -434,8 +427,16 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         return nil
     }
 
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        jumpedTo = nil
+    }
+
+    func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        jumpedTo = nil
+        return true
+    }
+
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        if !settling { jumpedTo = nil }
         reportCurrent()
         // Rows self-size as they scroll in, moving the selection's last line.
         placePill()
@@ -561,6 +562,7 @@ extension ReviewCollectionController {
         let step = 900 * depth / band * CGFloat(link.targetTimestamp - link.timestamp)
         let y = min(max(collectionView.contentOffset.y + step, top), bottom)
         guard y != collectionView.contentOffset.y else { return }
+        jumpedTo = nil
         collectionView.contentOffset.y = y
         extendToPress()
     }
