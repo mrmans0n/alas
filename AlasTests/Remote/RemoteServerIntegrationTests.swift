@@ -392,7 +392,7 @@ struct RemoteServerIntegrationTests {
         let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
         task.resume()
         let first = try await receiveServerMessage(task)
-        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", federationEnabled: true, capabilities: PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1, PushRelayCapability.v1, HostProtocolCapability.worktreesGitPhoneV1, HostProtocolCapability.worktreesHunksPhoneV1, HostProtocolCapability.shepherdsPhoneV1, HostProtocolCapability.attentionPhoneV1, HostProtocolCapability.reviewsPhoneV1, HostProtocolCapability.reviewsProviderPhoneV1, PeerToolTerminalCapability.v1, PeerSubagentCapability.v1] + HostProtocolCapability.served))
+        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", federationEnabled: true, capabilities: PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1, PushRelayCapability.v1, HostProtocolCapability.worktreesGitPhoneV1, HostProtocolCapability.worktreesHunksPhoneV1, HostProtocolCapability.shepherdsPhoneV1, HostProtocolCapability.attentionPhoneV1, HostProtocolCapability.reviewsPhoneV1, HostProtocolCapability.reviewsProviderPhoneV1, HostProtocolCapability.reviewsAgentPhoneV1, PeerToolTerminalCapability.v1, PeerSubagentCapability.v1] + HostProtocolCapability.served))
         task.cancel(with: .goingAway, reason: nil)
     }
 
@@ -412,7 +412,7 @@ struct RemoteServerIntegrationTests {
         let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
         task.resume()
         let first = try await receiveServerMessage(task)
-        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", federationEnabled: true, capabilities: PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1, PushRelayCapability.v1, HostProtocolCapability.worktreesGitPhoneV1, HostProtocolCapability.worktreesHunksPhoneV1, HostProtocolCapability.shepherdsPhoneV1, HostProtocolCapability.attentionPhoneV1, HostProtocolCapability.reviewsPhoneV1, HostProtocolCapability.reviewsProviderPhoneV1, PeerToolTerminalCapability.v1, PeerSubagentCapability.v1] + HostProtocolCapability.served))
+        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", federationEnabled: true, capabilities: PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1, PushRelayCapability.v1, HostProtocolCapability.worktreesGitPhoneV1, HostProtocolCapability.worktreesHunksPhoneV1, HostProtocolCapability.shepherdsPhoneV1, HostProtocolCapability.attentionPhoneV1, HostProtocolCapability.reviewsPhoneV1, HostProtocolCapability.reviewsProviderPhoneV1, HostProtocolCapability.reviewsAgentPhoneV1, PeerToolTerminalCapability.v1, PeerSubagentCapability.v1] + HostProtocolCapability.served))
         task.cancel(with: .goingAway, reason: nil)
     }
 

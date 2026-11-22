@@ -2118,6 +2118,7 @@ final class AppState {
         // Read when a delegated session's summary is built, so the devices
         // load only once one exists.
         core.delegationPairing = { [weak self] in self?.remotePairing }
+        core.reviewAgents = ReviewFeedbackAgentSender.reviewAgentSeam(appState: self)
         // Tabs can't be loaded here: worktrees haven't been refreshed yet (that
         // happens async in RootView.task), so worktreesByProject is empty and
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after

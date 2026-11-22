@@ -29,6 +29,7 @@ extension RemoteServerMessage {
                                                            HostProtocolCapability.worktreesGitPhoneV1, HostProtocolCapability.worktreesHunksPhoneV1,
                                                            HostProtocolCapability.shepherdsPhoneV1, HostProtocolCapability.attentionPhoneV1,
                                                            HostProtocolCapability.reviewsPhoneV1, HostProtocolCapability.reviewsProviderPhoneV1,
+                                                           HostProtocolCapability.reviewsAgentPhoneV1,
                                                            PeerToolTerminalCapability.v1, PeerSubagentCapability.v1]
                 + identity.hostCapabilities,
             hostVersion: identity.hostVersion)

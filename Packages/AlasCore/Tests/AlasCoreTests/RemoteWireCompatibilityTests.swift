@@ -200,6 +200,19 @@ import Testing
             == .publishReview(worktree: ref, sessionID: "s",
                               publish: HostReviewPublish(decision: .requestChanges, body: "Fix it", draftIDs: nil, headSHA: "abc")))
 
+        for (phone, mac) in [
+            (RemoteAgentTarget(kind: .newChat, id: "codex", title: "New chat"), ReviewFeedbackAgentTarget.newChat(agentID: "codex", title: "New chat")),
+            (RemoteAgentTarget(kind: .existingSession, id: "w", title: "Fix", sessionID: "c"), .existingSession(worktreeID: "w", sessionID: "c", title: "Fix")),
+        ] {
+            #expect(try decode(RemoteReviewRequest.sendToAgent(id: 1, projectID: "p", path: "/r", sessionID: "s", target: phone))
+                == .sendReviewToAgent(worktree: ref, sessionID: "s", target: mac))
+            let targets = OpaqueHostMessage(json: try JSONEncoder().encode(
+                HostServerMessage.response(id: 4, result: .reviewAgentTargets(targets: [mac]))))
+            #expect(RemoteReviewRequest.agentTargets(replying: 4, in: targets) == [phone])
+        }
+        #expect(try decode(RemoteReviewRequest.agentTargets(id: 1, projectID: "p", path: "/r", sessionID: "s"))
+            == .reviewAgentTargets(worktree: ref, sessionID: "s"))
+
         let base = ShepherdFixtures.thread("t1")
         // GitLab's removed line: only the old side's numbers.
         let thread = ReviewThread(

@@ -189,6 +189,12 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// Publishes pull or merge request review `sessionID` on its provider, as
     /// the host's user (`host.reviews.provider.v1`).
     case publishReview(worktree: WorktreeRef, sessionID: String, publish: HostReviewPublish)
+    /// The agent chats review `sessionID`'s draft comments can go to
+    /// (`host.reviews.agent.phone.v1`).
+    case reviewAgentTargets(worktree: WorktreeRef, sessionID: String)
+    /// Sends review `sessionID`'s open draft comments to `target`, as the
+    /// review pane's Send to agent does (`host.reviews.agent.phone.v1`).
+    case sendReviewToAgent(worktree: WorktreeRef, sessionID: String, target: ReviewFeedbackAgentTarget)
     /// The repository's stashes, as a worktree's Stashes list shows them
     /// (`host.worktrees.stash.v1`).
     case listStashes(worktree: WorktreeRef)
@@ -736,6 +742,10 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case reviewThreadMutated(result: ProviderThreadMutationResult)
     /// The answer to `publishReview`, warnings included.
     case reviewPublished(result: ProviderReviewPublishResult)
+    /// The answer to `reviewAgentTargets`.
+    case reviewAgentTargets(targets: [ReviewFeedbackAgentTarget])
+    /// The answer to `sendReviewToAgent`, once the agent took the turn.
+    case reviewSentToAgent
     /// The answer to `listStashes`.
     case stashes(stashes: [GitStash])
     /// The answer to `stashFiles`.
