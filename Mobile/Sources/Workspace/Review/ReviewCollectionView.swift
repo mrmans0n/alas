@@ -59,6 +59,9 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     /// A file jumped to whose header couldn't reach the top (the content ended first); it stays
     /// the current one until the user scrolls.
     private var jumpedTo: ReviewEntryID?
+    /// Set while `settle` scrolls, so any other scroll (a drag, the status bar, the edge auto-scroll,
+    /// VoiceOver) drops `jumpedTo`.
+    private var settling = false
     private lazy var pill = makePill()
 
     init(document: ReviewDocument) {
@@ -403,6 +406,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     /// when the content ends before it can get there.
     @discardableResult private func settle(at target: () -> CGFloat?) -> Bool {
         var reached = true
+        settling = true
+        defer { settling = false }
         // Until it holds: rows between here and there self-size on the way and move the target.
         for _ in 0 ..< 6 {
             collectionView.layoutIfNeeded()
@@ -429,11 +434,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         return nil
     }
 
-    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        jumpedTo = nil
-    }
-
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        if !settling { jumpedTo = nil }
         reportCurrent()
         // Rows self-size as they scroll in, moving the selection's last line.
         placePill()
@@ -666,7 +668,7 @@ extension ReviewCollectionController {
         alert.addAction(UIAlertAction(title: resolved ? "Unresolve" : "Resolve", style: .default) { [weak self] _ in
             Task { [weak self] in
                 guard let document = self?.document else { return }
-                document.error = await document.changeThread(thread, resolved ? .unresolve : .resolve)
+                if let message = await document.changeThread(thread, resolved ? .unresolve : .resolve) { document.error = message }
             }
         })
         present(alert, animated: true)
@@ -693,7 +695,9 @@ extension ReviewCollectionController {
     }
 
     private func change(_ mutation: RemoteReviewMutation) {
-        Task { document.error = await document.change(mutation) }
+        Task {
+            if let message = await document.change(mutation) { document.error = message }
+        }
     }
 
     private func confirmDelete(_ comment: RemoteReviewComment) {
