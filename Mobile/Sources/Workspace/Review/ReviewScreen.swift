@@ -61,20 +61,20 @@ struct ReviewScreen: View {
         switch composing {
         case .lines(let entry, let anchor, let title, let quote):
             CommentSheet(title: title, text: "", quote: quote) { body in
-                Task { await document.comment(on: entry, anchor: anchor, body: body) }
+                await document.comment(on: entry, anchor: anchor, body: body)
             }
         case .file(let entry):
             CommentSheet(title: "Comment on File", text: "") { body in
-                Task { await document.comment(on: entry, anchor: .file, body: body) }
+                await document.comment(on: entry, anchor: .file, body: body)
             }
         case .edit(let comment):
             CommentSheet(title: "Edit Comment", text: comment.body) { body in
-                Task { await document.change(.edit(commentID: comment.id, body: body)) }
+                await document.change(.edit(commentID: comment.id, body: body))
             }
         case .reply(let thread):
             CommentSheet(title: "Reply", text: "",
                          confirmation: "It's posted on the pull request, as \(document.pullRequest?.poster ?? "").") { body in
-                Task { await document.changeThread(thread, .reply, body: body) }
+                await document.changeThread(thread, .reply, body: body)
             }
         case .submit:
             if let pullRequest = document.pullRequest {

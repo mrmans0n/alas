@@ -367,22 +367,25 @@ final class ReviewDocument {
         composing = .lines(selection.entry, anchor, title: title, quote: selection.quotedText(in: hunk))
     }
 
-    func comment(on entry: ReviewEntryID, anchor: RemoteReviewAnchor, body: String) async {
-        guard let session = reviewSessionID else { return }
+    /// Returns the host's refusal, or nil once the comment is filed.
+    func comment(on entry: ReviewEntryID, anchor: RemoteReviewAnchor, body: String) async -> String? {
+        guard let session = reviewSessionID else { return nil }
         if let message = await workspace.comment(in: session, entry: entry,
                                                     originalPath: entries.first { $0.id == entry }?.renameFrom,
                                                     anchor: anchor, body: body) {
-            error = message
-            return
+            return message
         }
         await loadComments()
         if case .line = anchor { selection = nil }
+        return nil
     }
 
-    func change(_ mutation: RemoteReviewMutation) async {
-        guard let session = reviewSessionID else { return }
-        if let message = await workspace.changeReview(session, mutation) { error = message }
+    /// Returns the host's refusal, or nil once the comment changed.
+    @discardableResult func change(_ mutation: RemoteReviewMutation) async -> String? {
+        guard let session = reviewSessionID else { return nil }
+        let message = await workspace.changeReview(session, mutation)
         await loadComments()
+        return message
     }
 
     // MARK: Pull request
@@ -392,13 +395,14 @@ final class ReviewDocument {
         return !RemoteReviewSubmission(pullRequest, drafts: comments).decisions.isEmpty
     }
 
-    func changeThread(_ thread: RemoteProviderThread, _ action: RemoteProviderThreadAction, body: String? = nil) async {
-        guard case .pullRequest(let session) = source else { return }
+    /// Returns the host's refusal, or nil once the thread changed.
+    func changeThread(_ thread: RemoteProviderThread, _ action: RemoteProviderThreadAction, body: String? = nil) async -> String? {
+        guard case .pullRequest(let session) = source else { return nil }
         if let message = await workspace.changeThread(session, threadID: thread.id, action, body: body) {
-            error = message
-            return
+            return message
         }
         await reloadThreads()
+        return nil
     }
 
     /// Submits at the head the diff was read at. Returns why it failed, or nil once it's submitted.

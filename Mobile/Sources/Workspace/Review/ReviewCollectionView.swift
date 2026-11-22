@@ -609,7 +609,10 @@ extension ReviewCollectionController {
                                       message: "It changes on the pull request, as \(poster).", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: resolved ? "Unresolve" : "Resolve", style: .default) { [weak self] _ in
-            Task { await self?.document.changeThread(thread, resolved ? .unresolve : .resolve) }
+            Task { [weak self] in
+                guard let document = self?.document else { return }
+                document.error = await document.changeThread(thread, resolved ? .unresolve : .resolve)
+            }
         })
         present(alert, animated: true)
     }
@@ -635,7 +638,7 @@ extension ReviewCollectionController {
     }
 
     private func change(_ mutation: RemoteReviewMutation) {
-        Task { await document.change(mutation) }
+        Task { document.error = await document.change(mutation) }
     }
 
     private func confirmDelete(_ comment: RemoteReviewComment) {
