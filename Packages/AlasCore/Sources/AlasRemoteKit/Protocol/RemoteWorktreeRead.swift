@@ -36,6 +36,7 @@ public enum RemoteWorktreeRead {
     }
 
     /// The inner server message answering `id`, or the host's refusal; nil when `message` answers something else.
+    /// An answer to `id` that can't be read fails, so whoever waits for it stops waiting.
     public static func reply(to id: Int, in message: OpaqueHostMessage)
         -> Result<RemoteServerMessageOf<OpaqueHostMessage, OpaqueHostMessage>, RemoteGitFailure>? {
         guard let result = RemoteGitRequest.responseResult(in: message, matching: id) else { return nil }
@@ -45,7 +46,7 @@ public enum RemoteWorktreeRead {
         guard let reply = (result["worktreeRead"] as? [String: Any])?["reply"],
               let data = try? JSONSerialization.data(withJSONObject: reply),
               let decoded = try? JSONDecoder().decode(RemoteServerMessageOf<OpaqueHostMessage, OpaqueHostMessage>.self, from: data)
-        else { return nil }
+        else { return .failure(RemoteGitFailure("The machine's answer couldn't be read.")) }
         return .success(decoded)
     }
 }

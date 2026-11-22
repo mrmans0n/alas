@@ -54,14 +54,9 @@ struct FilesView: View {
                 .listStyle(.plain)
             }
         }
-        .searchable(text: $query, prompt: "Search files")
-        // The host's file search, as the composer's @ picker uses, after 120 ms of quiet.
-        .task(id: query) {
-            guard !query.isEmpty, query.count <= RemoteAttachmentLimits.maxMentionQueryLength else { return }
-            try? await Task.sleep(for: .milliseconds(120))
-            guard !Task.isCancelled else { return }
-            session.searchMentions(query)
-        }
+        // The host searches the session's directory; a workspace checkout's results would name paths
+        // outside the focused member, which is what a result opens in.
+        .modifier(FileSearch(enabled: workspace.checkout == nil, query: $query, session: session))
         .task { workspace.loadTree() }
     }
 
@@ -116,5 +111,27 @@ private struct FileTreeRow: View {
             }
         }
         .padding(.leading, CGFloat(depth) * 14)
+    }
+}
+
+/// The tree's search field: the host's file search, as the composer's @ picker uses, after 120 ms of quiet.
+private struct FileSearch: ViewModifier {
+    let enabled: Bool
+    @Binding var query: String
+    let session: TranscriptSession
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .searchable(text: $query, prompt: "Search files")
+                .task(id: query) {
+                    guard !query.isEmpty, query.count <= RemoteAttachmentLimits.maxMentionQueryLength else { return }
+                    try? await Task.sleep(for: .milliseconds(120))
+                    guard !Task.isCancelled else { return }
+                    session.searchMentions(query)
+                }
+        } else {
+            content
+        }
     }
 }

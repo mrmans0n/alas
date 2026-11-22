@@ -40,7 +40,11 @@ struct HostProtocolTests {
             return
         }
         #expect(sessionId == "p|/r" && files.map(\.path) == ["a.txt"])
+        #expect(RemoteGitRequest.responseID(in: try message(4)) == 4)
         #expect(RemoteWorktreeRead.reply(to: 5, in: try message(4)) == nil)
+        // An answer to the request that doesn't decode still ends the wait for it.
+        let unreadable = OpaqueHostMessage(json: Data(#"{"response":{"id":4,"result":{"worktreeRead":{"reply":{"unknownKind":{}}}}}}"#.utf8))
+        #expect(RemoteWorktreeRead.reply(to: 4, in: unreadable) == .failure(RemoteGitFailure("The machine's answer couldn't be read.")))
     }
 
     /// A preview at the cap, all `/`-heavy base64 that JSON escapes,

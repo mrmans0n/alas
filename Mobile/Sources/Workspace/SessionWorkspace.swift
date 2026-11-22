@@ -138,6 +138,8 @@ final class SessionWorkspace {
     private var chosenMemberID: String?
     /// `readWorktree` requests awaiting their answer: what each asked, and of which member's worktree.
     @ObservationIgnored private var memberReads: [Int: (read: RemoteWorktreeRead.Read, worktreeId: String)] = [:]
+    /// The member worktree the loaded changes, tree and open views belong to; nil outside a checkout.
+    @ObservationIgnored private var memberStateOwner: String?
 
     init(hub: HostHub, hostID: UUID, sessionId: String) {
         self.hub = hub
@@ -158,9 +160,12 @@ final class SessionWorkspace {
         if holders == 1 {
             listener = hub.addListener(hostID) { [weak self] in self?.receive($0) }
             hostWasOnline = hub.state(of: hostID) == .online
+            // The focus may have moved while nobody listened; drop what the previous member showed first.
+            followFocus(reload: false)
             if hostWasOnline { replay() }
             watchGeneration += 1
             watchHost(generation: watchGeneration)
+            watchFocus(generation: watchGeneration)
             pollShepherd(generation: watchGeneration)
         }
         return ListenerToken { [weak self] in
@@ -189,6 +194,18 @@ final class SessionWorkspace {
             replay()
             reconnects += 1
         }
+    }
+
+    /// Follows the focused member while the session is open: the host can drop the focused one from
+    /// its list, or a pick land, and the focus moves without `focusMember`.
+    private func watchFocus(generation: Int) {
+        guard generation == watchGeneration else { return }
+        withObservationTracking {
+            _ = focusedMember?.worktreeId
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.watchFocus(generation: generation) }
+        }
+        followFocus()
     }
 
     /// Asks again for whatever is open; the host forgot everything it was asked while away.
@@ -376,7 +393,9 @@ final class SessionWorkspace {
     /// name; nil for a session in a worktree of its own, or one a gateway relays from another Mac.
     var checkout: RemoteSessionCheckout? {
         guard let summary = hub.sessions(of: hostID).first(where: { $0.id == sessionId }), summary.serverId == nil,
-              let checkout = summary.checkout else { return nil }
+              let checkout = summary.checkout,
+              // Without `readWorktree` the host answers only for the session, as it did before checkouts.
+              hub.supports(HostProtocolCapability.worktreesReadV1, on: hostID) else { return nil }
         // An SSH member's summary carries a display path (`host:/repo`), as `gitTarget` notes.
         return RemoteSessionCheckout(id: checkout.id, name: checkout.name, branch: checkout.branch, rootPath: checkout.rootPath,
                                      members: checkout.members.filter { $0.worktree.path.hasPrefix("/") })
@@ -400,6 +419,22 @@ final class SessionWorkspace {
         guard let checkout, id != focusedMemberID, checkout.members.contains(where: { $0.id == id }) else { return }
         UserDefaults.standard.set(id, forKey: Self.focusKey(checkout.id))
         chosenMemberID = id
+        followFocus()
+    }
+
+    /// Resets what the previous member showed when the focused member's worktree is no longer the
+    /// one it was loaded for.
+    /// `reload`: ask again now; else the next `replay` does.
+    private func followFocus(reload: Bool = true) {
+        let current = focusedMember?.worktreeId
+        guard current != memberStateOwner else { return }
+        memberStateOwner = current
+        resetMemberState(reload: reload)
+    }
+
+    /// Drops what the previous member showed, failing the waits on it, and asks again for whatever
+    /// tab was loaded. Replies still on their way for the previous member are ignored.
+    private func resetMemberState(reload: Bool) {
         let changesWereLoaded = if case .idle = changes { false } else { true }
         // Forgetting the reads in flight drops their replies, which name the previous member's worktree.
         memberReads.removeAll()
@@ -422,8 +457,14 @@ final class SessionWorkspace {
         for sha in Array(commitFilesWaiters.keys) { resume(\.commitFilesWaiters, sha, .failure(switched)) }
         for waiters in peekWaiters.values { waiters.forEach { $0.resume(returning: nil) } }
         peekWaiters.removeAll()
-        if changesWereLoaded { refreshChanges() }
+        guard reload, hub.state(of: hostID) == .online else {
+            // Not idle, so the replay asks for them again.
+            if changesWereLoaded { changes = .loading }
+            return
+        }
+        if changesWereLoaded { refreshChanges() } else { refreshPullRequest() }
         if treeRequested { loadTree() }
+        refreshRunScripts()
     }
 
     /// The repository the session's reads name: the focused member in a workspace checkout, else the
@@ -440,7 +481,7 @@ final class SessionWorkspace {
     /// Asks for `read`: of the session's own worktree by its id, or, in a workspace checkout, of the
     /// focused member's through `readWorktree`.
     private func sendRead(_ read: RemoteWorktreeRead.Read) {
-        guard checkout != nil, hub.supports(HostProtocolCapability.worktreesReadV1, on: hostID) else {
+        guard checkout != nil else {
             if let message = sessionRead(read) { send(message) }
             return
         }
@@ -880,9 +921,8 @@ final class SessionWorkspace {
     private func receive(_ message: PhoneServerMessage) {
         switch message {
         case .host(let reply):
-            for (id, pending) in memberReads {
-                guard let result = RemoteWorktreeRead.reply(to: id, in: reply) else { continue }
-                memberReads[id] = nil
+            if !memberReads.isEmpty, let id = RemoteGitRequest.responseID(in: reply),
+               let pending = memberReads.removeValue(forKey: id), let result = RemoteWorktreeRead.reply(to: id, in: reply) {
                 // A member the focus left since, as when it's no longer listed.
                 guard pending.worktreeId == focusedMember?.worktreeId else { return }
                 switch result {
