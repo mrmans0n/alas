@@ -334,6 +334,11 @@ raise "release workflow must use the materialized tested architecture verifier" 
 ios_path = File.expand_path("../../../.github/workflows/ios-release.yml", __dir__)
 ios_workflow = YAML.safe_load(File.read(ios_path), aliases: true)
 ios_triggers = ios_workflow.fetch(true)
+raise "manual iOS uploads must default to the nightly version bump so internal testers receive a build on an open version" unless
+  ios_triggers.dig("workflow_dispatch", "inputs", "nightly", "type") == "boolean" &&
+    ios_triggers.dig("workflow_dispatch", "inputs", "nightly", "default") == true &&
+    ios_triggers.dig("workflow_dispatch", "inputs", "external", "type") == "boolean" &&
+    ios_triggers.dig("workflow_dispatch", "inputs", "external", "default") == false
 raise "iOS release classification must be an explicit boolean input for both manual and reusable calls" unless
   ios_triggers.dig("workflow_dispatch", "inputs", "release", "type") == "boolean" &&
     ios_triggers.dig("workflow_dispatch", "inputs", "release", "default") == false &&
@@ -343,6 +348,10 @@ release_ios_call = release_workflow.fetch("jobs").fetch("ios-app")
 raise "the tag release workflow must explicitly enable canonical release notes" unless
   release_ios_call.dig("with", "release") == true
 ios_steps = ios_workflow.fetch("jobs").fetch("ios").fetch("steps")
+archive_testflight = ios_steps.find { |step| step["name"] == "Archive and export" }
+raise "manual iOS nightly selection must reach the archive script" unless
+  archive_testflight&.fetch("run", "").include?("inputs.nightly") &&
+    archive_testflight.fetch("run", "").include?("--nightly")
 prepare_testflight_notes = ios_steps.find { |step| step["name"] == "Prepare TestFlight What to Test" }
 raise "iOS releases must derive immutable release-specific TestFlight notes from the checked-out ref" unless
   prepare_testflight_notes&.fetch("if", "") == "inputs.submit_build == ''" &&

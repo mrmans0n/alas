@@ -79,7 +79,8 @@ struct NativePeerSessionView: View {
             commands: (offersShip ? [ACPAlasSlashCommand.shipSuggestion] : [])
                 + NativePeerComposerState.slashSuggestions(from: transcript.config),
             upstreamReferences: client.upstreamReferences(for: transcript.sessionId, codeHost: transcript.config?.codeHost),
-            promptCardContext: ACPPromptCardContext(perform: { _ in }, openSkill: { client.openSkill($0) })
+            promptCardContext: ACPPromptCardContext(perform: { _ in }, openSkill: { client.openSkill($0) }),
+            worktreeRoot: client.row(for: transcript.sessionId)?.worktree?.path
         )
     }
 

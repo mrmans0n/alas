@@ -5,6 +5,7 @@ import SwiftUI
 struct ReviewScreen: View {
     let workspace: SessionWorkspace
     @State private var document: ReviewDocument
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     init(workspace: SessionWorkspace, source: ReviewSource, focus: ReviewEntryID?) {
         self.workspace = workspace
@@ -27,6 +28,9 @@ struct ReviewScreen: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .background(Color(.systemBackground))
+            // As in the session it opens from: on the iPhone the action bar takes the tab bar's place. Set here
+            // because a pull request's review pushes from the Reviews list, past the session's own setting.
+            .toolbar(sizeClass == .compact ? .hidden : .automatic, for: .tabBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     let wraps = ReviewPreferences.shared.wrapsLines
@@ -61,20 +65,20 @@ struct ReviewScreen: View {
         switch composing {
         case .lines(let entry, let anchor, let title, let quote):
             CommentSheet(title: title, text: "", quote: quote) { body in
-                Task { await document.comment(on: entry, anchor: anchor, body: body) }
+                await document.comment(on: entry, anchor: anchor, body: body)
             }
         case .file(let entry):
             CommentSheet(title: "Comment on File", text: "") { body in
-                Task { await document.comment(on: entry, anchor: .file, body: body) }
+                await document.comment(on: entry, anchor: .file, body: body)
             }
         case .edit(let comment):
             CommentSheet(title: "Edit Comment", text: comment.body) { body in
-                Task { await document.change(.edit(commentID: comment.id, body: body)) }
+                await document.change(.edit(commentID: comment.id, body: body))
             }
         case .reply(let thread):
             CommentSheet(title: "Reply", text: "",
                          confirmation: "It's posted on the pull request, as \(document.pullRequest?.poster ?? "").") { body in
-                Task { await document.changeThread(thread, .reply, body: body) }
+                await document.changeThread(thread, .reply, body: body)
             }
         case .submit:
             if let pullRequest = document.pullRequest {
@@ -132,8 +136,9 @@ private struct FileStrip: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
+                    let names = Self.names(document.entries.map(\.id.path))
                     ForEach(document.entries, id: \.id) { entry in
-                        chip(entry).id(entry.id)
+                        chip(entry, name: names[entry.id.path] ?? entry.id.path).id(entry.id)
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 6)
@@ -146,13 +151,28 @@ private struct FileStrip: View {
         .background(.bar)
     }
 
-    private func chip(_ entry: ReviewEntry) -> some View {
+    /// Each path's file name, or where names collide the nearest folder that tells them apart:
+    /// "Mobile/…/Package.resolved".
+    /// ponytail: compares every pair of paths, fine for a review's file count.
+    static func names(_ paths: [String]) -> [String: String] {
+        Dictionary(paths.map { path in
+            let parts = path.split(separator: "/")
+            let depth = (1...max(parts.count, 1)).first { k in
+                let tail = parts.suffix(k).joined(separator: "/")
+                return !paths.contains { $0 != path && ($0 == tail || $0.hasSuffix("/" + tail)) }
+            } ?? parts.count
+            let name = parts.last.map(String.init) ?? path
+            return (path, depth <= 1 ? name : depth == 2 ? parts.suffix(2).joined(separator: "/") : "\(parts[parts.count - depth])/…/\(name)")
+        }, uniquingKeysWith: { a, _ in a })
+    }
+
+    private func chip(_ entry: ReviewEntry, name: String) -> some View {
         let current = entry.id == document.current
         let viewed = document.isViewed(entry)
         return Button { document.scrollTo?(entry.id) } label: {
             HStack(spacing: 4) {
                 if viewed { Image(systemName: "checkmark").font(.caption2.weight(.bold)) }
-                Text(entry.id.path.split(separator: "/").last.map(String.init) ?? entry.id.path).lineLimit(1)
+                Text(name).lineLimit(1)
             }
             .font(.caption)
             .padding(.horizontal, 10).padding(.vertical, 6)
@@ -185,21 +205,28 @@ private struct ActionBar: View {
                     sent = nil
                 }
             if canSendToAgent {
-                Button("Send to Agent") { Task { await chooseTarget() } }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(sending)
-                    .confirmationDialog("Send \(commentCount) to", isPresented: $choosing, titleVisibility: .visible) {
-                        ForEach(targets, id: \.self) { target in
-                            Button(label(target)) { Task { await send(to: target) } }
-                        }
+                Button {
+                    // Set before the task starts, so a second tap can't start another.
+                    sending = true
+                    Task { await chooseTarget() }
+                } label: {
+                    if sending { ProgressView().controlSize(.mini) } else { Text("Send to Agent") }
+                }
+                .accessibilityLabel("Send to Agent")
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(sending)
+                .confirmationDialog("Send \(commentCount) to", isPresented: $choosing, titleVisibility: .visible) {
+                    ForEach(targets, id: \.self) { target in
+                        Button(label(target)) { startSending(to: target) }
                     }
-                    .alert(confirming.map { "Send \(commentCount) to \(label($0))?" } ?? "",
-                           isPresented: Binding { confirming != nil } set: { if !$0 { confirming = nil } },
-                           presenting: confirming) { target in
-                        Button("Send") { Task { await send(to: target) } }
-                        Button("Cancel", role: .cancel) {}
-                    }
+                }
+                .alert(confirming.map { "Send \(commentCount) to \(label($0))?" } ?? "",
+                       isPresented: Binding { confirming != nil } set: { if !$0 { confirming = nil } },
+                       presenting: confirming) { target in
+                    Button("Send") { startSending(to: target) }
+                    Button("Cancel", role: .cancel) {}
+                }
             }
             if document.pullRequest != nil {
                 Button("Submit…") { document.composing = .submit }
@@ -229,9 +256,8 @@ private struct ActionBar: View {
     }
 
     private func chooseTarget() async {
-        guard let session = document.reviewSessionID else { return }
-        sending = true
         defer { sending = false }
+        guard let session = document.reviewSessionID else { return }
         switch await document.workspace.reviewAgentTargets(session) {
         case .failure(let failure): document.error = failure.message
         case .success(let found) where found.isEmpty:
@@ -243,10 +269,15 @@ private struct ActionBar: View {
         }
     }
 
-    private func send(to target: RemoteAgentTarget) async {
-        guard let session = document.reviewSessionID else { return }
+    private func startSending(to target: RemoteAgentTarget) {
+        guard !sending else { return }
         sending = true
+        Task { await send(to: target) }
+    }
+
+    private func send(to target: RemoteAgentTarget) async {
         defer { sending = false }
+        guard let session = document.reviewSessionID else { return }
         if let message = await document.workspace.sendReview(session, to: target) {
             document.error = message
             return

@@ -59,6 +59,18 @@ struct WorkspaceCheckoutCreationModelTests {
         #expect(model.rootPath == "/checkouts/feature-my-change")
     }
 
+    @Test(arguments: [ExecutionLocation.local, .ssh("remote")])
+    func defaultCloneFolderSuppliesTheParentOnlyForLocalCheckouts(location: ExecutionLocation) {
+        let workspace = Workspace(name: "Release", executionLocation: location, members: [])
+        var model = WorkspaceCheckoutCreationModel(
+            workspace: workspace, branchPrefix: "feature/", defaultCloneFolder: "/checkouts"
+        )
+
+        model.setBranch("my-change")
+
+        #expect(model.request().rootPath == (location == .local ? "/checkouts/feature-my-change" : ""))
+    }
+
     @Test func returningToDetailsPreservesSelectedCheckoutParent() {
         var model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace(), branchPrefix: "feature/")
         model.selectCheckoutParent("/checkouts")

@@ -53,9 +53,15 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     private var commentsByID: [String: RemoteReviewComment] = [:]
     private var threadsByID: [String: RemoteProviderThread] = [:]
     private var outdated: Set<String> = []
+    /// Comments whose quoted code moved, by id: the lines it now sits on.
+    private var moved: [String: RemoteReviewAnchor] = [:]
     /// A long press's finger, in the controller's view, and the edge auto-scroll it drives.
     private var pressPoint: CGPoint = .zero
     private var autoScroller: CADisplayLink?
+    /// The file last jumped to. It stays the current one, and the jump is redone as rows reshape, until the
+    /// user scrolls (a drag, the status bar, the selection's edge auto-scroll): whether its header reached the
+    /// top is only known once rows below finish self-sizing, and a file the content ends too soon after never does.
+    private var jumpedTo: ReviewEntryID?
     private lazy var pill = makePill()
 
     init(document: ReviewDocument) {
@@ -126,7 +132,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             guard let self, case .line(let id, let h, let l) = row, let hunk = hunks(id)?[safe: h],
                   let diffLine = hunk.lines[safe: l], let metric = metrics[id] else { return }
             let entrySpans = entry(id).flatMap(document.spanKey).flatMap { self.document.spans[$0] } ?? []
-            let tokens = collectionView.traitCollection.userInterfaceStyle == .dark ? ThemeTokens.dark : ThemeTokens.light
+            // The controller's traits: a style change reaches it before the collection view, and redraws from there.
+            let tokens = traitCollection.userInterfaceStyle == .dark ? ThemeTokens.dark : ThemeTokens.light
             let selection = document.selection
             let selected = selection.map { $0.entry == id && $0.hunk == h && ($0.start ... $0.end).contains(l) } ?? false
             cell.configure(diffLine, spans: entrySpans[safe: metric.starts[h] + l] ?? [], digits: metric.digits,
@@ -140,7 +147,7 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             var badges: [String] = []
             if !comment.isOpen { badges.append(comment.state.capitalized) }
             if outdated.contains(cid) { badges.append("Outdated") }
-            cell.configure(author: comment.author, location: Self.location(comment.anchor), body: comment.body, badges: badges,
+            cell.configure(author: comment.author, location: Self.location(moved[cid] ?? comment.anchor), body: comment.body, badges: badges,
                            replies: comment.replies.map { .init(author: $0.author, body: $0.body) }, dimmed: !comment.isOpen)
         }
         let note = UICollectionView.CellRegistration<NoteCell, ReviewRow> { cell, _, row in
@@ -231,6 +238,7 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         // Comments only show where they can be written: the local-changes review.
         let byFile = document.reviewSessionID == nil ? [:] : Dictionary(grouping: document.comments, by: \.fileID)
         commentsByID = Dictionary(document.comments.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        moved = moved.filter { commentsByID[$0.key] != nil }
         // A pull request's threads by file; a conversation thread, on no file, stays in the Reviews list.
         let threadsByPath = Dictionary(grouping: document.threads.filter { $0.path != nil }, by: { $0.path ?? "" })
         threadsByID = Dictionary(document.threads.map { (Self.rowID($0), $0) }, uniquingKeysWith: { a, _ in a })
@@ -268,13 +276,20 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             }
             for (comment, place) in zip(comments, placed.dropFirst(threads.count)) {
                 if place.row == nil, case .line = comment.anchor { outdated.insert(comment.id) } else { outdated.remove(comment.id) }
+                if let lines = place.movedTo, case .line(let side, _, _, let quoted) = comment.anchor {
+                    moved[comment.id] = .line(side: side, startLine: lines.lowerBound,
+                                              endLine: lines.count > 1 ? lines.upperBound : nil, selectedText: quoted)
+                } else {
+                    moved[comment.id] = nil
+                }
             }
             let rows = ReviewLayout.rows(for: entry, folded: state.folded, comments: placed)
             if rows != sectionRows[id] { reshaped.append(id) }
             sectionRows[id] = rows
         }
         let ids = entries.map(\.id)
-        if ids != sectionIDs {
+        let idsChanged = ids != sectionIDs
+        if idsChanged {
             sectionIDs = ids
             var snapshot = NSDiffableDataSourceSnapshot<ReviewEntryID, ReviewRow>()
             snapshot.appendSections(ids)
@@ -287,12 +302,22 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
                 dataSource.apply(section, to: id, animatingDifferences: false)
             }
         }
+        // Wrapping changes every row's height: keep the row at the top where it is.
+        let anchor = wrapsChanged ? topRow() : nil
         // After the shape is applied, so every row reconfigured is in the snapshot.
         let stale = wrapsChanged ? ids : redrawn
         if !stale.isEmpty {
             var snapshot = dataSource.snapshot()
             snapshot.reconfigureItems(stale.flatMap { sectionRows[$0] ?? [] })
             dataSource.apply(snapshot, animatingDifferences: false)
+        }
+        if let anchor {
+            settle { self.dataSource.indexPath(for: anchor).flatMap(self.rowTop) }
+            reportCurrent()
+        } else if let pending = jumpedTo, idsChanged || !reshaped.isEmpty {
+            // Rows landing above or below it move it, or make the room it lacked (the focused file, opened
+            // over placeholders).
+            scroll(to: pending)
         }
         for indexPath in collectionView.indexPathsForVisibleSupplementaryElements(ofKind: UICollectionView.elementKindSectionHeader) {
             if let view = collectionView.supplementaryView(forElementKind: UICollectionView.elementKindSectionHeader, at: indexPath)
@@ -302,17 +327,17 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     }
 
     private static func placeable(_ comment: RemoteReviewComment) -> ReviewPlaceable {
-        guard case .line(let side, let start, let end) = comment.anchor else {
+        guard case .line(let side, let start, let end, let quoted) = comment.anchor else {
             return ReviewPlaceable(id: comment.id, side: nil, line: nil, endLine: nil)
         }
-        return ReviewPlaceable(id: comment.id, side: side, line: start, endLine: end)
+        return ReviewPlaceable(id: comment.id, side: side, line: start, endLine: end, selectedText: quoted)
     }
 
     private static func rowID(_ thread: RemoteProviderThread) -> String { "thread:" + thread.id }
 
     /// An outdated thread goes to the top of its file: the provider no longer places it on these lines.
     private static func placeable(_ thread: RemoteProviderThread) -> ReviewPlaceable {
-        guard !thread.isOutdated, case .line(let side, let start, let end)? = thread.anchor else {
+        guard !thread.isOutdated, case .line(let side, let start, let end, _)? = thread.anchor else {
             return ReviewPlaceable(id: rowID(thread), side: nil, line: nil, endLine: nil)
         }
         return ReviewPlaceable(id: rowID(thread), side: side, line: start, endLine: end)
@@ -333,7 +358,7 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         switch anchor {
         case .file: return "File"
         case .image: return "Image"
-        case .line(let side, let start, let end):
+        case .line(let side, let start, let end, _):
             let range = end.flatMap { $0 != start ? "L\(start)\u{2013}\($0)" : nil } ?? "L\(start)"
             return range + (side == "old" ? " (old)" : "")
         }
@@ -362,28 +387,62 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
 
     // MARK: Scrolling
 
-    /// Puts the entry's header at the top of the list.
+    /// Puts the entry's header at the top of the list, or where the content ends first, as far as it goes;
+    /// either way the entry becomes the current one.
     private func scroll(to id: ReviewEntryID) {
         guard let section = sectionIDs.firstIndex(of: id) else { return }
-        // Twice: rows between here and there self-size on the way and move the target.
-        for _ in 0 ..< 2 {
+        jumpedTo = id
+        settle {
+            if self.collectionView.numberOfItems(inSection: section) > 0 { return self.rowTop(IndexPath(item: 0, section: section)) }
+            return self.collectionView.layoutAttributesForSupplementaryElement(
+                ofKind: UICollectionView.elementKindSectionHeader, at: IndexPath(item: 0, section: section))?.frame.minY
+        }
+        reportCurrent()
+    }
+
+    /// Where the list's top edge goes for the row to sit right under its pinned header.
+    private func rowTop(_ indexPath: IndexPath) -> CGFloat? {
+        guard let row = collectionView.layoutAttributesForItem(at: indexPath) else { return nil }
+        // A pinned header's frame is where it's pinned, but its height holds.
+        let header = collectionView.layoutAttributesForSupplementaryElement(
+            ofKind: UICollectionView.elementKindSectionHeader, at: IndexPath(item: 0, section: indexPath.section))
+        return row.frame.minY - (header?.frame.height ?? 0)
+    }
+
+    /// Scrolls until `target`, a content y read afresh each pass, is the list's top edge, or as near as the
+    /// content allows.
+    private func settle(at target: () -> CGFloat?) {
+        // Until it holds: rows between here and there self-size on the way and move the target.
+        for _ in 0 ..< 6 {
             collectionView.layoutIfNeeded()
-            let header = collectionView.layoutAttributesForSupplementaryElement(
-                ofKind: UICollectionView.elementKindSectionHeader, at: IndexPath(item: 0, section: section))
-            let y: CGFloat
-            if collectionView.numberOfItems(inSection: section) > 0,
-               let first = collectionView.layoutAttributesForItem(at: IndexPath(item: 0, section: section)) {
-                // A pinned header's frame is where it's pinned; the first row sits right under where it belongs.
-                y = first.frame.minY - (header?.frame.height ?? 0)
-            } else if let header {
-                y = header.frame.minY
-            } else { return }
+            guard let y = target() else { break }
             let inset = collectionView.adjustedContentInset
             let top = -inset.top
             let bottom = max(top, collectionView.contentSize.height + inset.bottom - collectionView.bounds.height)
-            collectionView.setContentOffset(CGPoint(x: 0, y: min(max(y - inset.top, top), bottom)), animated: false)
+            let wanted = y - inset.top
+            let offset = min(max(wanted, top), bottom)
+            guard abs(collectionView.contentOffset.y - offset) >= 0.5 else { break }
+            collectionView.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
         }
-        reportCurrent()
+    }
+
+    /// The row just under the pinned header at the list's top.
+    private func topRow() -> ReviewRow? {
+        let top = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
+        for indexPath in collectionView.indexPathsForVisibleItems.sorted() {
+            guard let row = collectionView.layoutAttributesForItem(at: indexPath), let y = rowTop(indexPath) else { continue }
+            if y + row.frame.height > top + 1 { return dataSource.itemIdentifier(for: indexPath) }
+        }
+        return nil
+    }
+
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        jumpedTo = nil
+    }
+
+    func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        jumpedTo = nil
+        return true
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -399,7 +458,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             in: CGRect(x: 0, y: top, width: collectionView.bounds.width, height: 1)) ?? []
         let section = attributes.first { $0.representedElementCategory == .supplementaryView }?.indexPath.section
             ?? attributes.first?.indexPath.section
-        guard let section, let id = sectionIDs[safe: section], document.current != id else { return }
+        let reported = jumpedTo.flatMap { sectionIDs.contains($0) ? $0 : nil } ?? section.flatMap { sectionIDs[safe: $0] }
+        guard let id = reported, document.current != id else { return }
         // Not during a SwiftUI update, which a scroll from `apply` is part of.
         Task { self.document.current = id }
     }
@@ -511,28 +571,33 @@ extension ReviewCollectionController {
         let step = 900 * depth / band * CGFloat(link.targetTimestamp - link.timestamp)
         let y = min(max(collectionView.contentOffset.y + step, top), bottom)
         guard y != collectionView.contentOffset.y else { return }
+        jumpedTo = nil
         collectionView.contentOffset.y = y
         extendToPress()
     }
 
-    /// VoiceOver's way to select: each action checks the selection when it runs, not when the row was drawn.
+    /// VoiceOver's way to select. Rows redraw when the selection changes, so each offers only what applies now.
     fileprivate func lineActions(_ id: ReviewEntryID, hunk: Int, line: Int) -> [UIAccessibilityCustomAction] {
-        [
+        let selection = document.selection
+        var actions = [
             UIAccessibilityCustomAction(name: "Select line") { [weak self] _ in
                 self?.document.select(id, hunk: hunk, line: line)
                 return true
             },
-            UIAccessibilityCustomAction(name: "Extend selection to here") { [weak self] _ in
-                guard let self, let selection = document.selection, selection.entry == id, selection.hunk == hunk else { return false }
-                document.extendSelection(id, hunk: hunk, line: line)
-                return true
-            },
-            UIAccessibilityCustomAction(name: "Comment on selection") { [weak self] _ in
-                guard let self, document.selection != nil else { return false }
-                document.composeSelection()
-                return true
-            },
         ]
+        if selection?.entry == id, selection?.hunk == hunk {
+            actions.append(UIAccessibilityCustomAction(name: "Extend selection to here") { [weak self] _ in
+                self?.document.extendSelection(id, hunk: hunk, line: line)
+                return true
+            })
+        }
+        if selection != nil {
+            actions.append(UIAccessibilityCustomAction(name: "Comment on selection") { [weak self] _ in
+                self?.document.composeSelection()
+                return true
+            })
+        }
+        return actions
     }
 
     fileprivate func makePill() -> UIView {
@@ -555,8 +620,8 @@ extension ReviewCollectionController {
         return pill
     }
 
-    /// Floats the pill under the selection's last line, at the trailing edge; hidden while that line isn't laid out.
-    /// Near the viewport's bottom (the diff's last row included) it moves up, as far as above that line, to stay reachable.
+    /// Floats the pill by the selection, at the trailing edge (see `ReviewLayout.selectionPillY`); hidden while its
+    /// last line isn't laid out.
     fileprivate func placePill() {
         guard let selection = document.selection,
               let indexPath = dataSource.indexPath(for: .line(entry: selection.entry, hunk: selection.hunk, line: selection.end)),
@@ -565,8 +630,15 @@ extension ReviewCollectionController {
             return
         }
         let size = pill.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+        let first = dataSource.indexPath(for: .line(entry: selection.entry, hunk: selection.hunk, line: selection.start))
+            .flatMap { collectionView.layoutAttributesForItem(at: $0) } ?? last
+        // Under the file's pinned header.
+        let header = collectionView.layoutAttributesForSupplementaryElement(
+            ofKind: UICollectionView.elementKindSectionHeader, at: IndexPath(item: 0, section: indexPath.section))
+        let visibleTop = collectionView.contentOffset.y + collectionView.adjustedContentInset.top + (header?.frame.height ?? 0)
         let visibleBottom = collectionView.contentOffset.y + collectionView.bounds.height - collectionView.adjustedContentInset.bottom
-        let y = max(min(last.frame.maxY + 4, visibleBottom - size.height - 8), last.frame.minY - size.height - 4)
+        let y = ReviewLayout.selectionPillY(selectionTop: first.frame.minY, selectionBottom: last.frame.maxY,
+                                            pillHeight: size.height, visibleTop: visibleTop, visibleBottom: visibleBottom)
         pill.frame = CGRect(x: collectionView.bounds.width - collectionView.safeAreaInsets.right - size.width - 12,
                             y: y, width: size.width, height: size.height)
         pill.isHidden = false
@@ -609,7 +681,10 @@ extension ReviewCollectionController {
                                       message: "It changes on the pull request, as \(poster).", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: resolved ? "Unresolve" : "Resolve", style: .default) { [weak self] _ in
-            Task { await self?.document.changeThread(thread, resolved ? .unresolve : .resolve) }
+            Task { [weak self] in
+                guard let document = self?.document else { return }
+                if let message = await document.changeThread(thread, resolved ? .unresolve : .resolve) { document.error = message }
+            }
         })
         present(alert, animated: true)
     }
@@ -635,7 +710,9 @@ extension ReviewCollectionController {
     }
 
     private func change(_ mutation: RemoteReviewMutation) {
-        Task { await document.change(mutation) }
+        Task {
+            if let message = await document.change(mutation) { document.error = message }
+        }
     }
 
     private func confirmDelete(_ comment: RemoteReviewComment) {

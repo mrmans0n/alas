@@ -26,7 +26,7 @@ struct GeneralPane: View {
                 SettingsGroup(title: "Repositories") {
                     SettingsRow(
                         name: "Default clone folder",
-                        desc: "Used when cloning repositories from GitHub, GitLab, or a Git URL."
+                        desc: "Used when cloning repositories and creating local workspace checkouts."
                     ) {
                         HStack(spacing: 6) {
                             AlasField(

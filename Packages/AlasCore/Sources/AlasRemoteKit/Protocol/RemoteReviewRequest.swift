@@ -14,8 +14,9 @@ public struct RemoteReviewFileID: Codable, Equatable, Hashable, Sendable {
 /// Where a comment sits: `ReviewDraftCommentAnchor` without the parts the phone doesn't show.
 public enum RemoteReviewAnchor: Equatable, Sendable {
     case file
-    /// `side` is `DiffReviewInlineFeedbackSide`: old, new or unknown.
-    case line(side: String, startLine: Int, endLine: Int?)
+    /// `side` is `DiffReviewInlineFeedbackSide`: old, new or unknown. `selectedText`: the lines commented on,
+    /// "\n"-joined, which a comment follows when its code moves.
+    case line(side: String, startLine: Int, endLine: Int?, selectedText: String? = nil)
     case image
 }
 
@@ -113,13 +114,13 @@ public struct RemoteReviewComment: Decodable, Equatable, Identifiable, Sendable 
 
     /// Whether a review submission posts it: `ProviderReviewPublishPlanner.publishableDrafts`.
     public var isPublishable: Bool {
-        guard isOpen, !isPublished, case .line(let side, let start, _) = anchor else { return false }
+        guard isOpen, !isPublished, case .line(let side, let start, _, _) = anchor else { return false }
         return side != "unknown" && start > 0 && !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private enum Keys: String, CodingKey {
         case id, fileID, path, anchor, bodyMarkdown, state, author, replies, updatedAt, providerPublish
-        case file, line, image, side, startLine, endLine, user, agent, name
+        case file, line, image, side, startLine, endLine, selectedText, user, agent, name
     }
 
     public init(from decoder: Decoder) throws {
@@ -130,7 +131,8 @@ public struct RemoteReviewComment: Decodable, Equatable, Identifiable, Sendable 
         let anchor = try c.nestedContainer(keyedBy: Keys.self, forKey: .anchor)
         if let line = try? anchor.nestedContainer(keyedBy: Keys.self, forKey: .line) {
             self.anchor = .line(side: try line.decode(String.self, forKey: .side), startLine: try line.decode(Int.self, forKey: .startLine),
-                                endLine: try line.decodeIfPresent(Int.self, forKey: .endLine))
+                                endLine: try line.decodeIfPresent(Int.self, forKey: .endLine),
+                                selectedText: try line.decodeIfPresent(String.self, forKey: .selectedText))
         } else {
             self.anchor = anchor.contains(.image) ? .image : .file
         }
@@ -433,13 +435,14 @@ public enum RemoteReviewRequest {
     private static func encode(_ mutation: RemoteReviewMutation) -> [String: Any] {
         switch mutation {
         case .add(let fileID, let path, let originalPath, let anchor, let body):
-            let anchor: [String: Any] = switch anchor {
-            case .file, .image: ["file": [String: Any]()]
-            case .line(let side, let startLine, let endLine):
-                ["line": ["side": side, "startLine": startLine, "endLine": endLine ?? startLine]]
+            var json: [String: Any] = ["file": [String: Any]()]
+            if case .line(let side, let startLine, let endLine, let selectedText) = anchor {
+                var line: [String: Any] = ["side": side, "startLine": startLine, "endLine": endLine ?? startLine]
+                line["selectedText"] = selectedText
+                json = ["line": line]
             }
             var add: [String: Any] = ["fileID": ["namespace": fileID.namespace, "path": fileID.path], "path": path,
-                                      "anchor": anchor, "body": body]
+                                      "anchor": json, "body": body]
             add["originalPath"] = originalPath
             return ["add": add]
         case .edit(let commentID, let body): return ["edit": ["commentID": commentID, "body": body]]

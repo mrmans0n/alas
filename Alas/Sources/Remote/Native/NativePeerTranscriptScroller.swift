@@ -43,6 +43,8 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
     /// Opens a skill command's file and shows `/ship`'s state, for command chips.
     /// Only user messages get it: its no-op `perform` must not show a prompt card's action.
     var promptCardContext: ACPPromptCardContext? = nil
+    /// The session's worktree on its host, so tool-call patches list worktree-relative paths.
+    var worktreeRoot: String? = nil
 
     @Environment(\.theme) private var theme
     @Environment(\.openURL) private var openURL
@@ -246,6 +248,15 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                 if hasLiveTool || (isTurnActive && indices.contains { $0 >= currentTurnUserIndex }) {
                     specs[specs.count - 1].parksWhenReleased = false
                 }
+                // A finished turn's file changes follow its answer, as in a local session.
+                if case .message(let row) = renderRow,
+                   let changes = turnChanges(answerIndex: row.index, messages: messages, isTurnActive: isTurnActive, host: host) {
+                    specs.append(ACPTranscriptRowSpec(
+                        id: "__turn_changes__" + row.stableId,
+                        equalityToken: Self.token(changes, host: host),
+                        build: { Self.wrap(host: host) { ACPTurnChangesCard(changes: changes, caption: nil, onOpenDiff: nil) } }
+                    ))
+                }
             }
 
             specs.append(contentsOf: host.trailingRows.map { extraSpec($0, host: host) })
@@ -255,6 +266,26 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                 build: { AnyView(Color.clear.frame(height: NativePeerTranscriptScroller.composerSpacerHeight)) }
             ))
             return specs
+        }
+
+        /// The files live on the peer, so the card lists them without opening diffs.
+        private func turnChanges(
+            answerIndex: Int, messages: [RemoteWireMessage], isTurnActive: Bool, host: NativePeerTranscriptScroller
+        ) -> ACPTurnChanges? {
+            guard messages.indices.contains(answerIndex), messages[answerIndex].kind == "agent" else { return nil }
+            let rowCache = rowCache
+            return ACPTurnChanges.forAnswer(at: answerIndex, count: messages.count, isTurnActive: isTurnActive) { index in
+                let message = messages[index]
+                // A hidden row is transparent, as in the fold.
+                guard message.isHidden != true else { return .other }
+                switch rowCache.row(for: message) {
+                case .user: return .user
+                case .agent: return .agent
+                case .fileEdit(let edit): return .fileEdit(.init(path: edit.path, added: edit.added, removed: edit.removed))
+                case .toolCall(let call): return .toolCallEdits(ACPTurnChanges.written(by: call, worktreeRoot: host.worktreeRoot))
+                default: return .other
+                }
+            }
         }
 
         private struct MessageTokenInputs: Equatable {

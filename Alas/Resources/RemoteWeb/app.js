@@ -1973,6 +1973,7 @@ function applySnapshot(msg) {
   visualSubmitted.clear();   // every card the snapshot recreated consumed its entry; the rest left the transcript
   requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
   syncStreamingState(msg.streamingState);
+  refreshTurnChanges();
 }
 
 function applyDelta(msg) {
@@ -1988,8 +1989,9 @@ function applyDelta(msg) {
   const box = $("messages");
   const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 120;
   msg.upserts.forEach(m => upsertMessage(m));
-  if (atBottom) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
   syncStreamingState(msg.streamingState);
+  refreshTurnChanges();
+  if (atBottom) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
 }
 
 function applyQueueState(msg) {
@@ -2181,6 +2183,7 @@ function applyPage(msg) {
   // Pages arrive oldest-first; insert in reverse so each lands at the front.
   [...msg.messages].reverse().forEach(m => { if (!messages.has(m.stableId)) insertMessage(m, null); });
   transcriptMeta.firstIndex = Math.min(transcriptMeta.firstIndex, msg.firstIndex);
+  refreshTurnChanges();
   box.scrollTop += box.scrollHeight - prevHeight;   // keep the viewport anchored
 }
 
@@ -2246,6 +2249,76 @@ function upsertMessage(m) {
   // it will arrive if the user backfills that far.
   if (transcriptMeta && m.index < transcriptMeta.firstIndex) return;
   insertMessage(m, null);
+}
+
+// Each row's turn facts, kept per wire row object: a delta replaces the object, so a cached entry is never stale.
+const turnChangeItems = new WeakMap();
+
+// Puts a turn changes card under every finished turn's answer that made two or more edits, as on the
+// Mac and the phone, and drops cards whose turn changed. Cards carry an index just past their answer's,
+// so ordered inserts of later and older rows still land around them.
+function refreshTurnChanges() {
+  const box = $("messages");
+  const worktreeRoot = listedSessions.get(currentSession)?.worktree?.path || null;
+  const rows = [...messages.values()].filter((m) => m.isHidden !== true).sort((a, b) => a.index - b.index);
+  const items = rows.map((m) => {
+    let item = turnChangeItems.get(m);
+    if (!item) { item = RemoteTurnChanges.itemOf(m, worktreeRoot); turnChangeItems.set(m, item); }
+    return item;
+  });
+  const active = lastStreamingState !== "idle";
+  const wanted = new Map();
+  rows.forEach((m, index) => {
+    if (m.kind !== "agent") return;
+    const changes = RemoteTurnChanges.forAnswer(items, index, active);
+    if (changes) wanted.set(m.stableId, { changes, signature: JSON.stringify(changes.files) });
+  });
+  box.querySelectorAll(":scope > .m-turn-changes").forEach((card) => {
+    const entry = wanted.get(card.dataset.answer);
+    const answer = messageNodes.get(card.dataset.answer);
+    if (!entry || !answer || card.previousElementSibling !== answer || card.dataset.signature !== entry.signature) card.remove();
+  });
+  wanted.forEach((entry, sid) => {
+    const answer = messageNodes.get(sid);
+    if (!answer || answer.nextElementSibling?.dataset.answer === sid) return;
+    answer.after(turnChangesCard(sid, Number(answer.dataset.index), entry));
+  });
+}
+
+const TURN_CHANGES_COLLAPSED = 5;
+
+function turnChangesCard(sid, answerIndex, { changes, signature }) {
+  const card = el("div", "msg m-turn-changes");
+  card.dataset.answer = sid;
+  card.dataset.index = String(answerIndex + 0.5);
+  card.dataset.signature = signature;
+  const counts = (added, removed) => {
+    const node = el("span", "turn-changes-counts");
+    node.append(el("span", "turn-changes-added", "+" + added), el("span", "turn-changes-removed", "\u2212" + removed));
+    return node;
+  };
+  const header = el("div", "turn-changes-header");
+  header.append(el("span", "turn-changes-title", changes.files.length === 1 ? "1 file changed" : changes.files.length + " files changed"),
+                counts(changes.added, changes.removed));
+  const list = el("div", "turn-changes-files");
+  const row = (file) => {
+    const button = el("button", "turn-changes-file");
+    button.type = "button";
+    button.title = "Open diff";
+    button.append(el("span", "turn-changes-path", file.path), counts(file.added, file.removed));
+    button.onclick = () => { showTab("changes"); openDiff(file.path); };
+    return button;
+  };
+  changes.files.slice(0, TURN_CHANGES_COLLAPSED).forEach((file) => list.append(row(file)));
+  card.append(header, list);
+  const hidden = changes.files.length - TURN_CHANGES_COLLAPSED;
+  if (hidden > 0) {
+    const more = el("button", "turn-changes-more", "Show " + hidden + " more");
+    more.type = "button";
+    more.onclick = () => { changes.files.slice(TURN_CHANGES_COLLAPSED).forEach((file) => list.append(row(file))); more.remove(); };
+    card.append(more);
+  }
+  return card;
 }
 
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }

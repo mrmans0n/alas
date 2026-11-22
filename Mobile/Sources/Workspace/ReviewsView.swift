@@ -155,15 +155,15 @@ private struct ReviewDetailView: View {
         switch composing {
         case .add(let fileID, let path):
             CommentSheet(title: "Comment on File", text: "") { body in
-                change(.add(fileID: fileID, path: path, anchor: .file, body: body))
+                await changed(.add(fileID: fileID, path: path, anchor: .file, body: body))
             }
         case .edit(let comment):
             CommentSheet(title: "Edit Comment", text: comment.body) { body in
-                change(.edit(commentID: comment.id, body: body))
+                await changed(.edit(commentID: comment.id, body: body))
             }
         case .reply(let thread):
             CommentSheet(title: "Reply", text: "", confirmation: "It's posted on the pull request, as \(poster).") { body in
-                changeThread(thread, .reply, body: body)
+                await changedThread(thread, .reply, body: body)
             }
         case .submit(let pr, let drafts):
             SubmitReviewSheet(review: pr, drafts: drafts, poster: poster) { decision, body in
@@ -292,23 +292,32 @@ private struct ReviewDetailView: View {
     }
 
     private func change(_ mutation: RemoteReviewMutation) {
-        Task {
-            error = await workspace.changeReview(summary.id, mutation)
-            await loadDrafts()
-        }
+        Task { error = await changed(mutation) }
+    }
+
+    /// Returns the host's refusal, or nil once the comment changed.
+    private func changed(_ mutation: RemoteReviewMutation) async -> String? {
+        let failure = await workspace.changeReview(summary.id, mutation)
+        await loadDrafts()
+        return failure
     }
 
     private func changeThread(_ thread: RemoteProviderThread, _ action: RemoteProviderThreadAction, body: String? = nil) {
-        Task {
-            error = await workspace.changeThread(summary.id, threadID: thread.id, action, body: body)
-            if error == nil { await loadThreads() }
-        }
+        Task { error = await changedThread(thread, action, body: body) }
+    }
+
+    /// Returns the host's refusal, or nil once the thread changed.
+    private func changedThread(_ thread: RemoteProviderThread, _ action: RemoteProviderThreadAction,
+                               body: String? = nil) async -> String? {
+        let failure = await workspace.changeThread(summary.id, threadID: thread.id, action, body: body)
+        if failure == nil { await loadThreads() }
+        return failure
     }
 }
 
 private extension RemoteReviewComment {
     var line: Int {
-        if case .line(_, let start, _) = anchor { return start }
+        if case .line(_, let start, _, _) = anchor { return start }
         return 0
     }
 }
@@ -347,7 +356,7 @@ private struct CommentRow: View {
         switch comment.anchor {
         case .file: return "File"
         case .image: return "Image"
-        case .line(let side, let start, let end):
+        case .line(let side, let start, let end, _):
             let range = end.flatMap { $0 != start ? "L\(start)–\($0)" : nil } ?? "L\(start)"
             return range + (side == "old" ? " (old)" : "")
         }
@@ -367,10 +376,13 @@ struct CommentSheet: View {
     var confirmation: String?
     /// The lines commented on, shown above the field.
     var quote: String?
-    let submit: (String) -> Void
+    /// Returns the host's refusal, which keeps the sheet and its text up, or nil to close it.
+    let submit: (String) async -> String?
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
     @State private var confirming = false
+    @State private var saving = false
+    @State private var failure: String?
 
     var body: some View {
         NavigationStack {
@@ -379,30 +391,44 @@ struct CommentSheet: View {
                     Text(quote).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(8)
                 }
                 TextField("Comment", text: $text, axis: .vertical).lineLimit(4...12).focused($focused)
+                if let failure {
+                    Label(failure, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
+                }
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                // Kept until the host answers, so its refusal has a sheet to show in.
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(confirmation == nil ? "Save" : "Post") {
-                        if confirmation == nil { save() } else { confirming = true }
-                    }
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .confirmationDialog("Post this reply?", isPresented: $confirming, titleVisibility: .visible) {
-                        Button("Post") { save() }
-                    } message: {
-                        Text(confirmation ?? "")
+                    if saving {
+                        ProgressView()
+                    } else {
+                        Button(confirmation == nil ? "Save" : "Post") {
+                            if confirmation == nil { save() } else { confirming = true }
+                        }
+                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .confirmationDialog("Post this reply?", isPresented: $confirming, titleVisibility: .visible) {
+                            Button("Post") { save() }
+                        } message: {
+                            Text(confirmation ?? "")
+                        }
                     }
                 }
             }
         }
+        .interactiveDismissDisabled(saving)
         .presentationDetents([.medium, .large])
         .onAppear { focused = true }
     }
 
     private func save() {
-        submit(text.trimmingCharacters(in: .whitespacesAndNewlines))
-        dismiss()
+        saving = true
+        failure = nil
+        Task {
+            failure = await submit(text.trimmingCharacters(in: .whitespacesAndNewlines))
+            saving = false
+            if failure == nil { dismiss() }
+        }
     }
 }
