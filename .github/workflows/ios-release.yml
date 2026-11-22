@@ -23,6 +23,10 @@ on:
         description: "Also send the build to the external TestFlight groups"
         default: false
         type: boolean
+      nightly:
+        description: "Build the next patch version so internal testers receive it on an open TestFlight version"
+        default: true
+        type: boolean
       release:
         description: "Use versioned release notes and the canonical GitHub Release URL"
         default: false
