@@ -816,8 +816,15 @@ struct HostSessionsTests {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let sessionId = try await fixture.createCheckoutSession()
-        let mention = RemoteMention(kind: RemoteMention.file, value: "../escape.md", name: "escape.md")
-        #expect(await fixture.core.remoteMentionAttachments([mention], sessionId: sessionId) == nil)
+        let outside = fixture.root.deletingLastPathComponent().appendingPathComponent("escape-\(UUID().uuidString).md")
+        try Data("secret".utf8).write(to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let link = fixture.root.appendingPathComponent("link.md")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        for value in ["../" + outside.lastPathComponent, "link.md"] {
+            let mention = RemoteMention(kind: RemoteMention.file, value: value, name: "escape.md")
+            #expect(await fixture.core.remoteMentionAttachments([mention], sessionId: sessionId) == nil, "\(value)")
+        }
     }
 
     @Test func aCheckoutSessionReadsTranscriptImagesUnderItsRoot() async throws {

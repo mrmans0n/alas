@@ -19,20 +19,7 @@ extension AlasCoreContext {
         sessionId: String, query: String, cachedSessions: [ACPSessionMentionCandidate]? = nil
     ) async -> (mentions: [RemoteMention], sessions: [ACPSessionMentionCandidate]) {
         guard let sessionRoot = remoteSessionRoot(sessionId: sessionId) else { return ([], []) }
-        let root: URL
-        let isFolder: Bool
-        let projectId: String?
-        switch sessionRoot {
-        case .worktree(let worktree):
-            root = worktree.path
-            isFolder = isFolderWorktree(worktree)
-            projectId = worktree.projectId
-        case .checkout(let checkoutRoot, _):
-            // Not a git repo, and no project whose sessions it could list.
-            root = checkoutRoot
-            isFolder = true
-            projectId = nil
-        }
+        let (root, projectId, isFolder) = mentionScope(of: sessionRoot)
         // A bare `@` opens the picker: list files and sessions afresh then,
         // as the local picker does on open, and reuse both while the query
         // grows.
@@ -64,21 +51,22 @@ extension AlasCoreContext {
         return (mentions, sessions)
     }
 
+    /// Where a session's `@` mentions resolve: its root, the project whose
+    /// sessions it can mention (none for a Workspace checkout, which is no git
+    /// repo and has session mentions off), and whether it is a folder.
+    private func mentionScope(of sessionRoot: RemoteSessionRoot) -> (root: URL, projectId: String?, isFolder: Bool) {
+        switch sessionRoot {
+        case .worktree(let worktree): (worktree.path, worktree.projectId, isFolderWorktree(worktree))
+        case .checkout(let root, _): (root, nil, true)
+        }
+    }
+
     /// The prompt attachments for a viewer's mentions, or nil when any of
     /// them doesn't resolve inside the session's project.
     @_spi(Testing) public func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {
         guard !mentions.isEmpty else { return [] }
         guard let sessionRoot = remoteSessionRoot(sessionId: sessionId) else { return nil }
-        let root: URL
-        let projectId: String?
-        switch sessionRoot {
-        case .worktree(let worktree):
-            root = worktree.path
-            projectId = worktree.projectId
-        case .checkout(let checkoutRoot, _):
-            root = checkoutRoot
-            projectId = nil
-        }
+        let (root, projectId, _) = mentionScope(of: sessionRoot)
         var attachments: [ACPMessage.Attachment] = []
         for mention in mentions {
             guard let attachment = await RemoteMentions.attachment(
