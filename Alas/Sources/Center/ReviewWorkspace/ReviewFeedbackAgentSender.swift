@@ -277,18 +277,12 @@ extension ReviewFeedbackAgentSender {
             comments: try appState.core.reviewDrafts.load(sessionID: draftID)
         )
         guard !bundle.activeComments.isEmpty else { throw ReviewFeedbackAgentSendError.noOpenComments }
-        let base = production(appState: appState, worktreeID: worktreeID)
+        let sender = production(appState: appState, worktreeID: worktreeID)
         // Only where the review pane would offer to send, not a chat elsewhere.
-        guard base.availableTargets().contains(where: { $0.id == target.id }) else {
+        guard sender.availableTargets().contains(where: { $0.id == target.id }) else {
             throw ReviewFeedbackAgentSendError.unavailableTarget
         }
-        // As `ReviewSessionLoader` snapshots it: only the full local diff
-        // shows the whole working tree.
-        var reviewedTree: String?
-        if case .localChanges(.all) = record.target.payload, !record.target.repositoryPath.isRemoteAlasPath {
-            reviewedTree = (try? await GitService().localChangesReviewSnapshot(worktreePath: record.target.repositoryPath)) ?? nil
-        }
-        let sender = base.recordingReviewedWorkingTree(reviewedTree, worktreeID: worktreeID)
+        // No `recordingReviewedWorkingTree`: a snapshot taken now would mark edits the phone never showed as reviewed.
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             ReviewFeedbackPromptActions.sendToAgent(
                 bundle, target: target, sender: sender, sessionID: record.id,
