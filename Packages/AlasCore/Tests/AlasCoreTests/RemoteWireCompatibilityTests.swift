@@ -146,9 +146,9 @@ import Testing
         #expect(try decode(RemoteReviewRequest.list(id: 1, projectID: "p", path: "/r")) == .listReviews(worktree: ref))
         #expect(try decode(RemoteReviewRequest.read(id: 1, projectID: "p", path: "/r", sessionID: "s")) == .readReview(worktree: ref, sessionID: "s"))
         let mutations: [(RemoteReviewMutation, HostReviewMutation)] = [
-            (.add(fileID: fileID, path: "a.swift", originalPath: "old.swift", anchor: .line(side: "new", startLine: 3, endLine: 5), body: "Why?"),
+            (.add(fileID: fileID, path: "a.swift", originalPath: "old.swift", anchor: .line(side: "new", startLine: 3, endLine: 5, selectedText: "a\nb"), body: "Why?"),
              .add(fileID: macFileID, path: "a.swift", originalPath: "old.swift",
-                  anchor: .line(side: .new, startLine: 3, endLine: 5, selectedText: nil), body: "Why?")),
+                  anchor: .line(side: .new, startLine: 3, endLine: 5, selectedText: "a\nb"), body: "Why?")),
             (.add(fileID: fileID, path: "a.swift", anchor: .file, body: "Split"),
              .add(fileID: macFileID, path: "a.swift", originalPath: nil, anchor: .file, body: "Split")),
             (.edit(commentID: "c", body: "b"), .edit(commentID: "c", body: "b")),
@@ -179,7 +179,7 @@ import Testing
         let read = try #require(RemoteReviewRequest.review(
             replying: 2, in: encode(.review(review: HostReview(summary: summary, comments: [comment])))))
         let phoneComment = try #require(read.comments.first)
-        #expect(phoneComment.fileID == fileID && phoneComment.anchor == .line(side: "new", startLine: 3, endLine: nil))
+        #expect(phoneComment.fileID == fileID && phoneComment.anchor == .line(side: "new", startLine: 3, endLine: nil, selectedText: "x"))
         #expect(phoneComment.author == "Codex" && phoneComment.replies.map(\.author) == ["You"])
         #expect(phoneComment.replies.map(\.body) == ["Because"])
         #expect(try RemoteReviewRequest.reviews(replying: 9, in: encode(.reviews(reviews: [summary]))) == nil)

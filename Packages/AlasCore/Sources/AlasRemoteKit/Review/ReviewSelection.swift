@@ -26,14 +26,16 @@ public struct ReviewSelection: Equatable, Sendable {
     }
 
     /// Added and context lines anchor to the new side, removed lines to the old one;
-    /// a mixed range uses the new-side numbers of the lines it covers.
+    /// a mixed range uses the new-side numbers of the lines it covers, and quotes only those lines.
     public func anchor(in hunk: RemoteDiffHunk) -> RemoteReviewAnchor {
         let lines = hunk.lines[start...end]
-        let new = lines.compactMap(\.newNumber)
-        let (side, numbers) = new.isEmpty ? ("old", lines.compactMap(\.oldNumber)) : ("new", new)
+        let new = lines.filter { $0.newNumber != nil }
+        let (side, quoted) = new.isEmpty ? ("old", lines.filter { $0.oldNumber != nil }) : ("new", new)
+        let numbers = quoted.compactMap { side == "new" ? $0.newNumber : $0.oldNumber }
         let first = numbers.min() ?? 0
         let last = numbers.max() ?? first
-        return .line(side: side, startLine: first, endLine: last == first ? nil : last)
+        return .line(side: side, startLine: first, endLine: last == first ? nil : last,
+                     selectedText: quoted.map(\.text).joined(separator: "\n"))
     }
 
     public func isValid(in hunks: [RemoteDiffHunk]) -> Bool {
