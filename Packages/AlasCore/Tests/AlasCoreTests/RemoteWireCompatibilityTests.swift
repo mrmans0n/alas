@@ -182,6 +182,10 @@ import Testing
         #expect(phoneComment.fileID == fileID && phoneComment.anchor == .line(side: "new", startLine: 3, endLine: nil, selectedText: "x"))
         #expect(phoneComment.author == "Codex" && phoneComment.replies.map(\.author) == ["You"])
         #expect(phoneComment.replies.map(\.body) == ["Because"])
+        #expect(read.sent.isEmpty)
+        let sent = try #require(RemoteReviewRequest.review(replying: 2, in: encode(.review(review: HostReview(
+            summary: summary, comments: [comment], sent: ["c": HostReviewSent(title: "Claude", at: date)]))))).sent
+        #expect(sent.mapValues { [$0.title, "\($0.at.timeIntervalSinceReferenceDate)"] } == ["c": ["Claude", "1000.0"]])
         #expect(try RemoteReviewRequest.reviews(replying: 9, in: encode(.reviews(reviews: [summary]))) == nil)
     }
 

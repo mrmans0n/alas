@@ -162,6 +162,14 @@ public struct RemoteReviewComment: Decodable, Equatable, Identifiable, Sendable 
 public struct RemoteReview: Equatable, Sendable {
     public let summary: RemoteReviewSummary
     public let comments: [RemoteReviewComment]
+    /// Where each comment was last sent to an agent, by comment id; empty from a Mac that doesn't say.
+    public let sent: [String: RemoteReviewSent]
+}
+
+/// The agent a review comment was last sent to (`HostReviewSent`).
+public struct RemoteReviewSent: Decodable, Equatable, Sendable {
+    public let title: String
+    public let at: Date
 }
 
 /// A change to a review's comments, as the phone offers them (`HostReviewMutation`).
@@ -420,7 +428,8 @@ public enum RemoteReviewRequest {
 
     public static func review(replying id: Int? = nil, in message: OpaqueHostMessage) -> RemoteReview? {
         guard let review = decode(LenientReview.self, at: "review", "review", replying: id, in: message) else { return nil }
-        return RemoteReview(summary: review.summary, comments: review.comments.compactMap(\.value))
+        return RemoteReview(summary: review.summary, comments: review.comments.compactMap(\.value),
+                            sent: review.sent?.compactMapValues(\.value) ?? [:])
     }
 
     private static func decode<T: Decodable>(_ type: T.Type, at result: String, _ field: String,
@@ -461,5 +470,15 @@ public enum RemoteReviewRequest {
     private struct LenientReview: Decodable {
         let summary: RemoteReviewSummary
         let comments: [Lenient<RemoteReviewComment>]
+        let sent: [String: Lenient<RemoteReviewSent>]?
+
+        private enum CodingKeys: String, CodingKey { case summary, comments, sent }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            summary = try c.decode(RemoteReviewSummary.self, forKey: .summary)
+            comments = try c.decode([Lenient<RemoteReviewComment>].self, forKey: .comments)
+            sent = try? c.decodeIfPresent([String: Lenient<RemoteReviewSent>].self, forKey: .sent)
+        }
     }
 }

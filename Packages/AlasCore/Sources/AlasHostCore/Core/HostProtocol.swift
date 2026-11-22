@@ -497,10 +497,13 @@ public struct HostReviewSummary: Codable, Equatable, Sendable {
 public struct HostReview: Codable, Equatable, Sendable {
     public var summary: HostReviewSummary
     public var comments: [ReviewDraftComment]
+    /// Where each comment was last sent to an agent, by comment id; nil when none was.
+    public var sent: [String: HostReviewSent]?
 
-    public init(summary: HostReviewSummary, comments: [ReviewDraftComment]) {
+    public init(summary: HostReviewSummary, comments: [ReviewDraftComment], sent: [String: HostReviewSent]? = nil) {
         self.summary = summary
         self.comments = comments
+        self.sent = sent
     }
 
     /// Leaves out a comment a newer host sends in a shape this Mac can't read.
@@ -508,6 +511,29 @@ public struct HostReview: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         summary = try container.decode(HostReviewSummary.self, forKey: .summary)
         comments = try container.decode([Lossy<ReviewDraftComment>].self, forKey: .comments).compactMap(\.value)
+        sent = try? container.decodeIfPresent([String: HostReviewSent].self, forKey: .sent)
+    }
+}
+
+/// The agent a review comment was last sent to (`ReviewFeedbackHandoff`).
+public struct HostReviewSent: Codable, Equatable, Sendable {
+    public var title: String
+    public var at: Date
+
+    public init(title: String, at: Date) {
+        self.title = title
+        self.at = at
+    }
+
+    /// Each comment's latest delivered handoff; nil when there is none.
+    public static func latest(in handoffs: [ReviewFeedbackHandoff]) -> [String: HostReviewSent]? {
+        var sent: [String: HostReviewSent] = [:]
+        for handoff in handoffs.sorted(by: { $0.createdAt < $1.createdAt }) where handoff.status != .failed {
+            for id in handoff.commentIDs {
+                sent[id] = HostReviewSent(title: handoff.target.title, at: handoff.createdAt)
+            }
+        }
+        return sent.isEmpty ? nil : sent
     }
 }
 

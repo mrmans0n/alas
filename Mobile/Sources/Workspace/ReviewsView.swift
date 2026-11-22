@@ -185,7 +185,7 @@ private struct ReviewDetailView: View {
             ForEach(files, id: \.key) { path, comments in
                 Section {
                     ForEach(comments.sorted(by: Self.order)) { comment in
-                        CommentRow(comment: comment)
+                        CommentRow(comment: comment, sent: review.sent[comment.id])
                             .swipeActions(edge: .leading) {
                                 if comment.isOpen {
                                     Button("Resolve", systemImage: "checkmark") { change(.resolve(commentID: comment.id)) }.tint(.green)
@@ -324,6 +324,7 @@ private extension RemoteReviewComment {
 
 private struct CommentRow: View {
     let comment: RemoteReviewComment
+    let sent: RemoteReviewSent?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -348,6 +349,7 @@ private struct CommentRow: View {
                 .padding(.leading, 12)
                 .overlay(alignment: .leading) { Rectangle().fill(.quaternary).frame(width: 2) }
             }
+            if let sent { SentLine(sent: sent) }
         }
         .padding(.vertical, 4)
     }

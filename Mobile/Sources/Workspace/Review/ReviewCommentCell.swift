@@ -1,3 +1,4 @@
+import AlasRemoteKit
 import SwiftUI
 import UIKit
 
@@ -9,10 +10,11 @@ final class ReviewCommentCell: UICollectionViewCell {
         let body: String
     }
 
-    /// `badges`: its state and "Outdated", as they apply; `dimmed` for a closed comment.
-    func configure(author: String, location: String, body: String, badges: [String], replies: [Reply], dimmed: Bool) {
+    /// `badges`: its state and "Outdated", as they apply; `dimmed` for a closed comment; `sent`: the agent it last went to.
+    func configure(author: String, location: String, body: String, badges: [String], replies: [Reply], dimmed: Bool,
+                   sent: RemoteReviewSent? = nil) {
         contentConfiguration = UIHostingConfiguration {
-            Bubble(author: author, location: location, text: body, badges: badges, replies: replies, dimmed: dimmed)
+            Bubble(author: author, location: location, text: body, badges: badges, replies: replies, dimmed: dimmed, sent: sent)
         }
         .margins(.horizontal, 12)
         .margins(.vertical, 4)
@@ -25,6 +27,7 @@ final class ReviewCommentCell: UICollectionViewCell {
         let badges: [String]
         let replies: [Reply]
         let dimmed: Bool
+        let sent: RemoteReviewSent?
 
         var body: some View {
             VStack(alignment: .leading, spacing: 6) {
@@ -49,6 +52,7 @@ final class ReviewCommentCell: UICollectionViewCell {
                     .padding(.leading, 12)
                     .overlay(alignment: .leading) { Rectangle().fill(.quaternary).frame(width: 2) }
                 }
+                if let sent { SentLine(sent: sent) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
@@ -60,5 +64,17 @@ final class ReviewCommentCell: UICollectionViewCell {
             (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
                 ?? AttributedString(text)
         }
+    }
+}
+
+/// Where a review comment last went: "Sent to Claude · 5 min. ago".
+struct SentLine: View {
+    let sent: RemoteReviewSent
+
+    var body: some View {
+        Text("Sent to \(sent.title) · \(sent.at, format: .relative(presentation: .named, unitsStyle: .abbreviated))")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
     }
 }
