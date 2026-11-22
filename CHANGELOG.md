@@ -24,9 +24,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Read, reply to, resolve, and reopen GitHub or GitLab review threads from iPhone when the provider and signed-in account allow it ([#2661](https://github.com/mrmans0n/alas/pull/2661)).
 - Submit eligible pull or merge request reviews from iPhone with comments, approvals, or change requests ([#2665](https://github.com/mrmans0n/alas/pull/2665)).
 - Review a change in one continuous scroll on iPhone and iPad, with a file strip, sticky headers, viewed marks, folding, and lazy-loaded diffs ([#2669](https://github.com/mrmans0n/alas/pull/2669)).
+- Comment on a line or range while reviewing local changes on iPhone and iPad, using tap or drag selection, with comments shown beneath their lines ([#2674](https://github.com/mrmans0n/alas/pull/2674)).
 - Render `chart` fences natively on Mac, iPhone, and iPad, with bar, horizontal-bar, and line charts plus values on hover or tap ([#2671](https://github.com/mrmans0n/alas/pull/2671), [#2673](https://github.com/mrmans0n/alas/pull/2673)).
 - Render GitHub-style notes, tips, and warnings as native transcript alerts on Mac, iPhone, and iPad ([#2667](https://github.com/mrmans0n/alas/pull/2667)).
-- Show a finished turn's file changes and line totals beneath its answer on Mac, iPhone, and iPad, with optional on-device captions on supported Macs ([#2670](https://github.com/mrmans0n/alas/pull/2670), [#2672](https://github.com/mrmans0n/alas/pull/2672)).
+- After a finished turn makes two or more edits, show its files and line totals beneath the answer on Mac, iPhone, and iPad, with optional on-device captions on supported Macs ([#2670](https://github.com/mrmans0n/alas/pull/2670), [#2672](https://github.com/mrmans0n/alas/pull/2672)).
 - Keep suggested prompts in a compact inline Use pill that leaves more room for iPhone and iPad composer controls ([#2660](https://github.com/mrmans0n/alas/pull/2660)).
 
 ### 🐛 Fixes
