@@ -106,6 +106,33 @@ struct RemoteWorkspaceRulesTests {
         #expect(RemoteTranscriptLink.route(try #require(URL(string: link)), worktreeRoot: "/wt/a") == expected)
     }
 
+    /// A checkout session's link: root-relative, then the member that holds it.
+    @Test(arguments: [
+        ("/r/app/src/a.swift", "app", "src/a.swift"),
+        ("app/src/a.swift:4", "app", "src/a.swift"),
+        ("./lib/b.md", "lib", "b.md"),
+        ("/r/notes.txt", nil, nil),
+        ("/r/app", nil, nil),
+        ("app/../../etc/passwd", nil, nil),
+    ] as [(String, String?, String?)])
+    func checkoutLinkResolvesToMemberFile(link: String, member: String?, file: String?) throws {
+        let checkout = RemoteSessionCheckout(
+            id: "c", name: "W", branch: "b", rootPath: "/r",
+            members: ["app", "lib"].map { name in
+                RemoteSessionCheckout.Member(
+                    id: name, name: name, projectId: name, worktreeId: name,
+                    worktree: RemoteWorktreeSummary(
+                        projectName: name, worktreeName: "b", branch: "b", path: "/r/\(name)", metricsAvailable: false,
+                        comparisonRef: nil, commitCount: 0, changedFileCount: 0, addedLines: 0, deletedLines: 0, conflictCount: 0))
+            })
+        var match: (member: RemoteSessionCheckout.Member, relativePath: String)?
+        if case .file(let path) = RemoteTranscriptLink.route(try #require(URL(string: link)), worktreeRoot: "/r") {
+            match = checkout.memberFile(atRootRelative: path)
+        }
+        #expect(match?.member.id == member)
+        #expect(match?.relativePath == file)
+    }
+
     /// A previewed document's image, taken from the document's folder.
     @Test(arguments: [
         ("images/a.png", "docs/README.md", "docs/images/a.png"),

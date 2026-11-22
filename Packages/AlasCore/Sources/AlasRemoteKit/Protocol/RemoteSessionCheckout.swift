@@ -55,4 +55,12 @@ public struct RemoteSessionCheckout: Codable, Equatable, Sendable {
             }
             .max { $0.member.worktree.path.count < $1.member.worktree.path.count }
     }
+
+    /// The member and member-relative file for `path`, a file relative to the checkout's root, which is
+    /// where the agent's relative links start. Nil when no member holds it, or it names a member's root.
+    public func memberFile(atRootRelative path: String) -> (member: Member, relativePath: String)? {
+        let root = rootPath.hasSuffix("/") ? String(rootPath.dropLast()) : rootPath
+        guard let match = member(containing: root + "/" + path), !match.relativePath.isEmpty else { return nil }
+        return match
+    }
 }
