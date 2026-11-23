@@ -465,7 +465,7 @@ function handle(msg) {
     case "fileDiffFailed":
       if (msg.sessionId !== currentSession) break;
       if (isActiveDiff(msg.path, msg.stage || null)) {
-        $("diff-rows").innerHTML = "";
+        clearDiff();
         $("diff-rows").append(el("p", "placeholder-card", fileAccessMessage(msg.reason, null)));
       }
       break;
@@ -865,7 +865,7 @@ function resetChangesAndFilesDOM() {
   $("changes-error").textContent = ""; $("changes-error").classList.add("hidden");
   $("file-list").innerHTML = "";
   $("file-error").textContent = ""; $("file-error").classList.add("hidden");
-  $("diff-rows").innerHTML = ""; $("diff-path").textContent = "";
+  clearDiff(); $("diff-path").textContent = "";
   $("file-view-body").innerHTML = ""; $("file-view-path").textContent = "";
 }
 
@@ -1105,12 +1105,13 @@ function openDiff(path, stage = null) {
   $("changes-header").classList.add("hidden");
   $("diff-view").classList.remove("hidden");
   $("diff-path").textContent = path;
-  $("diff-rows").innerHTML = "";
+  clearDiff();
   send({ type: "fileDiff", sessionId: currentSession, path, stage });
 }
 
 function closeDetailLevel() {
   detailStack.pop();
+  clearDiff();
   $("diff-view").classList.add("hidden");
   $("file-view").classList.add("hidden");
   showTabListLevel();
@@ -1174,15 +1175,59 @@ function isActiveDiff(path, stage) {
   return top && top.tab === "changes" && top.path === path && top.stage === stage;
 }
 
-function renderDiff(path, stage, hunks, truncated, metadataNote) {
+// @pierre/diffs (diffs/, built by scripts/remote-web-bundle) loads the first time a diff opens.
+// Without it the diff shows as plain rows.
+let diffsModule = null;
+function loadDiffs() {
+  diffsModule = diffsModule || import("/diffs/diffs.js?v=1").catch(error => {
+    diffsModule = null;
+    throw error;
+  });
+  return diffsModule;
+}
+
+let diffView = null;   // the FileDiff showing in #diff-rows
+let diffRender = 0;    // bumped whenever #diff-rows changes, so a late load knows it is stale
+
+function clearDiff() {
+  diffRender += 1;
+  if (diffView) diffView.cleanUp();
+  diffView = null;
+  $("diff-rows").innerHTML = "";
+}
+
+async function renderDiff(path, stage, hunks, truncated, metadataNote) {
   if (!isActiveDiff(path, stage)) return;
+  clearDiff();
   const container = $("diff-rows");
-  container.innerHTML = "";
+  const notice = RemoteChangesView.truncationNotice(truncated, "diff");
   const metadataNotice = RemoteChangesView.metadataOnlyNotice(hunks, metadataNote);
   if (metadataNotice) {
     container.append(el("p", "placeholder-card", metadataNotice));
     return;
   }
+  const current = diffRender;
+  try {
+    const { FileDiff, getSingularPatch } = await loadDiffs();
+    if (current !== diffRender) return;
+    const fileDiff = getSingularPatch(RemoteChangesView.unifiedPatch(path, hunks));
+    diffView = new FileDiff({
+      theme: "pierre-dark", themeType: "dark", disableFileHeader: true, overflow: "scroll",
+      diffStyle: wideLayout.matches ? "split" : "unified",
+    });
+    const holder = el("div", "diff-rich");
+    container.append(holder);
+    diffView.render({ fileDiff, containerWrapper: holder });
+  } catch (error) {
+    if (current !== diffRender) return;
+    console.warn("Showing a plain diff:", error);
+    clearDiff();
+    renderPlainDiff(container, hunks);
+  }
+  if (notice) container.append(el("p", "placeholder-card", notice));
+}
+
+function renderPlainDiff(container, hunks) {
   for (const row of RemoteChangesView.diffRows(hunks)) {
     if (row.type === "hunk") {
       container.append(el("div", "diff-hunk", row.text));
@@ -1198,8 +1243,6 @@ function renderDiff(path, stage, hunks, truncated, metadataNote) {
     }
     container.appendChild(line);
   }
-  const notice = RemoteChangesView.truncationNotice(truncated, "diff");
-  if (notice) container.append(el("p", "placeholder-card", notice));
 }
 
 function renderFileTree() {

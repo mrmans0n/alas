@@ -148,6 +148,24 @@ function toolDiffText(content, diffs) {
   return diffs.map((diff, index) => "--- " + diff.path + "\n" + hunks[index]).join("\n\n");
 }
 
+// The host's hunks as a unified patch, for @pierre/diffs. Each header's counts come from its
+// lines rather than the host's header, so a hunk cut short by truncation still parses.
+function unifiedPatch(path, hunks) {
+  const out = ["--- " + path, "+++ " + path];
+  for (const hunk of hunks || []) {
+    const lines = hunk.lines || [];
+    const oldCount = lines.filter(line => line.kind !== "add").length;
+    const newCount = lines.filter(line => line.kind !== "delete").length;
+    const section = String(hunk.header || "").replace(/^@@[^@]*@@/, "");
+    out.push("@@ -" + hunk.oldStart + "," + oldCount + " +" + hunk.newStart + "," + newCount + " @@" + section);
+    for (const line of lines) {
+      out.push((line.kind === "add" ? "+" : line.kind === "delete" ? "-" : " ") + line.text);
+      if (line.noTrailingNewline) out.push("\\ No newline at end of file");
+    }
+  }
+  return out.join("\n") + "\n";
+}
+
 globalThis.RemoteChangesView = {
   sortFiles,
   splitPath,
@@ -159,5 +177,6 @@ globalThis.RemoteChangesView = {
   diffRows,
   truncationNotice,
   metadataOnlyNotice,
-  toolDiffText
+  toolDiffText,
+  unifiedPatch
 };

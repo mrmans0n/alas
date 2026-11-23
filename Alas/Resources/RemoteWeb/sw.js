@@ -1,4 +1,4 @@
-const CACHE_NAME = "alas-remote-shell-v102";
+const CACHE_NAME = "alas-remote-shell-v103";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
@@ -6,7 +6,7 @@ const SHELL_ASSETS = [
   "/repo-filter.js?v=3",
   "/session-ordering.js?v=3",
   "/worktree-creation.js?v=2",
-  "/changes-view.js?v=9",
+  "/changes-view.js?v=10",
   "/file-browser.js?v=3",
   "/hub-registry.js?v=3",
   "/hub-links.js?v=2",
@@ -19,7 +19,7 @@ const SHELL_ASSETS = [
   "/xterm.min.js?v=1",
   "/xterm-addon-fit.min.js?v=1",
   "/xterm.css?v=1",
-  "/app.js?v=113",
+  "/app.js?v=114",
   "/marked.min.js?v=28",
   "/purify.min.js?v=28",
   "/manifest.webmanifest",
@@ -75,6 +75,18 @@ self.addEventListener("fetch", (event) => {
   if (request.mode === "navigate") {
     event.respondWith(
       fetch(request).catch(() => caches.match("/index.html"))
+    );
+    return;
+  }
+
+  // The diff bundle loads on demand: diffs.js and the grammars and themes it imports. Each is
+  // cached the first time it loads, so a cached shell keeps showing diffs it already could.
+  if (url.pathname.startsWith("/diffs/")) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) => cache.match(request).then((cached) => cached || fetch(request).then((response) => {
+        if (response.ok) cache.put(request, response.clone());
+        return response;
+      })))
     );
     return;
   }

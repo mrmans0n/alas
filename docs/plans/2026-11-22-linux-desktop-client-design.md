@@ -57,11 +57,14 @@ In order, stopping where it is good enough:
 
 ## Decisions to make
 
-- **Build step.** Today the client vendors minified libraries (`marked`,
-  `purify`) and has no bundler. xterm.js can be vendored the same way.
-  `@pierre/diffs` is ESM and pulls in Shiki, which likely needs a bundler.
-  Adding one (esbuild, output committed or built in CI) is the main structural
-  change this plan would make; it should be its own PR.
+- **Build step.** The client vendors minified libraries (`marked`, `purify`,
+  xterm.js) and has no build step of its own. `@pierre/diffs` is ESM and pulls
+  in Shiki, so `scripts/remote-web-bundle` bundles it with esbuild into
+  `RemoteWeb/diffs`: a module the Changes view imports on first use, plus
+  grammar and theme chunks loaded on demand. The output is committed, so the
+  app, the Linux tarball and `alas-host` need no Node; CI rebuilds it and
+  fails if it differs. The bundle keeps about 35 grammars and Pierre's themes;
+  other languages show as plain text.
 - **Wire drift.** The JavaScript client decodes the same messages as
   `AlasRemoteKit`. As it takes on more surface, shared JSON wire fixtures
   decoded by both the Swift and the JavaScript tests would catch drift.
