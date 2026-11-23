@@ -4,6 +4,6 @@
   "type": "module",
   "dependencies": {
     "@pierre/diffs": "1.7.1",
-    "esbuild": "0.25.12"
+    "esbuild": "0.28.2"
   }
 }
