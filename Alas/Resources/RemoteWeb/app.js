@@ -933,9 +933,9 @@ function showTabListLevel() {
   $("file-list").classList.remove("hidden");
 }
 
-function showTab(name) {
+function showTab(name, keepDocument = false) {
   activeTab = name;
-  if (!wideLayout.matches) closeDocument();   // wide: an open diff or file keeps its own tab in the middle
+  if (!wideLayout.matches && !keepDocument) closeDocument();   // wide: an open diff or file keeps its own tab in the middle
   for (const [id, tab] of [["tab-chat", "chat"], ["tab-changes", "changes"], ["tab-files", "files"], ["tab-terminal", "terminal"]]) {
     $(id).classList.toggle("is-active", tab === name);
     $(id).setAttribute("aria-selected", String(tab === name));
@@ -963,6 +963,7 @@ function closeDocument() {
   $("diff-view").classList.add("hidden");
   $("file-view").classList.add("hidden");
   showTabListLevel();
+  if (centerTab === "document") setCenter(terminalTitle ? "terminal" : "chat");
 }
 
 function isFolderSummary(summary) {
@@ -1533,8 +1534,11 @@ function placeCenterViews() {
     const parent = wideLayout.matches ? $("center-detail") : $(home);
     if ($(id).parentElement !== parent) parent.appendChild($(id));
   }
-  if (!wideLayout.matches) setCenter("chat");
-  else if (detailStack.length) setCenter("document");
+  if (!wideLayout.matches) {
+    // A phone shows one section: the one holding the open document, which a tab switch would close.
+    if (detailStack.length) showTab(detailStack[detailStack.length - 1].tab, true);
+    setCenter("chat");
+  } else if (detailStack.length) setCenter("document");
   else renderCenterTabs();
 }
 
