@@ -132,6 +132,8 @@ public enum MarkdownDetails: Sendable {
         var segments: [Segment] = []
         var prose: [String] = []
         var fence: Fence?
+        // Inside an HTML comment that spans lines, which cmark hides whole, tags included.
+        var inComment = false
         var i = 0
         func flush() {
             if !prose.isEmpty { segments.append(.markdown(prose.joined(separator: "\n"))) }
@@ -139,10 +141,15 @@ public enum MarkdownDetails: Sendable {
         }
         while i < lines.count {
             let line = lines[i]
-            if let current = fence {
+            if inComment {
+                if line.contains("-->") { inComment = false }
+            } else if let current = fence {
                 if current.isClosed(by: line) { fence = nil }
             } else if let opened = Fence(opening: line) {
                 fence = opened
+            } else if !isIndentedCode(line), let comment = line.range(of: "<!--"),
+                      line[..<comment.lowerBound].allSatisfy({ $0 == " " }) {
+                inComment = !line[comment.upperBound...].contains("-->")
             } else if let found = section(in: lines, at: i) {
                 flush()
                 segments.append(.details(found.section))

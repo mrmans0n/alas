@@ -183,4 +183,10 @@ struct ACPMarkdownParserTests {
         let segments = MarkdownDetails.split("[outside][ref]\n\n<details>\n\n[ref]: https://example.com\n\n</details>")
         #expect(segments.first == .markdown("[outside][ref]\n\n\n[ref]: https://example.com"))
     }
+
+    @Test
+    func detailsSplitLeavesSectionsInHTMLCommentsToCmark() {
+        let text = "<!--\n<details>\n<summary>Draft</summary>\n\nnotes\n</details>\n-->\nVisible"
+        #expect(MarkdownDetails.split(text) == [.markdown(text)])
+    }
 }
