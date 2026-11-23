@@ -20,6 +20,8 @@ final class ACPTurnCaptionStore: ObservableObject {
 
     /// Read on every request, so a card asks again once captions turn back on.
     private let isEnabled: () -> Bool
+    /// Whether a local model can write one; saved captions show without it.
+    private let canGenerate: () -> Bool
     private let generate: (ACPTurnCaptionPolicy.Input) async -> String?
     private let load: @MainActor (String) async -> [StoredTurnCaption]
     private let save: @MainActor (String, StoredTurnCaption) async -> Void
@@ -44,11 +46,13 @@ final class ACPTurnCaptionStore: ObservableObject {
 
     init(
         isEnabled: @escaping () -> Bool,
+        canGenerate: @escaping () -> Bool = { true },
         generate: @escaping (ACPTurnCaptionPolicy.Input) async -> String?,
         load: @escaping @MainActor (String) async -> [StoredTurnCaption] = { _ in [] },
         save: @escaping @MainActor (String, StoredTurnCaption) async -> Void = { _, _ in }
     ) {
         self.isEnabled = isEnabled
+        self.canGenerate = canGenerate
         self.generate = generate
         self.load = load
         self.save = save
@@ -63,7 +67,7 @@ final class ACPTurnCaptionStore: ObservableObject {
             if first { loadSaved(sessionId: key.sessionId) }
             return
         }
-        guard running != key, !waiting.contains(where: { $0.key == key }),
+        guard canGenerate(), running != key, !waiting.contains(where: { $0.key == key }),
               attempts[key, default: 0] < Self.maxAttempts, let input = input()
         else { return }
         waiting.append((key, input))

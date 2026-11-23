@@ -123,4 +123,20 @@ struct ACPTurnCaptionStoreTests {
         #expect(model.calls == ["2"])
         #expect(disk.loads == ["s"])
     }
+
+    @Test
+    func savedCaptionsShowWhenNoModelCanWriteNewOnes() async {
+        let model = FakeModel()
+        let disk = FakeDisk(saved: [.init(answerIndex: 1, filesDigest: "d", caption: "Saved")])
+        let store = ACPTurnCaptionStore(
+            isEnabled: { true }, canGenerate: { false }, generate: { await model.generate($0) },
+            load: { disk.load($0) }, save: { disk.save($1) })
+        store.request(key: key(2)) { self.input(2) }
+        store.request(key: key(1)) { self.input(1) }
+
+        for await captions in store.$captions.values where captions[key(1)] != nil { break }
+        #expect(store.captions[key(1)] == "Saved")
+        #expect(store.captions[key(2)] == nil)
+        #expect(model.calls.isEmpty)
+    }
 }

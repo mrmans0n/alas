@@ -3,12 +3,12 @@ import Foundation
 extension AppState {
     /// Captions borrow the local model consent commit message drafts use: Apple Intelligence when
     /// the system offers it, else the downloaded model under next-prompt suggestions or session summaries.
+    /// Saved captions show whenever the setting is on, with or without a model.
     func makeTurnCaptionStore() -> ACPTurnCaptionStore {
         ACPTurnCaptionStore(
-            isEnabled: { [weak self] in
-                guard let self else { return false }
-                return self.config.turnCaptionsEnabled
-                    && (LocalTextAppleIntelligence.isAvailable || self.commitMessageMLXSuggestionsAvailable)
+            isEnabled: { [weak self] in self?.config.turnCaptionsEnabled ?? false },
+            canGenerate: { [weak self] in
+                LocalTextAppleIntelligence.isAvailable || self?.commitMessageMLXSuggestionsAvailable == true
             },
             generate: { [weak self] input in
                 guard let self else { return nil }
