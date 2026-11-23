@@ -12,7 +12,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas</title>
-  <link rel="stylesheet" href="/style.css?v=61" />
+  <link rel="stylesheet" href="/style.css?v=63" />
 </head>
 <body>
   <header id="bar">
@@ -42,6 +42,10 @@
     <button id="tab-files" class="tab" role="tab" type="button" aria-selected="false">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4.5a1 1 0 011-1h3.5l1.5 1.5h5a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1z"/></svg>
       <span>Files</span>
+    </button>
+    <button id="tab-terminal" class="tab hidden" role="tab" type="button" aria-selected="false">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 3.5h11v9h-11zM4.5 6.5l2 1.5-2 1.5M8 10h3"/></svg>
+      <span>Terminal</span>
     </button>
   </div>
   <main>
@@ -119,6 +123,28 @@
         <p id="file-view-path" class="detail-path"></p>
         <div id="file-view-body"></div>
       </div>
+    </section>
+    <section id="terminal" class="view hidden">
+      <div id="terminal-list-level">
+        <div id="terminal-header">
+          <span>Terminals</span>
+          <button id="terminal-new" type="button">New terminal</button>
+        </div>
+        <p id="terminal-error" class="sheet-error hidden" role="alert"></p>
+        <div id="terminal-list"></div>
+      </div>
+      <div id="terminal-view" class="hidden">
+        <div id="terminal-bar">
+          <button id="terminal-back" type="button" aria-label="Back to terminals">‹</button>
+          <span id="terminal-title"></span>
+          <button id="terminal-control" type="button" class="hidden">Take control</button>
+        </div>
+        <p id="terminal-status" class="term-note hidden"></p>
+        <div id="terminal-screen"></div>
+      </div>
+    </section>
+    <section id="empty-detail" class="view" aria-hidden="true">
+      <p>Select a session</p>
     </section>
     <section id="settings" class="view hidden">
       <h1>Settings</h1>
@@ -309,9 +335,11 @@
   <script src="/hub-registry.js?v=3"></script>
   <script src="/hub-links.js?v=2"></script>
   <script src="/visual-aid.js?v=8"></script>
-  <script src="/transcript-markdown.js?v=1"></script>
+  <script src="/transcript-markdown.js?v=2"></script>
   <script src="/turn-changes.js?v=1"></script>
-  <script src="/app.js?v=112"></script>
+  <script src="/peer-console.js?v=1"></script>
+  <script src="/terminals.js?v=2"></script>
+  <script src="/app.js?v=114"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

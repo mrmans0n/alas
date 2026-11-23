@@ -1378,37 +1378,43 @@ final class NativePeerSessions {
     }
     func takeOver() { routeWhileOnline { .takeOver(sessionId: $0) } }
 
-    func beginNewSession(peer: NativePeerGroup, repo: NativePeerRepoGroup) {
+    func beginNewSession(
+        peer: NativePeerGroup, repo: NativePeerRepoGroup, fixedWorktree: (id: String, projectId: String)? = nil
+    ) {
         guard downstream != nil, peer.state.carriesSessions else { return }
         pendingSessionId = nil
         newSession = NativePeerNewSession(
-            serverId: peer.serverId, peerName: peer.name, projectId: repo.projectId, repoName: repo.name
+            serverId: peer.serverId, peerName: peer.name, projectId: fixedWorktree?.projectId ?? repo.projectId,
+            repoName: repo.name, fixedWorktreeId: fixedWorktree?.id
         )
         requestNewSessionOptions()
     }
 
-    /// The peer and repo a new session in `selection` belongs to. Nil while
-    /// the peer is offline or for a worktree outside any of its projects.
-    func newSessionTarget(in selection: NativePeerWorktreeSelection) -> (peer: NativePeerGroup, repo: NativePeerRepoGroup)? {
+    /// A worktree's launch target, with the sidebar group kept for its display name.
+    func newSessionTarget(
+        in selection: NativePeerWorktreeSelection
+    ) -> (peer: NativePeerGroup, repo: NativePeerRepoGroup, worktree: (id: String, projectId: String))? {
         guard let peer = snapshot.groups.first(where: { $0.serverId == selection.serverId }),
-              peer.state.carriesSessions,
-              let repo = peer.repos(ordering: .manual).first(where: { repo in
-                  repo.worktrees.contains { $0.id == selection.worktreeId }
-              }),
-              repo.projectId != nil
+              peer.state.carriesSessions
         else { return nil }
-        return (peer, repo)
+        for repo in peer.repos(ordering: .manual) {
+            guard let repoProjectId = repo.projectId,
+                  let worktree = repo.worktrees.first(where: { $0.id == selection.worktreeId }),
+                  let worktreeId = worktree.peerWorktreeId
+            else { continue }
+            return (peer, repo, (worktreeId, worktree.owningProjectId ?? repoProjectId))
+        }
+        return nil
     }
 
-    /// Opens the new-session sheet on the selected worktree's repo, which
-    /// preselects that worktree.
     func beginNewSession(in selection: NativePeerWorktreeSelection) {
         guard let target = newSessionTarget(in: selection) else { return }
-        beginNewSession(peer: target.peer, repo: target.repo)
+        beginNewSession(peer: target.peer, repo: target.repo, fixedWorktree: target.worktree)
     }
 
-    func createNewSession(worktreeId: String, agentId: String, modelId: String?, effortId: String?) {
-        guard let request = newSession, request.phase != .creating, let downstream else { return }
+    func createNewSession(worktreeId: String?, agentId: String, modelId: String?, effortId: String?) {
+        guard let request = newSession, request.phase != .creating, let downstream,
+              let worktreeId = request.fixedWorktreeId ?? worktreeId else { return }
         newSession?.phase = .creating
         let token = request.id
         let sent = federation.request(
@@ -1421,8 +1427,8 @@ final class NativePeerSessions {
     /// Asks the peer to create a worktree from `base` and start the session
     /// in it, as one request.
     func createNewWorktreeSession(base: String, branch: String, agentId: String, modelId: String?, effortId: String?) {
-        guard let request = newSession, request.phase != .creating, let projectId = request.projectId,
-              downstream != nil else { return }
+        guard let request = newSession, request.phase != .creating, request.fixedWorktreeId == nil,
+              let projectId = request.projectId, downstream != nil else { return }
         newSession?.phase = .creating
         requestWorktreeSession(
             consent: supportsRepoHookApproval(request.serverId) ? .ask : nil, token: request.id
@@ -1504,12 +1510,17 @@ final class NativePeerSessions {
     private func requestNewSessionOptions() {
         guard let request = newSession, let downstream else { return }
         let token = request.id
-        var messages: [RemoteClientMessage] = [.listWorktrees, .listAgents]
-        if let projectId = request.projectId { messages.append(.listBranches(projectId: projectId)) }
-        let sent = messages.allSatisfy { message in
+        func send(_ message: RemoteClientMessage) -> Bool {
             federation.request(message, toPeer: request.serverId, from: downstream) { [weak self] reply in
                 self?.applyNewSessionReply(reply, token: token)
             }
+        }
+        let sent: Bool
+        if request.fixedWorktreeId != nil {
+            sent = send(.listAgents)
+        } else {
+            sent = send(.listWorktrees) && send(.listAgents)
+                && (request.projectId.map { send(.listBranches(projectId: $0)) } ?? true)
         }
         if !sent { newSession?.phase = .failed(Self.peerUnavailableMessage) }
     }

@@ -34,7 +34,7 @@ struct SidebarHeaderViewTests {
     }
 
     @Test func sortMenuExposesAChromelessAccessibilityButton() throws {
-        let view = WorktreeSortMenu(selection: .lastUpdateDesc, onSelect: { _ in })
+        let view = WorktreeSortMenu(selection: .lastUpdateDesc, onSelect: { _ in }, groupByMachine: .constant(false))
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: AnyView(view))
         controller.view.frame = NSRect(x: 0, y: 0, width: 40, height: 30)

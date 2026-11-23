@@ -7,6 +7,8 @@ import UIKit
 struct ReviewCollectionView: UIViewControllerRepresentable {
     let document: ReviewDocument
     let wraps: Bool
+    /// The action bar's height: the list runs under it but its last line scrolls clear of it.
+    let bottomInset: CGFloat
 
     func makeUIViewController(context: Context) -> ReviewCollectionController {
         ReviewCollectionController(document: document)
@@ -15,6 +17,7 @@ struct ReviewCollectionView: UIViewControllerRepresentable {
     /// Reads the document's state, so SwiftUI calls this again whenever it changes.
     func updateUIViewController(_ controller: ReviewCollectionController, context: Context) {
         controller.apply(wraps: wraps)
+        controller.setBottomInset(bottomInset)
     }
 }
 
@@ -34,6 +37,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
         let folded: Bool
         let hasSpans: Bool
         let comments: [RemoteReviewComment]
+        /// The comments', so a send redraws them.
+        let sent: [RemoteReviewSent?]
         let threads: [RemoteProviderThread]
         let selection: ReviewSelection?
     }
@@ -148,7 +153,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             if !comment.isOpen { badges.append(comment.state.capitalized) }
             if outdated.contains(cid) { badges.append("Outdated") }
             cell.configure(author: comment.author, location: Self.location(moved[cid] ?? comment.anchor), body: comment.body, badges: badges,
-                           replies: comment.replies.map { .init(author: $0.author, body: $0.body) }, dimmed: !comment.isOpen)
+                           replies: comment.replies.map { .init(author: $0.author, body: $0.body) }, dimmed: !comment.isOpen,
+                           sent: document.sent[cid])
         }
         let note = UICollectionView.CellRegistration<NoteCell, ReviewRow> { cell, _, row in
             switch row {
@@ -231,6 +237,12 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
 
     // MARK: Applying the document
 
+    func setBottomInset(_ inset: CGFloat) {
+        guard collectionView.contentInset.bottom != inset else { return }
+        collectionView.contentInset.bottom = inset
+        collectionView.verticalScrollIndicatorInsets.bottom = inset
+    }
+
     func apply(wraps: Bool) {
         let entries = document.entries
         // Headers read the marks; reading them here asks SwiftUI to call again when they change.
@@ -256,7 +268,8 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
             let threads = threadsByPath[id.path] ?? []
             let state = Drawn(content: entry.content, folded: document.folded.contains(id),
                               hasSpans: document.spanKey(entry).map { document.spans[$0] != nil } ?? false,
-                              comments: comments, threads: threads, selection: selection?.entry == id ? selection : nil)
+                              comments: comments, sent: comments.map { document.sent[$0.id] }, threads: threads,
+                              selection: selection?.entry == id ? selection : nil)
             guard drawn[id] != state else { continue }
             if drawn[id] != nil { redrawn.append(id) }
             if drawn[id]?.content != state.content {

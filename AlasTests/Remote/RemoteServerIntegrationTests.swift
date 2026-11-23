@@ -377,7 +377,7 @@ struct RemoteServerIntegrationTests {
 
     @Test func helloIsTheFirstFrameAfterUpgrade() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
-        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone", kind: .phone)
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
@@ -398,7 +398,7 @@ struct RemoteServerIntegrationTests {
 
     @Test func helloCarriesFederationEnabled() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
-        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone", kind: .phone)
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),

@@ -26,6 +26,8 @@ public struct RemoteNewSession: Identifiable, Equatable {
     public let peerName: String
     public let projectId: String?
     public let repoName: String
+    /// Set when launched from a worktree instead of a project.
+    public let fixedWorktreeId: String?
     public var worktrees: [RemoteWorktreeOption]?
     public var agents: [RemoteAgentOption]?
     public var branches: Branches?
@@ -34,14 +36,15 @@ public struct RemoteNewSession: Identifiable, Equatable {
     /// sheet can retry in that worktree instead of creating another.
     public var recoveredWorktreeId: String?
 
-    public init(serverId: String, peerName: String, projectId: String?, repoName: String) {
+    public init(serverId: String, peerName: String, projectId: String?, repoName: String, fixedWorktreeId: String? = nil) {
         self.serverId = serverId
         self.peerName = peerName
         self.projectId = projectId
         self.repoName = repoName
+        self.fixedWorktreeId = fixedWorktreeId
     }
 
-    public var isLoading: Bool { worktrees == nil || agents == nil }
+    public var isLoading: Bool { agents == nil || (fixedWorktreeId == nil && worktrees == nil) }
 
     public var branchNames: [String] {
         if case .loaded(let names, _) = branches { return names }

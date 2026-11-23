@@ -385,11 +385,20 @@ public final class ProjectsManager {
 
     /// Sets the project's worktree VM settings. Off is stored as nil, and so is
     /// a blank guest setup script. Callers persist via `AppState.saveProjects()`.
-    public func setVMSettings(projectId: String, forNewWorktrees: Bool, guestSetupScript: String) {
+    /// Stores only what differs from the repo's `.alas/` defaults, so a later
+    /// change to the repo still reaches a project the user never overrode. A
+    /// blank script inherits the repo's.
+    public func setVMSettings(
+        projectId: String,
+        forNewWorktrees: Bool,
+        guestSetupScript: String,
+        repoForNewWorktrees: Bool? = nil,
+        repoGuestSetupScript: String? = nil
+    ) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
-        projects[idx].vmForNewWorktrees = forNewWorktrees ? true : nil
+        projects[idx].vmForNewWorktrees = forNewWorktrees == (repoForNewWorktrees ?? false) ? nil : forNewWorktrees
         let blank = guestSetupScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        projects[idx].vmGuestSetupScript = blank ? nil : guestSetupScript
+        projects[idx].vmGuestSetupScript = blank || guestSetupScript == repoGuestSetupScript ? nil : guestSetupScript
     }
 
     public func ggWorktreeMode(projectId: String, worktreeId: String) -> GGWorktreeMode {

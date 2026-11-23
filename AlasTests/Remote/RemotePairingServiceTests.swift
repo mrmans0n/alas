@@ -128,6 +128,40 @@ struct RemotePairingServiceTests {
         #expect(RemotePairingService(store: store).device(id: result.deviceId)?.agentAccess == .ask)
     }
 
+    /// The console gate: a browser only once allowed, and never on a
+    /// delegation-only token.
+    @Test(arguments: [
+        (RemoteDeviceKind.browser, false, RemoteDeviceScope.full, false),
+        (.browser, true, .full, true),
+        (.browser, true, .delegation, false),
+        (.phone, false, .full, true),
+        (.alasInstance, false, .delegation, false),
+    ])
+    func consolesAreServedToABrowserOnlyOnceAllowed(kind: RemoteDeviceKind, allowed: Bool, scope: RemoteDeviceScope,
+                                                    expected: Bool) {
+        var device = RemoteDevice(id: "d", name: "n", tokenHash: "h", createdAt: .distantPast, lastSeenAt: nil,
+                                  kind: kind, scope: scope)
+        device.allowsTerminals = allowed
+        #expect(device.servesConsoles == expected)
+    }
+
+    @Test func terminalsAreAllowedPerBrowserAndPersist() throws {
+        let store = InMemoryDeviceStore()
+        let svc = RemotePairingService(store: store)
+        let browser = try svc.redeem(code: svc.beginPairing(), deviceName: "Firefox")
+        let phone = try svc.redeem(code: svc.beginPairing(), deviceName: "Phone", kind: .phone)
+        let browserID = try #require(svc.validate(token: browser))
+        let phoneID = try #require(svc.validate(token: phone))
+        var changed: [String] = []
+        svc.onDeviceTerminalsChanged = { changed.append($0) }
+
+        #expect(svc.device(id: browserID)?.allowsTerminals == false)
+        #expect(svc.setAllowsTerminals(true, deviceId: browserID))
+        #expect(!svc.setAllowsTerminals(true, deviceId: phoneID))
+        #expect(RemotePairingService(store: store).device(id: browserID)?.allowsTerminals == true)
+        #expect(changed == [browserID])
+    }
+
     @Test func cancellingApprovedCounterCodeRevokesItsAlreadyRedeemedGrant() throws {
         let store = InMemoryDeviceStore()
         let service = RemotePairingService(store: store)

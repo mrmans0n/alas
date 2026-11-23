@@ -14,6 +14,7 @@ struct RepoConfigTests {
           "version": 1,
           "icon": { "image": "logo.png" },
           "defaultAgent": "pi",
+          "vmForNewWorktrees": true,
           "mcpServers": [
             { "name": "linear", "transport": { "kind": "http", "url": "https://mcp.linear.app/mcp", "headers": [] } },
             { "name": "db", "transport": { "kind": "stdio", "command": "npx", "args": ["-y", "db-mcp"], "environment": [] } }
@@ -22,6 +23,7 @@ struct RepoConfigTests {
         """))
         #expect(config.icon?.image == "logo.png")
         #expect(config.defaultAgent == "pi")
+        #expect(config.vmForNewWorktrees == true)
         #expect(config.mcpServers.map(\.name) == ["linear", "db"])
         #expect(config.mcpServers[0].id == "repo:linear")
         if case .http(let url, _) = config.mcpServers[0].transport {

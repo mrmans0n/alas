@@ -49,7 +49,8 @@ extension ReviewsAPI {
             throw HostError.notFound(what: "review \(sessionID)")
         }
         if let summary = try list(in: worktree).first(where: { $0.sessionID == sessionID }) {
-            return HostReview(summary: summary, comments: try core.reviewDrafts.load(sessionID: parsed))
+            return HostReview(summary: summary, comments: try core.reviewDrafts.load(sessionID: parsed),
+                              sent: HostReviewSent.latest(in: summary.record.handoffs))
         }
         let localChanges = ReviewSessionTarget.localChanges(worktreeID: worktree.id, repositoryPath: worktree.path, scope: .all)
         guard parsed == localChanges.draftSessionID else { throw HostError.notFound(what: "review \(sessionID)") }

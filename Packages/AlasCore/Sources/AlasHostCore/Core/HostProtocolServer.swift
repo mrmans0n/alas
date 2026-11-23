@@ -410,6 +410,13 @@ public final class HostProtocolConnection {
                 throw HostError.failed(message: "That peer never proved its identity here. Pair it again to allow this.")
             }
             return .done
+        case .listBrowsers:
+            return .browsers(browsers: try localPairing().devices.filter { $0.kind == .browser }.map(HostBrowserSummary.init))
+        case .setBrowserTerminals(let deviceID, let allowed):
+            guard try localPairing().setAllowsTerminals(allowed, deviceId: deviceID) else {
+                throw HostError.notFound(what: "browser \(deviceID)")
+            }
+            return .done
         case .updateHost:
             // A person's request: a paired Mac or the local user, not an agent.
             switch caller {
@@ -565,6 +572,13 @@ public final class HostProtocolConnection {
             throw HostError.failed(message: "This host does not serve Mac peers.")
         }
         return peers
+    }
+
+    /// Paired browsers, which only the local user lists or lets open terminals.
+    private func localPairing() throws -> RemotePairingService {
+        guard case .localUser = caller else { throw HostError.failed(message: "Only the local user manages paired browsers.") }
+        guard let pairing = remotePairing() else { throw HostError.failed(message: Self.remoteOffRefusal) }
+        return pairing
     }
 
     nonisolated static let remoteOffRefusal = "Remote is off on this host. Set host.reachability to lan or tailscale, restart the host, and try again."

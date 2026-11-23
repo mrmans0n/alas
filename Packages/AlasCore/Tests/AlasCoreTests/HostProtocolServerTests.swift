@@ -3007,7 +3007,17 @@ struct HostProtocolServerTests {
             sessionID: nil, projectWorktrees: [worktree]
         )
         #expect(try await Process.git(["checkout", "--", ".alas/scripts/hello.sh"], cwd: repo).exitCode == 0)
-        let sessionID = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all).rawValue
+        let target = ReviewSessionTarget.localChanges(worktreeID: worktree.id, repositoryPath: worktree.path, scope: .all)
+        let sessionID = target.draftSessionID.rawValue
+        // The latest delivered send of a comment marks it; a failed one doesn't.
+        let commentID = try #require(fixture.core.reviewDrafts.load(sessionID: target.draftSessionID).first?.id)
+        let handoffs = [(2, "Codex", ReviewFeedbackHandoffStatus.addressed), (3, "Gemini", .failed), (1, "Claude", .sent)].map {
+            ReviewFeedbackHandoff(id: "h\($0.0)", sessionID: target.id, commentIDs: [commentID],
+                                  target: .newChat(agentID: $0.1, title: $0.1), createdAt: Date(timeIntervalSince1970: Double($0.0)),
+                                  promptRevision: "", status: $0.2)
+        }
+        try fixture.core.reviewSessions.save(ReviewSessionRecord(id: target.id, target: target, handoffs: handoffs,
+                                                                 createdAt: Date(), updatedAt: Date()))
 
         guard case .review(let review) = try await fixture.request(.readReview(worktree: ref, sessionID: sessionID)) else {
             Issue.record("expected the review")
@@ -3015,6 +3025,7 @@ struct HostProtocolServerTests {
         }
         #expect(review.comments.map(\.bodyMarkdown) == ["Why?"])
         #expect(review.summary.openCommentCount == 1)
+        #expect(review.sent == [commentID: HostReviewSent(title: "Codex", at: Date(timeIntervalSince1970: 2))])
         let foreign = ReviewDraftSessionID.localChanges(worktreeID: "other", worktreePath: repo, scope: .all).rawValue
         for unknown in ["nope", foreign] {
             #expect(try await fixture.request(.readReview(worktree: ref, sessionID: unknown))
@@ -3433,6 +3444,33 @@ struct HostProtocolServerTests {
         } else {
             #expect(pairing.device(id: "device-1")?.agentAccess == .off)
             #expect(client.messages.count == 3)
+            #expect(client.messages.allSatisfy { if case .response(_, .failure) = $0 { true } else { false } })
+        }
+    }
+
+    /// Terminals give a shell, so only the local user lets a browser open
+    /// them: never a paired device, which a stolen browser token could use.
+    @Test(arguments: [true, false])
+    func lettingABrowserOpenTerminalsIsOnlyForTheLocalUser(isLocalUser: Bool) async throws {
+        let fixture = try Fixture()
+        let browser = RemoteDevice(id: "browser-1", name: "Firefox", tokenHash: "h", createdAt: .distantPast, lastSeenAt: nil)
+        let pairing = RemotePairingService(store: MemoryDeviceStore(devices: [browser]))
+        fixture.server.remotePairing = pairing
+        let client = Client()
+        let caller: HostCaller = isLocalUser ? .localUser(uid: 501) : .remotePeer(deviceID: "browser-1")
+        let connection = fixture.server.connect(caller: caller, send: client.receive)
+
+        await connection.receive(HostClientMessage(id: 1, request: .setBrowserTerminals(deviceID: "browser-1", allowed: true)))
+        await connection.receive(HostClientMessage(id: 2, request: .listBrowsers))
+
+        #expect(pairing.device(id: "browser-1")?.allowsTerminals == isLocalUser)
+        if isLocalUser {
+            guard case .response(_, .browsers(let listed))? = client.messages.last else {
+                Issue.record("expected browsers, got \(client.messages)")
+                return
+            }
+            #expect(listed.map(\.allowsTerminals) == [true])
+        } else {
             #expect(client.messages.allSatisfy { if case .response(_, .failure) = $0 { true } else { false } })
         }
     }

@@ -159,36 +159,75 @@ struct DeviceDriverPill: View {
     let pulse: Bool
     let onTakeOver: () -> Void
     let onHandBack: () -> Void
+    /// The driving agent, whose logo stands in for its name.
+    var agent: (String) -> AgentDefinition? = { _ in nil }
+    /// Device points to view points, on a screen with a Dynamic Island: the pill then sits on the island,
+    /// black and as tall, as if the island grew.
+    var islandScale: CGFloat?
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// The Dynamic Island of an iPhone 17 Pro, in device points: 37 tall, 14 from the top.
+    /// ponytail: one size for every island; per-model frames if a model's island visibly drifts.
+    private static let islandHeight: CGFloat = 37
+    private static let islandTop: CGFloat = 14
+    private static let minHeight: CGFloat = 22
+
+    /// How far below the screen's top edge the pill goes, centred on the island when it is drawn as one.
+    static func islandTopPadding(scale: CGFloat) -> CGFloat {
+        let island = islandHeight * scale
+        return max(0, islandTop * scale - (max(island, minHeight) - island) / 2)
+    }
 
     var body: some View {
         // The one-line strip, or the same texts and button on two lines when the
         // screen is too narrow for it.
         ViewThatFits(in: .horizontal) {
-            content(stacked: false)
+            content(stacked: false, height: islandScale.map { max(Self.islandHeight * $0, Self.minHeight) } ?? 24)
             content(stacked: true)
         }
         .font(scale.caption.font)
-        .background(.ultraThinMaterial, in: Capsule())
-        .background(theme.color("bg-2").opacity(0.6), in: Capsule())
-        .overlay(Capsule().strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .environment(\.colorScheme, islandScale == nil ? colorScheme : .dark)
+        .background { pillBackground }
         .scaleEffect(pulse ? 1.06 : 1)
         .animation(.easeOut(duration: 0.2), value: pulse)
     }
 
+    @ViewBuilder private var pillBackground: some View {
+        if islandScale != nil {
+            Capsule().fill(Color.black)
+        } else {
+            ZStack {
+                Capsule().fill(theme.color("bg-2").opacity(0.6))
+                Capsule().fill(.ultraThinMaterial)
+                Capsule().strokeBorder(theme.color("line"), lineWidth: 0.5)
+            }
+        }
+    }
+
     @ViewBuilder
-    private func content(stacked: Bool) -> some View {
+    private func content(stacked: Bool, height: CGFloat = 24) -> some View {
+        let fg = islandScale == nil ? theme.color("fg") : Color.white
         let status = HStack(spacing: 6) {
             switch driver {
             case .agent(let sessionID, _, _):
-                Circle().fill(theme.color(DeviceStyle.colorToken(.busy))).frame(width: 6, height: 6)
-                Text(flow.map { "Running \($0.name) · step \($0.step) of \($0.total)" } ?? "\(agentName(sessionID)) is driving")
-                    .foregroundStyle(theme.color("fg"))
-                    .fixedSize()
+                if flow == nil, let agent = agent(sessionID) {
+                    AgentLogoView(agent: agent, size: 14)
+                        .help(agentName(sessionID))
+                    Text("driving")
+                        .foregroundStyle(fg)
+                        .fixedSize()
+                        .accessibilityLabel("\(agentName(sessionID)) is driving")
+                } else {
+                    Circle().fill(theme.color(DeviceStyle.colorToken(.busy))).frame(width: 6, height: 6)
+                    Text(flow.map { "Running \($0.name) · step \($0.step) of \($0.total)" } ?? "\(agentName(sessionID)) is driving")
+                        .foregroundStyle(fg)
+                        .fixedSize()
+                }
             case .user, .idle:
                 Text("You're driving")
-                    .foregroundStyle(theme.color("fg"))
+                    .foregroundStyle(fg)
                     .fixedSize()
                 if let waiting {
                     Text("· \(agentName(waiting)) is waiting")
@@ -220,8 +259,8 @@ struct DeviceDriverPill: View {
                 status
                 action
             }
-            .padding(.horizontal, scale.space[3])
-            .frame(height: 24)
+            .padding(.horizontal, islandScale == nil ? scale.space[3] : height / 2)
+            .frame(height: height)
         }
     }
 }

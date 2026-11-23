@@ -941,3 +941,7 @@ jobs:
       - name: Test remote web turn changes
         if: ${{ !cancelled() }}
         run: bash scripts/tests/remote-web-turn-changes/run.sh
+
+      - name: Test remote web console
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/remote-web-console/run.sh

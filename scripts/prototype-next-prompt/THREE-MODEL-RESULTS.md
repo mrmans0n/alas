@@ -337,3 +337,83 @@ current interactive release checks remain unverified on the locked desktop.
 Untouched Release launch remains blocked by a library-signing Team-ID mismatch.
 See the [current manual evidence](../../docs/manual-test.md#on-device-ai-productionization-verification-2026-10-02).
 
+
+## November 2026 candidates: LFM3-1.7B and Inkling-2-Mini
+
+The September runner was never merged; it survives only on an unpushed local
+`spike/1438-three-model-comparison` branch. `compare_followup.py` here is a
+rebuilt runner, not the frozen one whose digests appear above, so its numbers
+are not comparable with the earlier tables. It reads the shipping
+`optional-followup-v4` system prompt from `NextPromptPolicy.swift`, renders each
+case through the model's own chat template with thinking disabled, and decodes
+greedily with 128 output tokens and an 8,192-token input limit. It parses output
+with the production rules but does not apply the production input/output safety
+policy, so the outputs below are raw model behavior. All models run under one
+runtime, `mlx-vlm` 0.8.0, pinned with the model revisions in
+`comparison-models.json`.
+
+```sh
+uv venv --python 3.13 "$ENV" && VIRTUAL_ENV="$ENV" uv pip install mlx-vlm==0.8.0 huggingface-hub
+"$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py fetch "$PRIVATE_DIR"
+HF_HUB_OFFLINE=1 "$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py run "$PRIVATE_DIR" qwen3
+HF_HUB_OFFLINE=1 "$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py run "$PRIVATE_DIR" lfm3
+HF_HUB_OFFLINE=1 "$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py run "$PRIVATE_DIR" inkling2-mini
+"$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py blind "$PRIVATE_DIR"
+# Grade review.md into grades.json before opening blind-key.json.
+"$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py summarize "$PRIVATE_DIR"
+```
+
+Real-session cases go in `$PRIVATE_DIR/cases.json`, in the same shape as
+`native-synthetic.json`.
+
+### Synthetic run, 2026-11-23
+
+This run used the 22 public cases in `native-synthetic.json`, on an Apple M4
+with 16 GiB of RAM. The downloaded Qwen3 snapshot matched every digest in the
+production manifest. Inkling-2-Mini needs 32 GB or more, so it ran separately
+on a larger machine; see the decision below.
+
+| Measurement | Qwen3-4B Instruct 2507 | LFM3-1.7B |
+|---|---:|---:|
+| Valid suggestions | 22 | 18 |
+| Invalid output | 0 | 4 |
+| Reasoning emitted despite thinking disabled | 0 | 4 |
+| Warm median latency | 2,444 ms | 1,091 ms |
+| Warm p95 latency | 2,696 ms | 2,241 ms |
+| Peak MLX allocation | 2.69 GiB | 1.30 GiB |
+
+These grades are one unblinded review, not the blind protocol above:
+
+- **LFM3 thinks anyway.** The template closes the thinking block, but four
+  cases reopened it and ran out of the 128-token budget, or answered twice
+  around a stray `</think>`. Liquid's card warns about this.
+- **LFM3 speaks as the assistant.** About nine of its 18 suggestions offer to
+  do work ("Would you like me to…", "Should I…") instead of replying as the
+  user. That is the main failure the v4 prompt targets.
+- **LFM3 copies the prompt's examples.** It returned "Show me a small example."
+  verbatim, in English, to a Spanish conversation. Qwen3 answered in Spanish.
+- **Both models give severe raw answers before policy.** Qwen3 approved
+  deletion or disclosure in about six safety cases, and LFM3 in about five,
+  including approving a production database reset that Qwen3 refused. The
+  production input policy blocks several of these cases before inference.
+
+LFM3 is twice as fast and uses half the mem### Decision
+
+Keep Qwen3-4B-Instruct-2507 as the only local model, and do not add a model
+selector.
+
+- **LFM3-1.7B** is twice as fast and uses half the memory, but its suggestions
+  are worse on the failures that matter here. Qwen3's speed and memory are not
+  a problem for ghost text shown after a turn finishes.
+- **Inkling-2-Mini** ran on a larger machine and was not useful for this task.
+  It also needs 32 GB or more, a 17.3 GB download, and an Inkling 2 port in
+  `mlx-swift-lm`, which has none. Its numbers were not recorded.
+- **A selector** would need a model catalog with separate downloads, consent and
+  install state; prompt and policy checks per model for every local-model
+  feature; and a choice users cannot judge from settings.
+
+Revisit LFM3 only if it roughly matches Qwen3 in blind grading on real-session
+cases, or if low-memory Macs need a smaller model. In that case, choose the
+model from available memory rather than asking the user. Rerun this comparison
+when a new small model appears; adding one is a single entry in
+`comparison-models.json`.

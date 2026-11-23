@@ -117,6 +117,8 @@ private struct ProjectDialog: View {
     @State private var shepherdInstructions: String = ""
     @State private var vmForNewWorktrees = false
     @State private var vmGuestSetupScript: String = ""
+    /// The repo's `.alas/` VM defaults, so saving stores only the user's overrides.
+    @State private var vmRepoDefaults: (forNewWorktrees: Bool?, guestSetupScript: String?) = (nil, nil)
     @State private var shepherdRequiredReviewers: [String] = []
     /// `.alas/shepherd.local.md` or `.alas/shepherd.md` when the project's
     /// main worktree has one; that file wins over these settings.
@@ -1029,7 +1031,8 @@ private struct ProjectDialog: View {
                     Toggle("Give new worktrees a macOS VM", isOn: $vmForNewWorktrees)
                         .toggleStyle(.checkbox)
                         .font(scale.metaFont)
-                    Text("Created on demand otherwise (agent's first call or the VM tab).")
+                    Text("Created on demand otherwise (agent's first call or the VM tab)."
+                        + (vmRepoDefaults.forNewWorktrees == nil ? "" : " The repo's .alas/config.json sets the default."))
                         .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                 }
@@ -1039,7 +1042,8 @@ private struct ProjectDialog: View {
                         .foregroundColor(theme.color("fg"))
                     ProjectStartupScriptEditor(text: $vmGuestSetupScript, minHeight: 60)
                         .accessibilityLabel("Guest setup script")
-                    Text("Runs in zsh on macOS and bash on Linux. Keep it safe to run more than once, and don't depend on a particular worktree's files: later VMs reuse its result. Reset from scratch runs it again.")
+                    Text("Runs in zsh on macOS and bash on Linux. Keep it safe to run more than once, and don't depend on a particular worktree's files: later VMs reuse its result. Reset from scratch runs it again."
+                        + (vmRepoDefaults.guestSetupScript == nil ? "" : " Starts from the repo's .alas/vm-setup.sh; edits here apply only to you, and clearing it uses the repo's again."))
                         .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                 }
@@ -1359,8 +1363,9 @@ private struct ProjectDialog: View {
             agentSettings = project.startupScripts
             mcpServers = project.mcpServers
             shepherdInstructions = project.shepherd?.instructions ?? ""
-            vmForNewWorktrees = project.vmForNewWorktrees == true
-            vmGuestSetupScript = project.vmGuestSetupScript ?? ""
+            vmRepoDefaults = state.repoVMDefaults(for: project)
+            vmForNewWorktrees = state.effectiveVMForNewWorktrees(for: project)
+            vmGuestSetupScript = state.effectiveVMGuestSetupScript(for: project) ?? ""
             shepherdRequiredReviewers = project.shepherd?.requiredReviewers ?? []
         }
     }
@@ -1664,7 +1669,9 @@ private struct ProjectDialog: View {
         case .edit(let project):
             if showsWorktreeVMSection {
                 state.projectsManager.setVMSettings(
-                    projectId: project.id, forNewWorktrees: vmForNewWorktrees, guestSetupScript: vmGuestSetupScript)
+                    projectId: project.id, forNewWorktrees: vmForNewWorktrees, guestSetupScript: vmGuestSetupScript,
+                    repoForNewWorktrees: vmRepoDefaults.forNewWorktrees,
+                    repoGuestSetupScript: vmRepoDefaults.guestSetupScript)
             }
             state.updateProject(
                 id: project.id,

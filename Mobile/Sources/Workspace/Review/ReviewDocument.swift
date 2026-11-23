@@ -57,6 +57,8 @@ final class ReviewDocument {
     var selection: ReviewSelection?
     /// The review's draft comments, every file's.
     var comments: [RemoteReviewComment] = []
+    /// Where each comment was last sent to an agent, by comment id.
+    var sent: [String: RemoteReviewSent] = [:]
     var composing: ReviewComposing?
     /// The pull request as its diff was read: its head, account and capabilities.
     private(set) var pullRequest: RemoteProviderReview?
@@ -331,7 +333,10 @@ final class ReviewDocument {
     func loadComments() async {
         guard let session = reviewSessionID else { return }
         // ponytail: a failed read keeps the comments shown; the next refresh tries again.
-        if case .success(let review) = await workspace.review(session) { comments = review.comments }
+        if case .success(let review) = await workspace.review(session) {
+            comments = review.comments
+            sent = review.sent
+        }
     }
 
     func select(_ entry: ReviewEntryID, hunk: Int, line: Int) {

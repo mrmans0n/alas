@@ -209,6 +209,8 @@ function onActiveOpen() {
   setStatus(connectedLabel(), "ok");
   hideGate();
   send({ type: "listSessions" });
+  applyActiveCapabilities();
+  terminals.reconnected();
   resubscribe();   // re-sync images and transcript after reconnect
   replayActiveDetailRequest();   // the file/diff request itself doesn't survive a dropped socket
   replayActiveListRequest();     // ...and neither does a listChanges/root listFiles request
@@ -222,6 +224,7 @@ function onActiveOpen() {
 
 function onActiveClose() {
   failCreateOnDisconnect();
+  terminals.disconnected();
   if (closeState(everConnected) === "loading") {
     // Initial load still in progress — keep the neutral loading overlay up
     // instead of flashing the alarming "Can't reach Alas" screen. Once we've
@@ -254,6 +257,9 @@ function showPairGate() {
 }
 
 function handleLinkHello(link, hello) {
+  // Kept on the link: an idle host says hello before it becomes the active one.
+  link.capabilities = Array.isArray(hello.capabilities) ? hello.capabilities : [];
+  if (link.role === "active") applyActiveCapabilities();
   const result = RemoteHubRegistry.applyHello(hub, link.id, hello);
   if (!result) return;
   RemoteHubRegistry.save(localStorage, hub);
@@ -360,6 +366,9 @@ function switchServer(id) {
 
 function handle(msg) {
   switch (msg.type) {
+    case "console":
+      terminals.handle(msg.console);
+      break;
     case "sessionList":
       gatewayCounts = RemoteHubRegistry.peerSessionCounts(msg.sessions, (activeServer() || {}).peers);
       renderSessions(msg.sessions);
@@ -601,6 +610,7 @@ function renderSessions(sessions) {
   renderRepoFilterCounts(allSections);
   sections.forEach(section => list.appendChild(renderSection(section)));
   if (currentSession) { setDetailTitle(currentSession); updateChangesTabBadge(); }
+  markCurrentSession();
 }
 
 function renderSection(section) {
@@ -862,6 +872,12 @@ function resetChangesAndFilesDOM() {
 function openSession(id) {
   clearSessionSheetsForOpen();
   const sameSession = currentSession === id;
+  // A wide window opens a session straight from the sidebar, without going
+  // back to the list first, so leave the previous one here.
+  if (currentSession && !sameSession) {
+    send({ type: "unsubscribe", sessionId: currentSession });
+    transcriptImageLoader.reset();
+  }
   if (!sameSession) { visualDrafts.clear(); visualSubmitted.clear(); }   // drafts and answered flags belong to one session
   currentSession = id; messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
   dismissedQuestion = null; canDrive = false; canDriveKnown = false;
@@ -896,7 +912,17 @@ function openSession(id) {
   // (a turn, a reconnect, a tab switch) happens to refresh it.
   if (summary && summary.worktree) requestChanges();
   updateChangesTabBadge();
+  terminals.setWorktree(summary && summary.worktree ? summary.worktreeId : null);
+  updateTerminalTab();
   showTab("chat");
+  markCurrentSession();
+}
+
+// A wide window keeps the list beside the open session, so mark which row it is.
+function markCurrentSession() {
+  document.querySelectorAll("#session-list [data-session-id]").forEach(node => {
+    node.classList.toggle("sel", node.dataset.sessionId === currentSession);
+  });
 }
 
 function showTabListLevel() {
@@ -913,7 +939,7 @@ function showTab(name) {
   $("diff-view").classList.add("hidden");
   $("file-view").classList.add("hidden");
   showTabListLevel();
-  for (const [id, tab] of [["tab-chat", "chat"], ["tab-changes", "changes"], ["tab-files", "files"]]) {
+  for (const [id, tab] of [["tab-chat", "chat"], ["tab-changes", "changes"], ["tab-files", "files"], ["tab-terminal", "terminal"]]) {
     $(id).classList.toggle("is-active", tab === name);
     $(id).setAttribute("aria-selected", String(tab === name));
   }
@@ -926,6 +952,8 @@ function showTab(name) {
   // renamed files since the tree was last loaded, and there's no other
   // signal that would invalidate the cached listing otherwise.
   if (name === "files") refreshFileTree();
+  $("terminal").classList.toggle("hidden", name !== "terminal");
+  if (name === "terminal") terminals.show(); else terminals.hide();
 }
 
 function isFolderSummary(summary) {
@@ -965,6 +993,29 @@ function refreshFileTree() {
 $("tab-chat").addEventListener("click", () => showTab("chat"));
 $("tab-changes").addEventListener("click", () => showTab("changes"));
 $("tab-files").addEventListener("click", () => showTab("files"));
+$("tab-terminal").addEventListener("click", () => showTab("terminal"));
+
+const terminals = RemoteTerminals.createTerminals({
+  send,
+  el: {
+    listLevel: $("terminal-list-level"), list: $("terminal-list"), openButton: $("terminal-new"), error: $("terminal-error"),
+    viewLevel: $("terminal-view"), back: $("terminal-back"), title: $("terminal-title"), control: $("terminal-control"),
+    status: $("terminal-status"), screen: $("terminal-screen"),
+  },
+});
+
+// The host says in its hello whether this browser is served terminals: only once its owner allowed it.
+function applyActiveCapabilities() {
+  terminals.setCapabilities((links.activeLink() || {}).capabilities);
+  updateTerminalTab();
+}
+
+function updateTerminalTab() {
+  const summary = currentSession ? listedSessions.get(currentSession) : null;
+  const available = terminals.available && !!(summary && summary.worktree && summary.worktreeId);
+  $("tab-terminal").classList.toggle("hidden", !available);
+  if (!available && activeTab === "terminal") showTab("chat");
+}
 $("changes-refresh").addEventListener("click", requestChanges);
 
 function renderChanges() {
@@ -1312,7 +1363,8 @@ function showSessions() {
   $("detail-title-block").classList.add("hidden"); $("detail-rename").classList.add("hidden");
   $("messages").classList.remove("is-streaming");
   $("drivebar").classList.add("hidden");
-  $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
+  // A wide window can show Settings in the sidebar while a session is open.
+  $("transcript").classList.add("hidden"); $("sessions").classList.toggle("hidden", topLevelTab === "settings");
   $("bottom-tabbar").classList.remove("hidden");
   changesTree.reset();
   changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
@@ -1327,22 +1379,30 @@ function showSessions() {
   $("detail-tabs").classList.add("hidden");
   $("changes").classList.add("hidden");
   $("files").classList.add("hidden");
+  $("terminal").classList.add("hidden");
+  terminals.hide();
+  terminals.setWorktree(null);
   send({ type: "listSessions" });
+  markCurrentSession();
 }
 
 let topLevelTab = "repos";
+// Matches the breakpoint in style.css where the list becomes a sidebar.
+const wideLayout = window.matchMedia("(min-width: 900px)");
 
 function showRepos() {
   topLevelTab = "repos";
   $("tab-repos").classList.add("is-active");
   $("tab-settings").classList.remove("is-active");
-  $("sessions").classList.remove("hidden");
+  // A wide window reaches this while a session is open; the list and tab bar
+  // stay hidden then, as a phone needs, and the wide layout shows them anyway.
+  $("sessions").classList.toggle("hidden", !!currentSession);
   $("settings").classList.add("hidden");
-  $("bottom-tabbar").classList.remove("hidden");
+  $("bottom-tabbar").classList.toggle("hidden", !!currentSession);
 }
 
 function showSettings() {
-  if (currentSession) return;   // the tab bar is hidden during session detail
+  if (currentSession && !wideLayout.matches) return;   // a phone hides the tab bar during session detail
   topLevelTab = "settings";
   $("tab-settings").classList.add("is-active");
   $("tab-repos").classList.remove("is-active");
@@ -1354,7 +1414,7 @@ function showSettings() {
 $("tab-repos").addEventListener("click", showRepos);
 $("tab-settings").addEventListener("click", showSettings);
 $("fab-new-session").onclick = showCreateSheet;
-$("status").onclick = () => { if (!currentSession) showSettings(); };
+$("status").onclick = () => { if (!currentSession || wideLayout.matches) showSettings(); };
 
 // --- hub settings ------------------------------------------------------------
 
@@ -1949,11 +2009,9 @@ function applyCreatedSession(session) {
     return;
   }
 
-  const previousSession = currentSession;
   hideCreateSheet(true);
   listedSessions.set(session.id, session);
   renderSessions([...listedSessions.values()]);
-  if (previousSession && previousSession !== session.id) send({ type: "unsubscribe", sessionId: previousSession });
   openSession(session.id);
 }
 

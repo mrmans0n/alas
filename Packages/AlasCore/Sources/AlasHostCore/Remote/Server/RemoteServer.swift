@@ -152,6 +152,8 @@ public final class RemoteServer {
         self.diagnosticsProvider = diagnostics
         self.identityProvider = identity
         self.signer = signer
+        // A socket's console access is fixed when it authenticates.
+        pairing.onDeviceTerminalsChanged = { [weak self] in self?.disconnectDevice($0) }
     }
 
     /// Starts listening on the given port (0 = OS-assigned). A non-zero port that
@@ -377,17 +379,21 @@ public final class RemoteServer {
     }
 
     private func hello(identity: RemoteServerIdentity, pairingID: String) -> RemoteServerMessage {
-        let current = pairing.device(id: pairingID)?.scope == .full ? identity : identity.withoutPeers
+        let device = pairing.device(id: pairingID)
+        let current = device?.scope == .full ? identity : identity.withoutPeers
         let capability = PeerDeviceCapability.v1
         let advertise = servingDeviceHost != nil && nativeFullDevice(pairingID) != nil
-        if !current.consoleCapabilities.contains(capability), current.hostCapabilities.contains(capability) == advertise {
+        // A browser is told of consoles only once it is served them.
+        let consoles = device.map { $0.kind != .browser || $0.servesConsoles } == true
+            ? current.consoleCapabilities.filter { $0 != capability } : []
+        if consoles == current.consoleCapabilities, current.hostCapabilities.contains(capability) == advertise {
             return .hello(current)
         }
         var capabilities = current.hostCapabilities.filter { $0 != capability }
         if advertise { capabilities.append(capability) }
         return .hello(RemoteServerIdentity(
             serverId: current.serverId, name: current.name, peers: current.peers,
-            consoleCapabilities: current.consoleCapabilities.filter { $0 != capability },
+            consoleCapabilities: consoles,
             hostCapabilities: capabilities, hostVersion: current.hostVersion
         ))
     }
@@ -485,15 +491,16 @@ public final class RemoteServer {
             accessPolicy: accessPolicy,
             originPolicy: originPolicy,
             makeGateway: { [weak self] channel in
-                // Consoles are served only to paired Alas instances and the
-                // native phone app, never to browsers; revocation closes the
+                // Consoles are served to paired Alas instances and the native
+                // phone app, and to a browser only once allowed (see
+                // `RemoteDevice.allowsTerminals`); revocation closes the
                 // socket and the link.
                 let device = self?.pairing.devices.first { $0.id == channel.deviceId }
                 // A device gone since it authenticated is about to be cut
                 // off; until then it gets the least.
                 let scope = device?.scope ?? .delegation
                 let consoleLink = device.flatMap { device -> PeerConsoleLink? in
-                    guard device.kind == .alasInstance || device.kind == .phone, device.scope == .full else { return nil }
+                    guard device.servesConsoles else { return nil }
                     let sendTracked = channel.sendTracked
                     return PeerConsoleLink(peerName: device.name) { event, onWritten in
                         sendTracked(.console(event), onWritten)

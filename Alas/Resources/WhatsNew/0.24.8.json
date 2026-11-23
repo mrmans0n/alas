@@ -1,0 +1,16 @@
+{
+  "version": "0.24.8",
+  "headline": {
+    "title": "Grouped by machine",
+    "body": "Keep each project's sidebar worktrees together by machine, with local worktrees first.",
+    "media": "media/0.24.8-group-by-machine.png"
+  },
+  "also": [
+    {
+      "title": "Repository VM defaults"
+    },
+    {
+      "title": "Working-tree Changes on iOS"
+    }
+  ]
+}

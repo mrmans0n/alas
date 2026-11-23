@@ -478,6 +478,11 @@ extension AppState {
     func isUserDrivingVM(ofSession sessionID: String) -> Bool { vmTakeOvers.holds(sessionID: sessionID) }
 
     /// The display name of the agent behind `sessionID`.
+    /// The agent of a session driving a device; nil for a flow or a session that's gone.
+    func computerUseAgent(_ sessionID: String) -> AgentDefinition? {
+        session(for: sessionID).flatMap { agent(id: $0.agentId) }
+    }
+
     func computerUseAgentName(_ sessionID: String) -> String {
         if sessionID == DeviceAgentControl.userFlowSession { return "A flow" }
         guard let session = session(for: sessionID) else { return "An agent" }

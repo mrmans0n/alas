@@ -548,6 +548,7 @@
 		443F48C0A1AF36BFAB8B61E8 /* UnionCanvasGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 650B300A5337E2A9149CF083 /* UnionCanvasGeometry.swift */; };
 		444B1C11BC433A94A00BC2A5 /* ayu-mirage.json in Resources */ = {isa = PBXBuildFile; fileRef = C14BDB1E4FD4C60A3E6AC8AA /* ayu-mirage.json */; };
 		445DAFBF3E820823AA2779B4 /* ACPElicitationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57E1A9B42D47CC0244C24F7B /* ACPElicitationTests.swift */; };
+		44670D7222B29D7918E5F3F7 /* FileTypeIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7669546C0E5F26C28FEC7429 /* FileTypeIcon.swift */; };
 		449C7E4A63455D01633B791A /* PendingDiscard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B15F58AFF7BC19419935C05 /* PendingDiscard.swift */; };
 		44A5CAA6C9B420636540569A /* ACPSpeechDictationEngineLocaleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 050948BA098978A818ABC0F2 /* ACPSpeechDictationEngineLocaleTests.swift */; };
 		44D0A5C79291C4AF40360548 /* RestoreCheckpointSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FB6F3C4D60558033DC68383 /* RestoreCheckpointSheet.swift */; };
@@ -2033,10 +2034,10 @@
 		1A51DA06B445C208E5F643EF /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "$(CONTENTS_FOLDER_PATH)/XPCServices";
-			dstSubfolderSpec = 16;
+			dstPath = "alas-vm-guest";
+			dstSubfolderSpec = 7;
 			files = (
-				8E7C4F7DFA7D3E2D74767C2B /* AlasSimService.xpc in CopyFiles */,
+				CF66032F829FB00D791925E8 /* Install Alas VM Guest.command in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2054,10 +2055,10 @@
 		AF4AF5D7242A7B87F7C9E278 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
-			dstSubfolderSpec = 7;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/XPCServices";
+			dstSubfolderSpec = 16;
 			files = (
-				CF66032F829FB00D791925E8 /* Install Alas VM Guest.command in CopyFiles */,
+				8E7C4F7DFA7D3E2D74767C2B /* AlasSimService.xpc in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3004,6 +3005,7 @@
 		75DFDC1BD30B1D1CC469D54C /* ZmxEnvTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZmxEnvTests.swift; sourceTree = "<group>"; };
 		7617B5D1D131EA6B70F63DFD /* DesignCaptureReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignCaptureReview.swift; sourceTree = "<group>"; };
 		7624AEF61C42B615FBC76B71 /* AppKitDiffScrollerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitDiffScrollerTests.swift; sourceTree = "<group>"; };
+		7669546C0E5F26C28FEC7429 /* FileTypeIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTypeIcon.swift; sourceTree = "<group>"; };
 		768D12909DD5233659AC4E03 /* RepoGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoGroupView.swift; sourceTree = "<group>"; };
 		76942B028C3CBAED16BC4CC1 /* ImageDiffPairResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffPairResolverTests.swift; sourceTree = "<group>"; };
 		76B767602C3F8E5909A44B7C /* CodeEditorLineNumberRulerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeEditorLineNumberRulerView.swift; sourceTree = "<group>"; };
@@ -5264,6 +5266,7 @@
 				730461F7EE2A160A1981DB39 /* FilesBookmarksPane.swift */,
 				BD4A3B9B1103346242438940 /* FilesTabView.swift */,
 				5D444099DDEF20DC1870B62B /* FileTreeListView.swift */,
+				7669546C0E5F26C28FEC7429 /* FileTypeIcon.swift */,
 				F721FB733081A583D4053DDA /* FileTypeIconView.swift */,
 				542B9A0D90AC20BBCA6073F8 /* MergeOperationState.swift */,
 				BFF14A872437EAF5999E6E97 /* NativePeerChangesView.swift */,
@@ -8258,6 +8261,7 @@
 				6AB631ACAD28A187F15282AB /* FileSnapshotTabView.swift in Sources */,
 				2CA48C69C7D25BB7BF46277A /* FileSystemOpen.swift in Sources */,
 				86C42109845E7D45FA319D36 /* FileTreeListView.swift in Sources */,
+				44670D7222B29D7918E5F3F7 /* FileTypeIcon.swift in Sources */,
 				64ADA6AFE69C52F121A163E1 /* FileTypeIconView.swift in Sources */,
 				547ED6F48DA5A3A3D31BEFAF /* FilesBookmarksPane.swift in Sources */,
 				9782C5866410EFE13E670AFF /* FilesTabView.swift in Sources */,

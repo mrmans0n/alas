@@ -43,6 +43,22 @@ struct WorktreeSidebarFilterTests {
         #expect(!WorktreeSidebarFilter.isActive("   "))
     }
 
+    @Test func groupingKeepsLocalFirstAndPreservesTheOrderWithinEachMachine() {
+        let branches = ["mini-z", "local-z", "server", "mini-a", "local-a", "unmatched"]
+        let hosts = ["mini", nil, "server", "mini", nil, "mini"]
+        let sorted = zip(branches, hosts).map { branch, host in
+            var row = worktree(branch, branch: branch == "unmatched" ? branch : "fix/\(branch)")
+            if let host {
+                row.path = URL(fileURLWithPath: RemotePath.virtual(host: host, realPath: "/tmp/\(branch)"))
+            }
+            return row
+        }
+
+        let grouped = WorktreeSidebarFilter.apply("fix", to: sorted, groupByMachine: true)
+
+        #expect(grouped.map(\.id) == ["local-z", "local-a", "mini-z", "mini-a", "server"])
+    }
+
     @Test(arguments: [
         (nil as String?, 1, "a" as String?),
         (nil, -1, "c"),

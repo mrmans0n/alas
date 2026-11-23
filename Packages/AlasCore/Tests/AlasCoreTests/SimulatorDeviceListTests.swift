@@ -42,4 +42,16 @@ struct SimulatorDeviceListTests {
         """
         #expect(try SimulatorDeviceList.parse(Data(json.utf8)).map(\.udid) == ["new", "old"])
     }
+
+    @Test(arguments: [
+        ("iPhone-17-Pro", true), ("iPhone-Air", true), ("iPhone-15", true), ("iPhone-14-Pro-Max", true),
+        ("iPhone-18-Pro", true), ("iPhone-17e", false), ("iPhone-16e", false), ("iPhone-14", false),
+        ("iPhone-14-Plus", false), ("iPhone-13-mini", false), ("iPhone-SE-3rd-generation", false),
+        ("iPhone-Duo", false), ("iPad-Pro-11-inch-M5", false),
+    ])
+    func knowsWhichIPhonesHaveADynamicIsland(model: String, expected: Bool) {
+        let device = SimulatorDevice(udid: "A", name: model, runtimeName: "iOS 26.4", state: .booted,
+                                     deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType." + model)
+        #expect(device.hasDynamicIsland == expected)
+    }
 }

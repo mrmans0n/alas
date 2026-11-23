@@ -63,13 +63,45 @@ struct RemoteWorkspaceRulesTests {
         #expect(RemoteChangesRules.badge(loaded: nil, truncated: false, fallback: 0) == nil)
     }
 
-    @Test func groupedSplitsByDirectorySortedByPath() {
-        func f(_ p: String) -> RemoteChangedFile {
-            RemoteChangedFile(path: p, status: "M", add: 0, del: 0, conflict: nil, renameFrom: nil)
-        }
-        let groups = RemoteChangesRules.grouped([f("src/b.swift"), f("z.md"), f("src/a.swift"), f("a/c.swift")])
-        #expect(groups.map(\.directory) == ["", "a", "src"])
-        #expect(groups.map { $0.files.map(\.path) } == [["z.md"], ["a/c.swift"], ["src/a.swift", "src/b.swift"]])
+    private func changed(_ path: String, _ status: String = "M", add: Int = 0, del: Int = 0) -> RemoteChangedFile {
+        RemoteChangedFile(path: path, status: status, add: add, del: del, conflict: nil, renameFrom: nil)
+    }
+
+    @Test func treeSortsFoldersFirstAndMergesSingleFolderChains() {
+        let paths = ["z.md", "Alas/Sources/App/b.swift", "Alas/Sources/Devices/a.swift",
+                     "Mobile/Sources/Review/r.swift", "Alas/Sources/App/a10.swift", "Alas/Sources/App/a9.swift"]
+        let rows = RemoteChangesRules.tree(paths, path: { $0 })
+        #expect(rows.map { "\($0.depth) \($0.name)" } == [
+            "0 Alas/Sources", "1 App", "2 a9.swift", "2 a10.swift", "2 b.swift", "1 Devices", "2 a.swift",
+            "0 Mobile/Sources/Review", "1 r.swift", "0 z.md",
+        ])
+        #expect(rows[0].path == "Alas/Sources" && rows[0].items.count == 4)
+        #expect(rows[2].path == "Alas/Sources/App/a9.swift")
+    }
+
+    @Test func treeHidesTheContentsOfCollapsedFolders() {
+        let rows = RemoteChangesRules.tree(["a/b/x", "a/c/y", "d"], path: { $0 }, collapsed: ["a/b"])
+        #expect(rows.map(\.path) == ["a", "a/b", "a/c", "a/c/y", "d"])
+    }
+
+    @Test func workingTreeMergesStagedAndUnstagedSidesOfAPath() {
+        let files = RemoteChangesRules.workingTree(
+            staged: [changed("both", "A", add: 9, del: 1), changed("staged")],
+            unstaged: [changed("both", "M", add: 2, del: 4), changed("unstaged", "?")])
+        #expect(files.map(\.file.path) == ["both", "unstaged", "staged"])
+        #expect(files.map(\.stage) == [.mixed, .unstaged, .staged])
+        #expect(files[0].file.status == "M" && files[0].file.add == 9 && files[0].file.del == 4)
+    }
+
+    @Test(arguments: [
+        ([], RemoteStageState.unstaged),
+        ([.staged, .staged], .staged),
+        ([.unstaged, .unstaged], .unstaged),
+        ([.staged, .unstaged], .mixed),
+        ([.staged, .mixed], .mixed),
+    ] as [([RemoteStageState], RemoteStageState)])
+    func folderStageStateAggregatesItsFiles(states: [RemoteStageState], expected: RemoteStageState) {
+        #expect(RemoteStageState(states) == expected)
     }
 
     @Test(arguments: [

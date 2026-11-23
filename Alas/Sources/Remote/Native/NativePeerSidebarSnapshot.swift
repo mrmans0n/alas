@@ -321,6 +321,13 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
             ?? host?.snapshot.worktree.id
     }
 
+    /// The execution project's ID, before linked worktrees are grouped under their local project.
+    var owningProjectId: String? {
+        host?.project.id
+            ?? sessions.lazy.compactMap(\.projectId).first { !$0.isEmpty }
+            ?? consoles.lazy.compactMap(\.projectId).first { !$0.isEmpty }
+    }
+
     /// Main first, then `ordering` over the rest — the same shape as
     /// `ProjectsManager.sortedWorktrees`. Ties fall back to the id.
     static func sorted(_ groups: [NativePeerWorktreeGroup], ordering: AppConfig.WorktreeSortMode) -> [NativePeerWorktreeGroup] {

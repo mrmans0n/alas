@@ -29,15 +29,12 @@ struct NativePeerNewSessionSheet: View {
     private var request: NativePeerNewSession? { client.newSession }
     private var peerName: String { request?.peerName ?? "peer" }
     /// The peer can only create a worktree in a repo it identifies by id.
-    private var canCreateWorktrees: Bool { request?.projectId != nil }
+    private var canCreateWorktrees: Bool { request?.projectId != nil && request?.fixedWorktreeId == nil }
     private var createsWorktree: Bool { mode == .new && canCreateWorktrees }
 
     /// Agents the peer can launch in the selected worktree's project.
     private var agents: [RemoteAgentOption] {
-        let projectId = createsWorktree
-            ? request?.projectId
-            : request?.worktrees?.first { $0.id == worktreeId }?.projectId
-        return (request?.agents ?? []).filter { $0.isAvailable(inProjectId: projectId) }
+        request?.availableAgents(worktreeId: worktreeId, createsWorktree: createsWorktree) ?? []
     }
     private var selectedAgent: RemoteAgentOption? { agents.first { $0.id == agentId } }
     private var visibility: NativePeerNewSession.ChipVisibility? {
@@ -51,7 +48,7 @@ struct NativePeerNewSessionSheet: View {
         if createsWorktree {
             return NativePeerNewSession.canCreateWorktree(base: base, branch: branch, branches: request.branches)
         }
-        return worktreeId != nil
+        return request.fixedWorktreeId != nil || worktreeId != nil
     }
 
     var body: some View {
@@ -79,7 +76,7 @@ struct NativePeerNewSessionSheet: View {
     }
 
     @ViewBuilder
-    private var fields: some View {
+    private var worktreeFields: some View {
         DialogField(label: "Worktree") {
             VStack(alignment: .leading, spacing: 8) {
                 if canCreateWorktrees {
@@ -104,6 +101,13 @@ struct NativePeerNewSessionSheet: View {
         }
         if createsWorktree {
             newWorktreeFields
+        }
+    }
+
+    @ViewBuilder
+    private var fields: some View {
+        if let request, request.fixedWorktreeId == nil {
+            worktreeFields
         }
         DialogField(label: "Agent") {
             VStack(alignment: .leading, spacing: 6) {
@@ -263,20 +267,20 @@ struct NativePeerNewSessionSheet: View {
         return nil
     }
 
-    private func preselect() {
-        let worktrees = request?.worktrees ?? []
-        if mode == nil, let loaded = request?.worktrees {
+    private func preselectWorktree(_ request: NativePeerNewSession) {
+        let worktrees = request.worktrees ?? []
+        if mode == nil, let loaded = request.worktrees {
             mode = NativePeerNewSession.defaultWorktreeMode(for: loaded)
         }
         // A worktree the peer created without its session: retry in it
         // rather than create another.
-        if let recovered = request?.recoveredWorktreeId, recovered != appliedRecoveryId,
+        if let recovered = request.recoveredWorktreeId, recovered != appliedRecoveryId,
            worktrees.contains(where: { $0.id == recovered }) {
             appliedRecoveryId = recovered
             mode = .existing
             worktreeId = recovered
         }
-        if base.isEmpty, let preferred = NativePeerNewSession.preselectedBase(in: request?.branches) {
+        if base.isEmpty, let preferred = NativePeerNewSession.preselectedBase(in: request.branches) {
             base = preferred
         }
         // After a worktree change the filtered list reflects its project.
@@ -284,6 +288,12 @@ struct NativePeerNewSessionSheet: View {
             worktreeId = NativePeerNewSession.preselectedWorktreeId(
                 in: worktrees, selectedWorktreeId: client.newSessionDefaultWorktreeId
             )
+        }
+    }
+
+    private func preselect() {
+        if let request, request.fixedWorktreeId == nil {
+            preselectWorktree(request)
         }
         if agentId == nil || !agents.contains(where: { $0.id == agentId }) {
             agentId = NativePeerNewSession.preselectedAgentId(in: agents)
@@ -304,7 +314,7 @@ struct NativePeerNewSessionSheet: View {
         if createsWorktree {
             client.createNewWorktreeSession(
                 base: base, branch: branch, agentId: agentId, modelId: modelId, effortId: effortId)
-        } else if let worktreeId {
+        } else {
             client.createNewSession(worktreeId: worktreeId, agentId: agentId, modelId: modelId, effortId: effortId)
         }
     }
