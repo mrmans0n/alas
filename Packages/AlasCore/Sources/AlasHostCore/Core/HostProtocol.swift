@@ -130,6 +130,12 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case addPeer(link: String)
     /// Sets what agents on a paired Mac may do on this one; local client only.
     case setPeerAgentAccess(peerID: String, access: RemoteDeviceAgentAccess)
+    /// The browsers paired with a host that serves Remote headlessly; local
+    /// client only, as `listPeers`.
+    case listBrowsers
+    /// Lets a paired browser open terminals, or stops it, and disconnects it
+    /// so it reconnects with the change; local client only.
+    case setBrowserTerminals(deviceID: String, allowed: Bool)
     /// Upgrades the Homebrew cask this host runs from and restarts it on the
     /// new version (`host.update.v1`). The connection usually drops before
     /// the answer, when the upgrade replaces the running executable.
@@ -719,6 +725,31 @@ public struct HostPeerSummary: Codable, Equatable, Sendable {
     }
 }
 
+/// A browser paired with a host, as `alas-host browsers list` shows it.
+public struct HostBrowserSummary: Codable, Equatable, Sendable {
+    public var id: String
+    public var name: String
+    public var lastSeenAt: Date?
+    public var allowsTerminals: Bool
+
+    public init(_ device: RemoteDevice) {
+        id = device.id
+        name = device.name
+        lastSeenAt = device.lastSeenAt
+        allowsTerminals = device.allowsTerminals
+    }
+
+    /// The browser `query` names: its id, else a name only one browser has.
+    public static func resolve(_ query: String, in browsers: [HostBrowserSummary]) throws -> HostBrowserSummary {
+        if let browser = browsers.first(where: { $0.id == query }) { return browser }
+        let named = browsers.filter { $0.name == query }
+        if named.count == 1 { return named[0] }
+        if named.isEmpty { throw HostError.failed(message: "No paired browser has the id or name \(query).") }
+        let candidates = named.map { "  \($0.id)  \($0.name)" }.joined(separator: "\n")
+        throw HostError.failed(message: "More than one paired browser is named \(query); use its id:\n\(candidates)")
+    }
+}
+
 public enum HostServerMessage: Codable, Equatable, Sendable {
     case response(id: Int, result: HostResponse)
     /// The subscription's next events, coalesced per key, and the cursor
@@ -744,6 +775,7 @@ public enum HostResponse: Codable, Equatable, Sendable {
     /// `link` is absent from an older host, and where the host has no address for one.
     case remotePairingCode(code: String, expiresAt: Date, link: String?)
     case peers(peers: [HostPeerSummary])
+    case browsers(browsers: [HostBrowserSummary])
     /// The message a session in the worktree gets for the same read, with
     /// the worktree's id as its `sessionId`. Indirect: a Remote message
     /// carries host messages.

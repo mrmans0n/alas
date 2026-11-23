@@ -39,6 +39,9 @@ public final class RemotePairingService {
     private var provisionalCodes: Set<String> = []
     private var provisionalDeviceByCode: [String: String] = [:]
     @ObservationIgnored public var onDeviceRevoked: ((String) -> Void)?
+    /// Fired after a browser's `allowsTerminals` changed. Its open sockets
+    /// keep the console access they authenticated with until they reconnect.
+    @ObservationIgnored public var onDeviceTerminalsChanged: ((String) -> Void)?
 
     /// How long a minted code stays redeemable. Not private: `RemotePeerManager`
     /// aligns how long it remembers an ended attempt's counter-code to this,
@@ -234,6 +237,18 @@ public final class RemotePairingService {
         guard let i = devices.firstIndex(where: { $0.id == deviceId }) else { return false }
         devices[i].agentAccess = access
         saveDevices()
+        return true
+    }
+
+    /// Lets browser `deviceId` open terminals, or stops it. Returns false
+    /// when no browser has that id: the native clients are always served.
+    @discardableResult
+    public func setAllowsTerminals(_ allowed: Bool, deviceId: String) -> Bool {
+        guard let i = devices.firstIndex(where: { $0.id == deviceId }), devices[i].kind == .browser else { return false }
+        guard devices[i].allowsTerminals != allowed else { return true }
+        devices[i].allowsTerminals = allowed
+        saveDevices()
+        onDeviceTerminalsChanged?(deviceId)
         return true
     }
 

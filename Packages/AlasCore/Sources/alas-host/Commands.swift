@@ -35,7 +35,7 @@ func systemctlUser(_ arguments: String...) -> Int32 {
     return process.terminationStatus
 }
 
-/// The `config`, `peers`, `project`, `restart` and `setup` commands. The project operations
+/// The `browsers`, `config`, `peers`, `project`, `restart` and `setup` commands. The project operations
 /// go through the running host's socket when one serves the profile, and
 /// through a host booted in this process when none does.
 @MainActor
@@ -43,7 +43,7 @@ enum HostCommands {
     /// Runs the command `arguments` names and exits; returns when they name
     /// none of these commands.
     static func runIfCommand(_ arguments: [String]) {
-        guard let command = arguments.first, ["config", "peers", "project", "registry", "restart", "setup"].contains(command) else { return }
+        guard let command = arguments.first, ["browsers", "config", "peers", "project", "registry", "restart", "setup"].contains(command) else { return }
         Task { @MainActor in
             do {
                 try await run(command, Array(arguments.dropFirst()))
@@ -105,6 +105,17 @@ enum HostCommands {
             let peer = try HostPeerSummary.resolve(arguments[1], in: try await listPeers())
             try await forgetPeer(peer.id)
             print("\(peer.id)  \(peer.name)")
+        case ("browsers", "list", 1):
+            for browser in try await listBrowsers() {
+                print("\(browser.id)  \(browser.name)  terminals: \(browser.allowsTerminals ? "on" : "off")")
+            }
+        case ("browsers", "terminals", 3):
+            guard let allowed = ["on": true, "off": false][arguments[2]] else {
+                throw HostError.failed(message: "Terminals must be on or off.")
+            }
+            let browser = try HostBrowserSummary.resolve(arguments[1], in: try await listBrowsers())
+            try await setBrowserTerminals(browser.id, allowed)
+            print("\(browser.id)  \(browser.name)  terminals: \(allowed ? "on" : "off")")
         case ("registry", "search", 1), ("registry", "search", 2):
             let query = arguments.count == 2 ? arguments[1] : ""
             let installed = readConfig().agents.registry
@@ -301,6 +312,24 @@ enum HostCommands {
         try await perform(.setPeerAgentAccess(peerID: id, access: access)) { $0 == .done ? () : nil } inProcess: { _ in
             guard localPeerManager().setAgentAccess(access, peerId: id) else {
                 throw HostError.failed(message: "That peer never proved its identity here. Pair it again to allow this.")
+            }
+        }
+    }
+
+    // MARK: - Browsers
+
+    static func listBrowsers() async throws -> [HostBrowserSummary] {
+        try await perform(.listBrowsers) {
+            if case .browsers(let browsers) = $0 { browsers } else { nil }
+        } inProcess: { _ in
+            RemotePairingService(store: FileDeviceStore()).devices.filter { $0.kind == .browser }.map(HostBrowserSummary.init)
+        }
+    }
+
+    static func setBrowserTerminals(_ id: String, _ allowed: Bool) async throws {
+        try await perform(.setBrowserTerminals(deviceID: id, allowed: allowed)) { $0 == .done ? () : nil } inProcess: { _ in
+            guard RemotePairingService(store: FileDeviceStore()).setAllowsTerminals(allowed, deviceId: id) else {
+                throw HostError.notFound(what: "browser \(id)")
             }
         }
     }
