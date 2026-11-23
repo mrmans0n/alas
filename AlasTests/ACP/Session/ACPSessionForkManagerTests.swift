@@ -700,6 +700,35 @@ struct ACPSessionForkManagerTests {
         #expect(!client.sent.contains { $0.method == "session/prompt" })
     }
 
+    @Test(
+        "an unattended review turn runs only on agents whose read-only mode holds",
+        arguments: [("claude", true), ("opencode", false), ("pi", false)]
+    )
+    func reviewTurnNeedsEnforcedReadOnly(agentID: String, runs: Bool) async throws {
+        let client = ACPMockClient()
+        client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
+        client.script(method: "session/prompt") { _ in
+            client.emit(.init(sessionId: "remote", update: .agentMessageChunk(.text("No findings."))))
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        let (manager, _) = try reviewManager(client: client, sessionNewResponse: Self.planMode)
+        let parent = manager.createSession(agentId: agentID)
+
+        let outcome = await manager.runReviewTurn(reviewRequest(parentID: parent.id, agentID: agentID))
+
+        if runs {
+            guard case .finished(let id, "No findings.") = outcome else {
+                Issue.record("expected a finished review turn, got \(outcome)")
+                return
+            }
+            await manager.discardReviewSession(id: id)
+        } else {
+            #expect(outcome == .failed(sessionID: nil, .cannotRunReadOnly))
+            #expect(manager.sessions.keys.allSatisfy { $0 == parent.id })
+            #expect(!client.sent.contains { $0.method == "session/prompt" })
+        }
+    }
+
     /// Built like `sideQuestionReadOnlyMode`'s manager.
     private func reviewManager(
         client: ACPMockClient,
@@ -724,11 +753,11 @@ struct ACPSessionForkManagerTests {
         return (manager, store)
     }
 
-    private func reviewRequest(parentID: ACPSession.ID) -> ACPReviewTurnRequest {
+    private func reviewRequest(parentID: ACPSession.ID, agentID: String = "claude") -> ACPReviewTurnRequest {
         ACPReviewTurnRequest(
             parentSessionID: parentID,
             reuseSessionID: nil,
-            agentID: "claude",
+            agentID: agentID,
             modelID: nil,
             title: "Review before push",
             prompt: "Review the diff.",

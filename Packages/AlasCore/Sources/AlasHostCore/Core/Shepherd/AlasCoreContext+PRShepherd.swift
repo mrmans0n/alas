@@ -227,7 +227,14 @@ extension AlasCoreContext {
             switch Self.prCreateAdoption(
                 headRefName: adopted.headRefName, number: adopted.number, kind: adopted.provider, local: local
             ) {
-            case .bind: return await bound(adopted, created: false)
+            case .bind:
+                // Nothing to push, but the adopted head still passes review
+                // before auto-merge may take it: the record closes the merge
+                // gate from the first poll, and the review runs on the bound base.
+                shipReviewer.seedRecord(reviewID)
+                let result = await bound(adopted, created: false)
+                shipReviewer.reviewPushedHead(reviewID, headSHA: adopted.headSHA ?? local.headSHA)
+                return result
             case .blocked(let message): throw PRShepherdCLIError(message: message)
             case .publishThenBind: break
             }

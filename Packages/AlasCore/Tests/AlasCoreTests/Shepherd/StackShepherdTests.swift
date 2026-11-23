@@ -1381,6 +1381,8 @@ struct StackShepherdTests {
         var isSyncing: Bool { syncWaiter != nil }
         var listed = 0
         var turns: [String] = []
+        /// The bases review before push looked for a fork point against.
+        var mergeBases: [String] = []
 
         func sync() async { await withCheckedContinuation { syncWaiter = $0 } }
         func finishSync() { syncWaiter?.resume()
@@ -1462,7 +1464,7 @@ struct StackShepherdTests {
     /// With review before push on, `stack_ship` answers `reviewing` and gg
     /// sync waits. Once the review of the top entry it publishes is clean,
     /// Alas syncs once, and the owning session gets that ship's outcome turn
-    /// and no other.
+    /// and no other. The review diffs against the stack's base, not the worktree's.
     @Test func stackShipWaitsForAReviewBeforeItSyncs() async throws {
         let (core, log, stack, _) = try await stackShipCore(published: [false, false, false])
         let probe = ShipProbe()
@@ -1474,14 +1476,21 @@ struct StackShepherdTests {
         var effects = try #require(core.shipReviewer.effects)
         effects.context = { _ in
             ShipReviewer.Context(
-                worktreePath: URL(fileURLWithPath: "/tmp/wt-1"), branch: "auth", baseBranch: "main",
+                worktreePath: URL(fileURLWithPath: "/tmp/wt-1"), branch: "auth", baseBranch: "develop",
                 providerName: "GitHub", projectSettings: nil
             )
         }
         effects.ownerAgentID = { _ in "codex" }
         effects.agentLabel = { _ in "Codex" }
         effects.instructions = { _, _ in CodeReviewInstructions() }
-        effects.git = ShipReviewGit(headSHA: { _ in "unused" }, mergeBase: { _, _, _ in "base0" }, diff: { _, _, _ in "" })
+        effects.git = ShipReviewGit(
+            headSHA: { _ in "unused" },
+            mergeBase: { _, base, _ in
+                await MainActor.run { probe.mergeBases.append(base) }
+                return "base0"
+            },
+            diff: { _, _, _ in "" }
+        )
         effects.runReviewer = { _ in
             .finished(sessionID: "reviewer-1", finalText: #"{"verdict": "approve", "summary": "Fine.", "findings": [], "resolved": []}"#)
         }
@@ -1497,6 +1506,7 @@ struct StackShepherdTests {
         #expect(Self.text(reply).contains(#""status":"reviewing""#))
         #expect(Self.text(reply).contains(#""phase":"reviewing""#))
         #expect(Self.text(reply).contains(#""head_sha":"\#(top.sha)""#))
+        #expect(probe.mergeBases == ["origin/\(stack.base)"])
         let record = try #require(core.shipReviewer.record(for: id))
         #expect(record.rounds.map(\.headSHA) == [top.sha])
         #expect(record.rounds.first?.verdict == .approve)

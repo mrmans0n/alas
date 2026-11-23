@@ -1181,7 +1181,8 @@ private struct ProjectDialog: View {
                         agents: RepositoryAgentMenuPolicy.acpAgents(
                             from: state.enabledAgents(forProjectId: project.id)
                         ),
-                        modelCatalog: state.acpModelCatalog
+                        modelCatalog: state.acpModelCatalog,
+                        readOnlyAgentsOnly: true
                     )
                 }
                 VStack(alignment: .leading, spacing: 8) {

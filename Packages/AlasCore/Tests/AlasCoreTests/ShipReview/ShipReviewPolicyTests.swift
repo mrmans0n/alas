@@ -259,6 +259,19 @@ let shipReviewLineCases: [ShipReviewLineCase] = {
         }
     }
 
+    /// Findings about paths outside the diff are folded into the summary and
+    /// filed nowhere: no comment can resolve them, so only a commit answers them.
+    @Test func requestChangesWithNothingFiledNeedsACommit() {
+        var r = record(.awaitingFix(headSHA: "h1"), rounds: 1)
+        r.rounds[r.rounds.count - 1].openFindingIDs = []
+
+        let (next, action) = ShipReviewPolicy.ownerTurnEnded(r, headSHA: "h1", openFindings: 0, now: t1)
+
+        #expect(action == .stop(.noProgress(openFindings: 0)))
+        #expect(next.phase == .stopped(.noProgress(openFindings: 0)))
+        #expect(next.passedSHAs.isEmpty)
+    }
+
     @Test func relaunchRestartsRunningRound() {
         var r = record(.reviewing(headSHA: "h1", startedAt: t0), rounds: 1)
         r.reviewerSessionID = "reviewer-1"

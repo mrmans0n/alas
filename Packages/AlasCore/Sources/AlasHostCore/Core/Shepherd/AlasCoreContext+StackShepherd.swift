@@ -281,9 +281,10 @@ extension AlasCoreContext {
         guard let plan = (try? chosen.resolved(in: toSync)) ?? (isUsersChoice ? nil : chosen.recovered(in: toSync)) else {
             throw Self.missingShipEntryError(toSync)
         }
-        // Review before push reviews what this sync would publish, up to its top entry.
+        // Review before push reviews what this sync would publish, up to its
+        // top entry, against the stack's base.
         if let top = Self.topShippedEntry(of: toSync, plan: plan) {
-            try gateStackPush(sessionID: sessionID, worktreeID: worktreeID, plan: plan, headSHA: top.sha)
+            try gateStackPush(sessionID: sessionID, worktreeID: worktreeID, plan: plan, base: toSync.base, headSHA: top.sha)
         }
         progress { $0 = .init(phase: .syncing) }
         do {

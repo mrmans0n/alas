@@ -97,7 +97,7 @@ public struct ShipReviewWire: Encodable, Equatable, Sendable {
 
 extension ShipReviewWire {
     /// `reviewer` is the resolved reviewer, "agent/model" or "agent";
-    /// `openFindings` the current round's findings still active in the pane.
+    /// `openFindings` this push's findings still active in the pane.
     public init(record: ShipReviewRecord, reviewer: String, openFindings: Int) {
         let state: String
         let head: String?

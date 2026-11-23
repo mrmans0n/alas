@@ -445,7 +445,7 @@ public final class ShipReviewer {
         guard let effects, let context = effects.context(record.id.worktreeID) else { return nil }
         let open = effects.earlierFindings([reviewSessionID])
         guard !open.isEmpty else { return nil }
-        let base = record.pending?.pullRequestBase ?? context.baseBranch
+        let base = record.pending?.reviewBase ?? context.baseBranch
         var forkPoint = try? await effects.git.mergeBase(context.worktreePath, "origin/\(base)", round.headSHA)
         if forkPoint == nil {
             forkPoint = try? await effects.git.mergeBase(context.worktreePath, base, round.headSHA)
@@ -479,11 +479,11 @@ public final class ShipReviewer {
 
     /// The bound request's head isn't clean or allowed and no review runs.
     /// Local HEAD on that head is reviewed like a fix; any other head is
-    /// recorded as reaching the remote without a review.
+    /// recorded as reaching the remote without a review, and local HEAD is
+    /// compared again on the next check while the head stays unpassed.
     public func reviewPushedHead(_ id: ShipReviewID, headSHA: String) {
         guard let record = records[id], record.enabled, record.phase == .idle,
-              !record.passedSHAs.contains(headSHA), record.unreviewedRemoteHead != headSHA,
-              !checkingPushedHead.contains(id)
+              !record.passedSHAs.contains(headSHA), !checkingPushedHead.contains(id)
         else { return }
         checkingPushedHead.insert(id)
         spawn { [weak self] in
@@ -495,12 +495,20 @@ public final class ShipReviewer {
             else { return }
             if local == headSHA {
                 _ = requestPush(id, target: .pushedHead, headSHA: headSHA)
-            } else {
+            } else if record.unreviewedRemoteHead != headSHA {
                 record.unreviewedRemoteHead = headSHA
                 record.updatedAt = now()
                 put(record)
             }
         }
+    }
+
+    /// A request `pr_create` adopted with nothing to push. Seeds a missing
+    /// record from the Settings defaults, so the merge gate is closed before
+    /// the bind and `reviewPushedHead` reviews the adopted head.
+    public func seedRecord(_ id: ShipReviewID) {
+        guard records[id] == nil, let seeded = seededRecord(id) else { return }
+        put(seeded)
     }
 
     // MARK: - Actions
@@ -563,7 +571,13 @@ public final class ShipReviewer {
         do {
             head = try await effects.shipHead(id, current.pending)
         } catch {
-            shipReviewLogger.error("Could not read HEAD after the owner's turn: \(error.localizedDescription, privacy: .public)")
+            // Left awaiting the fix, the push would wait forever.
+            guard var record = records[id], case .awaitingFix = record.phase, !deliveringFindings.contains(id) else { return }
+            let stop = ShipReviewStop.reviewerFailed("couldn't read the branch: \(error.localizedDescription)")
+            record.phase = .stopped(stop)
+            record.updatedAt = now()
+            put(record)
+            execute(.stop(stop), for: id)
             return
         }
         guard let record = records[id], case .awaitingFix = record.phase, !deliveringFindings.contains(id) else { return }
@@ -757,7 +771,7 @@ public final class ShipReviewer {
         } catch {
             return .failure(.instructions(Self.unreadableInstructions(error)))
         }
-        let base = record.pending?.pullRequestBase ?? context.baseBranch
+        let base = record.pending?.reviewBase ?? context.baseBranch
         var forkPoint = try? await effects.git.mergeBase(context.worktreePath, "origin/\(base)", headSHA)
         if forkPoint == nil {
             forkPoint = try? await effects.git.mergeBase(context.worktreePath, base, headSHA)
@@ -820,11 +834,21 @@ public final class ShipReviewer {
         return resolved.agentID.isEmpty ? nil : resolved
     }
 
-    /// The current round's findings still open in the pane; its own list
-    /// when the pane can't be read, so a read failure never passes a head.
+    /// This push's findings still open in the pane, across all its rounds:
+    /// a later round need not report an earlier one's findings fixed. A
+    /// round whose session can't be read counts its own findings, at least
+    /// one, so a read failure never passes a head.
     private func openFindings(_ record: ShipReviewRecord) -> Int {
-        guard let round = record.currentRound else { return 0 }
-        return round.reviewSessionID.flatMap { effects?.openFindingCount($0) } ?? round.openFindingIDs.count
+        let rounds = record.rounds.filter { $0.reviewedAt != nil }.suffix(record.roundsThisPush)
+        var counted: Set<ReviewSessionID> = []
+        return rounds.reduce(0) { total, round in
+            guard let reviewSessionID = round.reviewSessionID else { return total + round.openFindingIDs.count }
+            guard counted.insert(reviewSessionID).inserted else { return total }
+            guard let open = effects?.openFindingCount(reviewSessionID) else {
+                return total + max(round.openFindingIDs.count, 1)
+            }
+            return total + open
+        }
     }
 
     private func localHead(_ id: ShipReviewID) async -> String? {
@@ -943,10 +967,13 @@ private extension ShipReviewPhase {
 }
 
 private extension ShipReviewTarget {
-    /// The base `pr_create` named, if any.
-    var pullRequestBase: String? {
-        if case let .pullRequest(push) = self { return push.base }
-        return nil
+    /// The base `pr_create` named or the gg stack's, if known.
+    var reviewBase: String? {
+        switch self {
+        case let .pullRequest(push): push.base
+        case let .stack(_, base): base
+        case .pushedHead: nil
+        }
     }
 }
 

@@ -254,7 +254,8 @@ struct ChangesPane: View {
             allowsSameAsSession: true,
             inheritLabel: nil,
             agents: RepositoryAgentMenuPolicy.acpAgents(from: state.agentRegistry.enabled()),
-            modelCatalog: state.acpModelCatalog
+            modelCatalog: state.acpModelCatalog,
+            readOnlyAgentsOnly: true
         )
     }
 

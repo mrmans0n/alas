@@ -244,7 +244,8 @@ struct ShipReviewSwitchRow: View {
                 allowsSameAsSession: true,
                 inheritLabel: lever.inheritLabel,
                 agents: lever.agents,
-                modelCatalog: lever.modelCatalog
+                modelCatalog: lever.modelCatalog,
+                readOnlyAgentsOnly: true
             )
             .controlSize(.small)
             .disabled(lever.isDisabled)

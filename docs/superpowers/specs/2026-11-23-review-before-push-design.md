@@ -137,8 +137,9 @@ A new "Code review" group above "PR shepherd":
 - **Reviewer.** "Agent and model that review shipped branches before Alas
   pushes them. A project can override it, and each ship can change it from the
   Ship button." Two menus: agent ("Same as the session" or any enabled ACP
-  agent) and model ("Agent default" or the models that agent last advertised,
-  from `ACPAgentModelCatalog`).
+  agent whose read-only mode Alas enforces, today Claude and Codex) and model
+  ("Agent default" or the models that agent last advertised, from
+  `ACPAgentModelCatalog`).
 - **Prompt.** "What every review looks for. Project instructions and
   .alas/code-review.md are added after it." Uses `promptEditorRow` and a new
   `CodeReviewPromptEditorWindow` on `PromptEditorBody`.
@@ -212,7 +213,9 @@ prompt tells the session to fix each finding, commit, resolve the finding with
    provider, adoption). If the lever is on for this ship and HEAD is not a
    clean or allowed SHA, it stores a pending push (title, body, draft, base,
    HEAD) instead of pushing, starts round 1 and returns
-   `{"status": "reviewing", ...}` (see "Agent contract").
+   `{"status": "reviewing", ...}` (see "Agent contract"). An open PR adopted
+   with nothing to push is bound, and with the lever on its head goes through
+   the pushed-head review, so auto-merge waits until it passes.
 3. Alas builds the review prompt and sends it to the reviewer session.
 4. When the reviewer's turn ends, Alas parses its result and files findings
    and the verdict into the round's review session.
@@ -272,6 +275,10 @@ built on the `/btw` side session machinery in `ACPSessionManager`:
 
 - Created with the resolved agent, with the model staged through
   `pendingModel` as run schedules do.
+- Only for agents whose read-only mode holds whatever the user's own rules
+  allow (`ACPSideQuestionSupportPolicy.enforcesReadOnly`: Claude, Codex).
+  Any other agent, "Same as the session" included, fails the review with
+  "<agent> can't run read-only" before a session starts.
 - Put in a read-only mode with `enterReadOnlyMode`. An agent Alas can't move
   out of auto-approving modes fails the review with "<agent> can't run
   read-only".

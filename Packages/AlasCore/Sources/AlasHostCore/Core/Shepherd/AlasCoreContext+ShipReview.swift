@@ -132,9 +132,11 @@ extension AlasCoreContext {
 
     /// Asks review before push whether `stack_ship` may sync `plan`, whose top
     /// entry is `headSHA`, now, and throws its answer when the sync waits.
-    func gateStackPush(sessionID: String, worktreeID: String, plan: StackShipPlan, headSHA: String) throws {
+    /// `base` is the stack's, which the review diffs against.
+    func gateStackPush(sessionID: String, worktreeID: String, plan: StackShipPlan, base: String, headSHA: String) throws {
         let id = ShipReviewID(worktreeID: worktreeID, sessionID: sessionID)
-        guard case .reviewing(let record) = shipReviewer.requestPush(id, target: .stack(plan), headSHA: headSHA) else {
+        let target = ShipReviewTarget.stack(plan, base: base)
+        guard case .reviewing(let record) = shipReviewer.requestPush(id, target: target, headSHA: headSHA) else {
             return
         }
         if case .stopped(let stop) = record.phase {
@@ -175,7 +177,7 @@ extension AlasCoreContext {
     /// entry its plan publishes, else HEAD.
     private func shipReviewHead(_ id: ShipReviewID, target: ShipReviewTarget?) async throws -> String {
         do {
-            if case .stack(let plan) = target {
+            if case .stack(let plan, _) = target {
                 return try await stackShipTopSHA(worktreeID: id.worktreeID, plan: plan)
             }
             guard let path = reviewShepherd.effects?.worktreeContext(id.worktreeID)?.path else {
@@ -331,7 +333,7 @@ extension AlasCoreContext {
             }
         case .pushedHead:
             return nil
-        case .stack(let plan):
+        case .stack(let plan, _):
             return await shipReviewedStack(sessionID: id.sessionID, worktreeID: id.worktreeID, plan: plan)
         }
     }

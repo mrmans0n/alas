@@ -62,10 +62,17 @@ struct ACPReviewTurnWaiter {
 
 extension ACPSessionManager {
     /// Runs one turn of `request.prompt` in an unattended read-only reviewer
-    /// session and returns the turn's whole final message. A session that
-    /// can't attach or enter a read-only mode is discarded; any other session
-    /// is kept for the next round, and `discardReviewSession(id:)` ends it.
+    /// session and returns the turn's whole final message. An agent whose
+    /// read-only mode Alas can't rely on is refused before any session
+    /// starts. A session that can't attach or enter a read-only mode is
+    /// discarded; any other session is kept for the next round, and
+    /// `discardReviewSession(id:)` ends it.
     public func runReviewTurn(_ request: ACPReviewTurnRequest) async -> ACPReviewTurnOutcome {
+        // Nobody watches this session: tools the agent runs without asking
+        // could edit the worktree.
+        guard ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: request.agentID) else {
+            return .failed(sessionID: nil, .cannotRunReadOnly)
+        }
         let session = await reviewSession(for: request)
         let id = session.id
         guard sessions[id] === session, session.agentState == .ready else {
@@ -73,8 +80,7 @@ extension ACPSessionManager {
             await discardReviewSession(id: id)
             return .failed(sessionID: id, failure)
         }
-        // No fallback for agents whose read-only mode Alas doesn't rely on:
-        // nobody watches this session.
+        // A mode Alas relies on, or no review.
         guard await enterReadOnlyMode(session), sessions[id] === session else {
             await discardReviewSession(id: id)
             return .failed(sessionID: id, .cannotRunReadOnly)

@@ -45,7 +45,7 @@ public enum ShipReviewPolicy {
         r.updatedAt = now
         // The review no longer describes HEAD: discard it, uncounted.
         guard currentHeadSHA == reviewedSHA else {
-            return startRound(r, headSHA: currentHeadSHA, now: now)
+            return startRound(retargetedOffPushedHead(r), headSHA: currentHeadSHA, now: now)
         }
         let result: CodeReviewResult
         switch outcome {
@@ -82,7 +82,7 @@ public enum ShipReviewPolicy {
         return (r, .sendFindings(round: r.currentRound?.number ?? r.roundsThisPush))
     }
 
-    /// The owner's turn ended. `openFindings` counts the round's findings still active in the pane.
+    /// The owner's turn ended. `openFindings` counts this push's findings still active in the pane.
     public static func ownerTurnEnded(
         _ r: ShipReviewRecord,
         headSHA: String,
@@ -93,9 +93,12 @@ public enum ShipReviewPolicy {
         guard case let .awaitingFix(findingsHead) = r.phase else { return (r, .none) }
         r.updatedAt = now
         if headSHA != findingsHead {
-            return beginRound(r, headSHA: headSHA, now: now)
+            return beginRound(retargetedOffPushedHead(r), headSHA: headSHA, now: now)
         }
-        if openFindings == 0 {
+        // A request_changes round with nothing filed put its findings in the
+        // summary (paths outside the diff): no comment can resolve them, only a commit.
+        let summaryOnly = r.currentRound.map { $0.verdict == .requestChanges && $0.openFindingIDs.isEmpty } ?? false
+        if openFindings == 0, !summaryOnly {
             // The owner resolved every finding without a commit: the reviewed SHA goes out.
             return passAndPush(r, headSHA: findingsHead)
         }
@@ -187,6 +190,15 @@ public enum ShipReviewPolicy {
         }
         r.phase = .reviewing(headSHA: headSHA, startedAt: now)
         return (r, .startRound(headSHA: headSHA))
+    }
+
+    /// A fix the owner committed on top of a pushed head isn't on the
+    /// remote: once it passes, `pr_create` pushes it to the open request.
+    private static func retargetedOffPushedHead(_ r: ShipReviewRecord) -> ShipReviewRecord {
+        guard r.pending == .pushedHead else { return r }
+        var r = r
+        r.pending = .pullRequest(PendingPRPush(title: "", body: "", draft: false, base: nil))
+        return r
     }
 
     private static func passAndPush(_ r: ShipReviewRecord, headSHA: String) -> (ShipReviewRecord, ShipReviewAction) {

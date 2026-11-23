@@ -31,12 +31,17 @@ private final class FakeEffects {
     }
 
     var head = "h1"
+    /// Thrown by every HEAD read when set.
+    var headError: (any Error)?
     var label: String? = "Codex"
     var instructionsError: (any Error)?
     /// The reviewer's final messages, in order; approve once they run out.
     var replies: [String] = []
     var openFindings = 1
+    /// Per review session; nil reads `openFindings` for every session.
+    var openFindingsIn: ((ReviewSessionID) -> Int?)?
     var autoFix = true
+    var reviewBeforePush = true
     /// The top entry a stack plan publishes, below HEAD; nil reads HEAD for every target.
     var stackTop: String?
     /// Runs inside the push effect, as `pr_create` re-entering the gate does.
@@ -63,11 +68,14 @@ private final class FakeEffects {
                     providerName: "GitHub", projectSettings: nil
                 )
             },
-            settings: { (CodeReviewSettings(), ShepherdDefaults(reviewBeforePush: true)) },
+            settings: { (CodeReviewSettings(), ShepherdDefaults(reviewBeforePush: self.reviewBeforePush)) },
             ownerAgentID: { _ in "codex" },
             agentLabel: { _ in self.label },
             git: ShipReviewGit(
-                headSHA: { _ in await self.head },
+                headSHA: { _ in
+                    if let error = await self.headError { throw error }
+                    return await self.head
+                },
                 mergeBase: { _, _, _ in "base0" },
                 diff: { _, _, _ in diff }
             ),
@@ -87,7 +95,10 @@ private final class FakeEffects {
                     .flatMap { zip($0.element.findingIDs, $0.element.result.findings) }
                     .map { CodeReviewEarlierFinding(id: $0, path: $1.path, line: nil, body: $1.body, replies: []) }
             },
-            openFindingCount: { _ in self.openFindings },
+            openFindingCount: { sessionID in
+                if let count = self.openFindingsIn { return count(sessionID) }
+                return self.openFindings
+            },
             fileRound: { filing in
                 self.filings.append(filing)
                 return Self.reviewSessionID(self.filings.count - 1)
@@ -147,7 +158,9 @@ struct ShipReviewerTests {
         fake.head = "top"
         fake.stackTop = "e2"
         let reviewer = makeReviewer(fake)
-        let stack = ShipReviewTarget.stack(StackShipPlan(shipThroughEntryID: "e2", shipThroughTitle: "Second", opensDrafts: false))
+        let stack = ShipReviewTarget.stack(
+            StackShipPlan(shipThroughEntryID: "e2", shipThroughTitle: "Second", opensDrafts: false), base: "main"
+        )
         var reentered: [ShipReviewer.Gate] = []
         fake.onPush = { id, target, headSHA in
             reentered.append(reviewer.requestPush(id, target: target, headSHA: headSHA))
@@ -185,6 +198,119 @@ struct ShipReviewerTests {
         #expect(fake.runs.last?.prompt.contains(findingID) == true)
         #expect(fake.filings.last?.earlierRoundSessionIDs == [FakeEffects.reviewSessionID(0)])
         #expect(fake.pushes.map(\.headSHA) == ["h2"])
+    }
+
+    /// A later round need not report an earlier round's findings fixed: an
+    /// owner turn without a commit pushes only once none of this push's
+    /// findings is open, and a session it can't read counts as open.
+    @Test(arguments: [1, nil] as [Int?])
+    func ownerTurnWithoutCommitWaitsForEveryRoundsFindings(earlierRoundOpen: Int?) async {
+        let fake = FakeEffects()
+        fake.replies = [oneFinding, oneFinding]
+        fake.openFindingsIn = { $0 == FakeEffects.reviewSessionID(0) ? earlierRoundOpen : 0 }
+        let reviewer = makeReviewer(fake)
+
+        _ = reviewer.requestPush(id, target: pullRequest, headSHA: "h1")
+        await reviewer.settle()
+        fake.head = "h2"
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID)
+        await reviewer.settle()
+        #expect(reviewer.record(for: id)?.phase == .awaitingFix(headSHA: "h2"))
+
+        // Round two's finding is resolved; the turn ends without a commit.
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID)
+        await reviewer.settle()
+
+        let stop = ShipReviewStop.noProgress(openFindings: 1)
+        #expect(reviewer.record(for: id)?.phase == .stopped(stop))
+        #expect(fake.stops == [stop])
+        #expect(fake.pushes.isEmpty)
+    }
+
+    /// A fix the owner commits after a review of a pushed head isn't on the
+    /// remote: the clean review publishes it through `pr_create`.
+    @Test func fixAfterAPushedHeadReviewIsPublished() async {
+        let fake = FakeEffects()
+        fake.replies = [oneFinding]
+        let reviewer = makeReviewer(fake)
+        reviewer.prepare(id, enabled: true, reviewer: nil)
+
+        reviewer.reviewPushedHead(id, headSHA: "h1")
+        await reviewer.settle()
+        #expect(reviewer.record(for: id)?.phase == .awaitingFix(headSHA: "h1"))
+        fake.head = "h2"
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID)
+        await reviewer.settle()
+
+        let publish = ShipReviewTarget.pullRequest(PendingPRPush(title: "", body: "", draft: false, base: nil))
+        #expect(fake.pushes == [.init(target: publish, headSHA: "h2")])
+        #expect(reviewer.record(for: id)?.passedSHAs == ["h2"])
+    }
+
+    /// `pr_create` adopting an open request with nothing to push: with the
+    /// default lever on, the adopted head is reviewed before it can merge.
+    @Test(arguments: [true, false])
+    func adoptedHeadIsReviewedWhenTheDefaultLeverIsOn(leverOn: Bool) async {
+        let fake = FakeEffects()
+        fake.reviewBeforePush = leverOn
+        let reviewer = makeReviewer(fake)
+
+        reviewer.seedRecord(id)
+        let gate = reviewer.reviewGate(worktreeID: id.worktreeID, sessionID: id.sessionID)
+        reviewer.reviewPushedHead(id, headSHA: "h1")
+        await reviewer.settle()
+
+        if leverOn {
+            #expect(gate?.passedSHAs.isEmpty == true)
+            #expect(fake.runs.count == 1)
+            #expect(reviewer.record(for: id)?.passedSHAs == ["h1"])
+        } else {
+            #expect(gate == nil)
+            #expect(reviewer.record(for: id) == nil)
+            #expect(fake.runs.isEmpty)
+        }
+    }
+
+    /// A remote head Alas couldn't review is checked again: once the
+    /// worktree checks it out, it is reviewed.
+    @Test func unreviewedRemoteHeadIsReviewedOnceCheckedOut() async {
+        let fake = FakeEffects()
+        fake.head = "local"
+        let reviewer = makeReviewer(fake)
+        reviewer.prepare(id, enabled: true, reviewer: nil)
+
+        reviewer.reviewPushedHead(id, headSHA: "remote")
+        await reviewer.settle()
+        #expect(reviewer.record(for: id)?.unreviewedRemoteHead == "remote")
+        #expect(fake.runs.isEmpty)
+
+        fake.head = "remote"
+        reviewer.reviewPushedHead(id, headSHA: "remote")
+        await reviewer.settle()
+
+        #expect(fake.runs.count == 1)
+        #expect(reviewer.record(for: id)?.passedSHAs == ["remote"])
+        #expect(reviewer.record(for: id)?.unreviewedRemoteHead == nil)
+    }
+
+    @Test func unreadableBranchAfterTheOwnersTurnStops() async {
+        struct GitFailed: LocalizedError {
+            var errorDescription: String? { "git failed" }
+        }
+        let fake = FakeEffects()
+        fake.replies = [oneFinding]
+        let reviewer = makeReviewer(fake)
+
+        _ = reviewer.requestPush(id, target: pullRequest, headSHA: "h1")
+        await reviewer.settle()
+        fake.headError = GitFailed()
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID)
+        await reviewer.settle()
+
+        let stop = ShipReviewStop.reviewerFailed("couldn't read the branch: git failed")
+        #expect(reviewer.record(for: id)?.phase == .stopped(stop))
+        #expect(fake.stops == [stop])
+        #expect(fake.pushes.isEmpty)
     }
 
     @Test func sendToSessionDeliversTheStoppedRoundsFindings() async throws {

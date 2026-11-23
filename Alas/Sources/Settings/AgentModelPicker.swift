@@ -2,9 +2,10 @@ import SwiftUI
 
 /// Agent and model menus for a `ReviewerChoice`. A nil choice inherits from a
 /// wider setting and shows `inheritLabel`; `.sameAsSession` is offered only
-/// when `allowsSameAsSession` is set. A saved agent or model the lists no
-/// longer carry stays selectable and is named as such, so the menu never
-/// claims a choice the stored value does not hold.
+/// when `allowsSameAsSession` is set. `readOnlyAgentsOnly` lists only agents
+/// whose read-only mode holds, as an unattended reviewer needs. A saved
+/// agent or model the lists no longer carry stays selectable and is named
+/// as such, so the menu never claims a choice the stored value does not hold.
 ///
 /// `body` lays the two menus out side by side; screens that label each menu
 /// separately place `agentMenu` and `modelMenu` themselves.
@@ -14,6 +15,7 @@ struct AgentModelPicker: View {
     let inheritLabel: String?
     let agents: [AgentDefinition]
     let modelCatalog: ACPAgentModelCatalog
+    var readOnlyAgentsOnly = false
 
     @Environment(\.designScale) private var scale
 
@@ -30,6 +32,7 @@ struct AgentModelPicker: View {
     }
 
     var agentMenu: some View {
+        let agents = listedAgents
         let missingAgentID = selectedAgentID.flatMap { id in
             agents.contains { $0.id == id } ? nil : id
         }
@@ -111,6 +114,11 @@ struct AgentModelPicker: View {
         case agent(String)
     }
 
+    private var listedAgents: [AgentDefinition] {
+        guard readOnlyAgentsOnly else { return agents }
+        return agents.filter { ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: $0.id) }
+    }
+
     private var selectedAgentID: String? {
         if case let .agent(id, _) = choice { return id }
         return nil
@@ -128,7 +136,7 @@ struct AgentModelPicker: View {
         case .sameAsSession:
             return Self.sameAsSessionLabel
         case let .agent(id, _):
-            if let agent = agents.first(where: { $0.id == id }) { return agent.displayName }
+            if let agent = listedAgents.first(where: { $0.id == id }) { return agent.displayName }
             return "\(id) · unavailable"
         }
     }

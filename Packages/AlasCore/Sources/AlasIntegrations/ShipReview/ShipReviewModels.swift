@@ -32,7 +32,9 @@ public struct PendingPRPush: Codable, Equatable, Sendable {
 public enum ShipReviewTarget: Codable, Equatable, Sendable {
     /// The first push and PR fix pushes (`pr_create` adopts the open PR).
     case pullRequest(PendingPRPush)
-    case stack(StackShipPlan)
+    /// `base` is the gg stack's base, which the review diffs against; nil
+    /// in records written before it was kept.
+    case stack(StackShipPlan, base: String?)
     /// A head already on the remote; a clean review just records it.
     case pushedHead
 }
