@@ -31,12 +31,14 @@ final class ACPTurnCaptionStore: ObservableObject {
     private var waiting: [(key: Key, input: ACPTurnCaptionPolicy.Input)] = []
     private var running: Key?
     private var attempts: [Key: Int] = [:]
-    private var order: [Key] = []
+    /// Loaded sessions, oldest first: past `maxLoadedSessions` the oldest is forgotten whole, and loads
+    /// again on its next request. A session is never forgotten during its own load.
+    private var loadOrder: [String] = []
     /// Bumped by `reset`, so work started before it is dropped.
     private var generation = 0
 
     static let maxAttempts = 2
-    private static let capacity = 500
+    private static let maxLoadedSessions = 40
     /// Older waiting requests drop off; their cards ask again when they next show.
     private static let maxWaiting = 20
 
@@ -77,7 +79,7 @@ final class ACPTurnCaptionStore: ObservableObject {
         awaitingLoad.removeAll()
         waiting.removeAll()
         attempts.removeAll()
-        order.removeAll()
+        loadOrder.removeAll()
         captions.removeAll()
     }
 
@@ -88,6 +90,8 @@ final class ACPTurnCaptionStore: ObservableObject {
             let saved = await load(sessionId)
             guard let self, started == self.generation else { return }
             self.loaded.insert(sessionId)
+            self.loadOrder.append(sessionId)
+            if self.loadOrder.count > Self.maxLoadedSessions { self.forget(sessionId: self.loadOrder.removeFirst()) }
             for caption in saved {
                 self.remember(caption.caption, for: Key(
                     sessionId: sessionId, answerIndex: caption.answerIndex, digest: caption.filesDigest))
@@ -122,14 +126,12 @@ final class ACPTurnCaptionStore: ObservableObject {
     }
 
     private func remember(_ caption: String, for key: Key) {
-        if captions[key] == nil { order.append(key) }
         captions[key] = caption
-        if order.count > Self.capacity {
-            let evicted = order.removeFirst()
-            captions[evicted] = nil
-            attempts[evicted] = nil
-            // Its caption is still saved: the session loads again on its next request.
-            loaded.remove(evicted.sessionId)
-        }
+    }
+
+    private func forget(sessionId: String) {
+        loaded.remove(sessionId)
+        captions = captions.filter { $0.key.sessionId != sessionId }
+        attempts = attempts.filter { $0.key.sessionId != sessionId }
     }
 }

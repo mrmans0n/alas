@@ -104,10 +104,11 @@ struct ACPTurnCaptionStoreTests {
     @Test
     func savedCaptionsShowWithoutTheModelAndOnlyChangedTurnsAreWrittenAndSaved() async {
         let model = FakeModel()
+        // A long session's many captions all stay loaded: none of them sends the session back to disk.
         let disk = FakeDisk(saved: [
             .init(answerIndex: 1, filesDigest: "d", caption: "Saved"),
             .init(answerIndex: 2, filesDigest: "older edits", caption: "Stale"),
-        ])
+        ] + (100..<700).map { .init(answerIndex: $0, filesDigest: "d", caption: "Turn \($0)") })
         let store = ACPTurnCaptionStore(
             isEnabled: { true }, generate: { await model.generate($0) },
             load: { disk.load($0) }, save: { disk.save($1) })

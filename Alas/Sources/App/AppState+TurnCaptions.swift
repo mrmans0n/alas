@@ -43,15 +43,18 @@ extension AppState {
 
     /// Captions the turn `sessionID` just finished, so it is saved before its card shows here or on a
     /// Remote client. Turns without a card ask for nothing.
-    func captionFinishedTurn(sessionID: String) {
+    func captionFinishedTurn(_ completion: ACPTurnCompletion) {
+        guard completion.result == .completed else { return }
+        let sessionID = completion.sessionId
         guard let manager = acpManager(forSession: sessionID), let session = manager.sessions[sessionID] else { return }
         let messages = session.transcript.messages
+        let offset = session.transcript.messageIndexOffset
         let worktreeRoot = manager.worktreePath
         guard let answerIndex = messages.lastIndex(where: { if case .agent = $0 { true } else { false } }),
               let changes = ACPTurnChanges.forAnswer(
                   at: answerIndex, in: messages, isTurnActive: false, worktreeRoot: worktreeRoot)
         else { return }
-        turnCaptions.request(key: .init(sessionId: sessionID, answerIndex: answerIndex, digest: changes.digest)) {
+        turnCaptions.request(key: .init(sessionId: sessionID, answerIndex: offset + answerIndex, digest: changes.digest)) {
             changes.captionInput(messages: messages, answerIndex: answerIndex, worktreeRoot: worktreeRoot)
         }
     }

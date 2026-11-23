@@ -1333,7 +1333,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ACPTurnChangesCard.Caption(
                     store: store,
                     // Changes to the turn ask again, so a caption never describes an older set of edits.
-                    key: .init(sessionId: host.session.id, answerIndex: answer.index, digest: changes.digest),
+                    // Saved by the answer's place in the whole transcript: a long one first mounts its tail.
+                    key: .init(
+                        sessionId: host.session.id, answerIndex: host.session.transcript.messageIndexOffset + answer.index,
+                        digest: changes.digest),
                     input: { changes.captionInput(messages: messages, answerIndex: answer.index, worktreeRoot: worktreeRoot) }
                 )
             }
