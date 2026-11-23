@@ -39,6 +39,7 @@ function createTerminals({ send, el }) {
   const closing = new Set();   // consoles terminated here, hidden until a list no longer has them
   let error = "";
   let view = null;   // { attachment, term, fit, observer }
+  let selection = 0;   // bumped by every navigation, so a load that finishes late knows it is stale
 
   const has = capability => capabilities.includes(capability);
   const sendConsole = request => send({ type: "console", console: request });
@@ -132,6 +133,7 @@ function createTerminals({ send, el }) {
 
   async function showConsole(summary) {
     closeConsole();
+    const current = selection;
     el.listLevel.classList.add("hidden");
     el.viewLevel.classList.remove("hidden");
     el.title.textContent = summary.title;
@@ -141,10 +143,10 @@ function createTerminals({ send, el }) {
     try {
       await loadXterm();
     } catch (e) {
-      el.status.textContent = e.message;
+      if (current === selection) el.status.textContent = e.message;
       return;
     }
-    if (!shown || el.viewLevel.classList.contains("hidden")) return;   // left while loading
+    if (current !== selection) return;   // navigated elsewhere while xterm loaded
     const term = new globalThis.Terminal({
       cols: summary.columns, rows: summary.rows, scrollback: 5000, cursorBlink: true, fontSize: 13,
       fontFamily: getComputedStyle(document.body).getPropertyValue("--font-mono") || "monospace",
@@ -169,6 +171,7 @@ function createTerminals({ send, el }) {
   }
 
   function closeConsole() {
+    selection += 1;
     if (!view) return;
     view.attachment.detach();
     view.observer.disconnect();
