@@ -294,4 +294,3 @@ enum NerdFontGlyphPath {
         return combined.isEmpty ? nil : combined
     }
 }
-

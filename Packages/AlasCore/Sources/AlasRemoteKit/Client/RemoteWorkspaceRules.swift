@@ -157,11 +157,8 @@ public enum RemoteStageState: Equatable, Sendable {
     public init(_ states: some Sequence<RemoteStageState>) {
         var staged = false, unstaged = false
         for state in states {
-            switch state {
-            case .mixed: self = .mixed; return
-            case .staged: staged = true
-            case .unstaged: unstaged = true
-            }
+            staged = staged || state != .unstaged
+            unstaged = unstaged || state != .staged
         }
         self = staged && unstaged ? .mixed : staged ? .staged : .unstaged
     }
