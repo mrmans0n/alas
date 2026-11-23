@@ -214,6 +214,13 @@ a:hover { color: var(--accent-hover); }
 .md blockquote.md-alert-warning { --alert: oklch(0.82 0.14 75); }
 .md blockquote.md-alert-caution { --alert: var(--del); }
 .md-alert-title { font-size: 13px; font-weight: 600; color: var(--alert); white-space: normal; }
+/* A <details> section: a summary row with a chevron that opens the blocks under it, as on the Mac. */
+.md details { margin: 8px 0; padding: 0 12px; background: var(--bg-2); border-radius: 12px; box-shadow: inset 0 0 0 0.5px var(--ring); }
+.md details[open] { padding-bottom: 10px; }
+.md summary { display: flex; align-items: baseline; gap: 8px; margin: 0 -12px; padding: 9px 12px; font-size: 14px; font-weight: 600; color: var(--fg); cursor: pointer; list-style: none; }
+.md summary::-webkit-details-marker { display: none; }
+.md summary::before { content: ""; flex: none; width: 6px; height: 6px; border: solid var(--fg-dim); border-width: 0 1.5px 1.5px 0; transform: translateY(-2px) rotate(-45deg); transition: transform 0.15s ease; }
+.md details[open] > summary::before { transform: translateY(-3px) rotate(45deg); }
 /* A ```visual or ```chart fence: an embedded visual between the row's prose, or its label while it streams. */
 .m-agent > .m-visual { margin: 8px 0; }
 .md-drawing { margin: 6px 0; font-size: 13px; color: var(--fg-dim); white-space: normal; }

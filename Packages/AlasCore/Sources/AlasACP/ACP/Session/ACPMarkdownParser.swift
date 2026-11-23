@@ -24,6 +24,9 @@ public enum ACPMarkdownParser: Sendable {
         case chart(ChartSpec)
         case image(alt: String, source: String)
         case table(header: [String], rows: [[String]])
+        /// A GitHub `<details>` section: its blocks fold under the summary, open first when the tag says
+        /// `open`. See `MarkdownDetails`.
+        case details(summary: String, isOpen: Bool, blocks: [Block])
     }
 
     public typealias AlertKind = MarkdownAlert.Kind
@@ -176,6 +179,7 @@ public enum ACPMarkdownParser: Sendable {
     private static func startsParagraphBoundary(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty || matchFence(line) != nil || trimmed.hasPrefix(">")
+            || MarkdownDetails.opensSection(line) || MarkdownDetails.depthChange(line) < 0
             || matchHeading(trimmed) != nil || matchTaskItem(line) != nil || matchImage(trimmed) != nil
     }
 
@@ -313,7 +317,7 @@ public enum ACPMarkdownParser: Sendable {
     public static func parse(_ text: String) -> [Block] {
         var blocks: [Block] = []
         var i = 0
-        let lines = text.components(separatedBy: "\n")
+        var lines = text.components(separatedBy: "\n")
 
         while i < lines.count {
             let line = lines[i]
@@ -346,6 +350,23 @@ public enum ACPMarkdownParser: Sendable {
                 } else {
                     blocks.append(.streamingCode(language: fence.language, body: codeBody))
                 }
+                continue
+            }
+
+            // A `<details>` section, parsed on its own. Text after its closing tag starts the next block.
+            if let found = MarkdownDetails.section(in: lines, at: i) {
+                let section = found.section
+                blocks.append(.details(summary: section.summary, isOpen: section.isOpen, blocks: parse(section.body)))
+                i += found.lineCount
+                if let trailing = found.trailing {
+                    i -= 1
+                    lines[i] = trailing
+                }
+                continue
+            }
+            // A closing tag with no section to close is HTML that shows nothing, as on GitHub.
+            if MarkdownDetails.depthChange(trimmed) < 0 {
+                i += 1
                 continue
             }
 
@@ -416,5 +437,14 @@ public enum ACPMarkdownParser: Sendable {
             blocks.append(.paragraph(para.joined(separator: "\n")))
         }
         return blocks
+    }
+
+    /// `blocks` with each `<details>` section replaced by its summary, as a paragraph, and then its own
+    /// blocks: for readers that collect a message's text rather than draw it.
+    public static func flatteningDetails(_ blocks: [Block]) -> [Block] {
+        blocks.flatMap { block -> [Block] in
+            guard case .details(let summary, _, let inner) = block else { return [block] }
+            return [.paragraph(summary)] + flatteningDetails(inner)
+        }
     }
 }

@@ -31,8 +31,27 @@ enum MarkdownBlock: Equatable {
     case drawingVisual(title: String?)
     /// A closed ```` ```chart ```` fence, drawn natively as on the Mac.
     case chart(ChartSpec)
+    /// A GitHub `<details>` section, folded under its summary as on the Mac. See `MarkdownDetails`.
+    case details(summary: AttributedString, isOpen: Bool, blocks: [MarkdownBlock])
 
+    /// The text's blocks. `<details>` sections are cut out first, since cmark reads their tags as HTML
+    /// that ends at a blank line, and each part is parsed on its own.
     static func parse(_ text: String) -> [MarkdownBlock] {
+        MarkdownDetails.split(text).flatMap { segment -> [MarkdownBlock] in
+            switch segment {
+            case .markdown(let markdown): parseMarkdown(markdown)
+            case .details(let section):
+                [.details(summary: summaryText(section.summary), isOpen: section.isOpen, blocks: parse(section.body))]
+            }
+        }
+    }
+
+    private static func summaryText(_ summary: String) -> AttributedString {
+        guard let paragraph = Document(parsing: summary).child(at: 0) as? Paragraph else { return AttributedString(summary) }
+        return inline(paragraph)
+    }
+
+    private static func parseMarkdown(_ text: String) -> [MarkdownBlock] {
         let lines = text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" })  // cmark's line endings only, so line numbers match
         return Document(parsing: text).children.compactMap { block($0, lines: lines) }
     }
@@ -254,6 +273,9 @@ final class MarkdownBlockCache {
     static let shared = MarkdownBlockCache()
 
     private var entries: [String: (text: String, blocks: [MarkdownBlock])] = [:]
+    /// The `<details>` sections the reader opened or closed against their tag, by key, so a reused
+    /// cell keeps them as they were.
+    var toggledDetails: Set<String> = []
 
     /// Keeps only the newest text per id, so a streaming row re-parses only itself. Keyed on the
     /// text itself, so a changed message can never be served stale blocks; an unchanged row's
@@ -270,11 +292,15 @@ final class MarkdownBlockCache {
         for id in ids {
             entries[id] = nil
         }
+        if !toggledDetails.isEmpty {
+            toggledDetails = toggledDetails.filter { key in !ids.contains { key.hasPrefix($0 + ":") } }
+        }
     }
 
     /// The benchmark clears it per run: a warm cache would make every open after the first look
     /// cheaper than a real cold open.
     func removeAll() {
         entries.removeAll()
+        toggledDetails.removeAll()
     }
 }

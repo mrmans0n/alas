@@ -289,6 +289,12 @@ private struct PluginMarkdownView: View {
                 .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-2")))
         case .chart(let chart):
             ACPMarkdownChart(chart: chart)
+        case .details(let summary, let isOpen, let blocks):
+            ACPMarkdownDetailsBlock(summary: summary, opensFirst: isOpen) {
+                VStack(alignment: .leading, spacing: scale.space[2]) {
+                    ForEach(Array(blocks.enumerated()), id: \.offset) { _, inner in AnyView(self.block(inner)) }
+                }
+            }
         case .image(let alt, let source):
             Text(alt.isEmpty ? source : alt).foregroundColor(theme.color("fg-dim"))
         case .table(let header, let rows):

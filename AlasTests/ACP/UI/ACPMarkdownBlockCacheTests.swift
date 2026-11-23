@@ -89,26 +89,18 @@ struct ACPMarkdownBlockCacheTests {
         #expect(cache.stableBlocks.count > stableAfterOpen)
     }
 
-    @Test("cached output equals direct parse for the same input")
-    func cacheParityWithDirectParse() async {
-        let raw = """
-        # Heading
-
-        First paragraph with **bold**.
-
-        ```
-        let x = 1
-        ```
-
-        Closing paragraph.
-        """
+    @Test("cached output equals direct parse at every point of a stream", arguments: [
+        "# Heading\n\nFirst paragraph with **bold**.\n\n```\nlet x = 1\n```\n\nClosing paragraph.",
+        "Intro\n\n<details>\n<summary>Log</summary>\n\nfirst\n\n<details open>\n\ninner\n\n</details>\n\nlast\n\n</details>\n\nAfter",
+        "<details>\n\na\n\n</details><details>\n\n<details>\n\nb\n\n</details></details>\n\nAfter",
+    ])
+    func cacheParityWithDirectParse(raw: String) {
         let cache = ACPMarkdownBlockCache()
-        cache.update(with: raw)
-        let cached = cache.stableBlocks + ACPMarkdownText.parse(cache.tailUnparsed)
-        let direct = ACPMarkdownText.parse(raw)
-        // Block-by-block comparison: Block must conform to Equatable
-        // (synthesized; its associated values are String / [String] / Int).
-        #expect(cached == direct)
+        for end in raw.indices + [raw.endIndex] {
+            let prefix = String(raw[..<end])
+            cache.update(with: prefix)
+            #expect(cache.stableBlocks + ACPMarkdownText.parse(cache.tailUnparsed) == ACPMarkdownText.parse(prefix))
+        }
     }
 
     @Test("contiguous top-level task lines parse into one task list")

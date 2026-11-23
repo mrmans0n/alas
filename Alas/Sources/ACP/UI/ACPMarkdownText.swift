@@ -21,6 +21,13 @@ struct ACPMarkdownText: View {
     var noninteractiveTapAction: (() -> Void)? = nil
     /// Overrides the transcript spacing for surfaces that keep their own density.
     var spacing: Spacing? = nil
+    /// A `<details>` section's blocks, drawn instead of parsing `raw`.
+    var sectionBlocks: [Block]? = nil
+    /// Where the sections drawn here keep whether the reader toggled them: the message's cache, which
+    /// outlives the row. Defaults to `cache`.
+    var detailsMemory: ACPMarkdownBlockCache? = nil
+    /// Prefixes each section's key, so a nested section's differs from its parent's siblings.
+    var detailsKeyPrefix = ""
     @Environment(\.theme) private var theme
     @Environment(\.acpMarkdownProseMaxWidth) private var proseMaxWidth
     @Environment(\.designScale) private var scale
@@ -38,8 +45,8 @@ struct ACPMarkdownText: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: spacing?.block ?? scale.transcriptBlockSpacing) {
-            ForEach(Array(currentRenderBlocks().enumerated()), id: \.offset) { _, renderBlock in
-                view(for: renderBlock)
+            ForEach(Array(currentRenderBlocks().enumerated()), id: \.offset) { offset, renderBlock in
+                view(for: renderBlock, offset: offset)
                     .modifier(ACPMarkdownNoninteractiveTapModifier(
                         action: renderBlock.block.allowsNoninteractiveTapAction ? noninteractiveTapAction : nil
                     ))
@@ -48,6 +55,9 @@ struct ACPMarkdownText: View {
     }
 
     private func currentRenderBlocks() -> [RenderBlock] {
+        if let sectionBlocks {
+            return sectionBlocks.map { RenderBlock(block: $0, memoizesInlineMarkdown: true) }
+        }
         if let cache {
             cache.update(
                 with: raw,
@@ -63,7 +73,7 @@ struct ACPMarkdownText: View {
     }
 
     @ViewBuilder
-    private func view(for renderBlock: RenderBlock) -> some View {
+    private func view(for renderBlock: RenderBlock, offset: Int) -> some View {
         switch renderBlock.block {
         case .heading(let level, let text):
             ACPMarkdownInlineText(
@@ -183,6 +193,21 @@ struct ACPMarkdownText: View {
                 .id(visual.id)
         case .chart(let chart):
             ACPMarkdownChart(chart: chart)
+        case .details(let summary, let isOpen, let blocks):
+            let memory = detailsMemory ?? cache
+            let key = detailsKeyPrefix + String(offset)
+            ACPMarkdownDetailsBlock(summary: summary, opensFirst: isOpen, key: key, memory: memory, typography: typography) {
+                ACPMarkdownText(
+                    raw: "",
+                    typography: typography,
+                    showsCodeBlockCopyButton: showsCodeBlockCopyButton,
+                    spacing: spacing,
+                    sectionBlocks: blocks,
+                    detailsMemory: memory,
+                    detailsKeyPrefix: key + "."
+                )
+            }
+            .frame(maxWidth: proseMaxWidth ?? .infinity, alignment: .leading)
         case .image(let alt, let source):
             ACPMarkdownImageBlockView(alt: alt, source: source)
         case .table(let header, let rows):
@@ -361,7 +386,7 @@ struct ACPMarkdownText: View {
 private extension ACPMarkdownText.Block {
     var allowsNoninteractiveTapAction: Bool {
         switch self {
-        case .mermaid, .image, .visual, .chart:
+        case .mermaid, .image, .visual, .chart, .details:
             false
         case .heading, .paragraph, .taskList, .quote, .alert, .code, .streamingCode, .table:
             true
@@ -377,6 +402,70 @@ private struct ACPMarkdownVisualBlock: View {
 
     var body: some View {
         ACPVisualAidCard(visual: visual, form: nil, sendStatus: sendStatus, actions: .fenced, typography: typography)
+    }
+}
+
+/// A `<details>` section: a summary line that opens and closes the blocks under it. Whether the reader
+/// toggled it is kept in `memory` under `key`, when given, so a row rebuilt after scrolling keeps it.
+struct ACPMarkdownDetailsBlock<Content: View>: View {
+    let summary: String
+    let opensFirst: Bool
+    var key = ""
+    var memory: ACPMarkdownBlockCache? = nil
+    var typography: ACPChatTypography = .default
+    @ViewBuilder let content: () -> Content
+    @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
+    @State private var toggled: Bool
+
+    init(
+        summary: String, opensFirst: Bool, key: String = "", memory: ACPMarkdownBlockCache? = nil,
+        typography: ACPChatTypography = .default, @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.summary = summary
+        self.opensFirst = opensFirst
+        self.key = key
+        self.memory = memory
+        self.typography = typography
+        self.content = content
+        _toggled = State(initialValue: memory?.toggledDetails.contains(key) ?? false)
+    }
+
+    private var isOpen: Bool { opensFirst != toggled }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: toggle) {
+                HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: typography.labelSize, weight: .semibold))
+                        .foregroundStyle(theme.color("fg-muted"))
+                        .rotationEffect(.degrees(isOpen ? 90 : 0))
+                    Text(ACPMarkdownInlineRenderer.cleanAttributedString(summary))
+                        .font(.system(size: typography.paragraphSize, weight: .semibold))
+                        .foregroundStyle(theme.color("fg"))
+                        .multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(isOpen ? "Expanded" : "Collapsed")
+            .accessibilityHint(isOpen ? "Hides the section" : "Shows the section")
+            if isOpen {
+                content()
+                    .padding(.leading, scale.space[3]).padding(.trailing, scale.space[3]).padding(.bottom, scale.space[2])
+            }
+        }
+        .background(theme.color("bg-2").opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+    }
+
+    private func toggle() {
+        toggled.toggle()
+        guard let memory else { return }
+        if toggled { memory.toggledDetails.insert(key) } else { memory.toggledDetails.remove(key) }
     }
 }
 

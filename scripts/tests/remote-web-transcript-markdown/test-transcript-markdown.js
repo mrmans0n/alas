@@ -32,6 +32,13 @@ assert.deepEqual(tm.splitVisualFences("Intro\n```visual\n<div>"), [
 assert.deepEqual(types("```visual\n\n```"), ["markdown"]);
 assert.deepEqual(types("```html\n<svg/>\n```"), ["markdown"]);
 assert.deepEqual(types("````md\n```visual\n<svg/>\n```\n````"), ["markdown"]);
+// So does a visual inside a <details> section, which a split would tear open; after it closes, they draw again.
+assert.deepEqual(types("<details>\n<summary>Log</summary>\n\n```visual\n<svg/>\n```\n\n</details>"), ["markdown"]);
+assert.deepEqual(types("<details><summary>a</summary>b</details>\n```visual\n<svg/>\n```"), ["markdown", "visual"]);
+assert.deepEqual(types("<details>\n\n</details>\n```visual\n<svg/>\n```"), ["markdown", "visual"]);
+assert.deepEqual(types("<details><summary>a</summary>b</details> tail\n```visual\n<svg/>\n```"), ["markdown", "visual"]);
+assert.deepEqual(types("    <details>\n\n```visual\n<svg/>\n```"), ["markdown", "visual"]);
+assert.deepEqual(types("<details>\n\n</details><details>\n\n```visual\n<svg/>\n```"), ["markdown"]);
 
 // A chart becomes an escaped <alas-chart>, titled by its label.
 const [chart] = tm.splitVisualFences('```chart line unit=ms label="Build & test"\n{"labels":["a"],"values":[1]}\n```');

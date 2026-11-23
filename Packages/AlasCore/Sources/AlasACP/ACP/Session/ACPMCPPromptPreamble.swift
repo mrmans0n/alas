@@ -596,7 +596,8 @@ public enum ACPMCPPromptPreamble: Sendable {
             + "and callout (info, success, warn, danger). "
             + "Use \(tool) instead to ask the user a question about "
             + "a visual or to show a UI mockup in a titled card. Skip visuals for short answers, "
-            + "single facts, code edits, and status updates."
+            + "single facts, code edits, and status updates. Put long logs, full command output and "
+            + "side explanations in a <details> section with a <summary> line, which Alas shows collapsed."
     }
 
     private static func ggStackLine(_ context: GGPreambleStackContext, cliMode: Bool, shipsWithAlas: Bool) -> String {
