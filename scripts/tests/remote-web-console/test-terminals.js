@@ -87,4 +87,18 @@ async function finishLoadingXterm() {
   assert.equal(sent.filter(m => m.detach).length, 1);
   assert.equal(viewTitle, null);
   console.log("✔ a desktop terminal stays attached until its tab closes");
+
+  // A terminal still loading when the worktree changes never attaches, though the desktop kept it
+  // through the panel moving to another tab.
+  delete globalThis.Terminal;
+  delete globalThis.FitAddon;
+  sent.length = 0;
+  desk.show();
+  desk.handle({ list: { consoles: [summary("A")] } });
+  el.list.children[0].children[0].click();
+  desk.hide();
+  desk.setWorktree("w2");
+  await finishLoadingXterm();
+  assert.equal(sent.filter(m => m.attach).length, 0);
+  console.log("✔ a terminal still loading when the worktree changes is never attached");
 })().catch(error => { console.error("✘", error); process.exit(1); });

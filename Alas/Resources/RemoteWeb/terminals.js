@@ -217,7 +217,10 @@ function createTerminals({ send, el, keepView = () => false, onView = () => {} }
       worktreeId = id || null;
       opening = null;
       error = "";
-      if (shown || view) showList(true);
+      // Another worktree: close the open terminal and drop one still loading, even unseen.
+      closeConsole();
+      el.viewLevel.classList.add("hidden");
+      if (shown) showList(true);
     },
     show() {
       shown = true;

@@ -1178,7 +1178,7 @@ function replayActiveDetailRequest() {
 // just before its first response ever arrived) — same code path, since
 // `detailStack` is empty in both.
 function replayActiveListRequest() {
-  if (!currentSession || detailStack.length > 0) return;
+  if (!currentSession || (detailStack.length > 0 && !wideLayout.matches)) return;   // wide: lists show beside a document
   // Chat shares this on reconnect for the same reason it shares the
   // idle-transition refresh: a dropped connection can hide edits made
   // during the outage, and requestChanges() only touches hidden DOM plus
@@ -1398,7 +1398,7 @@ function noteStreamingStateForChanges(state) {
   previousChangesStreamingState = state;
   if (state !== "idle" || wasIdle) return;
   if (activeTab !== "changes" && activeTab !== "files" && activeTab !== "chat") return;
-  if (detailStack.length !== 0) {
+  if (detailStack.length !== 0 && !wideLayout.matches) {   // wide: the list shows beside the document
     pendingListRefresh = true;
     return;
   }
