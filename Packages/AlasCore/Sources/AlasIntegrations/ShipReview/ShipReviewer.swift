@@ -877,11 +877,14 @@ public final class ShipReviewer {
         return ShipReviewRecord(id: id, enabled: true, reviewer: nil, maxRounds: defaults.maxReviewRounds, now: now())
     }
 
-    /// Changes the record, creating it from the defaults' round cap. Turning
-    /// the lever off stops a running review.
+    /// Changes the record, creating it from the Settings defaults (lever and
+    /// round cap) so changing only the reviewer keeps the default lever.
+    /// Turning the lever off stops a running review.
     private func update(_ id: ShipReviewID, _ change: (inout ShipReviewRecord) -> Void) {
-        let maxRounds = effects?.settings().defaults.maxReviewRounds ?? ShepherdDefaults.defaultMaxReviewRounds
-        var record = records[id] ?? ShipReviewRecord(id: id, enabled: false, reviewer: nil, maxRounds: maxRounds, now: now())
+        let defaults = effects?.settings().defaults ?? ShepherdDefaults()
+        var record = records[id] ?? ShipReviewRecord(
+            id: id, enabled: defaults.reviewBeforePush, reviewer: nil, maxRounds: defaults.maxReviewRounds, now: now()
+        )
         change(&record)
         record.updatedAt = now()
         if !record.enabled { halt(&record) }

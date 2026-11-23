@@ -247,6 +247,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// enforce. Its `session/new` cwd and its runner's terminal and file
     /// root. In-memory only, like `unattendedReview`.
     public var workingDirectory: String?
+    /// The model a reviewer session was asked to run (nil: the agent's
+    /// default), so a later round with a different choice starts a new
+    /// reviewer instead of reusing this one. In-memory only.
+    public var reviewModelID: String?
 
     public func recordReadOnlyBlock(_ title: String) {
         readOnlyBlockedTools.append(.init(title: title, messageIndex: transcript.messages.count))

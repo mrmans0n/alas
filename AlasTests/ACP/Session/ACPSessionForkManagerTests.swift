@@ -773,6 +773,61 @@ struct ACPSessionForkManagerTests {
         await manager.discardReviewSession(id: id)
     }
 
+    @Test("a later round reuses the reviewer only while its model choice is unchanged", arguments: [
+        ("gpt-5.2", "gpt-5.2", true),
+        ("gpt-5.2", "gpt-5.5", false),
+        (nil, "gpt-5.5", false),
+    ] as [(String?, String?, Bool)])
+    func reviewTurnReuseFollowsTheModel(first: String?, second: String?, reused: Bool) async throws {
+        // A reviewer that isn't reused is discarded, which closes its
+        // connection: each reviewer gets its own client, as each gets its
+        // own agent process outside tests.
+        func reviewerClient() -> ACPMockClient {
+            let client = ACPMockClient()
+            client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
+            client.script(method: "session/set_model") { _ in Data("{}".utf8) }
+            client.script(method: "session/prompt") { _ in
+                client.emit(.init(sessionId: "remote", update: .agentMessageChunk(.text("No findings."))))
+                return Data(#"{"stopReason":"end_turn"}"#.utf8)
+            }
+            client.script(method: "initialize") { _ in
+                try JSONEncoder().encode(ACPInitializeResult(
+                    protocolVersion: 1,
+                    agentCapabilities: .init(sessionCapabilities: .init(resume: nil, close: nil)),
+                    authMethods: []
+                ))
+            }
+            client.script(method: "session/new") { _ in Data(Self.planMode.utf8) }
+            return client
+        }
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: try ACPSessionStore(path: temporaryPath()),
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: reviewerClient()) }
+        )
+        let parent = manager.createSession(agentId: "claude")
+        var request = reviewRequest(parentID: parent.id)
+        request.modelID = first
+        guard case .finished(let firstID, _) = await manager.runReviewTurn(request) else {
+            Issue.record("the first round didn't finish")
+            return
+        }
+
+        request.reuseSessionID = firstID
+        request.modelID = second
+        let secondOutcome = await manager.runReviewTurn(request)
+        guard case .finished(let secondID, _) = secondOutcome else {
+            Issue.record("the second round didn't finish: \(secondOutcome)")
+            return
+        }
+
+        #expect((secondID == firstID) == reused)
+        #expect(manager.sessions[secondID]?.reviewModelID == second)
+        await manager.discardReviewSession(id: secondID)
+    }
+
     /// Built like `sideQuestionReadOnlyMode`'s manager.
     private func reviewManager(
         client: ACPMockClient,

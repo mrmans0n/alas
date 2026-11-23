@@ -155,6 +155,7 @@ extension ACPSessionManager {
            previous.unattendedReview {
             if previous.agentId == request.agentID,
                previous.workingDirectory == request.workingDirectory,
+               previous.reviewModelID == request.modelID,
                previous.agentState == .ready,
                previous.transcript.streamingState == .idle,
                reviewTurnWaiters[previousID] == nil {
@@ -170,6 +171,7 @@ extension ACPSessionManager {
         )
         session.unattendedReview = true
         session.workingDirectory = request.workingDirectory
+        session.reviewModelID = request.modelID
         if let modelID = request.modelID {
             pendingModel[session.id] = modelID
         }

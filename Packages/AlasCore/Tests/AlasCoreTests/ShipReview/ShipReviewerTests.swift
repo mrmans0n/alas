@@ -274,6 +274,20 @@ struct ShipReviewerTests {
         }
     }
 
+    /// Picking a reviewer for a PR that has no record yet keeps the lever
+    /// the Settings default shows instead of turning it off.
+    @Test(arguments: [true, false])
+    func changingTheReviewerKeepsTheDefaultLever(leverOn: Bool) {
+        let fake = FakeEffects()
+        fake.reviewBeforePush = leverOn
+        let reviewer = makeReviewer(fake)
+
+        reviewer.setReviewer(.agent(id: "codex", modelID: "gpt-5.2"), for: id)
+
+        #expect(reviewer.record(for: id)?.enabled == leverOn)
+        #expect(reviewer.record(for: id)?.reviewer == .agent(id: "codex", modelID: "gpt-5.2"))
+    }
+
     /// A remote head Alas couldn't review is checked again: once the
     /// worktree checks it out, it is reviewed.
     @Test func unreviewedRemoteHeadIsReviewedOnceCheckedOut() async {
