@@ -301,6 +301,11 @@ extension Paths {
     public static var pendingReviewsDir: URL {
         appSupportRoot.appendingPathComponent("pending-reviews", isDirectory: true)
     }
+
+    /// Review before push records (`ShipReviewer`).
+    public static var shipReviewsFile: URL {
+        appSupportRoot.appendingPathComponent("ship-reviews.json")
+    }
 }
 
 extension Paths {

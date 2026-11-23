@@ -50,7 +50,9 @@ extension AlasCoreContext {
                     worktreeID, sessionID: sessionID, isStillWanted: isStillWanted
                 ) ?? .declined
             },
-            servesWorktree: { [weak self] in self?.servesShepherdWorktree($0) ?? false }
+            servesWorktree: { [weak self] in self?.servesShepherdWorktree($0) ?? false },
+            reviewGate: { [weak self] in self?.reviewGate(for: $0) },
+            unreviewedHead: { [weak self] in self?.noteUnreviewedHead($0, headSHA: $1) }
         )
         stackShepherd.effects = StackShepherd.Effects(
             worktreeContext: { [weak self] worktreeID in
@@ -115,6 +117,12 @@ extension AlasCoreContext {
             servesWorktree: { [weak self] in self?.servesShepherdWorktree($0) ?? false },
             loadStackWithForgeState: { path in try await GGService().currentStack(worktreePath: path.path) }
         )
+        shipReviewNotice = { [weak self] id, message in
+            self?.notifyShepherd(
+                title: "Review before push", body: message, sessionID: id.sessionID,
+                owner: .worktree(id.worktreeID), worktreeID: id.worktreeID
+            )
+        }
     }
 
     /// A turn of a session this host runs ended: the shepherds and scheduled
@@ -123,6 +131,7 @@ extension AlasCoreContext {
         scheduledAgentTurns.deliver(completion)
         reviewShepherd.turnCompleted(sessionID: completion.sessionId)
         stackShepherd.turnCompleted(sessionID: completion.sessionId)
+        shipReviewer.ownerTurnCompleted(sessionID: completion.sessionId)
         await orchestration.childTurnCompleted(completion)
     }
 

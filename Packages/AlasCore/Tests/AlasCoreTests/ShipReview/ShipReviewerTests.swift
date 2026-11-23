@@ -1,0 +1,216 @@
+import Foundation
+import Testing
+import AlasModel
+@testable import AlasIntegrations
+
+private let t0 = Date(timeIntervalSince1970: 1_000)
+private let fileURL = URL(fileURLWithPath: "/memory/ship-reviews.json")
+private let id = ShipReviewID(worktreeID: "wt-1", sessionID: "s1")
+private let pullRequest = ShipReviewTarget.pullRequest(PendingPRPush(title: "Add b", body: "Body", draft: false, base: "main"))
+
+private let diff = """
+    diff --git a/Sources/A.swift b/Sources/A.swift
+    --- a/Sources/A.swift
+    +++ b/Sources/A.swift
+    @@ -1,1 +1,2 @@
+     let a = 1
+    +let b = 2
+    """
+private let approve = #"{"verdict": "approve", "summary": "Looks right.", "findings": [], "resolved": []}"#
+private let oneFinding = #"""
+    {"verdict": "request_changes", "summary": "One bug.",
+     "findings": [{"path": "Sources/A.swift", "line": 2, "body": "b is never read."}], "resolved": []}
+    """#
+
+/// Effects that record every call and answer from what the test set.
+@MainActor
+private final class FakeEffects {
+    struct Push: Equatable {
+        let target: ShipReviewTarget
+        let headSHA: String
+    }
+
+    var head = "h1"
+    var label: String? = "Codex"
+    var instructionsError: (any Error)?
+    /// The reviewer's final messages, in order; approve once they run out.
+    var replies: [String] = []
+    var openFindings = 1
+    /// Runs inside the push effect, as `pr_create` re-entering the gate does.
+    var onPush: ((ShipReviewID, ShipReviewTarget, String) -> Void)?
+
+    var runs: [ShipReviewer.ReviewerRun] = []
+    var filings: [ShipReviewer.Filing] = []
+    var delivered: [ShepherdPrompt] = []
+    var pushes: [Push] = []
+    var stops: [ShipReviewStop] = []
+
+    func effects() -> ShipReviewer.Effects {
+        ShipReviewer.Effects(
+            context: { _ in
+                ShipReviewer.Context(
+                    worktreePath: URL(fileURLWithPath: "/tmp/wt-1"), branch: "feature", baseBranch: "main",
+                    providerName: "GitHub", projectSettings: nil
+                )
+            },
+            settings: { (CodeReviewSettings(), ShepherdDefaults(reviewBeforePush: true)) },
+            ownerAgentID: { _ in "codex" },
+            agentLabel: { _ in self.label },
+            git: ShipReviewGit(
+                headSHA: { _ in await self.head },
+                mergeBase: { _, _, _ in "base0" },
+                diff: { _, _, _ in diff }
+            ),
+            instructions: { _, _ in
+                if let error = self.instructionsError { throw error }
+                return CodeReviewInstructions()
+            },
+            runReviewer: { run in
+                self.runs.append(run)
+                let reply = self.replies.isEmpty ? approve : self.replies.removeFirst()
+                return .finished(sessionID: "reviewer-\(self.runs.count)", finalText: reply)
+            },
+            discardReviewer: { _, _ in },
+            earlierFindings: { sessionIDs in
+                self.filings.enumerated()
+                    .filter { sessionIDs.contains(Self.reviewSessionID($0.offset)) }
+                    .flatMap { zip($0.element.findingIDs, $0.element.result.findings) }
+                    .map { CodeReviewEarlierFinding(id: $0, path: $1.path, line: nil, body: $1.body, replies: []) }
+            },
+            openFindingCount: { _ in self.openFindings },
+            fileRound: { filing in
+                self.filings.append(filing)
+                return Self.reviewSessionID(self.filings.count - 1)
+            },
+            deliverFindings: { _, prompt in
+                self.delivered.append(prompt)
+                return .delivered
+            },
+            push: { id, target, headSHA in
+                self.pushes.append(Push(target: target, headSHA: headSHA))
+                self.onPush?(id, target, headSHA)
+                return nil
+            },
+            autoFix: { _ in true },
+            localCommitsToPush: { _ in nil },
+            notify: { _, stop in self.stops.append(stop) }
+        )
+    }
+
+    static func reviewSessionID(_ index: Int) -> ReviewSessionID {
+        ReviewSessionID(rawValue: "review-\(index + 1)")
+    }
+}
+
+@MainActor
+struct ShipReviewerTests {
+    private func makeReviewer(_ fake: FakeEffects, store: MemoryStore = MemoryStore()) -> ShipReviewer {
+        let reviewer = ShipReviewer(store: store, fileURL: fileURL, now: { t0 })
+        reviewer.effects = fake.effects()
+        return reviewer
+    }
+
+    @Test func cleanReviewPushesTheReviewedSHA() async {
+        let fake = FakeEffects()
+        let reviewer = makeReviewer(fake)
+        var reentered: [ShipReviewer.Gate] = []
+        fake.onPush = { id, target, headSHA in
+            reentered.append(reviewer.requestPush(id, target: target, headSHA: headSHA))
+        }
+
+        #expect(reviewer.requestPush(id, target: pullRequest, headSHA: "h1") != .push)
+        await reviewer.settle()
+
+        #expect(fake.pushes == [.init(target: pullRequest, headSHA: "h1")])
+        #expect(reentered == [.push])
+        #expect(fake.filings.map(\.round) == [1])
+        let record = reviewer.record(for: id)
+        #expect(record?.phase == .idle)
+        #expect(record?.passedSHAs == ["h1"])
+    }
+
+    @Test func findingsGoToTheOwnerAndTheNextCommitStartsRoundTwo() async throws {
+        let fake = FakeEffects()
+        fake.replies = [oneFinding]
+        let reviewer = makeReviewer(fake)
+
+        _ = reviewer.requestPush(id, target: pullRequest, headSHA: "h1")
+        await reviewer.settle()
+
+        #expect(fake.delivered.map(\.card.title) == ["Review before push · 1 finding"])
+        #expect(reviewer.record(for: id)?.phase == .awaitingFix(headSHA: "h1"))
+        #expect(fake.pushes.isEmpty)
+
+        fake.head = "h2"
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID)
+        await reviewer.settle()
+
+        let findingID = try #require(fake.filings.first?.findingIDs.first)
+        #expect(fake.runs.count == 2)
+        #expect(fake.runs.last?.reuseSessionID == "reviewer-1")
+        #expect(fake.runs.last?.prompt.contains(findingID) == true)
+        #expect(fake.filings.last?.earlierRoundSessionIDs == [FakeEffects.reviewSessionID(0)])
+        #expect(fake.pushes.map(\.headSHA) == ["h2"])
+    }
+
+    @Test func unavailableReviewerStopsWithoutPushing() async {
+        let fake = FakeEffects()
+        fake.label = nil
+        let reviewer = makeReviewer(fake)
+
+        _ = reviewer.requestPush(id, target: pullRequest, headSHA: "h1")
+        await reviewer.settle()
+
+        let stop = ShipReviewStop.reviewerFailed("codex isn't available")
+        #expect(reviewer.record(for: id)?.phase == .stopped(stop))
+        #expect(fake.stops == [stop])
+        #expect(fake.runs.isEmpty)
+        #expect(fake.pushes.isEmpty)
+    }
+
+    @Test func unreadableInstructionsStopWithoutPushing() async {
+        let fake = FakeEffects()
+        fake.instructionsError = ShepherdRulesReadError(file: ".alas/code-review.md", host: "local", detail: "denied")
+        let reviewer = makeReviewer(fake)
+
+        _ = reviewer.requestPush(id, target: pullRequest, headSHA: "h1")
+        await reviewer.settle()
+
+        let stop = ShipReviewStop.instructionsUnreadable(".alas/code-review.md: denied")
+        #expect(reviewer.record(for: id)?.phase == .stopped(stop))
+        #expect(fake.stops == [stop])
+        #expect(fake.runs.isEmpty)
+        #expect(fake.pushes.isEmpty)
+    }
+
+    @Test func relaunchRestartsARunningRoundOnce() async throws {
+        let store = MemoryStore()
+        var running = ShipReviewRecord(id: id, enabled: true, reviewer: nil, maxRounds: 3, now: t0)
+        running.pending = pullRequest
+        running.roundsThisPush = 1
+        running.rounds = [
+            ShipReviewRound(
+                number: 1, headSHA: "h0", reviewSessionID: FakeEffects.reviewSessionID(0), verdict: .requestChanges,
+                openFindingIDs: ["f1"], reviewerLabel: "Codex", reviewedAt: t0
+            ),
+            ShipReviewRound(number: 2, headSHA: "h1", reviewerLabel: "Codex"),
+        ]
+        running.phase = .reviewing(headSHA: "h1", startedAt: t0)
+        running.reviewerSessionID = "reviewer-before-quit"
+        try store.write(ShipReviewsFile(records: [running]), to: fileURL)
+        let fake = FakeEffects()
+        let reviewer = makeReviewer(fake, store: store)
+
+        reviewer.start()
+        reviewer.start()
+
+        let restarted = try #require(reviewer.record(for: id))
+        #expect(restarted.phase == .reviewing(headSHA: "h1", startedAt: t0))
+        #expect(restarted.roundsThisPush == 1)
+        #expect(restarted.rounds.map(\.number) == [1, 2])
+        #expect(restarted.reviewerSessionID == nil)
+        await reviewer.settle()
+        #expect(fake.runs.count == 1)
+        #expect(fake.runs.first?.reuseSessionID == nil)
+    }
+}

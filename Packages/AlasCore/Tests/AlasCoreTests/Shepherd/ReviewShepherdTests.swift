@@ -61,19 +61,6 @@ struct ReviewShepherdTests {
         #expect(idle.record.phase == .awaitingPush(turnEndedAt: F.now.addingTimeInterval(3600), pollsWithoutProgress: 0))
     }
 
-    private final class MemoryStore: PersistenceStoreProtocol {
-        var files: [URL: Data] = [:]
-
-        func write<T: Encodable>(_ value: T, to url: URL) throws {
-            files[url] = try JSONEncoder().encode(value)
-        }
-
-        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
-            guard let data = files[url] else { return nil }
-            return try JSONDecoder().decode(T.self, from: data)
-        }
-    }
-
     /// Serves one open request on the worktree's branch.
     private struct FakeProvider: CodeHostProvider {
         let request: ReviewRequest

@@ -151,6 +151,9 @@ public final class ReviewShepherd {
         public var servesWorktree: @MainActor (_ worktreeID: String) -> Bool
         /// Review before push state for the record; nil when the lever is off.
         public var reviewGate: @MainActor (_ record: ShepherdRecord) -> ShepherdReviewGate? = { _ in nil }
+        /// The open request's head is neither clean nor allowed and no review
+        /// runs: review before push reviews it when it is local HEAD.
+        public var unreviewedHead: @MainActor (_ record: ShepherdRecord, _ headSHA: String) -> Void = { _, _ in }
 
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
@@ -170,7 +173,8 @@ public final class ReviewShepherd {
                 _ isStillWanted: @escaping @MainActor () -> Bool
             ) async -> ArchiveResult,
             servesWorktree: @escaping @MainActor (_ worktreeID: String) -> Bool = { _ in true },
-            reviewGate: @escaping @MainActor (_ record: ShepherdRecord) -> ShepherdReviewGate? = { _ in nil }
+            reviewGate: @escaping @MainActor (_ record: ShepherdRecord) -> ShepherdReviewGate? = { _ in nil },
+            unreviewedHead: @escaping @MainActor (_ record: ShepherdRecord, _ headSHA: String) -> Void = { _, _ in }
         ) {
             self.worktreeContext = worktreeContext
             self.sessionState = sessionState
@@ -181,6 +185,7 @@ public final class ReviewShepherd {
             self.archiveWorktreeIfAllowed = archiveWorktreeIfAllowed
             self.servesWorktree = servesWorktree
             self.reviewGate = reviewGate
+            self.unreviewedHead = unreviewedHead
         }
     }
 
@@ -688,13 +693,14 @@ public final class ReviewShepherd {
         guard let current = records[id], current.sessionID == owner, !current.phase.isTerminal else { return }
         failureCounts[id] = nil
         snapshots[id] = observed
+        let reviewGate = effects.reviewGate(current)
         let observation = ShepherdObservation(
             snapshot: observed,
             headReviewers: reviewers,
             session: session,
             rules: rules,
             now: now(),
-            reviewGate: effects.reviewGate(current)
+            reviewGate: reviewGate
         )
         let decision = ShepherdPolicy.decide(current, observation)
         gatePasses[id] = ShepherdPolicy.mergeGatePasses(decision.record, observation)
@@ -705,6 +711,10 @@ public final class ReviewShepherd {
         if next != current {
             next.updatedAt = now()
             put(next)
+        }
+        if let reviewGate, !reviewGate.reviewing, let request = observed.reviewRequest, request.state == .open,
+           let head = request.headSHA, !head.isEmpty, !reviewGate.passedSHAs.contains(head) {
+            effects.unreviewedHead(current, head)
         }
         let generation = bumpGeneration(id)
         await execute(decision.action, for: id, generation: generation, before: current, snapshot: observed, rules: rules, context: context)

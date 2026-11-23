@@ -31,11 +31,15 @@ extension AlasCoreContext {
         base: String?
     ) async -> AlasCLIResponse {
         await serializedPublish(worktreeID: worktreeID) {
-            let result = try await self.createShepherdedPR(
-                sessionID: sessionID, worktreeID: worktreeID,
-                title: title, body: body, draft: draft, base: base
-            )
-            return ReviewCommentWireDTO.jsonLine(result)
+            do {
+                let result = try await self.createShepherdedPR(
+                    sessionID: sessionID, worktreeID: worktreeID,
+                    title: title, body: body, draft: draft, base: base
+                )
+                return ReviewCommentWireDTO.jsonLine(result)
+            } catch let pending as ShipReviewPending {
+                return pending.line
+            }
         }
     }
 
@@ -196,11 +200,13 @@ extension AlasCoreContext {
             throw PRShepherdCLIError(message: "Could not check for an existing pull request: \(message)")
         }
         let hasUncommittedChanges = local.hasWorkingTreeChanges || local.hasStagedChanges
+        let reviewID = ShipReviewID(worktreeID: worktreeID, sessionID: sessionID)
         func bound(_ request: ReviewRequest, created: Bool) async -> PRCreateResultWire {
             let record = await bindPRShepherd(sessionID: sessionID, worktreeID: worktreeID, request: request)
             return PRCreateResultWire(
                 request: request, headSHA: request.headSHA ?? local.headSHA, created: created,
-                uncommittedChanges: hasUncommittedChanges, record: record
+                uncommittedChanges: hasUncommittedChanges, record: record,
+                reviewBeforePush: shipReviewer.record(for: reviewID)?.enabled ?? false
             )
         }
 
@@ -226,6 +232,14 @@ extension AlasCoreContext {
             case .publishThenBind: break
             }
         }
+
+        // Review before push holds the push back until HEAD passes; a pending
+        // review answers this call instead of an error.
+        try gatePRPush(
+            sessionID: sessionID, worktreeID: worktreeID,
+            push: PendingPRPush(title: title, body: body, draft: draft, base: baseBranch),
+            headSHA: local.headSHA, kind: remote.kind
+        )
 
         // Same exact-SHA publish path as Commit & publish: capture validates the
         // branch, HEAD and push destinations; push re-checks the URL set and
@@ -326,8 +340,22 @@ extension AlasCoreContext {
         return nil
     }
 
-    /// Read-only: neither path runs the shepherd's policy or changes its record.
+    /// The request's status with the session's review before push state.
+    /// Before the first push there is no request: a review holding it back
+    /// is reported on its own.
     private func shepherdedPRStatus(sessionID: String, worktreeID: String) async throws -> PRStatusWire {
+        let reviewID = ShipReviewID(worktreeID: worktreeID, sessionID: sessionID)
+        do {
+            var status = try await providerPRStatus(sessionID: sessionID, worktreeID: worktreeID)
+            status.review = shipReviewer.wire(for: reviewID)
+            return status
+        } catch where shipReviewer.record(for: reviewID)?.pending != nil {
+            return PRStatusWire(pullRequest: nil, shepherd: nil, review: shipReviewer.wire(for: reviewID))
+        }
+    }
+
+    /// Read-only: neither path runs the shepherd's policy or changes its record.
+    private func providerPRStatus(sessionID: String, worktreeID: String) async throws -> PRStatusWire {
         let (effects, context) = try prShepherdTarget(worktreeID)
         let bound = reviewShepherd.record(forSession: sessionID).flatMap { $0.id.worktreeID == worktreeID ? $0 : nil }
         let snapshot: ReviewLoopSnapshot
@@ -370,10 +398,11 @@ extension AlasCoreContext {
             throw PRShepherdCLIError(message: "Could not load the pull request: \(message)")
         }
         // The record may have changed while the fetch ran; report it as it is now.
+        let reviewBeforePush = shipReviewer.reviewGate(worktreeID: worktreeID, sessionID: sessionID) != nil
         let shepherd = bound
             .flatMap { reviewShepherd.records[$0.id] }
-            .map { PRStatusWire.Shepherd(record: $0, rules: rules) }
-        return PRStatusWire(pullRequest: pullRequest, shepherd: shepherd)
+            .map { PRStatusWire.Shepherd(record: $0, rules: rules, reviewBeforePush: reviewBeforePush) }
+        return PRStatusWire(pullRequest: pullRequest, shepherd: shepherd, review: nil)
     }
 
     private func prShepherdTarget(
