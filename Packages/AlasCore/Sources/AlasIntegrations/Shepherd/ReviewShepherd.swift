@@ -149,6 +149,8 @@ public final class ReviewShepherd {
         /// for a headless host): its records are that instance's, so this
         /// one never changes, escalates, archives or removes them.
         public var servesWorktree: @MainActor (_ worktreeID: String) -> Bool
+        /// Review before push state for the record; nil when the lever is off.
+        public var reviewGate: @MainActor (_ record: ShepherdRecord) -> ShepherdReviewGate? = { _ in nil }
 
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
@@ -167,7 +169,8 @@ public final class ReviewShepherd {
                 _ sessionID: String,
                 _ isStillWanted: @escaping @MainActor () -> Bool
             ) async -> ArchiveResult,
-            servesWorktree: @escaping @MainActor (_ worktreeID: String) -> Bool = { _ in true }
+            servesWorktree: @escaping @MainActor (_ worktreeID: String) -> Bool = { _ in true },
+            reviewGate: @escaping @MainActor (_ record: ShepherdRecord) -> ShepherdReviewGate? = { _ in nil }
         ) {
             self.worktreeContext = worktreeContext
             self.sessionState = sessionState
@@ -177,6 +180,7 @@ public final class ReviewShepherd {
             self.refreshPaneIfCached = refreshPaneIfCached
             self.archiveWorktreeIfAllowed = archiveWorktreeIfAllowed
             self.servesWorktree = servesWorktree
+            self.reviewGate = reviewGate
         }
     }
 
@@ -371,7 +375,8 @@ public final class ReviewShepherd {
         defer { if deliveringBind[id] == pending.id { deliveringBind[id] = nil } }
         let prompt = ShepherdPromptBuilder.bindPrompt(
             request: request,
-            fix: ShepherdPolicy.problems(in: request, handled: record.handledThreadRevisions ?? []), rules: rules)
+            fix: ShepherdPolicy.problems(in: request, handled: record.handledThreadRevisions ?? []), rules: rules,
+            reviewBeforePush: effects.reviewGate(record) != nil)
         let delivery = await effects.deliverPrompt(record.sessionID, id.worktreeID, prompt) { [weak self] in
             self?.records[id]?.pendingBindDelivery?.id == pending.id
                 && self?.isCurrent(id, generation, before: "the bind delivery") == true
@@ -688,7 +693,8 @@ public final class ReviewShepherd {
             headReviewers: reviewers,
             session: session,
             rules: rules,
-            now: now()
+            now: now(),
+            reviewGate: effects.reviewGate(current)
         )
         let decision = ShepherdPolicy.decide(current, observation)
         gatePasses[id] = ShepherdPolicy.mergeGatePasses(decision.record, observation)
@@ -785,7 +791,9 @@ public final class ReviewShepherd {
                 discardUndeliveredFix(id, dispatched: record, before: before)
                 return
             }
-            let prompt = ShepherdPromptBuilder.fixPrompt(request: request, fix: fix, logs: logs, rules: rules)
+            let prompt = ShepherdPromptBuilder.fixPrompt(
+                request: request, fix: fix, logs: logs, rules: rules,
+                reviewBeforePush: effects.reviewGate(record) != nil)
             let delivery = await effects.deliverPrompt(record.sessionID, id.worktreeID, prompt) { [weak self] in
                 self?.isCurrent(id, generation, before: "fix delivery") ?? false
             }
@@ -955,7 +963,8 @@ public final class ReviewShepherd {
             headReviewers: reviewers,
             session: session,
             rules: rules,
-            now: now()
+            now: now(),
+            reviewGate: effects.reviewGate(record)
         )
         let decision = ShepherdPolicy.decide(record, observation)
         gatePasses[id] = ShepherdPolicy.mergeGatePasses(decision.record, observation)

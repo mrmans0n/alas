@@ -121,6 +121,8 @@ public final class StackShepherd {
         /// for a headless host): its records are that instance's, so this
         /// one never changes, escalates, archives or removes them.
         public var servesWorktree: @MainActor (_ worktreeID: String) -> Bool
+        /// Review before push state for the stack; nil when the lever is off.
+        public var reviewGate: @MainActor (_ record: StackShepherdRecord) -> ShepherdReviewGate? = { _ in nil }
 
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
@@ -144,7 +146,8 @@ public final class StackShepherd {
                 _ isStillWanted: @escaping @MainActor () -> Bool
             ) async -> ReviewShepherd.ArchiveResult,
             servesWorktree: @escaping @MainActor (_ worktreeID: String) -> Bool = { _ in true },
-            loadStackWithForgeState: @escaping @MainActor (_ path: URL) async throws -> GGStack? = { _ in nil }
+            loadStackWithForgeState: @escaping @MainActor (_ path: URL) async throws -> GGStack? = { _ in nil },
+            reviewGate: @escaping @MainActor (_ record: StackShepherdRecord) -> ShepherdReviewGate? = { _ in nil }
         ) {
             self.worktreeContext = worktreeContext
             self.loadStack = loadStack
@@ -157,6 +160,7 @@ public final class StackShepherd {
             self.notify = notify
             self.archiveWorktreeIfAllowed = archiveWorktreeIfAllowed
             self.servesWorktree = servesWorktree
+            self.reviewGate = reviewGate
         }
     }
 
@@ -305,8 +309,19 @@ public final class StackShepherd {
             isStackPublished: StackShepherdPolicy.publication(
                 of: stack, local: probed.local, landed: landed, shipPlan: latest.shipPlan ?? .wholeStack
             ).isPublished,
-            capabilities: provider.capabilities, rules: rules, headReviewers: headReviewers, now: now()
+            capabilities: provider.capabilities, rules: rules, headReviewers: headReviewers, now: now(),
+            reviewPassed: reviewPassed(current, requests: freshRequests)
         )
+    }
+
+    /// With review before push on, only a stack whose top open entry's head
+    /// passed review can land.
+    private func reviewPassed(_ record: StackShepherdRecord, requests: [Int: ReviewRequest]) -> Bool {
+        guard let gate = effects?.reviewGate(record) else { return true }
+        guard let top = record.openEntries.max(by: { $0.position < $1.position }),
+              let head = requests[top.requestNumber]?.headSHA
+        else { return false }
+        return gate.passedSHAs.contains(head)
     }
 
     private static func preferred(_ candidates: [StackShepherdRecord]) -> StackShepherdRecord? {
@@ -717,6 +732,10 @@ public final class StackShepherd {
             return
         }
         requests[id] = fetched
+        if decision.gatePasses, !reviewPassed(current, requests: fetched) {
+            decision.gatePasses = false
+            decision.notifyReady = false
+        }
         gatePasses[id] = decision.gatePasses
         if decision.record != current { put(decision.record) }
         let generation = bumpGeneration(id)

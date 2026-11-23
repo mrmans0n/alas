@@ -137,6 +137,20 @@ struct StackShepherdTests {
         #expect(again.gatePasses && !again.notifyReady)
     }
 
+    @Test("ready to land requires the review to have passed", arguments: [true, false])
+    func readyRequiresReviewPassed(reviewPassed: Bool) {
+        let green = [Self.request(41), Self.request(42)]
+        let record = StackShepherdPolicy.decide(Self.record([41, 42]), Self.observation(green, now: F.earlier)).record
+        let observation = Self.observation(green)
+        let ready = StackShepherdPolicy.decide(record, observation)
+        #expect(ready.gatePasses)
+        #expect(StackShepherdPolicy.isReady(
+            ready.record, requests: observation.requests, isStackPublished: observation.isStackPublished,
+            capabilities: observation.capabilities, rules: observation.rules,
+            headReviewers: observation.headReviewers, now: observation.now, reviewPassed: reviewPassed
+        ) == reviewPassed)
+    }
+
     /// After a stack lands the worktree can move to a new one; the finished
     /// record only counts while the worktree is still on its own stack.
     @Test func aFinishedRecordDoesNotStandInForTheStackTheWorktreeMovedTo() throws {

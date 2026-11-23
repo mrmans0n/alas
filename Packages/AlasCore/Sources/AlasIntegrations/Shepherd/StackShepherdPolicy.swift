@@ -372,13 +372,14 @@ public enum StackShepherdPolicy {
         capabilities: CodeHostProviderCapabilities,
         rules: ShepherdRules,
         headReviewers: [Int: Set<String>],
-        now: Date
+        now: Date,
+        reviewPassed: Bool = true
     ) -> Bool {
         let open = record.openEntries
         // Merged entries are landed; a closed one never will be, and gg land
         // can't get past it, so the stack is not ready however green the rest is.
         let hasClosedEntry = record.entries.contains { $0.shepherd.phase == .closed }
-        return record.pendingBindDelivery == nil && isStackPublished && !hasClosedEntry && !open.isEmpty && open.allSatisfy { entry in
+        return reviewPassed && record.pendingBindDelivery == nil && isStackPublished && !hasClosedEntry && !open.isEmpty && open.allSatisfy { entry in
             guard entry.shepherd.phase == .watching, let request = requests[entry.requestNumber] else { return false }
             return ReviewReadinessModel.requestIsMergeReady(request, capabilities: capabilities)
                 && ShepherdPolicy.headGatePasses(

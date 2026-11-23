@@ -14,6 +14,8 @@ public enum ShepherdBadgeState: String, Equatable, Sendable {
     /// Checks running, watching, waiting for a push or on reviewers.
     case waiting
     case fixing
+    /// Review before push runs on the head before Alas pushes it.
+    case reviewing
     case ready
     case merging
     case queued
@@ -48,8 +50,14 @@ public struct ShepherdPresentation: Equatable, Sendable {
     }
 
     /// `mergeGatePasses` should come from `ShepherdPolicy.mergeGatePasses`
-    /// so the badge agrees with what the policy would do.
-    public static func make(record: ShepherdRecord?, request: ReviewRequest?, mergeGatePasses: Bool) -> ShepherdPresentation {
+    /// so the badge agrees with what the policy would do. `review` is the
+    /// review before push line for the record's head, if any.
+    public static func make(
+        record: ShepherdRecord?,
+        request: ReviewRequest?,
+        mergeGatePasses: Bool,
+        review: ShipReviewLine? = nil
+    ) -> ShepherdPresentation {
         guard let record else {
             let line = "not shepherded"
             guard let request else {
@@ -58,9 +66,21 @@ public struct ShepherdPresentation: Equatable, Sendable {
             let number = "\(request.provider.reviewRequestNumberPrefix)\(request.number)"
             return ShepherdPresentation(badge: .unshepherded, number: number, tooltip: "\(number) · \(line)", phaseLine: line)
         }
-        let (badge, line) = state(record: record, request: request, mergeGatePasses: mergeGatePasses)
+        let (badge, line) = reviewState(record: record, review: review)
+            ?? state(record: record, request: request, mergeGatePasses: mergeGatePasses)
         let number = "\(record.id.providerKind.reviewRequestNumberPrefix)\(record.id.requestNumber)"
         return ShepherdPresentation(badge: badge, number: number, tooltip: "\(number) · \(line)", phaseLine: line)
+    }
+
+    /// Review before push outranks the shepherd's own phase while a round
+    /// runs or after it stopped.
+    private static func reviewState(record: ShepherdRecord, review: ShipReviewLine?) -> (ShepherdBadgeState, String)? {
+        guard let review, !record.phase.isTerminal else { return nil }
+        switch review.tone {
+        case .running: return (.reviewing, "reviewing before the push")
+        case .stopped: return (.attention, "needs attention: \(review.text.prefix(1).lowercased())\(review.text.dropFirst())")
+        case .clean, .findings: return nil
+        }
     }
 
     private static func state(

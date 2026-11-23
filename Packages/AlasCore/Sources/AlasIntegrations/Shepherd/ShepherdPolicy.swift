@@ -62,6 +62,19 @@ public enum ShepherdAction: Equatable, Sendable {
     case escalate(ShepherdEscalation)
 }
 
+/// Review before push state for one request. Nil means the lever is off.
+public struct ShepherdReviewGate: Equatable, Sendable {
+    /// Heads that came back clean or that the user allowed.
+    public var passedSHAs: Set<String>
+    /// A round runs or findings wait for the owner.
+    public var reviewing: Bool
+
+    public init(passedSHAs: Set<String>, reviewing: Bool) {
+        self.passedSHAs = passedSHAs
+        self.reviewing = reviewing
+    }
+}
+
 public struct ShepherdObservation: Equatable, Sendable {
     /// Has `local` and `reviewRequest`.
     public let snapshot: ReviewLoopSnapshot
@@ -71,19 +84,23 @@ public struct ShepherdObservation: Equatable, Sendable {
     public let session: ShepherdSessionState
     public let rules: ShepherdRules
     public let now: Date
+    /// Nil when review before push is off.
+    public let reviewGate: ShepherdReviewGate?
 
     public init(
         snapshot: ReviewLoopSnapshot,
         headReviewers: Set<String>?,
         session: ShepherdSessionState,
         rules: ShepherdRules,
-        now: Date
+        now: Date,
+        reviewGate: ShepherdReviewGate? = nil
     ) {
         self.snapshot = snapshot
         self.headReviewers = headReviewers
         self.session = session
         self.rules = rules
         self.now = now
+        self.reviewGate = reviewGate
     }
 }
 
@@ -143,7 +160,8 @@ public enum ShepherdPolicy {
         else { return false }
         return headGatePasses(
             record, request: request, rules: observation.rules,
-            headReviewers: observation.headReviewers, now: observation.now
+            headReviewers: observation.headReviewers, now: observation.now,
+            reviewGate: observation.reviewGate
         )
     }
 
@@ -155,13 +173,16 @@ public enum ShepherdPolicy {
         request: ReviewRequest,
         rules: ShepherdRules,
         headReviewers: Set<String>?,
-        now: Date
+        now: Date,
+        reviewGate: ShepherdReviewGate? = nil
     ) -> Bool {
         guard let head = request.headSHA,
               record.lastSeenHeadSHA == head,
               record.stableHeadPolls >= requiredStablePolls,
               !awaitingFirstChecks(record, request: request, now: now)
         else { return false }
+        // Review before push: only a head that passed review can merge.
+        if let reviewGate, !reviewGate.passedSHAs.contains(head) { return false }
         let required = rules.requiredReviewers
         guard !required.isEmpty else { return true }
         guard let headReviewers else { return false }
@@ -321,6 +342,9 @@ public enum ShepherdPolicy {
         }
         var problems = problems
         if case .awaitingPush(let turnEndedAt, _) = record.phase {
+            // Review before push owns the fix's commits until it pushes or
+            // hands findings back; the owner's quiet turn is not a miss.
+            if observation.reviewGate?.reviewing == true { return .wait }
             if hasIncompleteChecks(request) || awaitingFirstChecks(record, request: request, now: observation.now) {
                 // Reruns can outlive a foreground turn, including review-only
                 // fixes. Waiting is not an ineffective fix attempt.

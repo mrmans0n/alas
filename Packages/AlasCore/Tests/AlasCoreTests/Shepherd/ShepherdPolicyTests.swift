@@ -631,4 +631,28 @@ private let policyCases: [ShepherdPolicyCase] = [
         #expect(next.stableHeadPolls == (outcome == nil ? 0 : 2))
         #expect(next.updatedAt == F.now)
     }
+
+    @Test("merge gate requires a passed head when review is on", arguments: [
+        (ShepherdReviewGate?.none, true),
+        (.some(.init(passedSHAs: [F.head], reviewing: false)), true),
+        (.some(.init(passedSHAs: ["older"], reviewing: false)), false),
+    ] as [(ShepherdReviewGate?, Bool)])
+    func mergeGateRequiresAPassedHead(gate: ShepherdReviewGate?, passes: Bool) {
+        let observation = F.observation(F.snapshot(F.request()), reviewGate: gate)
+        let decision = ShepherdPolicy.decide(stable(autoMerge: true), observation)
+        #expect(ShepherdPolicy.mergeGatePasses(decision.record, observation) == passes)
+        #expect(decision.action == (passes ? .merge : .wait))
+    }
+
+    @Test("an idle fix waits while review before push runs")
+    func awaitingPushWaitsWhileReviewing() {
+        let phase = ShepherdPhase.awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 2)
+        let record = F.record(phase: phase, fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly))
+        let decision = ShepherdPolicy.decide(record, F.observation(
+            F.snapshot(F.request(checks: [F.failing])),
+            reviewGate: ShepherdReviewGate(passedSHAs: [], reviewing: true)))
+        #expect(decision.action == .wait)
+        #expect(decision.record.phase == phase)
+        #expect(decision.record.fixAttempts == 1)
+    }
 }

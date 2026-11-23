@@ -130,10 +130,11 @@ enum ShepherdFixtures {
         session: ShepherdSessionState = .idle,
         rules: ShepherdRules = .none,
         headReviewers: Set<String>? = nil,
-        now: Date = ShepherdFixtures.now
+        now: Date = ShepherdFixtures.now,
+        reviewGate: ShepherdReviewGate? = nil
     ) -> ShepherdObservation {
         ShepherdObservation(snapshot: snapshot, headReviewers: headReviewers,
-                            session: session, rules: rules, now: now)
+                            session: session, rules: rules, now: now, reviewGate: reviewGate)
     }
 
     static func fingerprint(_ fix: ShepherdFixRequest, head: String = ShepherdFixtures.head) -> ShepherdFingerprint {

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import AlasCore
 @testable import AlasHostCore
+@testable import AlasIntegrations
 
 private typealias F = ShepherdFixtures
 
@@ -91,6 +92,18 @@ private let presentationCases: [ShepherdPresentationCase] = [
         #expect(presentation.badge == c.badge)
         #expect(presentation.number == c.number)
         #expect(presentation.tooltip == c.tooltip)
+    }
+
+    @Test("review before push outranks the watching phase", arguments: [
+        (ShipReviewLine.Tone.running, "Reviewing with Codex", ShepherdBadgeState.reviewing, "reviewing before the push"),
+        (.stopped, "No progress after 3 rounds", .attention, "needs attention: no progress after 3 rounds"),
+    ])
+    func reviewPresentation(tone: ShipReviewLine.Tone, text: String, badge: ShepherdBadgeState, phaseLine: String) {
+        let review = ShipReviewLine(tone: tone, text: text, actions: [])
+        let presentation = ShepherdPresentation.make(
+            record: F.record(), request: F.request(), mergeGatePasses: false, review: review)
+        #expect(presentation.badge == badge)
+        #expect(presentation.phaseLine == phaseLine)
     }
 
     @Test(
