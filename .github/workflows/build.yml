@@ -58,7 +58,8 @@ jobs:
   build-test:
     runs-on: xcode-27
     # Build once; test runners queue only after products and the plan are published.
-    timeout-minutes: 110
+    # Cold Xcode 27.2 jobs can spend 73 minutes preparing native tools and packages.
+    timeout-minutes: 160
     # "Re-run failed jobs" skips a successful builder, so later attempts must
     # download the products and plan from the attempt that published them.
     outputs:
@@ -439,9 +440,8 @@ jobs:
             swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build for testing
-        # A cold compilation cache takes about 25 minutes on a macos-26 runner,
-        # so slow runners need headroom beyond that.
-        timeout-minutes: 45
+        # Cold compilation was still running after 37 minutes on Xcode 27.2.
+        timeout-minutes: 60
         # Splitting build/test into `build-for-testing` + `test-without-building`
         # avoids the lsregister/CoreServices hang we observed locally and on CI
         # when xcodebuild's `test` action re-validates the build description and
