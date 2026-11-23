@@ -914,7 +914,7 @@ function openSession(id) {
   updateChangesTabBadge();
   terminals.setWorktree(summary && summary.worktree ? summary.worktreeId : null);
   updateTerminalTab();
-  showTab("chat");
+  showTab(homeTab());
   markCurrentSession();
 }
 
@@ -943,7 +943,7 @@ function showTab(name) {
     $(id).classList.toggle("is-active", tab === name);
     $(id).setAttribute("aria-selected", String(tab === name));
   }
-  $("transcript").classList.toggle("hidden", name !== "chat");
+  $("transcript").classList.toggle("hidden", name !== "chat" && !wideLayout.matches);   // wide: chat stays beside the panel
   $("changes").classList.toggle("hidden", name !== "changes");
   $("files").classList.toggle("hidden", name !== "files");
   if (name === "changes") requestChanges();
@@ -1014,7 +1014,7 @@ function updateTerminalTab() {
   const summary = currentSession ? listedSessions.get(currentSession) : null;
   const available = terminals.available && !!(summary && summary.worktree && summary.worktreeId);
   $("tab-terminal").classList.toggle("hidden", !available);
-  if (!available && activeTab === "terminal") showTab("chat");
+  if (!available && activeTab === "terminal") showTab(homeTab());
 }
 $("changes-refresh").addEventListener("click", requestChanges);
 
@@ -1213,7 +1213,7 @@ async function renderDiff(path, stage, hunks, truncated, metadataNote) {
     const fileDiff = getSingularPatch(RemoteChangesView.unifiedPatch(path, hunks));
     diffView = new FileDiff({
       theme: "pierre-dark", themeType: "dark", disableFileHeader: true, overflow: "scroll",
-      diffStyle: wideLayout.matches ? "split" : "unified",
+      diffStyle: container.clientWidth >= 760 ? "split" : "unified",   // side by side only where both sides fit
     });
     const holder = el("div", "diff-rich");
     container.append(holder);
@@ -1458,6 +1458,72 @@ $("tab-repos").addEventListener("click", showRepos);
 $("tab-settings").addEventListener("click", showSettings);
 $("fab-new-session").onclick = showCreateSheet;
 $("status").onclick = () => { if (!currentSession || wideLayout.matches) showSettings(); };
+
+// The tab a session opens on: Chat on a phone. A wide window always shows the chat, so its panel
+// starts on Changes, or Files for a folder, which has no changes.
+function homeTab() {
+  if (!wideLayout.matches) return "chat";
+  return isFolderSummary(currentSession ? listedSessions.get(currentSession) : null) ? "files" : "changes";
+}
+
+wideLayout.addEventListener("change", () => {
+  if (currentSession) showTab(activeTab === "chat" ? homeTab() : activeTab);
+});
+
+// Desktop panes: either side folds away, and the panel is as wide as it was last dragged.
+const paneState = (() => {
+  try { return JSON.parse(localStorage.getItem("alas.panes")) || {}; } catch { return {}; }
+})();
+function applyPanes() {
+  document.body.classList.toggle("side-collapsed", !!paneState.sideCollapsed);
+  document.body.classList.toggle("panel-collapsed", !!paneState.panelCollapsed);
+  if (paneState.panelWidth) document.documentElement.style.setProperty("--panel-w", paneState.panelWidth + "px");
+}
+function savePanes() {
+  localStorage.setItem("alas.panes", JSON.stringify(paneState));
+  applyPanes();
+}
+function togglePane(key) {
+  paneState[key] = !paneState[key];
+  savePanes();
+}
+applyPanes();
+$("toggle-side").addEventListener("click", () => togglePane("sideCollapsed"));
+$("toggle-panel").addEventListener("click", () => togglePane("panelCollapsed"));
+document.addEventListener("keydown", event => {
+  if (!wideLayout.matches || !(event.metaKey || event.ctrlKey) || event.shiftKey || event.key.toLowerCase() !== "b") return;
+  event.preventDefault();
+  togglePane(event.altKey ? "panelCollapsed" : "sideCollapsed");
+});
+// The panel has no back button: the path above a diff or file leads back to the list, as does Escape.
+for (const id of ["diff-path", "file-view-path"]) {
+  $(id).addEventListener("click", () => { if (wideLayout.matches && detailStack.length > 0) closeDetailLevel(); });
+}
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape" || !wideLayout.matches || detailStack.length === 0 || document.querySelector(".sheet:not(.hidden)")) return;
+  if (event.target.closest && event.target.closest("textarea, input, #terminal-screen")) return;
+  closeDetailLevel();
+});
+$("panel-resize").addEventListener("pointerdown", event => {
+  event.preventDefault();
+  const handle = event.currentTarget;
+  handle.setPointerCapture(event.pointerId);
+  document.body.classList.add("resizing");
+  const move = e => {
+    // Keep the chat at least 420px wide and the panel at least 300px.
+    const side = paneState.sideCollapsed ? 0 : $("sessions").offsetWidth || 280;
+    paneState.panelWidth = Math.round(Math.max(300, Math.min(window.innerWidth - side - 420, window.innerWidth - e.clientX)));
+    applyPanes();
+  };
+  const up = () => {
+    handle.removeEventListener("pointermove", move);
+    document.body.classList.remove("resizing");
+    savePanes();
+  };
+  handle.addEventListener("pointermove", move);
+  handle.addEventListener("pointerup", up, { once: true });
+  handle.addEventListener("pointercancel", up, { once: true });
+});
 
 // --- hub settings ------------------------------------------------------------
 

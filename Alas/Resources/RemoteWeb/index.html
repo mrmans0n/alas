@@ -12,10 +12,13 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas</title>
-  <link rel="stylesheet" href="/style.css?v=62" />
+  <link rel="stylesheet" href="/style.css?v=63" />
 </head>
 <body>
   <header id="bar">
+    <button id="toggle-side" class="pane-toggle desk-only" type="button" aria-label="Toggle sidebar" title="Toggle sidebar (Ctrl+B)">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M6 3v10"/></svg>
+    </button>
     <button id="back" class="hidden" type="button" aria-label="Back">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg>
     </button>
@@ -28,6 +31,9 @@
     </button>
     <span id="nav-title">Alas</span>
     <span id="status" class="chip is-server" data-state="connecting">connecting…</span>
+    <button id="toggle-panel" class="pane-toggle desk-only" type="button" aria-label="Toggle panel" title="Toggle panel (Ctrl+Alt+B)">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M10 3v10"/></svg>
+    </button>
   </header>
   <div id="detail-tabs" class="tabs hidden" role="tablist">
     <button id="tab-chat" class="tab is-active" role="tab" type="button" aria-selected="true">
@@ -155,6 +161,7 @@
       </div>
     </section>
   </main>
+  <div id="panel-resize" class="desk-only" role="separator" aria-orientation="vertical" aria-label="Resize panel"></div>
   <nav id="bottom-tabbar">
     <button type="button" id="tab-repos" class="bt-tab is-active" aria-label="Repos">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.6"/><path d="M5 2.5v11M5 6h9M5 10h9"/></svg>
@@ -339,7 +346,7 @@
   <script src="/turn-changes.js?v=1"></script>
   <script src="/peer-console.js?v=1"></script>
   <script src="/terminals.js?v=2"></script>
-  <script src="/app.js?v=114"></script>
+  <script src="/app.js?v=115"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
