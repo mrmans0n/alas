@@ -192,6 +192,10 @@ public final class ShipReviewer {
         /// HEAD when it is ahead of the bound request's remote head branch, else nil.
         public var localCommitsToPush: @MainActor (_ id: ShipReviewID) async -> String?
         public var notify: @MainActor (_ id: ShipReviewID, _ stop: ShipReviewStop) -> Void
+        /// The head the pending push would ship now, which a round's result
+        /// must still describe: HEAD, or for a stack the top entry its plan
+        /// publishes. Defaults to HEAD.
+        public var shipHead: @MainActor (_ id: ShipReviewID, _ target: ShipReviewTarget?) async throws -> String
 
         public init(
             context: @escaping @MainActor (_ worktreeID: String) -> Context?,
@@ -209,7 +213,8 @@ public final class ShipReviewer {
             push: @escaping @MainActor (_ id: ShipReviewID, _ target: ShipReviewTarget, _ headSHA: String) async -> String?,
             autoFix: @escaping @MainActor (_ id: ShipReviewID) -> Bool,
             localCommitsToPush: @escaping @MainActor (_ id: ShipReviewID) async -> String?,
-            notify: @escaping @MainActor (_ id: ShipReviewID, _ stop: ShipReviewStop) -> Void
+            notify: @escaping @MainActor (_ id: ShipReviewID, _ stop: ShipReviewStop) -> Void,
+            shipHead: (@MainActor (_ id: ShipReviewID, _ target: ShipReviewTarget?) async throws -> String)? = nil
         ) {
             self.context = context
             self.settings = settings
@@ -227,6 +232,10 @@ public final class ShipReviewer {
             self.autoFix = autoFix
             self.localCommitsToPush = localCommitsToPush
             self.notify = notify
+            self.shipHead = shipHead ?? { id, _ in
+                guard let path = context(id.worktreeID)?.worktreePath else { throw ShipReviewFailure.reviewer("the worktree is gone") }
+                return try await git.headSHA(path)
+            }
         }
     }
 
@@ -485,10 +494,10 @@ public final class ShipReviewer {
     }
 
     private func ownerTurnEnded(_ id: ShipReviewID) async {
-        guard let effects, let context = effects.context(id.worktreeID) else { return }
+        guard let effects, let current = records[id] else { return }
         let head: String
         do {
-            head = try await effects.git.headSHA(context.worktreePath)
+            head = try await effects.shipHead(id, current.pending)
         } catch {
             shipReviewLogger.error("Could not read HEAD after the owner's turn: \(error.localizedDescription, privacy: .public)")
             return
@@ -577,7 +586,7 @@ public final class ShipReviewer {
         }
         var currentHead = headSHA
         do {
-            currentHead = try await effects.git.headSHA(prepared.context.worktreePath)
+            currentHead = try await effects.shipHead(id, records[id]?.pending ?? record.pending)
         } catch {
             parsed = .failure(.reviewer("couldn't read HEAD: \(error.localizedDescription)"))
         }
@@ -755,8 +764,8 @@ public final class ShipReviewer {
     }
 
     private func localHead(_ id: ShipReviewID) async -> String? {
-        guard let effects, let context = effects.context(id.worktreeID) else { return nil }
-        return try? await effects.git.headSHA(context.worktreePath)
+        guard let effects else { return nil }
+        return try? await effects.shipHead(id, records[id]?.pending)
     }
 
     /// A new record with the Settings defaults; nil when they leave the lever off.

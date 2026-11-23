@@ -36,6 +36,8 @@ private final class FakeEffects {
     /// The reviewer's final messages, in order; approve once they run out.
     var replies: [String] = []
     var openFindings = 1
+    /// The top entry a stack plan publishes, below HEAD; nil reads HEAD for every target.
+    var stackTop: String?
     /// Runs inside the push effect, as `pr_create` re-entering the gate does.
     var onPush: ((ShipReviewID, ShipReviewTarget, String) -> Void)?
 
@@ -46,7 +48,14 @@ private final class FakeEffects {
     var stops: [ShipReviewStop] = []
 
     func effects() -> ShipReviewer.Effects {
-        ShipReviewer.Effects(
+        var shipHead: (@MainActor (ShipReviewID, ShipReviewTarget?) async throws -> String)?
+        if let top = stackTop {
+            shipHead = { _, target in
+                if case .stack = target { return top }
+                return self.head
+            }
+        }
+        return ShipReviewer.Effects(
             context: { _ in
                 ShipReviewer.Context(
                     worktreePath: URL(fileURLWithPath: "/tmp/wt-1"), branch: "feature", baseBranch: "main",
@@ -93,7 +102,8 @@ private final class FakeEffects {
             },
             autoFix: { _ in true },
             localCommitsToPush: { _ in nil },
-            notify: { _, stop in self.stops.append(stop) }
+            notify: { _, stop in self.stops.append(stop) },
+            shipHead: shipHead
         )
     }
 
@@ -127,6 +137,29 @@ struct ShipReviewerTests {
         let record = reviewer.record(for: id)
         #expect(record?.phase == .idle)
         #expect(record?.passedSHAs == ["h1"])
+    }
+
+    /// A partial stack ship reviews the top entry its plan publishes, not
+    /// HEAD above it: a clean review pushes once instead of restarting.
+    @Test func partialStackShipPushesOnceAfterACleanReview() async {
+        let fake = FakeEffects()
+        fake.head = "top"
+        fake.stackTop = "e2"
+        let reviewer = makeReviewer(fake)
+        let stack = ShipReviewTarget.stack(StackShipPlan(shipThroughEntryID: "e2", shipThroughTitle: "Second", opensDrafts: false))
+        var reentered: [ShipReviewer.Gate] = []
+        fake.onPush = { id, target, headSHA in
+            reentered.append(reviewer.requestPush(id, target: target, headSHA: headSHA))
+        }
+
+        #expect(reviewer.requestPush(id, target: stack, headSHA: "e2") != .push)
+        await reviewer.settle()
+
+        #expect(fake.runs.count == 1)
+        #expect(fake.pushes == [.init(target: stack, headSHA: "e2")])
+        #expect(reentered == [.push])
+        #expect(reviewer.record(for: id)?.phase == .idle)
+        #expect(reviewer.record(for: id)?.passedSHAs == ["e2"])
     }
 
     @Test func findingsGoToTheOwnerAndTheNextCommitStartsRoundTwo() async throws {

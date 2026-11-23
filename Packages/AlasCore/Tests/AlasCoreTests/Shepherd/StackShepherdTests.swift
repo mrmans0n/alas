@@ -639,11 +639,12 @@ struct StackShepherdTests {
             stack: .init(name: "auth", base: "main", entries: [
                 .init(position: 1, entryId: "c-41", title: "Add store", pullRequest: nil, phase: nil),
             ]),
-            shepherd: nil
+            shepherd: nil,
+            review: nil
         )
 
         #expect(ReviewCommentWireDTO.jsonLine(wire)
-            == #"{"shepherd":null,"stack":{"base":"main","entries":[{"entry_id":"c-41","phase":null,"position":1,"pull_request":null,"title":"Add store"}],"name":"auth"}}"#)
+            == #"{"review":null,"shepherd":null,"stack":{"base":"main","entries":[{"entry_id":"c-41","phase":null,"position":1,"pull_request":null,"title":"Add store"}],"name":"auth"}}"#)
     }
 
     // MARK: Service
@@ -1456,6 +1457,59 @@ struct StackShepherdTests {
             #expect(core.stackShipStatus(sessionID: "session-1", worktreeID: "wt-1") == nil)
             #expect(core.stackShipActivity["wt-1"] == nil)
         }
+    }
+
+    /// With review before push on, `stack_ship` answers `reviewing` and gg
+    /// sync waits. Once the review of the top entry it publishes is clean,
+    /// Alas syncs once, and the owning session gets that ship's outcome turn
+    /// and no other.
+    @Test func stackShipWaitsForAReviewBeforeItSyncs() async throws {
+        let (core, log, stack, _) = try await stackShipCore(published: [false, false, false])
+        let probe = ShipProbe()
+        core.stackShepherd.effects?.deliverPrompt = { _, _, prompt, _ in
+            probe.turns.append(prompt.text)
+            return .delivered
+        }
+        let top = try #require(stack.entries.max { $0.position < $1.position })
+        var effects = try #require(core.shipReviewer.effects)
+        effects.context = { _ in
+            ShipReviewer.Context(
+                worktreePath: URL(fileURLWithPath: "/tmp/wt-1"), branch: "auth", baseBranch: "main",
+                providerName: "GitHub", projectSettings: nil
+            )
+        }
+        effects.ownerAgentID = { _ in "codex" }
+        effects.agentLabel = { _ in "Codex" }
+        effects.instructions = { _, _ in CodeReviewInstructions() }
+        effects.git = ShipReviewGit(headSHA: { _ in "unused" }, mergeBase: { _, _, _ in "base0" }, diff: { _, _, _ in "" })
+        effects.runReviewer = { _ in
+            .finished(sessionID: "reviewer-1", finalText: #"{"verdict": "approve", "summary": "Fine.", "findings": [], "resolved": []}"#)
+        }
+        effects.discardReviewer = { _, _ in }
+        effects.fileRound = { _ in ReviewSessionID(rawValue: "review-1") }
+        core.shipReviewer.effects = effects
+        let id = ShipReviewID(worktreeID: "wt-1", sessionID: "session-1")
+        core.shipReviewer.prepare(id, enabled: true, reviewer: nil)
+
+        let reply = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .seconds(60))
+        await core.shipReviewer.settle()
+
+        #expect(Self.text(reply).contains(#""status":"reviewing""#))
+        #expect(Self.text(reply).contains(#""phase":"reviewing""#))
+        #expect(Self.text(reply).contains(#""head_sha":"\#(top.sha)""#))
+        let record = try #require(core.shipReviewer.record(for: id))
+        #expect(record.rounds.map(\.headSHA) == [top.sha])
+        #expect(record.rounds.first?.verdict == .approve)
+        #expect(record.passedSHAs == [top.sha])
+        #expect(log.plans.count == 1)
+        // The fake gg opens no request, so the reviewed ship fails after its sync.
+        #expect(probe.turns.count == 1)
+        #expect(probe.turns.first?.contains("has no pull request") == true)
+        guard case .stopped(.pushFailed(let reason)) = record.phase else {
+            Issue.record("expected the failed ship to stop the review, got \(record.phase)")
+            return
+        }
+        #expect(reason.contains("has no pull request"))
     }
 
     /// gg sync streams lint, then push, events; `stack_ship` reports the

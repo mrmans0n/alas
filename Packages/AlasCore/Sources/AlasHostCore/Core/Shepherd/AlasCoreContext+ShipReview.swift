@@ -84,6 +84,10 @@ extension AlasCoreContext {
             notify: { [weak self] id, stop in
                 guard let self, let record = shipReviewer.record(for: id) else { return }
                 shipReviewNotice?(id, ShipReviewPresentation.stopMessage(stop, maxRounds: record.maxRounds))
+            },
+            shipHead: { [weak self] id, target in
+                guard let self else { throw ShipHeadUnreadable(errorDescription: "Alas is shutting down") }
+                return try await shipReviewHead(id, target: target)
             }
         )
     }
@@ -91,6 +95,12 @@ extension AlasCoreContext {
     /// The review before push state the PR shepherd decides with, for
     /// `ReviewShepherd.Effects.reviewGate`; nil when the lever is off.
     public func reviewGate(for record: ShepherdRecord) -> ShepherdReviewGate? {
+        shipReviewer.reviewGate(worktreeID: record.id.worktreeID, sessionID: record.sessionID)
+    }
+
+    /// The review before push state the stack shepherd decides with, for
+    /// `StackShepherd.Effects.reviewGate`; nil when the lever is off.
+    public func stackReviewGate(for record: StackShepherdRecord) -> ShepherdReviewGate? {
         shipReviewer.reviewGate(worktreeID: record.id.worktreeID, sessionID: record.sessionID)
     }
 
@@ -120,6 +130,25 @@ extension AlasCoreContext {
         ))
     }
 
+    /// Asks review before push whether `stack_ship` may sync `plan`, whose top
+    /// entry is `headSHA`, now, and throws its answer when the sync waits.
+    func gateStackPush(sessionID: String, worktreeID: String, plan: StackShipPlan, headSHA: String) throws {
+        let id = ShipReviewID(worktreeID: worktreeID, sessionID: sessionID)
+        guard case .reviewing(let record) = shipReviewer.requestPush(id, target: .stack(plan), headSHA: headSHA) else {
+            return
+        }
+        if case .stopped(let stop) = record.phase {
+            throw PRShepherdCLIError(message: ShipReviewPresentation.stopMessage(stop, maxRounds: record.maxRounds))
+        }
+        let review = shipReviewer.wire(for: id) ?? ShipReviewWire(record: record, reviewer: "", openFindings: 0)
+        throw ShipReviewPending(wire: StackShipProgressWire.reviewing(
+            review: review,
+            message: "Alas is reviewing the stack's commits before gg sync publishes them. "
+                + "Findings come back as a new turn; once the review is clean Alas runs gg sync and sends this session a turn with the result. "
+                + "Don't run gg sync or push yourself."
+        ))
+    }
+
     // MARK: - Effects
 
     private func shipReviewContext(_ worktreeID: String) -> ShipReviewer.Context? {
@@ -131,10 +160,31 @@ extension AlasCoreContext {
         return ShipReviewer.Context(
             worktreePath: shepherd.path,
             branch: resolved.worktree.branch,
-            baseBranch: bound?.baseBranch ?? shepherd.baseBranch,
+            baseBranch: bound?.baseBranch ?? shipReviewStackBase(worktreeID) ?? shepherd.baseBranch,
             providerName: kind?.displayName ?? "the remote",
             projectSettings: resolved.project.codeReview
         )
+    }
+
+    /// The base of the stack the worktree's live stack record ships.
+    private func shipReviewStackBase(_ worktreeID: String) -> String? {
+        stackShepherd.records.values.first { $0.id.worktreeID == worktreeID && !$0.isFinished }?.base
+    }
+
+    /// What a round's result must still describe: for a stack ship the top
+    /// entry its plan publishes, else HEAD.
+    private func shipReviewHead(_ id: ShipReviewID, target: ShipReviewTarget?) async throws -> String {
+        do {
+            if case .stack(let plan) = target {
+                return try await stackShipTopSHA(worktreeID: id.worktreeID, plan: plan)
+            }
+            guard let path = reviewShepherd.effects?.worktreeContext(id.worktreeID)?.path else {
+                throw PRShepherdCLIError(message: "the worktree is gone")
+            }
+            return try await ShipReviewGit.live.headSHA(path)
+        } catch {
+            throw ShipHeadUnreadable(errorDescription: Self.prShepherdErrorMessage(error))
+        }
     }
 
     /// The live PR shepherd record the owning session has in the worktree.
@@ -281,8 +331,8 @@ extension AlasCoreContext {
             }
         case .pushedHead:
             return nil
-        case .stack:
-            return "stack ships aren't reviewed yet"
+        case .stack(let plan):
+            return await shipReviewedStack(sessionID: id.sessionID, worktreeID: id.worktreeID, plan: plan)
         }
     }
 
@@ -299,4 +349,9 @@ extension AlasCoreContext {
         }
         return result.exitCode == 1 ? head : nil
     }
+}
+
+/// The head a ship review checks could not be read; `errorDescription` says why.
+private struct ShipHeadUnreadable: LocalizedError {
+    let errorDescription: String?
 }

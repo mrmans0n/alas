@@ -115,7 +115,8 @@ extension AlasCoreContext {
                 ) ?? .declined
             },
             servesWorktree: { [weak self] in self?.servesShepherdWorktree($0) ?? false },
-            loadStackWithForgeState: { path in try await GGService().currentStack(worktreePath: path.path) }
+            loadStackWithForgeState: { path in try await GGService().currentStack(worktreePath: path.path) },
+            reviewGate: { [weak self] in self?.stackReviewGate(for: $0) }
         )
         shipReviewNotice = { [weak self] id, message in
             self?.notifyShepherd(
