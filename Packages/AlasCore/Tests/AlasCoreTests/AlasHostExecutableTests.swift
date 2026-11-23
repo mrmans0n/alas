@@ -30,7 +30,8 @@ struct AlasHostExecutableTests {
     /// With Remote enabled, a device pairs with a code the running host
     /// mints for its local user, and drives a session with the scripted
     /// agent over the Remote channel. A paired device cannot mint codes.
-    /// Terminals are offered only where the host finds zmx.
+    /// Terminals are offered only where the host finds zmx, to the phone app
+    /// here: a browser gets them only once allowed.
     @Test(arguments: [true, false])
     func aDevicePairedWithAHeadlessHostDrivesASessionOverRemote(hasZmx: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-remote-\(UUID().uuidString)")
@@ -67,7 +68,7 @@ struct AlasHostExecutableTests {
         let code = String(pair.output.prefix { $0 != "\n" })
         var redeem = URLRequest(url: address.appendingPathComponent("pair"))
         redeem.httpMethod = "POST"
-        redeem.httpBody = try JSONSerialization.data(withJSONObject: ["code": code, "deviceName": "e2e"])
+        redeem.httpBody = try JSONSerialization.data(withJSONObject: ["code": code, "deviceName": "e2e", "client": "ios"])
         let (paired, _) = try await URLSession.shared.data(for: redeem)
         let token = try #require((try JSONSerialization.jsonObject(with: paired) as? [String: Any])?["token"] as? String)
 

@@ -95,6 +95,20 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
     public var scope: RemoteDeviceScope
     /// The push relay this phone registered; nil when it has none.
     public var pushRelay: RemotePushRelay?
+    /// The host's owner let this browser open terminals. A browser renders
+    /// host-supplied content in the page that holds its socket, so it gets
+    /// none unless someone here allows it for this one device.
+    public var allowsTerminals = false
+
+    /// Whether this device is served consoles: the native clients always, a
+    /// browser once allowed, and only with a full-scope token.
+    public var servesConsoles: Bool {
+        guard scope == .full else { return false }
+        switch kind {
+        case .alasInstance, .phone: return true
+        case .browser: return allowsTerminals
+        }
+    }
 
     public init(id: String, name: String, tokenHash: String, createdAt: Date, lastSeenAt: Date?,
          kind: RemoteDeviceKind = .browser, peerServerId: String? = nil,
@@ -113,6 +127,7 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, tokenHash, createdAt, lastSeenAt, kind, peerServerId, agentAccess, peerPublicKey, scope, pushRelay
+        case allowsTerminals
     }
 
     // Records written before federation have no `kind`; treat them as browsers
@@ -137,6 +152,7 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
             scope = .full
         }
         pushRelay = try? c.decodeIfPresent(RemotePushRelay.self, forKey: .pushRelay)
+        allowsTerminals = (try? c.decodeIfPresent(Bool.self, forKey: .allowsTerminals)) ?? false
     }
 }
 

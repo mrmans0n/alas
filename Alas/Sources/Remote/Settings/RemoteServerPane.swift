@@ -249,6 +249,17 @@ struct RemoteServerPane: View {
                                 }
                                 .buttonStyle(.plain)
                             }
+                            if device.kind == .browser {
+                                SettingsRow(
+                                    name: "Allow terminals",
+                                    desc: "Lets this browser open shells here. Only for a browser you trust."
+                                ) {
+                                    AlasToggle(on: Binding(
+                                        get: { device.allowsTerminals },
+                                        set: { state.remotePairing.setAllowsTerminals($0, deviceId: device.id) }
+                                    ))
+                                }
+                            }
                         }
                         SettingsRow(
                             name: "All devices",

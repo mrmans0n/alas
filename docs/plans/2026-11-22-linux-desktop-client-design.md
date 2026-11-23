@@ -33,7 +33,10 @@ desktop one, not writing a new client.
 2. **Consoles.** The web client has none. The iOS app runs them over the
    peer console protocol (`PeerConsoleProtocol.swift`,
    `Mobile/Sources/Terminal`). The web side needs xterm.js speaking the same
-   frames.
+   frames. The host serves consoles to browsers only once its owner allows
+   it for that device (`alas-host browsers terminals`, or the toggle on the
+   device in the Mac's Remote settings): the web client renders host-supplied
+   content in the page that holds its socket.
 3. **Diffs.** `changes-view.js` builds its own rows. A diff library
    (`@pierre/diffs`, from diffs.com) would give split view, syntax
    highlighting and word-level changes.

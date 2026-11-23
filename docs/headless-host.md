@@ -247,6 +247,22 @@ the Alas phone app or the web client. Devices you paired with the app on this
 profile stay paired. When every address the host serves is loopback, stderr
 also notes that only this Mac or a tunnel reaches it.
 
+### Terminals in a browser
+
+A paired browser gets no terminals. The web client renders content the host
+supplies, such as agent output and plugin views, in the same page that holds
+its connection, so a flaw there could reach a shell. To open terminals from a
+browser you trust, such as the web client on this machine, allow it for that
+one device:
+
+```bash
+alas-host browsers list                     # id, name, whether it may open terminals
+alas-host browsers terminals <id|name> on   # or off
+```
+
+Changing it disconnects that browser, which reconnects with the new setting.
+The phone app and paired Macs always get terminals.
+
 ### Pair a Mac
 
 A Mac running the app pairs with the host as a peer and sees its projects and
