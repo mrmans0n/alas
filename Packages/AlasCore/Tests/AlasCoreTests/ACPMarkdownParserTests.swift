@@ -163,9 +163,17 @@ struct ACPMarkdownParserTests {
         ("<details><summary>Log</summary>ok</details> tail\n\nVisible",
          [.details(summary: "Log", isOpen: false, blocks: [.paragraph("ok")]), .paragraph("tail"), .paragraph("Visible")]),
         ("    <details>\n    <summary>Example</summary>", [.paragraph("    <details>\n    <summary>Example</summary>")]),
+        ("Intro\n<details><summary>Log</summary>ok</details>",
+         [.paragraph("Intro"), .details(summary: "Log", isOpen: false, blocks: [.paragraph("ok")])]),
         ("```html\n<details>\n```", [.code(language: "html", body: "<details>")]),
     ] as [(String, [ACPMarkdownParser.Block])])
     func detailsSectionsNestAroundTheirBlocks(source: String, expected: [ACPMarkdownParser.Block]) {
         #expect(ACPMarkdownParser.parse(source) == expected)
+    }
+
+    @Test
+    func detailsSplitSharesDefinitionsFromInsideSections() {
+        let segments = MarkdownDetails.split("[outside][ref]\n\n<details>\n\n[ref]: https://example.com\n\n</details>")
+        #expect(segments.first == .markdown("[outside][ref]\n\n\n[ref]: https://example.com"))
     }
 }

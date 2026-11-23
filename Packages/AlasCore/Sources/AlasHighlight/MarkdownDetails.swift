@@ -45,6 +45,11 @@ public enum MarkdownDetails: Sendable {
         return trimmed.lowercased().hasPrefix(closeTag) ? -1 : 0
     }
 
+    /// Whether the line starts a section, even one it also closes.
+    public static func opensSection(_ line: some StringProtocol) -> Bool {
+        !isIndentedCode(line) && opening(line.trimmingCharacters(in: .whitespaces)) != nil
+    }
+
     /// The section `lines[start]` opens, how many lines it spans, and any text after its closing tag on
     /// the last of them; nil when the line opens none.
     public static func section(
@@ -96,7 +101,6 @@ public enum MarkdownDetails: Sendable {
         var lines = text.components(separatedBy: "\n")
         var segments: [Segment] = []
         var prose: [String] = []
-        var definitions: [String] = []
         var fence: Fence?
         var i = 0
         func flush() {
@@ -118,15 +122,14 @@ public enum MarkdownDetails: Sendable {
                     lines[i] = trailing
                 }
                 continue
-            } else if line.range(of: #"^ {0,3}\[[^\]]+\]:\s*\S"#, options: .regularExpression) != nil {
-                definitions.append(line.trimmingCharacters(in: .whitespaces))
             }
             prose.append(line)
             i += 1
         }
         flush()
-        guard !definitions.isEmpty, segments.contains(where: { if case .details = $0 { true } else { false } })
-        else { return segments }
+        guard segments.contains(where: { if case .details = $0 { true } else { false } }) else { return segments }
+        let definitions = referenceDefinitions(in: text)
+        guard !definitions.isEmpty else { return segments }
         let suffix = "\n\n" + definitions.joined(separator: "\n")
         return segments.map {
             switch $0 {
@@ -134,6 +137,22 @@ public enum MarkdownDetails: Sendable {
             case .details(let s): .details(Section(summary: s.summary, isOpen: s.isOpen, body: s.body + suffix))
             }
         }
+    }
+
+    /// The text's link reference definitions outside code fences, sections' included.
+    private static func referenceDefinitions(in text: String) -> [String] {
+        var definitions: [String] = []
+        var fence: Fence?
+        for line in text.components(separatedBy: "\n") {
+            if let current = fence {
+                if current.isClosed(by: line) { fence = nil }
+            } else if let opened = Fence(opening: line) {
+                fence = opened
+            } else if line.range(of: #"^ {0,3}\[[^\]]+\]:\s*\S"#, options: .regularExpression) != nil {
+                definitions.append(line.trimmingCharacters(in: .whitespaces))
+            }
+        }
+        return definitions
     }
 
     /// Four leading spaces, or a tab within them: the line is an indented code block's, or that block's

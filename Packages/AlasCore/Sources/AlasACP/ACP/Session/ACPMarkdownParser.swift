@@ -179,7 +179,7 @@ public enum ACPMarkdownParser: Sendable {
     private static func startsParagraphBoundary(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty || matchFence(line) != nil || trimmed.hasPrefix(">")
-            || MarkdownDetails.depthChange(trimmed) != 0
+            || MarkdownDetails.opensSection(line) || MarkdownDetails.depthChange(line) < 0
             || matchHeading(trimmed) != nil || matchTaskItem(line) != nil || matchImage(trimmed) != nil
     }
 
