@@ -29,8 +29,10 @@ function newId() {
   return globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-// `send(message)` sends one wire message; `el` holds the tab's elements by role.
-function createTerminals({ send, el }) {
+// `send(message)` sends one wire message; `el` holds the tab's elements by role. `keepView()` says
+// whether an open terminal stays while the list shows, as on a desktop where it has its own tab;
+// `onView(title)` hears a terminal open (its title) or close (null).
+function createTerminals({ send, el, keepView = () => false, onView = () => {} }) {
   let capabilities = [];
   let worktreeId = null;
   let shown = false;
@@ -168,6 +170,7 @@ function createTerminals({ send, el }) {
     view = { attachment, term, fit, observer, title: summary.title };
     attachment.attach();
     renderView();
+    onView(summary.title);
   }
 
   function closeConsole() {
@@ -178,17 +181,20 @@ function createTerminals({ send, el }) {
     view.term.dispose();
     view = null;
     el.screen.innerHTML = "";
+    onView(null);
   }
 
-  function showList() {
-    closeConsole();
-    el.viewLevel.classList.add("hidden");
+  function showList(closeView = !keepView()) {
+    if (closeView) {
+      closeConsole();
+      el.viewLevel.classList.add("hidden");
+    }
     el.listLevel.classList.remove("hidden");
     renderList();
     sendConsole({ list: {} });
   }
 
-  el.back.addEventListener("click", showList);
+  el.back.addEventListener("click", () => showList(true));
   el.control.addEventListener("click", () => {
     if (!view) return;
     if (view.attachment.isControlling) view.attachment.releaseControl(); else view.attachment.takeControl();
@@ -211,7 +217,7 @@ function createTerminals({ send, el }) {
       worktreeId = id || null;
       opening = null;
       error = "";
-      if (shown) showList();
+      if (shown || view) showList(true);
     },
     show() {
       shown = true;
@@ -219,7 +225,11 @@ function createTerminals({ send, el }) {
     },
     hide() {
       shown = false;
-      closeConsole();
+      if (!keepView()) closeConsole();
+    },
+    // Closes the open terminal, as its tab's close button does.
+    closeView() {
+      showList(true);
     },
     handle(event) {
       if (view && view.attachment.handle(event)) return;
@@ -229,7 +239,7 @@ function createTerminals({ send, el }) {
         const listed = body.consoles || [];
         for (const id of closing) if (!listed.some(c => c.consoleId === id)) closing.delete(id);
         consoles = listed.filter(c => !closing.has(c.consoleId));
-        if (shown && !view) renderList();
+        if (shown) renderList();
       } else if (kind === "opened" && body.requestId === opening) {
         opening = null;
         // The host lists the new console before it answers.
@@ -244,8 +254,8 @@ function createTerminals({ send, el }) {
     // A new link knows nothing of the old one's attachments or pending open.
     reconnected() {
       opening = null;
-      if (!shown) return;
-      if (view) view.attachment.reconnected(); else sendConsole({ list: {} });
+      if (view) view.attachment.reconnected();
+      else if (shown) sendConsole({ list: {} });
     },
     disconnected() {
       if (view) view.attachment.disconnected();

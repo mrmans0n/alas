@@ -867,6 +867,8 @@ function resetChangesAndFilesDOM() {
   $("file-error").textContent = ""; $("file-error").classList.add("hidden");
   clearDiff(); $("diff-path").textContent = "";
   $("file-view-body").innerHTML = ""; $("file-view-path").textContent = "";
+  $("diff-view").classList.add("hidden"); $("file-view").classList.add("hidden");
+  if (centerTab === "document") setCenter(terminalTitle ? "terminal" : "chat"); else renderCenterTabs();
 }
 
 function openSession(id) {
@@ -933,12 +935,7 @@ function showTabListLevel() {
 
 function showTab(name) {
   activeTab = name;
-  detailStack = [];
-  pendingListRefresh = false;   // this switch's own unconditional fetch below covers it
-  pendingExpandedPathsRefresh = false;   // ditto
-  $("diff-view").classList.add("hidden");
-  $("file-view").classList.add("hidden");
-  showTabListLevel();
+  if (!wideLayout.matches) closeDocument();   // wide: an open diff or file keeps its own tab in the middle
   for (const [id, tab] of [["tab-chat", "chat"], ["tab-changes", "changes"], ["tab-files", "files"], ["tab-terminal", "terminal"]]) {
     $(id).classList.toggle("is-active", tab === name);
     $(id).setAttribute("aria-selected", String(tab === name));
@@ -954,6 +951,18 @@ function showTab(name) {
   if (name === "files") refreshFileTree();
   $("terminal").classList.toggle("hidden", name !== "terminal");
   if (name === "terminal") terminals.show(); else terminals.hide();
+}
+
+// Drops the open diff or file. A phone does so whenever it switches tab; a wide window when another
+// document replaces it, or its tab closes.
+function closeDocument() {
+  detailStack = [];
+  pendingListRefresh = false;   // the next list request covers it
+  pendingExpandedPathsRefresh = false;   // ditto
+  clearDiff();
+  $("diff-view").classList.add("hidden");
+  $("file-view").classList.add("hidden");
+  showTabListLevel();
 }
 
 function isFolderSummary(summary) {
@@ -1001,6 +1010,13 @@ const terminals = RemoteTerminals.createTerminals({
     listLevel: $("terminal-list-level"), list: $("terminal-list"), openButton: $("terminal-new"), error: $("terminal-error"),
     viewLevel: $("terminal-view"), back: $("terminal-back"), title: $("terminal-title"), control: $("terminal-control"),
     status: $("terminal-status"), screen: $("terminal-screen"),
+  },
+  keepView: () => wideLayout.matches,
+  onView: title => {
+    terminalTitle = title;
+    if (title) setCenter("terminal");
+    else if (centerTab === "terminal") setCenter(detailStack.length ? "document" : "chat");
+    else renderCenterTabs();
   },
 });
 
@@ -1100,7 +1116,7 @@ function updateChangesTabBadge() {
 }
 
 function openDiff(path, stage = null) {
-  if (wideLayout.matches && paneState.panelCollapsed) togglePane("panelCollapsed");   // asked for a diff: show the panel
+  if (wideLayout.matches) closeDocument();   // one document tab: this diff replaces what it showed
   detailStack.push({ tab: "changes", path, stage });
   $("changes-list").classList.add("hidden");
   $("changes-header").classList.add("hidden");
@@ -1108,6 +1124,7 @@ function openDiff(path, stage = null) {
   $("diff-path").textContent = path;
   clearDiff();
   send({ type: "fileDiff", sessionId: currentSession, path, stage });
+  setCenter("document");
 }
 
 function closeDetailLevel() {
@@ -1120,6 +1137,8 @@ function closeDetailLevel() {
     pendingListRefresh = false;
     scheduleListRefresh();
   }
+  if (centerTab === "document") setCenter(terminalTitle ? "terminal" : "chat");
+  else renderCenterTabs();
 }
 
 // If the socket drops while a file or diff detail view is open, `onopen`'s
@@ -1286,12 +1305,14 @@ function renderFileTree() {
 }
 
 function openFileView(path) {
+  if (wideLayout.matches) closeDocument();   // one document tab: this file replaces what it showed
   detailStack.push({ tab: "files", path });
   $("file-list").classList.add("hidden");
   $("file-view").classList.remove("hidden");
   $("file-view-path").textContent = path;
   $("file-view-body").textContent = "Loading…";
   send({ type: "readFile", sessionId: currentSession, path });
+  setCenter("document");
 }
 
 function renderFileContents(path, text, truncated) {
@@ -1501,13 +1522,60 @@ document.addEventListener("keydown", event => {
   event.preventDefault();
   togglePane(event.altKey ? "panelCollapsed" : "sideCollapsed");
 });
-// The panel has no back button: the path above a diff or file leads back to the list, as does Escape.
-for (const id of ["diff-path", "file-view-path"]) {
-  $(id).addEventListener("click", () => { if (wideLayout.matches && detailStack.length > 0) closeDetailLevel(); });
+// The middle column of a wide window: the chat, and beside it in tabs the open document (a diff or
+// a file) and the open terminal. Their views move out of the panel, which keeps its lists.
+let centerTab = "chat";   // "chat" | "document" | "terminal"
+let terminalTitle = null;
+const centerViews = [["diff-view", "changes"], ["file-view", "files"], ["terminal-view", "terminal"]];
+
+function placeCenterViews() {
+  for (const [id, home] of centerViews) {
+    const parent = wideLayout.matches ? $("center-detail") : $(home);
+    if ($(id).parentElement !== parent) parent.appendChild($(id));
+  }
+  if (!wideLayout.matches) setCenter("chat");
+  else if (detailStack.length) setCenter("document");
+  else renderCenterTabs();
 }
+
+function setCenter(tab) {
+  centerTab = tab;
+  document.body.dataset.center = tab;
+  renderCenterTabs();
+}
+
+function renderCenterTabs() {
+  const strip = $("center-tabs");
+  strip.innerHTML = "";
+  const top = detailStack[detailStack.length - 1];
+  const tabs = [["chat", "Chat", null]];
+  if (top) tabs.push(["document", top.path.split("/").pop(), () => closeDetailLevel()]);
+  if (terminalTitle) tabs.push(["terminal", terminalTitle, () => terminals.closeView()]);
+  for (const [id, label, close] of tabs) {
+    const tab = el("div", "ctab" + (id === centerTab ? " is-active" : ""));
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(id === centerTab));
+    const name = el("button", "ctab-name", label);
+    name.type = "button";
+    if (id === "document") name.title = top.path;
+    name.onclick = () => setCenter(id);
+    tab.append(name);
+    if (close) {
+      const x = el("button", "ctab-close", "×");
+      x.type = "button";
+      x.setAttribute("aria-label", "Close " + label);
+      x.onclick = close;
+      tab.append(x);
+    }
+    strip.append(tab);
+  }
+}
+
+placeCenterViews();
+wideLayout.addEventListener("change", placeCenterViews);
 document.addEventListener("keydown", event => {
-  if (event.key !== "Escape" || !wideLayout.matches || detailStack.length === 0 || document.querySelector(".sheet:not(.hidden)")) return;
-  if (event.target.closest && event.target.closest("textarea, input, #terminal-screen")) return;
+  if (event.key !== "Escape" || !wideLayout.matches || centerTab !== "document" || document.querySelector(".sheet:not(.hidden)")) return;
+  if (event.target.closest && event.target.closest("textarea, input")) return;
   closeDetailLevel();
 });
 $("panel-resize").addEventListener("pointerdown", event => {

@@ -65,4 +65,26 @@ async function finishLoadingXterm() {
   const attached = sent.filter(m => m.attach).map(m => m.attach.consoleId);
   assert.deepEqual(attached, ["B"]);
   console.log("✔ a terminal left while xterm loads is never attached");
+
+  // A desktop keeps an open terminal in its own tab: the list showing again leaves it attached, and
+  // only closing its tab detaches it.
+  sent.length = 0;
+  let viewTitle = "unset";
+  const desk = globalThis.RemoteTerminals.createTerminals({
+    send: m => sent.push(m.console), el, keepView: () => true, onView: title => { viewTitle = title; },
+  });
+  desk.setCapabilities([globalThis.RemoteTerminals.TERMINAL_CAPABILITY]);
+  desk.setWorktree("w");
+  desk.show();
+  desk.handle({ list: { consoles: [summary("A")] } });
+  el.list.children[0].children[0].click();
+  await finishLoadingXterm();
+  assert.equal(viewTitle, "A");
+  desk.hide();
+  desk.show();
+  assert.equal(sent.filter(m => m.detach).length, 0);
+  desk.closeView();
+  assert.equal(sent.filter(m => m.detach).length, 1);
+  assert.equal(viewTitle, null);
+  console.log("✔ a desktop terminal stays attached until its tab closes");
 })().catch(error => { console.error("✘", error); process.exit(1); });
