@@ -229,9 +229,11 @@ struct AgentMarkdown: View {
     var chips: UserMessageChips?
     /// Maps an image source before it loads: a file preview resolves it beside the file.
     var resolve: (String) -> String = { $0 }
+    /// A `<details>` section's blocks, drawn instead of parsing `text`.
+    var sectionBlocks: [MarkdownBlock]?
 
     var body: some View {
-        let blocks = MarkdownBlockCache.shared.blocks(id: id, text: text)
+        let blocks = sectionBlocks ?? MarkdownBlockCache.shared.blocks(id: id, text: text)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 switch block {
@@ -248,6 +250,11 @@ struct AgentMarkdown: View {
                         CodeBlockView(language: VisualFence.tag, chunks: [CodeChunk(text: aid.html, spans: [])])
                     }
                 case .chart(let chart): MarkdownChart(chart: chart)
+                case .details(let summary, let isOpen, let inner):
+                    let key = "\(id):details:\(index)"
+                    MarkdownDetailsView(summary: summary, opensFirst: isOpen, key: key) {
+                        AgentMarkdown(id: key, text: "", session: session, chips: chips, resolve: resolve, sectionBlocks: inner)
+                    }
                 case .drawingVisual(let title):
                     Label(title.map { "Drawing \($0)…" } ?? "Drawing visual…", systemImage: "rectangle.on.rectangle")
                         .font(.footnote)
@@ -302,6 +309,54 @@ struct AgentMarkdown: View {
         } else {
             Text(string)
         }
+    }
+}
+
+/// A `<details>` section: a summary row that opens and closes the blocks under it, remembering a
+/// toggle in `MarkdownBlockCache` under `key` so a reused cell keeps it.
+private struct MarkdownDetailsView<Content: View>: View {
+    let summary: AttributedString
+    let opensFirst: Bool
+    let key: String
+    @ViewBuilder let content: () -> Content
+    @State private var toggled: Bool
+
+    init(summary: AttributedString, opensFirst: Bool, key: String, @ViewBuilder content: @escaping () -> Content) {
+        self.summary = summary
+        self.opensFirst = opensFirst
+        self.key = key
+        self.content = content
+        _toggled = State(initialValue: MarkdownBlockCache.shared.toggledDetails.contains(key))
+    }
+
+    private var isOpen: Bool { opensFirst != toggled }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                toggled.toggle()
+                if toggled {
+                    MarkdownBlockCache.shared.toggledDetails.insert(key)
+                } else {
+                    MarkdownBlockCache.shared.toggledDetails.remove(key)
+                }
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isOpen ? 90 : 0))
+                    Text(summary).font(.subheadline.weight(.semibold)).multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(isOpen ? "Expanded" : "Collapsed")
+            if isOpen { content() }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 }
 

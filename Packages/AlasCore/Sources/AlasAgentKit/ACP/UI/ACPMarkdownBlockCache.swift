@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasACP
+import AlasHighlight
 
 /// Incrementally parses streaming markdown. Promotes already-completed
 /// prefix into `stableBlocks` at every blank line that lies outside a
@@ -26,6 +27,9 @@ public final class ACPMarkdownBlockCache {
     private var lastRevision: UInt64?
     private var lastSourceID: ObjectIdentifier?
     private var promotionScanner = PromotionScanner()
+    /// The `<details>` sections the reader opened or closed against their tag, by their place in the
+    /// message, so a row rebuilt after scrolling keeps them as they were. Kept across resets.
+    public var toggledDetails: Set<String> = []
 
     #if DEBUG
     public private(set) var promotionScanCharacterCountForTests = 0
@@ -143,6 +147,7 @@ public final class ACPMarkdownBlockCache {
     /// the prior stable parse closed any earlier fences.
     public nonisolated static func lastSafePromotionIndex(in text: String) -> Int? {
         var openingFence: FenceDelimiter?
+        var detailsDepth = 0
         var lastSafeEnd: Int? = nil
         var line = ""
         var idx = 0
@@ -154,8 +159,10 @@ public final class ACPMarkdownBlockCache {
                     }
                 } else if let fence = matchFence(line) {
                     openingFence = fence
+                } else {
+                    detailsDepth = max(0, detailsDepth + MarkdownDetails.depthChange(line))
                 }
-                if line.trimmingCharacters(in: .whitespaces).isEmpty && openingFence == nil {
+                if line.trimmingCharacters(in: .whitespaces).isEmpty && openingFence == nil && detailsDepth == 0 {
                     lastSafeEnd = idx + 1 // include the newline
                 }
                 line = ""
@@ -180,11 +187,14 @@ public final class ACPMarkdownBlockCache {
     private struct PromotionScanner {
         private(set) var lastSafeEnd: Int?
         private var openingFence: FenceDelimiter?
+        /// How many `<details>` sections are open: a section is parsed whole, so none is promoted in part.
+        private var detailsDepth = 0
         private var line = ""
 
         mutating func reset() {
             lastSafeEnd = nil
             openingFence = nil
+            detailsDepth = 0
             line = ""
         }
 
@@ -198,8 +208,10 @@ public final class ACPMarkdownBlockCache {
                         }
                     } else if let fence = matchFence(line) {
                         openingFence = fence
+                    } else {
+                        detailsDepth = max(0, detailsDepth + MarkdownDetails.depthChange(line))
                     }
-                    if line.trimmingCharacters(in: .whitespaces).isEmpty && openingFence == nil {
+                    if line.trimmingCharacters(in: .whitespaces).isEmpty && openingFence == nil && detailsDepth == 0 {
                         lastSafeEnd = idx + 1 // include the newline
                     }
                     line = ""
