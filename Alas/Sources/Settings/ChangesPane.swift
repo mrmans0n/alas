@@ -58,7 +58,44 @@ struct ChangesPane: View {
                     }
                 }
 
+                SettingsGroup(title: "Code review") {
+                    SettingsRow(
+                        name: "Reviewer",
+                        desc: "Agent and model that review shipped branches before Alas pushes them. A project can override it, and each ship can change it from the Ship button."
+                    ) {
+                        reviewerPicker
+                    }
+                    SettingsRow(
+                        name: "Prompt",
+                        desc: "What every review looks for. Project instructions and .alas/code-review.md are added after it."
+                    ) {
+                        promptEditorRow(
+                            windowId: "code-review-prompt-editor",
+                            currentValue: state.config.changes.codeReview.prompt,
+                            defaultValue: CodeReviewSettings.defaultPrompt
+                        )
+                    }
+                }
+
                 SettingsGroup(title: "PR shepherd") {
+                    SettingsRow(
+                        name: "Review before pushing",
+                        desc: "Review each push Ship makes with the reviewer above. Findings open in the review pane; with Auto-fix on they go back to the session that owns the branch. Each ship can change this from the Ship button or the review drawer."
+                    ) {
+                        Toggle("", isOn: state.bind(\.changes.shepherd.reviewBeforePush))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                    }
+                    SettingsRow(
+                        name: "Review rounds per push",
+                        desc: "Reviews with findings before the shepherd stops and asks for you."
+                    ) {
+                        Stepper(
+                            "\(state.config.changes.shepherd.maxReviewRounds)",
+                            value: state.bind(\.changes.shepherd.maxReviewRounds),
+                            in: ShepherdDefaults.reviewRoundRange
+                        )
+                    }
                     SettingsRow(
                         name: "Auto-fix new PRs",
                         desc: "Send failing checks, trusted review threads and merge conflicts back to the session that owns the PR. Each PR can change this from its toolbar button or the review drawer."
@@ -79,7 +116,7 @@ struct ChangesPane: View {
                     }
                     SettingsRow(
                         name: "Auto-merge new PRs",
-                        desc: "Squash-merge once checks pass, required reviewers have reviewed the current head, and the head has stayed the same for two polls."
+                        desc: "Squash-merge once checks pass, required reviewers have reviewed the current head, the current head passed its review, and the head has stayed the same for two polls."
                     ) {
                         Toggle("", isOn: state.bind(\.changes.shepherd.autoMerge))
                             .toggleStyle(.switch)
@@ -205,6 +242,20 @@ struct ChangesPane: View {
                 PromptStatusChip(label: label)
             }
         }
+    }
+
+    private var reviewerPicker: some View {
+        let reviewer = state.bind(\.changes.codeReview.reviewer)
+        return AgentModelPicker(
+            choice: Binding(
+                get: { reviewer.wrappedValue },
+                set: { if let choice = $0 { reviewer.wrappedValue = choice } }
+            ),
+            allowsSameAsSession: true,
+            inheritLabel: nil,
+            agents: RepositoryAgentMenuPolicy.acpAgents(from: state.agentRegistry.enabled()),
+            modelCatalog: state.acpModelCatalog
+        )
     }
 
     private var toolPicker: some View {

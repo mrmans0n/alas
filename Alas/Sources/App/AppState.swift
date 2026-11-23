@@ -7013,7 +7013,8 @@ final class AppState {
         startupScripts: ProjectStartupScripts,
         mcpServers: [ProjectMCPServer],
         worktreeBranchTemplate: String? = nil,
-        shepherd: ProjectShepherdSettings? = nil
+        shepherd: ProjectShepherdSettings? = nil,
+        codeReview: ProjectCodeReviewSettings? = nil
     ) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
@@ -7026,7 +7027,8 @@ final class AppState {
                 startupScripts: startupScripts,
                 mcpServers: mcpServers,
                 worktreeBranchTemplate: worktreeBranchTemplate,
-                shepherd: shepherd
+                shepherd: shepherd,
+                codeReview: codeReview
             )
         )
         saveProjects()

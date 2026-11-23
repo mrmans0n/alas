@@ -355,7 +355,7 @@ struct RunScheduleEditorView: View {
     private var worktreePicker: some View {
         let worktrees = draft.projectID.map { state.projectsManager.visibleWorktrees(projectId: $0) } ?? []
         let selected = worktrees.first { $0.id == draft.worktreeID }
-        return ScheduleChipMenu(
+        return FieldChipMenu(
             title: selected?.title ?? "Choose a worktree",
             monospaced: true,
             grows: true
@@ -385,7 +385,7 @@ struct RunScheduleEditorView: View {
         }()
         return VStack(alignment: .leading, spacing: scale.space[2]) {
             HStack(spacing: 0) {
-                ScheduleChipMenu(title: selectedTitle) {
+                FieldChipMenu(title: selectedTitle) {
                     Picker("", selection: Binding(
                         get: { draft.scriptKey ?? "" },
                         set: { draft.scriptKey = $0.isEmpty ? nil : $0 }
@@ -421,81 +421,32 @@ struct RunScheduleEditorView: View {
         }
     }
 
-    private var agentPicker: some View {
-        let agents = state.enabledAgents(forProjectId: draft.projectID)
-        // An agent that has since been disabled or removed is still named,
-        // the way a missing script is. Showing "Project default" for it
-        // would be a lie: the id stays in the draft and is saved, and the
-        // next firing fails on an agent the dialog claimed was not selected.
-        let missingAgentID = draft.agentID.flatMap { id in
-            agents.contains { $0.id == id } ? nil : id
-        }
-        let title: String = {
-            guard let id = draft.agentID else { return "Project default" }
-            if let agent = agents.first(where: { $0.id == id }) { return agent.displayName }
-            return "\(id) · unavailable"
-        }()
-        return ScheduleChipMenu(title: title) {
-            Picker("", selection: Binding(
-                get: { draft.agentID ?? "" },
-                set: { selected in
-                    let agentID = selected.isEmpty ? nil : selected
-                    // A model belongs to the agent it was listed for.
-                    if agentID != draft.agentID { draft.modelID = nil }
-                    draft.agentID = agentID
+    /// The schedule stores agent and model ids as strings; the shared picker
+    /// works on a `ReviewerChoice`, where nil is the project default.
+    private var agentModelPicker: AgentModelPicker {
+        AgentModelPicker(
+            choice: Binding(
+                get: { draft.agentID.map { .agent(id: $0, modelID: draft.modelID) } },
+                set: { choice in
+                    switch choice {
+                    case let .agent(id, modelID):
+                        draft.agentID = id
+                        draft.modelID = modelID
+                    case nil, .sameAsSession:
+                        draft.agentID = nil
+                        draft.modelID = nil
+                    }
                 }
-            )) {
-                Text("Project default").tag("")
-                ForEach(agents) { agent in
-                    Text(agent.displayName).tag(agent.id)
-                }
-                if let missingAgentID {
-                    Divider()
-                    Text("\(missingAgentID) · unavailable").tag(missingAgentID)
-                }
-            }
-            .pickerStyle(.inline)
-            .labelsHidden()
-        }
-        .accessibilityLabel("Agent")
+            ),
+            allowsSameAsSession: false,
+            inheritLabel: "Project default",
+            agents: state.enabledAgents(forProjectId: draft.projectID),
+            modelCatalog: state.acpModelCatalog
+        )
     }
 
     private var agentSurface: RunSchedulePresentation.AgentSurface {
         RunSchedulePresentation.agentSurface(agentID: draft.agentID)
-    }
-
-    /// Models the agent has advertised in earlier sessions. Like the agent
-    /// picker, a saved id the list no longer carries stays selectable and
-    /// is named as such, rather than silently reading as "Agent default".
-    private var modelPicker: some View {
-        let models = draft.agentID.map { state.acpModelCatalog.models(for: $0) } ?? []
-        let missingModelID = draft.modelID.flatMap { id in
-            models.contains { $0.id == id } ? nil : id
-        }
-        let title: String = {
-            guard let id = draft.modelID else { return "Agent default" }
-            if let model = models.first(where: { $0.id == id }) { return model.name }
-            return "\(id) · not listed"
-        }()
-        return ScheduleChipMenu(title: title) {
-            Picker("", selection: Binding(
-                get: { draft.modelID ?? "" },
-                set: { draft.modelID = $0.isEmpty ? nil : $0 }
-            )) {
-                Text("Agent default").tag("")
-                ForEach(models) { model in
-                    Text(model.name).tag(model.id)
-                }
-                if let missingModelID {
-                    Divider()
-                    Text("\(missingModelID) · not listed").tag(missingModelID)
-                }
-            }
-            .pickerStyle(.inline)
-            .labelsHidden()
-        }
-        .disabled(models.isEmpty && missingModelID == nil)
-        .accessibilityLabel("Model")
     }
 
     // MARK: - Composition
@@ -523,7 +474,7 @@ struct RunScheduleEditorView: View {
             }
             DialogField(label: "Agent") {
                 HStack(spacing: 0) {
-                    agentPicker
+                    agentModelPicker.agentMenu
                     Spacer(minLength: 0)
                 }
             }
@@ -531,7 +482,7 @@ struct RunScheduleEditorView: View {
                 DialogField(label: "Model") {
                     VStack(alignment: .leading, spacing: scale.space[1]) {
                         HStack(spacing: 0) {
-                            modelPicker
+                            agentModelPicker.modelMenu
                             Spacer(minLength: 0)
                         }
                         if state.acpModelCatalog.models(for: agentID).isEmpty {
@@ -649,52 +600,6 @@ struct RunScheduleEditorView: View {
 }
 
 // MARK: - Controls
-
-/// A field-shaped menu: current value, chevron, and a menu of choices. The
-/// same silhouette as `ProjectPicker` so a row of the two reads as one kind
-/// of control.
-private struct ScheduleChipMenu<Items: View>: View {
-    let title: String
-    var monospaced = false
-    var grows = false
-    @ViewBuilder let items: () -> Items
-
-    @Environment(\.theme) private var theme
-    @Environment(\.designScale) private var scale
-
-    var body: some View {
-        Menu {
-            items()
-        } label: {
-            HStack(spacing: scale.space[2]) {
-                Text(title)
-                    .font(scale.meta.font(design: monospaced ? .monospaced : .default))
-                    .foregroundColor(theme.color("fg"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if grows {
-                    Spacer(minLength: 0)
-                }
-                Image(systemName: "chevron.down")
-                    .font(scale.glyphFont)
-                    .foregroundColor(theme.color("fg-dim"))
-            }
-            .padding(.horizontal, scale.space[2])
-            .frame(height: 28)
-            .frame(maxWidth: grows ? .infinity : nil)
-            .background(theme.color("bg-1"))
-            .overlay(
-                RoundedRectangle(cornerRadius: scale.radius.medium)
-                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
-            .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize(horizontal: !grows, vertical: true)
-    }
-}
 
 /// The design's small square checkbox, drawn in theme colours rather than
 /// AppKit's, with the label as part of the click target.
