@@ -35,6 +35,11 @@ it with a one-line reply saying what changed.
   work committed into entries, with the same consent rule. It may answer
   `in_progress` and keep going; then `alas pr status` reports progress, and
   you must not run `gg sync` or ship again meanwhile.
+- With review before push on, `alas pr create` and `alas stack ship` may
+  answer `reviewing`: a reviewer agent checks the commits first. Findings
+  arrive as a new turn. Fix them, commit, and resolve each finding with
+  `alas review resolve`; don't push. Alas reviews the new commits and pushes
+  them once the review is clean.
 
 If a publish times out, the push may still complete: run `alas pr status`
 before retrying.
