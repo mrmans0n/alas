@@ -81,11 +81,25 @@ struct TranscriptRowView: View {
             AgentMarkdown(id: item.id, text: text, session: session)
                 .contextMenu { messageMenu(text) }
         case .thought(let text):
-            Text(text)
-                .font(.callout.italic())
-                .foregroundStyle(.secondary)
-                .lineLimit(isExpanded ? nil : 2)
-                .onTapGesture(perform: toggle)
+            // As the Mac's `ACPThoughtView`: a labelled disclosure, so a lone thought doesn't read as cut-off text.
+            VStack(alignment: .leading, spacing: 6) {
+                Button(action: toggle) {
+                    Label(isExpanded ? "Hide thinking" : "Thinking…", systemImage: "brain")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if isExpanded {
+                    Text(text)
+                        .font(.callout.italic())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.leading, 12)
+            .overlay(alignment: .leading) { Rectangle().fill(.quaternary).frame(width: 1.5) }
         case .toolCall(let call):
             if let subagent = item.message.subagent {
                 SubagentCard(subagent: subagent, duration: item.toolCall?.duration,
