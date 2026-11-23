@@ -2541,7 +2541,7 @@ struct NativePeerSessionsTests {
         #expect(client.selectedSessionId == "B:new")
     }
 
-    @Test func aWorktreesNewSessionPreselectsItEvenWithNoTabOpen() throws {
+    @Test func aWorktreesNewSessionNeedsOnlyAgentOptions() throws {
         let (links, client, _, _) = startedClientWithPeerRepo()
         let history = RemoteSessionSummary(id: "s", title: "s", agentId: "claude", status: "idle", canDrive: true,
                                            isActive: false, projectId: "p", worktreeId: "w1",
@@ -2552,11 +2552,20 @@ struct NativePeerSessionsTests {
         // Its only session is history, so selecting the worktree opens no tab.
         client.selectWorktree(selection)
         #expect(client.selectedTab == nil)
+        links.sent.removeAll()
 
         client.beginNewSession(in: selection)
 
-        #expect(client.newSession?.projectId == "p")
-        #expect(client.newSessionDefaultWorktreeId == "w1")
+        #expect(links.sent(to: "B") == [.listAgents])
+        links.receive(.agentList(agents: [.init(id: "claude", name: "Claude", isDefault: true)]), from: "B")
+        #expect(client.newSession?.isLoading == false)
+
+        client.createNewWorktreeSession(base: "main", branch: "feature/x", agentId: "claude", modelId: nil, effortId: nil)
+        #expect(links.sent(to: "B") == [.listAgents])
+
+        client.createNewSession(worktreeId: "w2", agentId: "claude", modelId: "opus", effortId: "high")
+        #expect(links.sent(to: "B").last
+            == .createSession(worktreeId: "w1", agentId: "claude", modelId: "opus", effortId: "high"))
         links.offline("B")
         #expect(client.newSessionTarget(in: selection) == nil)
     }

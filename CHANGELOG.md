@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixes
+
+- Start new sessions directly in the current peer worktree without loading other worktrees or offering to create one.
+
 ## [0.24.7] - 2026-11-22
 
 ### ✨ Features
