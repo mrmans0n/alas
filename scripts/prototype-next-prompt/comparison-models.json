@@ -1,0 +1,40 @@
+{
+  "runtime": {
+    "python": "3.13",
+    "packages": ["mlx-vlm==0.8.0", "mlx==0.32.4", "transformers==5.24.0", "huggingface-hub==2.4.0"]
+  },
+  "models": [
+    {
+      "alias": "qwen3",
+      "role": "baseline",
+      "repo": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+      "revision": "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
+      "template_kwargs": {},
+      "weight_bytes": 2263022417,
+      "minimum_memory_gib": 8,
+      "note": "Shipping model. Non-thinking checkpoint; the template has no thinking switch."
+    },
+    {
+      "alias": "lfm3",
+      "role": "challenger",
+      "repo": "LiquidAI/LFM3-1.7B-MLX-4bit",
+      "revision": "91f34088d6946482cbcae11b85d4657093618c34",
+      "template_kwargs": {"enable_thinking": false},
+      "closed_thinking_suffix": "<|im_start|>assistant\n<think></think>",
+      "weight_bytes": 973083386,
+      "minimum_memory_gib": 8,
+      "note": "Thinking defaults on in the template; the card says disabling it can be inconsistent. lfm1.0 license. Native Swift support needs mlx-swift-lm 3.33.0."
+    },
+    {
+      "alias": "inkling2-mini",
+      "role": "larger-tier",
+      "repo": "mlx-community/Inkling-2-Mini-4bit",
+      "revision": "9c0e2960609ba7cb40daf92c6f7bf8ed56e1dd62",
+      "template_kwargs": {"reasoning_effort": "none"},
+      "closed_thinking_suffix": "Thinking effort level: 0<|end_message|>",
+      "weight_bytes": 17308326283,
+      "minimum_memory_gib": 32,
+      "note": "26.4B MoE, 5.4B effective active. Vision tower stays in bfloat16 and is loaded but unused. Upstream asks for 32 GB or more. No mlx-swift-lm support."
+    }
+  ]
+}
