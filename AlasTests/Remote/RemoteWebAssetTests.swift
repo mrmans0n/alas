@@ -1297,7 +1297,7 @@ struct RemoteWebAssetTests {
     @Test func openingASessionRequestsChangesForTheBadgesScope() throws {
         let js = try asset("app.js")
         let body = try #require(
-            js.range(of: "function openSession(id) {").map { js[$0.lowerBound...].prefix(2600) })
+            js.range(of: "function openSession(id) {").map { js[$0.lowerBound...].prefix(3200) })
         #expect(body.contains("if (summary && summary.worktree) requestChanges();"))
     }
 
@@ -1410,7 +1410,7 @@ struct RemoteWebAssetTests {
         #expect(js.contains("RemoteHubRegistry.serverBadgeCounts(s, (links.get(s.id) || {}).counts, active, gatewayCounts)"))
         #expect(js.contains("RemoteHubRegistry.otherAttentionTotal(effective, hub.activeId)"))
         #expect(html.contains(#"id="tab-settings" class="bt-tab" aria-label="Settings">"#))
-        #expect(js.contains(#"$("status").onclick = () => { if (!currentSession) showSettings(); };"#))
+        #expect(js.contains(#"$("status").onclick = () => { if (!currentSession || wideLayout.matches) showSettings(); };"#))
 
         #expect(css.contains(".server-row {"))
         #expect(css.contains(".server-row.is-active"))
