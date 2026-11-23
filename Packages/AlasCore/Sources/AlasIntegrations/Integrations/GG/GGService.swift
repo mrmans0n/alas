@@ -1092,9 +1092,13 @@ public struct GGLandStream: Sendable {
 }
 
 private struct GGLandStreamValidator {
+    private enum ReportedEntry {
+        case queued(prNumber: Int)
+        case completed(successful: Bool)
+    }
+
     private var start: (stack: String, base: String, totalEntries: Int)?
-    private var terminalPositions = Set<Int>()
-    private var successfulTerminalPositions = Set<Int>()
+    private var entries: [Int: ReportedEntry] = [:]
     private var sawTerminalEvent = false
 
     mutating func accept(_ event: GGLandEvent) throws {
@@ -1113,15 +1117,34 @@ private struct GGLandStreamValidator {
             start = (stack, base, totalEntries)
 
         case .wait(let wait):
-            try validateActivePosition(wait.position, event: "wait")
+            try validatePosition(wait.position, event: "wait")
+            switch entries[wait.position] {
+            case nil:
+                break
+            case .queued(let prNumber) where wait.phase == .mergeTrain && wait.prNumber == prNumber:
+                break
+            case .queued:
+                throw GGServiceError.malformedOutput("gg land wait did not match its queued entry.")
+            case .completed:
+                throw GGServiceError.malformedOutput("gg land emitted wait after that entry completed.")
+            }
 
         case .entry(let entry):
-            try validateActivePosition(entry.position, event: "entry")
-            guard terminalPositions.insert(entry.position).inserted else {
-                throw GGServiceError.malformedOutput("gg land emitted duplicate terminal entry positions.")
+            try validatePosition(entry.position, event: "entry")
+            // gg reports submission before polling a merge train, then updates
+            // the same entry when GitLab confirms the merge.
+            if let previous = entries[entry.position] {
+                guard case .queued(let prNumber) = previous,
+                      entry.prNumber == prNumber, entry.action == "merged", entry.error == nil
+                else {
+                    throw GGServiceError.malformedOutput("gg land emitted an invalid update for a reported entry.")
+                }
             }
-            if entry.error == nil {
-                successfulTerminalPositions.insert(entry.position)
+            if entry.error == nil, let prNumber = entry.prNumber,
+               entry.action == "queued" || entry.action == "already_queued" {
+                entries[entry.position] = .queued(prNumber: prNumber)
+            } else {
+                entries[entry.position] = .completed(successful: entry.error == nil)
             }
 
         case .summary(let summary):
@@ -1140,7 +1163,10 @@ private struct GGLandStreamValidator {
                     throw GGServiceError.malformedOutput("gg land summary reported duplicate entry positions.")
                 }
             }
-            guard successfulTerminalPositions.isSubset(of: summaryPositions) else {
+            guard entries.allSatisfy({ position, entry in
+                if case .completed(successful: false) = entry { return true }
+                return summaryPositions.contains(position)
+            }) else {
                 throw GGServiceError.malformedOutput("gg land summary omitted a completed entry.")
             }
             sawTerminalEvent = true
@@ -1156,15 +1182,12 @@ private struct GGLandStreamValidator {
         }
     }
 
-    private func validateActivePosition(_ position: Int, event: String) throws {
+    private func validatePosition(_ position: Int, event: String) throws {
         guard let start else {
             throw GGServiceError.malformedOutput("gg land emitted \(event) before start.")
         }
         guard position >= 1, position <= start.totalEntries else {
             throw GGServiceError.malformedOutput("gg land emitted \(event) outside its start range.")
-        }
-        guard !terminalPositions.contains(position) else {
-            throw GGServiceError.malformedOutput("gg land emitted \(event) after that entry completed.")
         }
     }
 }
