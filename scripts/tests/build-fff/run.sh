@@ -78,7 +78,7 @@ grep -qx 'rustup target list --installed --toolchain 1.97.1' "${invocations}"
 grep -qx 'rustup target add --toolchain 1.97.1 x86_64-apple-darwin' "${invocations}"
 grep -qx 'rustup which --toolchain 1.97.1 rustc' "${invocations}"
 grep -qx 'rustup which --toolchain 1.97.1 cargo' "${invocations}"
-grep -q "^cargo RUSTC=${toolchain_bin}/rustc build " "${invocations}"
+grep -Fq "cargo RUSTC=${toolchain_bin}/rustc build --config profile.release.build-override.strip=false " "${invocations}"
 test -f "${srcroot}/.build/fff/x86_64/install/lib/libfff_c.dylib"
 
 # Xcode uses undefined_arch for a parent target even when ARCHS contains only
