@@ -166,6 +166,7 @@ struct DeviceDriverPill: View {
     var islandScale: CGFloat?
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
+    @Environment(\.colorScheme) private var colorScheme
 
     /// The Dynamic Island of an iPhone 17 Pro, in device points: 37 tall, 14 from the top.
     /// ponytail: one size for every island; per-model frames if a model's island visibly drifts.
@@ -180,26 +181,28 @@ struct DeviceDriverPill: View {
     }
 
     var body: some View {
-        if let islandScale {
-            content(stacked: false, height: max(Self.islandHeight * islandScale, Self.minHeight))
-                .font(scale.caption.font)
-                .environment(\.colorScheme, .dark)
-                .background(Color.black, in: Capsule())
-                .scaleEffect(pulse ? 1.06 : 1)
-                .animation(.easeOut(duration: 0.2), value: pulse)
+        // The one-line strip, or the same texts and button on two lines when the
+        // screen is too narrow for it.
+        ViewThatFits(in: .horizontal) {
+            content(stacked: false, height: islandScale.map { max(Self.islandHeight * $0, Self.minHeight) } ?? 24)
+            content(stacked: true)
+        }
+        .font(scale.caption.font)
+        .environment(\.colorScheme, islandScale == nil ? colorScheme : .dark)
+        .background { pillBackground }
+        .scaleEffect(pulse ? 1.06 : 1)
+        .animation(.easeOut(duration: 0.2), value: pulse)
+    }
+
+    @ViewBuilder private var pillBackground: some View {
+        if islandScale != nil {
+            Capsule().fill(Color.black)
         } else {
-            // The one-line strip, or the same texts and button on two lines when the
-            // screen is too narrow for it.
-            ViewThatFits(in: .horizontal) {
-                content(stacked: false)
-                content(stacked: true)
+            ZStack {
+                Capsule().fill(theme.color("bg-2").opacity(0.6))
+                Capsule().fill(.ultraThinMaterial)
+                Capsule().strokeBorder(theme.color("line"), lineWidth: 0.5)
             }
-            .font(scale.caption.font)
-            .background(.ultraThinMaterial, in: Capsule())
-            .background(theme.color("bg-2").opacity(0.6), in: Capsule())
-            .overlay(Capsule().strokeBorder(theme.color("line"), lineWidth: 0.5))
-            .scaleEffect(pulse ? 1.06 : 1)
-            .animation(.easeOut(duration: 0.2), value: pulse)
         }
     }
 
