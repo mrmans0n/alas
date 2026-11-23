@@ -945,3 +945,14 @@ jobs:
       - name: Test remote web console
         if: ${{ !cancelled() }}
         run: bash scripts/tests/remote-web-console/run.sh
+
+      - name: Check the remote web diff bundle matches its sources
+        if: ${{ !cancelled() }}
+        run: |
+          npm ci --prefix scripts/remote-web-bundle --no-audit --no-fund
+          node scripts/remote-web-bundle/build.mjs
+          test -z "$(git status --porcelain -- Alas/Resources/RemoteWeb/diffs)" || {
+            git status --short -- Alas/Resources/RemoteWeb/diffs
+            echo "Alas/Resources/RemoteWeb/diffs is stale: run npm ci && node build.mjs in scripts/remote-web-bundle."
+            exit 1
+          }

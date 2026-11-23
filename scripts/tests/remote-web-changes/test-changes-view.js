@@ -198,4 +198,21 @@ const view = globalThis.RemoteChangesView;
   assert.equal(view.toolDiffText(undefined, diffs), undefined);
 }
 
-console.log("remote-web-changes: ok");
+// The bundled @pierre/diffs parses the patch built from the host's hunks: the file keeps its own
+// name, counts come from the lines even when the host's header disagrees, and a missing final
+// newline survives.
+(async () => {
+  const { getSingularPatch } = await import("../../../Alas/Resources/RemoteWeb/diffs/diffs.js");
+  const diff = getSingularPatch(view.unifiedPatch("src/a.swift", [
+    { header: "@@ -0,0 +1,2 @@", oldStart: 0, newStart: 1, lines: [{ kind: "add", text: "x" }, { kind: "add", text: "y" }] },
+    { header: "@@ -9,9 +11,9 @@ func f()", oldStart: 9, newStart: 11, lines: [
+      { kind: "context", text: "a" }, { kind: "delete", text: "b" }, { kind: "add", text: "c", noTrailingNewline: true }] }
+  ]));
+  assert.equal(diff.name, "src/a.swift");
+  assert.equal(diff.type, "change");
+  assert.deepEqual(diff.hunks.map(h => [h.deletionStart, h.deletionCount, h.additionStart, h.additionCount, h.hunkContext]),
+    [[0, 0, 1, 2, undefined], [9, 2, 11, 2, "func f()"]]);
+  assert.deepEqual(diff.additionLines, ["x\n", "y\n", "a\n", "c"]);
+  assert.deepEqual(diff.deletionLines, ["a\n", "b\n"]);
+  console.log("remote-web-changes: ok");
+})().catch(error => { console.error(error); process.exit(1); });
