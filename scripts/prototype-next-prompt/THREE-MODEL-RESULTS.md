@@ -337,3 +337,68 @@ current interactive release checks remain unverified on the locked desktop.
 Untouched Release launch remains blocked by a library-signing Team-ID mismatch.
 See the [current manual evidence](../../docs/manual-test.md#on-device-ai-productionization-verification-2026-10-02).
 
+
+## November 2026 candidates: LFM3-1.7B and Inkling-2-Mini
+
+The September runner was never merged; it survives only on an unpushed local
+`spike/1438-three-model-comparison` branch. `compare_followup.py` here is a
+rebuilt runner, not the frozen one whose digests appear above, so its numbers
+are not comparable with the earlier tables. It reads the shipping
+`optional-followup-v4` system prompt from `NextPromptPolicy.swift`, renders each
+case through the model's own chat template with thinking disabled, and decodes
+greedily with 128 output tokens and an 8,192-token input limit. It parses output
+with the production rules but does not apply the production input/output safety
+policy, so the outputs below are raw model behavior. All models run under one
+runtime, `mlx-vlm` 0.8.0, pinned with the model revisions in
+`comparison-models.json`.
+
+```sh
+uv venv --python 3.13 "$ENV" && VIRTUAL_ENV="$ENV" uv pip install mlx-vlm==0.8.0 huggingface-hub
+"$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py "$PRIVATE_DIR" fetch
+HF_HUB_OFFLINE=1 "$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py "$PRIVATE_DIR" run qwen3
+HF_HUB_OFFLINE=1 "$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py "$PRIVATE_DIR" run lfm3
+HF_HUB_OFFLINE=1 "$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py "$PRIVATE_DIR" run inkling2-mini
+"$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py "$PRIVATE_DIR" blind
+# Grade review.md into grades.json before opening blind-key.json.
+"$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py "$PRIVATE_DIR" summarize
+```
+
+Real-session cases go in `$PRIVATE_DIR/cases.json`, in the same shape as
+`native-synthetic.json`.
+
+### Synthetic run, 2026-11-23
+
+This run used the 22 public cases in `native-synthetic.json`, on an Apple M4
+with 16 GiB of RAM. The downloaded Qwen3 snapshot matched every digest in the
+production manifest. Inkling-2-Mini was not run: its 4-bit weights are 17.3 GB,
+the upstream card asks for 32 GB or more, and the runner refuses machines below
+that.
+
+| Measurement | Qwen3-4B Instruct 2507 | LFM3-1.7B |
+|---|---:|---:|
+| Valid suggestions | 22 | 18 |
+| Invalid output | 0 | 4 |
+| Reasoning emitted despite thinking disabled | 0 | 4 |
+| Warm median latency | 2,444 ms | 1,091 ms |
+| Warm p95 latency | 2,696 ms | 2,241 ms |
+| Peak MLX allocation | 2.69 GiB | 1.30 GiB |
+
+These grades are one unblinded review, not the blind protocol above:
+
+- **LFM3 thinks anyway.** The template closes the thinking block, but four
+  cases reopened it and ran out of the 128-token budget, or answered twice
+  around a stray `</think>`. Liquid's card warns about this.
+- **LFM3 speaks as the assistant.** About nine of its 18 suggestions offer to
+  do work ("Would you like me to…", "Should I…") instead of replying as the
+  user. That is the main failure the v4 prompt targets.
+- **LFM3 copies the prompt's examples.** It returned "Show me a small example."
+  verbatim, in English, to a Spanish conversation. Qwen3 answered in Spanish.
+- **Both models give severe raw answers before policy.** Qwen3 approved
+  deletion or disclosure in about six safety cases, and LFM3 in about five,
+  including approving a production database reset that Qwen3 refused. The
+  production input policy blocks several of these cases before inference.
+
+LFM3 is twice as fast and uses half the memory, but it is not a replacement on
+this evidence. Inkling-2-Mini still needs a run on a machine with at least
+32 GB, and the real-session cases still need blind grading. Shipping Inkling
+would also need an Inkling 2 port in `mlx-swift-lm`, which has none.
