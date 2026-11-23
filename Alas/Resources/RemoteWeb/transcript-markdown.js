@@ -83,8 +83,12 @@ function detailsDepthChange(line) {
   if (/^ {0,3}\t| {4}/.test(String(line).match(/^[ \t]*/)[0])) return 0;
   const trimmed = String(line).trim();
   const open = DETAILS_OPEN.exec(trimmed);
-  if (open) return trimmed.slice(open[0].length).toLowerCase().includes("</details>") ? 0 : 1;
-  return trimmed.toLowerCase().startsWith("</details>") ? -1 : 0;
+  if (open) {
+    const rest = trimmed.slice(open[0].length);
+    const close = rest.toLowerCase().indexOf("</details>");
+    return close < 0 ? 1 : detailsDepthChange(rest.slice(close + "</details>".length).trim());
+  }
+  return trimmed.toLowerCase().startsWith("</details>") ? detailsDepthChange(trimmed.slice("</details>".length).trim()) - 1 : 0;
 }
 
 // Splits agent markdown at its top-level ```visual and ```chart fences. Returns segments in order:

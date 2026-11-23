@@ -38,6 +38,7 @@ assert.deepEqual(types("<details><summary>a</summary>b</details>\n```visual\n<sv
 assert.deepEqual(types("<details>\n\n</details>\n```visual\n<svg/>\n```"), ["markdown", "visual"]);
 assert.deepEqual(types("<details><summary>a</summary>b</details> tail\n```visual\n<svg/>\n```"), ["markdown", "visual"]);
 assert.deepEqual(types("    <details>\n\n```visual\n<svg/>\n```"), ["markdown", "visual"]);
+assert.deepEqual(types("<details>\n\n</details><details>\n\n```visual\n<svg/>\n```"), ["markdown"]);
 
 // A chart becomes an escaped <alas-chart>, titled by its label.
 const [chart] = tm.splitVisualFences('```chart line unit=ms label="Build & test"\n{"labels":["a"],"values":[1]}\n```');

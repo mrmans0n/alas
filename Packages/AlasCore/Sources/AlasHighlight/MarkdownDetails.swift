@@ -41,8 +41,18 @@ public enum MarkdownDetails: Sendable {
     public static func depthChange(_ line: some StringProtocol) -> Int {
         guard !isIndentedCode(line) else { return 0 }
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if let open = opening(trimmed) { return open.rest.range(of: closeTag, options: .caseInsensitive) == nil ? 1 : 0 }
-        return trimmed.lowercased().hasPrefix(closeTag) ? -1 : 0
+        if let open = opening(trimmed) {
+            guard let close = open.rest.range(of: closeTag, options: .caseInsensitive) else { return 1 }
+            return depthChange(open.rest[close.upperBound...].trimmingCharacters(in: .whitespaces))
+        }
+        guard let after = afterClosingTag(trimmed) else { return 0 }
+        return depthChange(after) - 1
+    }
+
+    /// The rest of a line that starts with `</details>`, trimmed; nil for any other line.
+    private static func afterClosingTag(_ trimmed: String) -> String? {
+        guard trimmed.lowercased().hasPrefix(closeTag) else { return nil }
+        return trimmed.dropFirst(closeTag.count).trimmingCharacters(in: .whitespaces)
     }
 
     /// Whether the line starts a section, even one it also closes.
@@ -79,15 +89,17 @@ public enum MarkdownDetails: Sendable {
                 if current.isClosed(by: line) { fence = nil }
             } else if let opened = Fence(opening: line) {
                 fence = opened
-            } else {
-                depth += depthChange(line)
+            } else if !isIndentedCode(line), let after = afterClosingTag(line.trimmingCharacters(in: .whitespaces)) {
+                // Text after the tag may open a section of its own, as in `</details><details>`.
+                depth -= 1
                 if depth == 0 {
-                    let after = line.trimmingCharacters(in: .whitespaces).dropFirst(closeTag.count)
-                        .trimmingCharacters(in: .whitespaces)
                     trailing = after.isEmpty ? nil : after
                     closed = true
                     break
                 }
+                depth += depthChange(after)
+            } else {
+                depth += depthChange(line)
             }
             inner.append(line)
         }
