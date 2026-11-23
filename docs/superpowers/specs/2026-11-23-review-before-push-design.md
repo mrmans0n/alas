@@ -230,15 +230,15 @@ prompt tells the session to fix each finding, commit, resolve the finding with
 
 The shepherd's fix prompt changes from "Fix what's below, commit, and push" to
 "Fix what's below and commit. Don't push: Alas reviews the commits and pushes
-them." When the fix turn ends (`ReviewShepherd.turnCompleted`) with local
-commits ahead of the PR head, the record enters a new `reviewing` phase and
-runs steps 3 to 7 against the PR's head branch. A clean review pushes through
-the same exact-SHA path `pr_create` uses.
+them." When the fix turn ends with local commits ahead of the PR's remote head
+branch, the ship review for that session runs steps 3 to 7. A clean review
+pushes through the same exact-SHA path `pr_create` uses, by re-entering
+`pr_create`, which adopts the open PR.
 
-While the record is `reviewing` or `fixing` for review findings, the
-`awaitingPush` no-progress count does not advance. Review findings and CI
-failures share the existing fix-attempt budget per problem; the round cap is
-separate and counts only reviews.
+While a review runs or its findings wait for the owner, the shepherd's
+`awaitingPush` idle follow-up doesn't fire. Review findings and CI failures
+share the existing fix-attempt budget per problem; the round cap is separate
+and counts only reviews.
 
 With the lever off, the fix prompt keeps today's wording and nothing changes.
 
@@ -350,12 +350,13 @@ round's session with the reviewer as resolver, and stores the verdict with
 | `AppConfig.Changes` | `codeReview: CodeReviewSettings` with `reviewer: ReviewerChoice` (`sameAsSession` or `agent(id, modelID?)`) and `prompt: String`. |
 | `ShepherdDefaults` | `reviewBeforePush: Bool = false`, `maxReviewRounds: Int = 3`, clamped to `1...10`. |
 | `ProjectConfig` | `codeReview: ProjectCodeReviewSettings?` with `reviewer: ReviewerChoice?` (nil inherits) and `instructions: String`. Cleared when empty, copied to linked projects like `shepherd`. |
-| `ShepherdRecord` | `reviewBeforePush: Bool`, `reviewer: ReviewerChoice?`, `reviewID: ShipReviewID?`. Seeded from the ship request or defaults at bind. |
-| `StackShepherdRecord` | The same three fields. |
-| `ShepherdPhase` | New `reviewing`. |
-| `ShepherdEscalation` | New `reviewRoundsExhausted`, `reviewFindings` (Auto-fix off), `reviewFailed`. |
 | `ShepherdBadgeState` | New `reviewing`. |
-| `ShipReviewRecord` (new) | Keyed by worktree and owning session. Holds the lever, reviewer, pending push (PR request fields or stack plan), current round and phase, reviewer session id, `cleanSHAs`, `allowedSHAs`, and one entry per round (SHA, review session id, verdict). |
+| `ShepherdObservation` | `reviewGate: ShepherdReviewGate?` (passed SHAs, whether a review is running); nil when the lever is off. |
+| `ShipReviewRecord` (new) | Keyed by worktree and owning session. Holds the lever, the per-ship reviewer, the pending push (PR request fields or stack plan), the phase (idle, reviewing, awaiting fix, pushing, stopped with a reason), rounds this push, the round history (SHA, review session id, verdict, open findings), `passedSHAs` (clean or allowed), an unreviewed remote head, and the reviewer session id. |
+
+The shepherd records don't change. The lever and reviewer live only on the
+`ShipReviewRecord`, which the shepherd finds by worktree and owning session, so
+there is one source of truth before and after the PR exists.
 
 `ShipReviewRecord`s persist to `ship-reviews.json` under Application Support
 through `PersistenceStoreProtocol`, like `review-shepherds.json`. A record lives
@@ -363,8 +364,9 @@ from the first gated push until its shepherd record ends or the user stops it.
 On relaunch, a round that was running restarts with a new reviewer session and
 does not count toward the cap.
 
-`ShepherdPolicy.headGatePasses` gains one condition: with `reviewBeforePush`
-on, the request head is in the record's `cleanSHAs` or `allowedSHAs`.
+`ShepherdPolicy.headGatePasses` gains one condition: with the lever on, the
+request head is in the record's `passedSHAs`. Stacks check the top open entry's
+head the same way in `StackShepherdPolicy.isReady`.
 
 The ship request that carries the popover's choice is the existing
 `requestShepherdCreatePR` path. Alas stores the choice on a `ShipReviewRecord`
@@ -400,9 +402,12 @@ integration path:
   Auto-fix off stops; the cap stops; HEAD moving mid-review restarts without
   counting; a failed round doesn't count.
 - `ShepherdPolicyTests`: the merge gate with clean, allowed and unreviewed
-  heads, parameterized; `awaitingPush` doesn't count polls while reviewing.
-- One git-backed integration test: `pr_create` with the lever on returns
-  `reviewing` and leaves the remote branch untouched.
+  heads, parameterized; the `awaitingPush` idle follow-up waits while reviewing.
+- `ShipReviewer` with fake effects: a clean review pushes the reviewed SHA,
+  findings reach the owner and the next commit starts round two, an
+  unavailable reviewer or unreadable instructions stop without pushing, and a
+  relaunch restarts a running round once. No `pr_create` test harness exists
+  (it needs a code host), so the gate is covered at this layer.
 
 ## Documentation
 
