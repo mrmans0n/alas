@@ -273,10 +273,14 @@ struct ChangesTabView: View {
             ?? ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
         let recordID = record?.id
         let ownerSessionID = record?.sessionID
+        // Review before push belongs to the request's owning session.
+        let shipReview = record.map { ShipReviewContext(sessionID: $0.sessionID, worktree: worktree, state: appState, ownerAgentID: owner?.agentId) }
+        let shipReviewID = shipReview?.id
+        let reviewLine = shipReview?.line(providerName: request.provider.displayName)
 
         return ReviewShepherdDrawerModel(
             bound: record.map(ReviewShepherdDrawerModel.Bound.init),
-            presentation: ShepherdPresentation.make(record: record, request: request, mergeGatePasses: gatePasses),
+            presentation: ShepherdPresentation.make(record: record, request: request, mergeGatePasses: gatePasses, review: reviewLine),
             ownerTitle: owner?.title,
             ownerAgent: owner.flatMap { appState.agent(id: $0.agentId) },
             candidates: candidates,
@@ -308,6 +312,12 @@ struct ChangesTabView: View {
             },
             refreshSessions: {
                 manager?.refreshRecent()
+            },
+            reviewLever: shipReview?.boundLever(state: appState, isDisabled: record?.phase.isTerminal ?? true),
+            review: reviewLine,
+            performReviewAction: { action in
+                guard let shipReviewID else { return }
+                ShipReviewContext.perform(action, id: shipReviewID, state: appState)
             }
         )
     }

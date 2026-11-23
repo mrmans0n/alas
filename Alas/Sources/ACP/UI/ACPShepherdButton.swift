@@ -28,11 +28,17 @@ struct ACPShepherdButton: View {
     private struct PillState {
         let presentation: ShepherdPresentation
         let invitesShip: Bool
+        /// Replaces "Ship" while no request has a number yet.
+        var label: String? = nil
     }
 
     private func pillState(shipsStack: Bool) -> PillState {
+        let review = ShipReviewContext(sessionID: session.id, worktree: worktree, state: state, ownerAgentID: session.agentId)
         if shipsStack {
             let context = StackShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state)
+            if context.record == nil, let held = review.heldShip(stack: true) {
+                return Self.heldShipPill(held)
+            }
             return PillState(
                 presentation: context.presentation,
                 invitesShip: StackShipAction.invitesShip(
@@ -44,12 +50,33 @@ struct ACPShepherdButton: View {
             )
         }
         let context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state)
+        if context.record == nil, let held = review.heldShip(stack: false) {
+            return Self.heldShipPill(held)
+        }
         return PillState(
             presentation: context.presentation,
             invitesShip: ShepherdShipAction.invitesShip(
                 record: context.record, otherRecord: context.otherRecord, request: context.request,
                 snapshot: context.snapshot, isBusy: turnRunning
             )
+        )
+    }
+
+    /// A ship whose push waits on review before push: "Reviewing", or the
+    /// stop's attention badge until the user acts.
+    private static func heldShipPill(_ held: ShipReviewRecord) -> PillState {
+        if case let .stopped(stop) = held.phase {
+            let message = ShipReviewPresentation.stopMessage(stop, maxRounds: held.maxRounds)
+            return PillState(
+                presentation: ShepherdPresentation(badge: .attention, number: nil, tooltip: message, phaseLine: message),
+                invitesShip: false
+            )
+        }
+        let line = "Reviewing before the push"
+        return PillState(
+            presentation: ShepherdPresentation(badge: .reviewing, number: nil, tooltip: line, phaseLine: line),
+            invitesShip: false,
+            label: "Reviewing"
         )
     }
 
@@ -74,7 +101,7 @@ struct ACPShepherdButton: View {
                     Text(number)
                         .font(scale.meta.font(weight: .semibold, design: .monospaced))
                 } else {
-                    Text(shipsStack ? "Ship stack" : "Ship")
+                    Text(pill.label ?? (shipsStack ? "Ship stack" : "Ship"))
                         .font(scale.meta.font(weight: pill.invitesShip ? .semibold : .medium))
                 }
             }
@@ -140,6 +167,8 @@ struct ShepherdSessionContext {
     /// The shepherd's own merge gate from its latest decision on the bound
     /// record; nil without one.
     private let shepherdGatePasses: Bool?
+    /// The review before push line for the bound record's head.
+    let review: ShipReviewLine?
 
     init(sessionID: String, worktree: Worktree, state: AppState, fetched: ReviewLoopSnapshot? = nil) {
         let shepherd = state.reviewShepherd
@@ -162,6 +191,10 @@ struct ShepherdSessionContext {
             snapshot = pane ?? fetched
         }
         shepherdGatePasses = own.map { shepherd.gatePasses[$0.id] ?? false }
+        review = own.flatMap { own in
+            ShipReviewContext(sessionID: sessionID, worktree: worktree, state: state)
+                .line(providerName: own.id.providerKind.displayName)
+        }
     }
 
     private static func carries(_ id: ShepherdRecordID, _ snapshot: ReviewLoopSnapshot) -> Bool {
@@ -182,7 +215,114 @@ struct ShepherdSessionContext {
     }
 
     var presentation: ShepherdPresentation {
-        ShepherdPresentation.make(record: record, request: request, mergeGatePasses: mergeGatePasses)
+        ShepherdPresentation.make(record: record, request: request, mergeGatePasses: mergeGatePasses, review: review)
+    }
+}
+
+/// Review before push for one owning session as the Ship surfaces show it:
+/// its record, the settings a ship starts from, and the reviewer's names.
+@MainActor
+struct ShipReviewContext {
+    let id: ShipReviewID
+    let record: ShipReviewRecord?
+    let defaults: ShepherdDefaults
+    /// What the reviewer menus offer.
+    let agents: [AgentDefinition]
+    let modelCatalog: ACPAgentModelCatalog
+    private let project: ProjectCodeReviewSettings?
+    private let global: CodeReviewSettings
+    /// Empty when the owning session's agent is unknown.
+    private let ownerAgentID: String
+    private let knownAgents: [AgentDefinition]
+
+    init(sessionID: String, worktree: Worktree, state: AppState, ownerAgentID: String? = nil) {
+        id = ShipReviewID(worktreeID: worktree.id, sessionID: sessionID)
+        record = state.core.shipReviewer.record(for: id)
+        defaults = state.config.changes.shepherd
+        global = state.config.changes.codeReview
+        project = state.projectsManager.projects.first(where: { $0.id == worktree.projectId })?.codeReview
+        self.ownerAgentID = ownerAgentID ?? {
+            let manager = state.acpManager(for: worktree)
+            return manager?.liveSession(for: sessionID)?.agentId
+                ?? manager?.sessionRows.first(where: { $0.id == sessionID })?.agentId
+                ?? ""
+        }()
+        agents = RepositoryAgentMenuPolicy.acpAgents(from: state.enabledAgents(forProjectId: worktree.projectId))
+        modelCatalog = state.acpModelCatalog
+        knownAgents = state.agentRegistry.agents
+    }
+
+    /// The record while a ship's push waits on review before any request
+    /// exists: `stack` picks a Ship stack push over a PR's.
+    func heldShip(stack: Bool) -> ShipReviewRecord? {
+        guard let record, record.enabled, let pending = record.pending else { return nil }
+        switch pending {
+        case .pullRequest: return stack ? nil : record
+        case .stack: return stack ? record : nil
+        case .pushedHead: return nil
+        }
+    }
+
+    /// "Codex"; "The reviewer" while the session's own agent is unknown.
+    func reviewerName(_ choice: ReviewerChoice?) -> String {
+        let agentID = resolved(choice).agentID
+        guard !agentID.isEmpty else { return "The reviewer" }
+        return knownAgents.first(where: { $0.id == agentID })?.displayName ?? agentID
+    }
+
+    /// "Codex · gpt-5.2", or "Codex" for the agent's default model.
+    func reviewerLabel(_ choice: ReviewerChoice?) -> String {
+        let reviewer = resolved(choice)
+        let name = reviewerName(choice)
+        guard let modelID = reviewer.modelID else { return name }
+        let model = modelCatalog.models(for: reviewer.agentID).first(where: { $0.id == modelID })?.name ?? modelID
+        return "\(name) · \(model)"
+    }
+
+    /// `providerName` is the code host's, "GitHub".
+    func line(providerName: String) -> ShipReviewLine? {
+        record.flatMap { ShipReviewPresentation.line($0, reviewerName: reviewerName($0.reviewer), providerName: providerName) }
+    }
+
+    /// "up to 3 rounds"
+    var roundsDetail: String {
+        let rounds = record?.maxRounds ?? defaults.maxReviewRounds
+        return "up to \(rounds) round\(rounds == 1 ? "" : "s")"
+    }
+
+    /// The lever of a shepherded request; it writes to the record. Without a
+    /// record the next push seeds one from the Settings default.
+    func boundLever(state: AppState, isDisabled: Bool) -> ShipReviewLever {
+        let id = self.id
+        let shipReviewer = state.core.shipReviewer
+        return ShipReviewLever(
+            isOn: record?.enabled ?? defaults.reviewBeforePush,
+            reviewer: record?.reviewer,
+            inheritLabel: reviewerLabel(nil),
+            agents: agents,
+            modelCatalog: modelCatalog,
+            detail: "every fix too",
+            isDisabled: isDisabled,
+            setEnabled: { shipReviewer.setEnabled($0, for: id) },
+            setReviewer: { shipReviewer.setReviewer($0, for: id) }
+        )
+    }
+
+    static func perform(_ action: ShipReviewLineAction, id: ShipReviewID, state: AppState) {
+        switch action {
+        case .openSession: state.openReviewerSession(id)
+        case .openReview: state.openShipReview(id)
+        case .retry, .reviewNow: state.retryShipReview(id)
+        case .shipAnyway: state.shipWithoutReview(id)
+        case .sendToSession: state.sendShipReviewFindings(id)
+        case .allow:
+            guard let head = state.core.shipReviewer.record(for: id)?.unreviewedRemoteHead else { return }
+            state.core.shipReviewer.allow(id, headSHA: head)
+        }
+    }
+
+    private func resolved(_ choice: ReviewerChoice?) -> ResolvedReviewer {
+        ReviewerResolver.resolve(ship: choice, project: project, global: global, ownerAgentID: ownerAgentID)
     }
 }
 
@@ -194,6 +334,7 @@ extension ShepherdBadgeState {
         case .unshepherded: "arrow.triangle.pull"
         case .waiting: "clock.fill"
         case .fixing: "sparkles"
+        case .reviewing: "eye"
         case .ready, .merging: "arrow.triangle.merge"
         case .queued: "list.bullet.rectangle"
         case .attention: "exclamationmark.triangle.fill"
@@ -206,7 +347,7 @@ extension ShepherdBadgeState {
         switch self {
         case .noRequest, .unshepherded, .closed: theme.color("fg-muted")
         case .waiting: theme.color("warn")
-        case .fixing: theme.color("accent")
+        case .fixing, .reviewing: theme.color("accent")
         case .ready, .merging, .queued: theme.color("add")
         case .attention: theme.color("del")
         case .merged: Color(nsColor: .systemPurple)
@@ -229,6 +370,11 @@ private struct ShepherdPopover: View {
     /// own merge gate rather than judge it without them.
     @State private var rulesUnreadable = false
     @State private var reviewerResult: ReviewerResult?
+    /// This ship's review before push lever; nil until the user flips it,
+    /// which reads the Settings default.
+    @State private var shipReviewEnabled: Bool?
+    /// This ship's reviewer; nil uses the project's or Settings' reviewer.
+    @State private var shipReviewer: ReviewerChoice?
 
     private var isBusy: Bool { transcript.streamingState != .idle }
 
@@ -236,11 +382,14 @@ private struct ShepherdPopover: View {
         let context = ShepherdSessionContext(
             sessionID: session.id, worktree: worktree, state: state, fetched: fetchedSnapshot
         )
+        let review = ShipReviewContext(sessionID: session.id, worktree: worktree, state: state, ownerAgentID: session.agentId)
         VStack(alignment: .leading, spacing: 0) {
             if let record = context.record {
-                boundContent(record: record, context: context)
+                boundContent(record: record, context: context, review: review)
+            } else if let held = review.heldShip(stack: false) {
+                reviewingContent(held: held, context: context, review: review)
             } else {
-                unboundContent(context: context)
+                unboundContent(context: context, review: review)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -324,7 +473,7 @@ private struct ShepherdPopover: View {
     // MARK: Bound
 
     @ViewBuilder
-    private func boundContent(record: ShepherdRecord, context: ShepherdSessionContext) -> some View {
+    private func boundContent(record: ShepherdRecord, context: ShepherdSessionContext, review: ShipReviewContext) -> some View {
         let request = context.request
         let presentation = exactPresentation(record: record, context: context)
         header(record: record, request: request)
@@ -338,6 +487,11 @@ private struct ShepherdPopover: View {
             reviewLines(request: request, reviewers: reviewers(for: context))
         } else {
             infoLine("Waiting for the first status check.", systemImage: "hourglass")
+        }
+        if let line = context.review {
+            ShipReviewLineView(line: line) { ShipReviewContext.perform($0, id: review.id, state: state) }
+                .padding(.horizontal, scale.space[3])
+                .padding(.bottom, scale.space[2])
         }
         Divider().background(theme.color("line"))
         VStack(alignment: .leading, spacing: scale.space[2]) {
@@ -370,6 +524,7 @@ private struct ShepherdPopover: View {
             }
             .font(scale.caption.font(weight: .regular))
             .foregroundStyle(theme.color("fg-muted"))
+            ShipReviewSwitchRow(lever: review.boundLever(state: state, isDisabled: record.phase.isTerminal))
             ShepherdSwitchRow(
                 title: "Auto-fix",
                 detail: "CI failures, conflicts and reviewer threads go back to this session",
@@ -412,7 +567,8 @@ private struct ShepherdPopover: View {
         return ShepherdPresentation.make(
             record: record,
             request: context.request,
-            mergeGatePasses: ShepherdPolicy.mergeGatePasses(record, observation)
+            mergeGatePasses: ShepherdPolicy.mergeGatePasses(record, observation),
+            review: context.review
         )
     }
 
@@ -513,7 +669,7 @@ private struct ShepherdPopover: View {
     // MARK: Unbound
 
     @ViewBuilder
-    private func unboundContent(context: ShepherdSessionContext) -> some View {
+    private func unboundContent(context: ShepherdSessionContext, review: ShipReviewContext) -> some View {
         let snapshot = context.snapshot
         ShipPopoverHeader(
             symbol: ShepherdBadgeState.noRequest.symbolName,
@@ -537,7 +693,7 @@ private struct ShepherdPopover: View {
         } else {
             createContent(kind: snapshot?.remote?.kind, reason: ShepherdShipAction.createUnavailableReason(
                 isBusy: isBusy, snapshot: snapshot, isLoading: isLoading
-            ))
+            ), review: review)
         }
     }
 
@@ -569,10 +725,16 @@ private struct ShepherdPopover: View {
     }
 
     @ViewBuilder
-    private func createContent(kind: CodeHostKind?, reason: String?) -> some View {
+    private func createContent(kind: CodeHostKind?, reason: String?, review: ShipReviewContext) -> some View {
         let label = kind?.reviewRequestLabel ?? "PR"
         let defaults = state.config.changes.shepherd
+        let reviewsFirst = shipReviewEnabled ?? defaults.reviewBeforePush
         VStack(alignment: .leading, spacing: scale.space[2]) {
+            if reviewsFirst {
+                ShipPopoverStep(symbol: ShepherdBadgeState.reviewing.symbolName) {
+                    Text("\(review.reviewerName(shipReviewer)) reviews the commits here first. Nothing is pushed until the review is clean.")
+                }
+            }
             ShipPopoverStep(symbol: "sparkles") {
                 Text("The agent writes the description and opens the \(label) on \(kind?.displayName ?? "the code host").")
             }
@@ -594,6 +756,17 @@ private struct ShepherdPopover: View {
                     .help("Change the shepherd defaults in Settings > Changes")
                 }
             }
+            ShipReviewSwitchRow(lever: ShipReviewLever(
+                isOn: reviewsFirst,
+                reviewer: shipReviewer,
+                inheritLabel: review.reviewerLabel(nil),
+                agents: review.agents,
+                modelCatalog: review.modelCatalog,
+                detail: review.roundsDetail,
+                isDisabled: false,
+                setEnabled: { shipReviewEnabled = $0 },
+                setReviewer: { shipReviewer = $0 }
+            ))
         }
         .padding(.horizontal, scale.space[3])
         .padding(.vertical, scale.space[2])
@@ -606,7 +779,11 @@ private struct ShepherdPopover: View {
             help: "Ask this session to open a \(label) and shepherd it"
         ) {
             onClose()
-            state.requestShepherdCreatePR(sessionID: session.id, worktree: worktree)
+            state.requestShepherdCreatePR(
+                sessionID: session.id,
+                worktree: worktree,
+                review: (enabled: reviewsFirst, reviewer: shipReviewer)
+            )
         }
     }
 
@@ -746,5 +923,197 @@ struct ShipPopoverFooter: View {
                 .foregroundStyle(theme.color("fg-faint"))
         }
         .padding(scale.space[3])
+    }
+}
+
+/// The Ship popovers while a ship's push waits on review before push: what
+/// happened to it so far and what comes next, with Ship without review and
+/// Stop. A stopped review says why and offers its actions instead.
+struct ShipReviewProgress: View {
+    @Environment(\.designScale) private var scale
+    @Environment(\.theme) private var theme
+    let record: ShipReviewRecord
+    /// "Codex"
+    let reviewerName: String
+    /// "feature → main"
+    let route: String
+    /// "Push and open the PR"
+    let pushStep: String
+    let perform: @MainActor (ShipReviewLineAction) -> Void
+    let shipWithoutReview: @MainActor () -> Void
+    let stop: @MainActor () -> Void
+
+    private enum Status {
+        case done, active, upcoming
+    }
+
+    private struct Step: Identifiable {
+        let id: Int
+        let symbol: String
+        let text: String
+        let status: Status
+        var link: ShipReviewLineAction?
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ShipPopoverHeader(
+                symbol: ShepherdBadgeState.reviewing.symbolName,
+                title: "Reviewing before the push",
+                detail: "\(route) · nothing pushed yet"
+            )
+            Divider().background(theme.color("line"))
+            VStack(alignment: .leading, spacing: scale.space[2]) {
+                ForEach(steps) { stepRow($0) }
+                if isStopped, let line = ShipReviewPresentation.line(record, reviewerName: reviewerName, providerName: "") {
+                    ShipReviewLineView(line: line, perform: perform)
+                        .padding(.top, scale.space[1])
+                }
+            }
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
+            Divider().background(theme.color("line"))
+            HStack(spacing: scale.space[2]) {
+                if !isStopped {
+                    Button("Ship without review") { shipWithoutReview() }
+                        .help("Push HEAD as it is and record it as allowed")
+                }
+                Spacer(minLength: 0)
+                Button("Stop") { stop() }
+                    .help("End the review and leave the branch unpushed")
+            }
+            .disabled(isPushing)
+            .controlSize(.small)
+            .font(scale.metaFont)
+            .padding(scale.space[3])
+        }
+    }
+
+    private var isStopped: Bool {
+        if case .stopped = record.phase { return true }
+        return false
+    }
+
+    private var isPushing: Bool {
+        if case .pushing = record.phase { return true }
+        return false
+    }
+
+    /// This push's rounds, oldest first; round numbers restart with each push.
+    private var rounds: [ShipReviewRound] {
+        guard let start = record.rounds.lastIndex(where: { $0.number == 1 }) else { return record.rounds }
+        return Array(record.rounds[start...])
+    }
+
+    /// Committed, the latest review, the fix and the review after it while
+    /// findings are out, then the push. A stopped review keeps what happened.
+    private var steps: [Step] {
+        let rounds = self.rounds
+        let maxRounds = record.maxRounds
+        let reviewed = rounds.last { $0.reviewedAt != nil }
+        let running: ShipReviewRound? = if case .reviewing = record.phase, let last = rounds.last, last.reviewedAt == nil {
+            last
+        } else {
+            nil
+        }
+        let reviewerSession: ShipReviewLineAction? = record.reviewerSessionID == nil ? nil : .openSession
+        var steps: [Step] = []
+        if let first = rounds.first {
+            steps.append(Step(id: 0, symbol: "checkmark.circle.fill", text: "Committed \(Self.short(first.headSHA))", status: .done))
+        }
+        if let reviewed {
+            steps.append(Step(
+                id: 1,
+                symbol: ShepherdBadgeState.reviewing.symbolName,
+                text: "\(reviewerName) review, round \(reviewed.number): \(Self.outcome(reviewed))",
+                status: .done,
+                link: reviewed.reviewSessionID == nil ? nil : .openReview
+            ))
+            if !reviewed.isClean, !isStopped {
+                let fixed = running.map { $0.number > reviewed.number } ?? false
+                steps.append(Step(
+                    id: 2,
+                    symbol: "sparkles",
+                    text: "This session is fixing them",
+                    status: fixed ? .done : (record.phase == .awaitingFix(headSHA: reviewed.headSHA) ? .active : .upcoming)
+                ))
+                if let running, running.number > reviewed.number {
+                    steps.append(Step(
+                        id: 3,
+                        symbol: ShepherdBadgeState.reviewing.symbolName,
+                        text: "\(reviewerName) reviews the fix (round \(running.number) of \(maxRounds))",
+                        status: .active,
+                        link: reviewerSession
+                    ))
+                } else if reviewed.number < maxRounds {
+                    steps.append(Step(
+                        id: 3,
+                        symbol: ShepherdBadgeState.reviewing.symbolName,
+                        text: "\(reviewerName) reviews the fix (round \(reviewed.number + 1) of \(maxRounds))",
+                        status: .upcoming
+                    ))
+                }
+            }
+        } else {
+            steps.append(Step(
+                id: 1,
+                symbol: ShepherdBadgeState.reviewing.symbolName,
+                text: "\(reviewerName) reviews the commits (round \(running?.number ?? 1) of \(maxRounds))",
+                status: running == nil ? .upcoming : .active,
+                link: running == nil ? nil : reviewerSession
+            ))
+        }
+        steps.append(Step(id: 4, symbol: "arrow.up.circle", text: pushStep, status: isPushing ? .active : .upcoming))
+        return steps
+    }
+
+    private func stepRow(_ step: Step) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
+            Image(systemName: step.symbol)
+                .font(scale.meta.font(weight: .medium))
+                .foregroundStyle(theme.color(Self.symbolColor(step.status)))
+                .frame(width: 14)
+                .accessibilityHidden(true)
+            Text(step.text)
+                .font(step.status == .active ? scale.meta.font(weight: .medium) : scale.metaFont)
+                .foregroundStyle(theme.color(Self.textColor(step.status)))
+                .fixedSize(horizontal: false, vertical: true)
+            if let link = step.link {
+                Button(link.title) { perform(link) }
+                    .buttonStyle(.plain)
+                    .font(scale.meta.font(weight: .medium))
+                    .foregroundStyle(theme.color("accent"))
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private static func symbolColor(_ status: Status) -> String {
+        switch status {
+        case .done: "add"
+        case .active: "accent"
+        case .upcoming: "fg-faint"
+        }
+    }
+
+    private static func textColor(_ status: Status) -> String {
+        switch status {
+        case .done: "fg-muted"
+        case .active: "fg"
+        case .upcoming: "fg-dim"
+        }
+    }
+
+    /// "2 findings", "1 finding", or "clean".
+    private static func outcome(_ round: ShipReviewRound) -> String {
+        switch round.openFindingIDs.count {
+        case 0: round.isClean ? "clean" : "changes requested"
+        case 1: "1 finding"
+        case let count: "\(count) findings"
+        }
+    }
+
+    private static func short(_ sha: String) -> String {
+        String(sha.prefix(7))
     }
 }
