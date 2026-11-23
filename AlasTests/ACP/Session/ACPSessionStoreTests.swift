@@ -708,6 +708,22 @@ struct ACPSessionStoreSchemaTests {
         #expect(rows.first?["n"] as? Int64 == 0)
     }
 
+    @Test("turn captions replace by answer, load in order, and go with their session")
+    func turnCaptionsRoundTrip() throws {
+        let store = try tmpStore()
+        try seedSession(store)
+        try store.saveTurnCaption(sessionId: "s", .init(answerIndex: 9, filesDigest: "a", caption: "Later"))
+        try store.saveTurnCaption(sessionId: "s", .init(answerIndex: 4, filesDigest: "a", caption: "Old"))
+        try store.saveTurnCaption(sessionId: "s", .init(answerIndex: 4, filesDigest: "b", caption: "New"))
+        #expect(try store.loadTurnCaptions(sessionId: "s") == [
+            .init(answerIndex: 4, filesDigest: "b", caption: "New"),
+            .init(answerIndex: 9, filesDigest: "a", caption: "Later"),
+        ])
+        try store.deleteSession(id: "s")
+        try seedSession(store)
+        #expect(try store.loadTurnCaptions(sessionId: "s").isEmpty)
+    }
+
     @Test("deleteAllSessionSummaries clears every stored summary")
     func deleteAllSessionSummaries() throws {
         let store = try tmpStore()

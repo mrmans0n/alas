@@ -29,8 +29,31 @@ extension AppState {
                 return await router.generate(request, caller: .turnCaption, priority: .background) {
                     ACPTurnCaptionPolicy.parse($0)
                 }
+            },
+            load: { [weak self] sessionId in
+                guard let persistence = self?.acpManager(forSession: sessionId)?.persistence else { return [] }
+                return (try? await persistence.loadTurnCaptions(sessionId: sessionId)) ?? []
+            },
+            save: { [weak self] sessionId, caption in
+                guard let persistence = self?.acpManager(forSession: sessionId)?.persistence else { return }
+                try? await persistence.saveTurnCaption(sessionId: sessionId, caption)
             }
         )
+    }
+
+    /// Captions the turn `sessionID` just finished, so it is saved before its card shows here or on a
+    /// Remote client. Turns without a card ask for nothing.
+    func captionFinishedTurn(sessionID: String) {
+        guard let manager = acpManager(forSession: sessionID), let session = manager.sessions[sessionID] else { return }
+        let messages = session.transcript.messages
+        let worktreeRoot = manager.worktreePath
+        guard let answerIndex = messages.lastIndex(where: { if case .agent = $0 { true } else { false } }),
+              let changes = ACPTurnChanges.forAnswer(
+                  at: answerIndex, in: messages, isTurnActive: false, worktreeRoot: worktreeRoot)
+        else { return }
+        turnCaptions.request(key: .init(sessionId: sessionID, answerIndex: answerIndex, digest: changes.digest)) {
+            changes.captionInput(messages: messages, answerIndex: answerIndex, worktreeRoot: worktreeRoot)
+        }
     }
 
     func setTurnCaptionsEnabled(_ enabled: Bool) {

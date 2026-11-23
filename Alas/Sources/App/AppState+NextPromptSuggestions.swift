@@ -216,6 +216,7 @@ extension AppState {
     func nextPromptCompleted(_ turn: NextPromptCompletedTurn, owner: SessionOwnerID) {
         nextPromptCompletedTurns[turn.sessionID] = turn
         nextPromptCoordinator.completed(turn)
+        captionFinishedTurn(sessionID: turn.sessionID)
     }
 
     /// A suggestion for the turn `sessionID` last completed, for a Remote

@@ -690,8 +690,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 }
                 // A finished turn's file changes follow its answer.
                 if case .message(let row) = renderRow,
-                   let changes = Self.turnChanges(
-                       answerIndex: row.index, messages: messages, isTurnActive: isTurnActive,
+                   let changes = ACPTurnChanges.forAnswer(
+                       at: row.index, in: messages, isTurnActive: isTurnActive,
                        worktreeRoot: host.trustedImageRoot?.path) {
                     specs.append(Self.turnChangesSpec(
                         host: host, answer: row, changes: changes, messages: messages))
@@ -1322,21 +1322,6 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let boundaryText: String?
         }
 
-        static func turnChanges(
-            answerIndex: Int, messages: [ACPMessage], isTurnActive: Bool, worktreeRoot: String?
-        ) -> ACPTurnChanges? {
-            guard messages.indices.contains(answerIndex), case .agent = messages[answerIndex] else { return nil }
-            return ACPTurnChanges.forAnswer(at: answerIndex, count: messages.count, isTurnActive: isTurnActive) { index in
-                switch messages[index] {
-                case .user: .user
-                case .agent: .agent
-                case .fileEdit(_, let edit): .fileEdit(.init(path: edit.path, added: edit.added, removed: edit.removed))
-                case .toolCall(let call): .toolCallEdits(ACPTurnChanges.written(by: call, worktreeRoot: worktreeRoot))
-                default: .other
-                }
-            }
-        }
-
         static func turnChangesSpec(
             host: ACPTranscriptScroller,
             answer: ACPTranscriptVisibleRow,
@@ -1348,8 +1333,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ACPTurnChangesCard.Caption(
                     store: store,
                     // Changes to the turn ask again, so a caption never describes an older set of edits.
-                    key: answer.stableId + "#" + String(changes.files.hashValue),
-                    input: { captionInput(changes: changes, messages: messages, answerIndex: answer.index, worktreeRoot: worktreeRoot) }
+                    key: .init(sessionId: host.session.id, answerIndex: answer.index, digest: changes.digest),
+                    input: { changes.captionInput(messages: messages, answerIndex: answer.index, worktreeRoot: worktreeRoot) }
                 )
             }
             return ACPTranscriptRowSpec(
@@ -1361,30 +1346,6 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     }
                 }
             )
-        }
-
-        /// The turn's request and patches, for its caption. File writes become patches of their
-        /// changed hunks.
-        static func captionInput(
-            changes: ACPTurnChanges, messages: [ACPMessage], answerIndex: Int, worktreeRoot: String?
-        ) -> ACPTurnCaptionPolicy.Input? {
-            guard messages.indices.contains(changes.userIndex), changes.userIndex < answerIndex,
-                  answerIndex <= messages.count
-            else { return nil }
-            var request: String?
-            if case .user(_, _, let text, _, _, _) = messages[changes.userIndex] { request = text }
-            var patches: [String] = []
-            for message in messages[(changes.userIndex + 1)..<answerIndex] {
-                switch message {
-                case .fileEdit(_, let edit):
-                    patches.append(ACPTurnCaptionPolicy.patch(path: edit.path, old: edit.oldText, new: edit.newText))
-                case .toolCall(let call) where !ACPTurnChanges.written(by: call, worktreeRoot: worktreeRoot).isEmpty:
-                    patches += call.diffs.filter { $0.source == .toolCall && $0.isValid }.compactMap(\.patch)
-                default:
-                    break
-                }
-            }
-            return ACPTurnCaptionPolicy.Input(request: request, files: changes.files, patches: patches)
         }
 
         /// Verbatim port of the fork divider inserted right after the fork

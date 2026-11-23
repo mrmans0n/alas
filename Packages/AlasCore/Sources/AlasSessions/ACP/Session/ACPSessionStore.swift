@@ -7,7 +7,7 @@ import AlasCode
 import AlasACP
 
 public final class ACPSessionStore {
-    public static let targetSchemaVersion = 38
+    public static let targetSchemaVersion = 39
     public let path: String
     public let db: SQLiteDatabase
 
@@ -113,6 +113,7 @@ public final class ACPSessionStore {
             }
         }
         if current < 38 { try createV2PreviewDisplaySchema() }
+        if current < 39 { try createTurnCaptionsSchema() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -840,6 +841,48 @@ extension ACPSessionStore {
 
     public func deleteAllSessionSummaries() throws {
         try db.exec("DELETE FROM session_summaries")
+    }
+
+    /// One caption per turn changes card, keyed by its answer's transcript index, which is the
+    /// message's `seq`.
+    private func createTurnCaptionsSchema() throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS session_turn_captions (
+          session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          answer_seq    INTEGER NOT NULL,
+          files_digest  TEXT NOT NULL,
+          caption       TEXT NOT NULL,
+          created_at    INTEGER NOT NULL,
+          PRIMARY KEY (session_id, answer_seq)
+        )
+        """)
+    }
+
+    public func loadTurnCaptions(sessionId: String) throws -> [StoredTurnCaption] {
+        try db.query(
+            "SELECT answer_seq, files_digest, caption FROM session_turn_captions WHERE session_id = ? ORDER BY answer_seq",
+            bindings: [sessionId]
+        ).compactMap { row in
+            guard let seq = row["answer_seq"] as? Int64, let digest = row["files_digest"] as? String,
+                  let caption = row["caption"] as? String
+            else { return nil }
+            return StoredTurnCaption(answerIndex: Int(seq), filesDigest: digest, caption: caption)
+        }
+    }
+
+    /// Replaces the turn's caption: one written for edits that have since changed.
+    public func saveTurnCaption(sessionId: String, _ caption: StoredTurnCaption) throws {
+        try db.exec("""
+        INSERT INTO session_turn_captions (session_id, answer_seq, files_digest, caption, created_at)
+        VALUES (?,?,?,?,?)
+        ON CONFLICT(session_id, answer_seq) DO UPDATE SET
+            files_digest = excluded.files_digest,
+            caption = excluded.caption,
+            created_at = excluded.created_at
+        """, bindings: [
+            sessionId, Int64(caption.answerIndex), caption.filesDigest, caption.caption,
+            Int64(Date().timeIntervalSince1970),
+        ])
     }
 
     /// Clears every summary through a bare connection, without migrating, so
@@ -1754,5 +1797,20 @@ extension ACPSessionStore {
             try? db.exec("ROLLBACK")
             throw error
         }
+    }
+}
+
+/// A turn changes card's caption, as stored with its session.
+public struct StoredTurnCaption: Equatable, Sendable {
+    /// The answer's transcript index.
+    public let answerIndex: Int
+    /// `ACPTurnChanges.digest` of the edits the caption describes.
+    public let filesDigest: String
+    public let caption: String
+
+    public init(answerIndex: Int, filesDigest: String, caption: String) {
+        self.answerIndex = answerIndex
+        self.filesDigest = filesDigest
+        self.caption = caption
     }
 }
