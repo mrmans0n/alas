@@ -1461,7 +1461,8 @@ extension ACPSessionStore {
     ///
     /// Stored boundaries that name a message `seq` — a submitted draft's
     /// `submitted_after_seq` and a fork's `source_boundary_seq` — move with
-    /// the rows, or a later restart would compare them against new seqs.
+    /// the rows, or a later restart would compare them against new seqs. So
+    /// do turn captions, by their answer's `seq`; one naming no stored row goes.
     /// Does not open a transaction; callers wrap it in one.
     @discardableResult
     public func closeMessageSequenceGaps(sessionId: String, loadedMessageCount: Int) throws -> Bool {
@@ -1486,6 +1487,20 @@ extension ACPSessionStore {
         SET source_boundary_seq = \(newBoundary("session_forks.source_boundary_seq"))
         WHERE source_session_id = ?
         """, bindings: [sessionId, sessionId])
+        let captions = try loadTurnCaptions(sessionId: sessionId)
+        if !captions.isEmpty {
+            var positions: [Int: Int] = [:]
+            for (position, row) in rows.enumerated() {
+                if let seq = row["seq"] as? Int64 { positions[Int(seq)] = position }
+            }
+            // Rewritten rather than updated in place: a moved key could meet one not yet moved.
+            try db.exec("DELETE FROM session_turn_captions WHERE session_id = ?", bindings: [sessionId])
+            for caption in captions {
+                guard let position = positions[caption.answerIndex] else { continue }
+                try saveTurnCaption(sessionId: sessionId, .init(
+                    answerIndex: position, filesDigest: caption.filesDigest, caption: caption.caption))
+            }
+        }
         for (position, row) in rows.enumerated() {
             guard let id = row["id"] as? String,
                   let seq = row["seq"] as? Int64,
