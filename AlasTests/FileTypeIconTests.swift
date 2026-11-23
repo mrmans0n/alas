@@ -1,3 +1,5 @@
+import CoreText
+import Foundation
 import Testing
 @testable import Alas
 
@@ -150,5 +152,22 @@ struct FileTypeIconTests {
         #expect(FileTypeIcon.folderInfo(name: ".github")?.kind == .folderExact)
         #expect(FileTypeIcon.folderInfo(name: "Foo.xcodeproj")?.kind == .folderSuffix)
         #expect(FileTypeIcon.folderInfo(name: "resources", path: "src/main/resources")?.kind == .folderPath)
+    }
+
+    /// The iOS app draws these icons from a subset of the font; a glyph added here without
+    /// rerunning scripts/subset-file-type-icon-font.sh would draw nothing there.
+    @Test func iosFontSubsetHoldsEveryGlyph() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Mobile/Resources/FileTypeIcons.ttf")
+        let data = try Data(contentsOf: url) as CFData
+        let descriptor = try #require(CTFontManagerCreateFontDescriptorFromData(data))
+        let font = CTFontCreateWithFontDescriptor(descriptor, 12, nil)
+        let missing = FileTypeIcon.nerdFontSymbols.filter { symbol in
+            let units = Array(symbol.utf16)
+            var glyphs = [CGGlyph](repeating: 0, count: units.count)
+            return !CTFontGetGlyphsForCharacters(font, units, &glyphs, units.count)
+        }
+        #expect(missing.isEmpty, "Missing from FileTypeIcons.ttf: \(missing.map { $0.unicodeScalars.map { String($0.value, radix: 16, uppercase: true) } })")
     }
 }
