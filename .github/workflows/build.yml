@@ -82,6 +82,10 @@ jobs:
       # `git branch --list` after `git branch -d`.
       GIT_PAGER: "cat"
     steps:
+      # SSH sessions and test subprocesses can start without DEVELOPER_DIR.
+      - name: Select Xcode for system developer tools
+        run: sudo xcode-select --switch "$DEVELOPER_DIR"
+
       - name: Checkout (with submodules)
         uses: actions/checkout@v7.0.1
         with:
@@ -606,6 +610,10 @@ jobs:
       DISPLAY: ":0"
       GIT_PAGER: "cat"
     steps:
+      # SSH sessions and test subprocesses can start without DEVELOPER_DIR.
+      - name: Select Xcode for system developer tools
+        run: sudo xcode-select --switch "$DEVELOPER_DIR"
+
       - name: Checkout (with submodules)
         uses: actions/checkout@v7.0.1
         with:
