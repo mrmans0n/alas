@@ -56,9 +56,7 @@ concurrency:
 
 jobs:
   build-test:
-    # macos-26 GA on GitHub-hosted runners ships Xcode 26 — matches what
-    # Ghostty 1.4 requires (per ThirdParty/ghostty/HACKING.md).
-    runs-on: macos-26
+    runs-on: xcode-27
     # Build once; test runners queue only after products and the plan are published.
     timeout-minutes: 110
     # "Re-run failed jobs" skips a successful builder, so later attempts must
@@ -72,6 +70,7 @@ jobs:
     # one). Setting GIT_TERMINAL_PROMPT=0 + a no-op GIT_ASKPASS makes any
     # interactive request return immediately.
     env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       GIT_TERMINAL_PROMPT: "0"
       GIT_ASKPASS: "/usr/bin/true"
       SSH_ASKPASS: "/usr/bin/true"
@@ -218,9 +217,9 @@ jobs:
             .build/cua-driver/*/cua-driver
             .build/cua-driver/*/CUA-DRIVER-LICENSE.txt
             .build/cua-driver/fingerprint
-          key: tools-${{ runner.os }}-arm64-${{ hashFiles('.tools-pin') }}
+          key: tools-xcode27.2-${{ runner.os }}-arm64-${{ hashFiles('.tools-pin') }}
           restore-keys: |
-            tools-${{ runner.os }}-arm64-
+            tools-xcode27.2-${{ runner.os }}-arm64-
 
       - name: Build the iOS app
         # Also compiles AlasRemoteKit for iOS: an iOS-breaking change in the
@@ -309,9 +308,9 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/Library/Caches/Alas/GhosttyKit/arm64
-          key: ghostty-${{ runner.os }}-arm64-${{ hashFiles('.ghostty-pin') }}
+          key: ghostty-xcode27.2-${{ runner.os }}-arm64-${{ hashFiles('.ghostty-pin') }}
           restore-keys: |
-            ghostty-${{ runner.os }}-arm64-
+            ghostty-xcode27.2-${{ runner.os }}-arm64-
 
       - name: Build Ghostty xcframework
         # xcodebuild validates the GhosttyKit.xcframework dependency at the
@@ -393,9 +392,9 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: .build/xcode/SourcePackages
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: swiftpm-xcode27.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            swiftpm-${{ runner.os }}-${{ runner.arch }}-
+            swiftpm-xcode27.2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Resolve SwiftPM packages
         run: |
@@ -592,7 +591,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    runs-on: macos-26
+    runs-on: xcode-27
     # Cover cumulative invocation deadlines, result extraction, and diagnostics.
     timeout-minutes: 180
     strategy:
@@ -600,6 +599,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       GIT_TERMINAL_PROMPT: "0"
       GIT_ASKPASS: "/usr/bin/true"
       SSH_ASKPASS: "/usr/bin/true"
@@ -808,6 +808,8 @@ jobs:
   rust-tests:
     name: Rust tests (${{ matrix.project }}${{ matrix.os && format(', {0}', matrix.os) || '' }})
     runs-on: ${{ matrix.os || 'ubuntu-26.04' }}
+    env:
+      DEVELOPER_DIR: ${{ matrix.os && '/Applications/Xcode_27.2.app/Contents/Developer' || '' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -820,7 +822,7 @@ jobs:
           # The helper supervises plugin processes differently on macOS hosts.
           - project: AlasHelper
             toolchain: "1.98.1"
-            os: macos-26
+            os: xcode-27
           # tree-sitter-pack's build script declares this toolchain until the
           # crate owns a rust-toolchain.toml like the other first-party crates.
           - project: ThirdParty/treesitter-pack
@@ -835,9 +837,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ${{ matrix.project }}/target
-          key: rust-${{ runner.os }}-${{ matrix.project }}-${{ matrix.toolchain }}-${{ hashFiles('AlasCLI/Cargo.lock', 'AlasHelper/Cargo.lock', 'ThirdParty/treesitter-pack/Cargo.lock') }}
+          key: rust-${{ matrix.os && 'xcode27.2' || runner.os }}-${{ matrix.project }}-${{ matrix.toolchain }}-${{ hashFiles('AlasCLI/Cargo.lock', 'AlasHelper/Cargo.lock', 'ThirdParty/treesitter-pack/Cargo.lock') }}
           restore-keys: |
-            rust-${{ runner.os }}-${{ matrix.project }}-${{ matrix.toolchain }}-
+            rust-${{ matrix.os && 'xcode27.2' || runner.os }}-${{ matrix.project }}-${{ matrix.toolchain }}-
 
       - name: Install declared Rust toolchain
         run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal

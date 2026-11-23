@@ -254,7 +254,7 @@ projects = matrix.fetch("include").map { |entry| [entry.fetch("project"), entry.
 raise "rust-tests must cover every first-party Rust project with its declared toolchain, the helper on macOS too" unless projects == [
   ["AlasCLI", "1.98.1", "ubuntu-26.04"],
   ["AlasHelper", "1.98.1", "ubuntu-26.04"],
-  ["AlasHelper", "1.98.1", "macos-26"],
+  ["AlasHelper", "1.98.1", "xcode-27"],
   ["ThirdParty/treesitter-pack", "1.97.1", "ubuntu-26.04"]
 ]
 
