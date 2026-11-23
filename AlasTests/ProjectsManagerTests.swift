@@ -1238,4 +1238,28 @@ extension ProjectsManagerTests {
         #expect(manager.projects.first?.linkedProjectId == nil)
         #expect(manager.primaryProjects.map(\.id) == ["R"])
     }
+
+    /// Saving the project dialog stores only what differs from the repo's
+    /// `.alas/` VM defaults, so a later repo change still reaches the user.
+    @Test(arguments: [
+        // (toggle, script, repo toggle, repo script, stored toggle, stored script)
+        (true, "brew install jq", nil, nil, true, "brew install jq"),
+        (false, "", nil, nil, nil, nil),
+        (true, "repo", true, "repo", nil, nil),
+        (false, "mine", true, "repo", false, "mine"),
+        (true, "  ", true, "repo", nil, nil),
+    ] as [(Bool, String, Bool?, String?, Bool?, String?)])
+    func vmSettingsStoreOnlyOverridesOfTheRepoDefaults(
+        _ c: (Bool, String, Bool?, String?, Bool?, String?)
+    ) {
+        let manager = ProjectsManager(persistedProjects: [
+            ProjectConfig(id: "p", name: "R", path: "/tmp/r", color: "#fff", addedAt: .distantPast),
+        ])
+        manager.setVMSettings(
+            projectId: "p", forNewWorktrees: c.0, guestSetupScript: c.1,
+            repoForNewWorktrees: c.2, repoGuestSetupScript: c.3
+        )
+        #expect(manager.projects[0].vmForNewWorktrees == c.4)
+        #expect(manager.projects[0].vmGuestSetupScript == c.5)
+    }
 }

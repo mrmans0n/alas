@@ -210,9 +210,11 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
     /// Project-level PR shepherd rules. A `.alas/shepherd.local.md` or
     /// `.alas/shepherd.md` file in the worktree overrides them completely.
     public var shepherd: ProjectShepherdSettings?
-    /// When true, creating a worktree here also creates its macOS VM. Nil means off.
+    /// When true, creating a worktree here also creates its macOS VM. Nil
+    /// inherits the repo's `.alas/config.json`, then off.
     public var vmForNewWorktrees: Bool?
-    /// Shell script run in a new worktree VM's guest before its clean point is taken.
+    /// Shell script run in a new worktree VM's guest before its clean point is
+    /// taken. Nil inherits the repo's `.alas/vm-setup.sh`.
     public var vmGuestSetupScript: String?
 
     public enum CodingKeys: String, CodingKey, Sendable {

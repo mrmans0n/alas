@@ -147,6 +147,25 @@ public final class RepoConfigStore {
         return resolved
     }
 
+    public static let maxVMSetupScriptBytes = 256 * 1024
+
+    /// The repo's committed worktree VM guest setup script, or nil when it has
+    /// none, it is blank or oversized, or it is not a regular file inside `.alas/`.
+    public static func vmSetupScript(checkout: URL) -> String? {
+        guard let file = confinedRegularFile(
+            checkout.appendingPathComponent(RepoConfig.vmSetupScriptPath),
+            under: checkout.appendingPathComponent(".alas", isDirectory: true),
+            checkout: checkout
+        ),
+            let handle = try? FileHandle(forReadingFrom: file),
+            // One byte past the cap tells an oversized file apart without reading the rest.
+            let data = try? handle.read(upToCount: maxVMSetupScriptBytes + 1), data.count <= maxVMSetupScriptBytes,
+            let script = String(data: data, encoding: .utf8),
+            !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return script
+    }
+
     /// A path that does not exist reads as missing. Anything else that cannot
     /// become a config — unreadable (permissions, or a directory in the file's
     /// place), or readable but undecodable — is malformed, so "this repo has no
