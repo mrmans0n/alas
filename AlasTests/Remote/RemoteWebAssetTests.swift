@@ -239,7 +239,9 @@ struct RemoteWebAssetTests {
         // A version the page requests but the worker never precached (or vice
         // versa) leaves the shell fetching an asset that was warmed under a
         // stale URL, which is how a bumped asset reaches users late.
-        #expect(versionedAssets(in: html) == versionedAssets(in: sw))
+        // terminals.js requests xterm.js's files itself, the first time a terminal opens.
+        let requested = try versionedAssets(in: html).merging(versionedAssets(in: asset("terminals.js"))) { page, _ in page }
+        #expect(requested == versionedAssets(in: sw))
         #expect(!versionedAssets(in: html).isEmpty)
         #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v"#))
     }
