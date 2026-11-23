@@ -666,6 +666,26 @@ private struct ShepherdPopover: View {
         .padding(scale.space[3])
     }
 
+    // MARK: Reviewing
+
+    /// A ship whose push waits on review before push; no request exists yet.
+    private func reviewingContent(held: ShipReviewRecord, context: ShepherdSessionContext, review: ShipReviewContext) -> some View {
+        let base: String = if case let .pullRequest(push) = held.pending, let pushBase = push.base {
+            pushBase
+        } else {
+            context.snapshot?.local.baseBranch ?? state.shepherdBaseBranch(for: worktree)
+        }
+        return ShipReviewProgress(
+            record: held,
+            reviewerName: review.reviewerName(held.reviewer),
+            route: "\(worktree.branch) → \(base)",
+            pushStep: "Push and open the \(context.snapshot?.remote?.kind.reviewRequestLabel ?? "PR")",
+            perform: { ShipReviewContext.perform($0, id: held.id, state: state) },
+            shipWithoutReview: { state.shipWithoutReview(held.id) },
+            stop: { state.stopShipReview(held.id) }
+        )
+    }
+
     // MARK: Unbound
 
     @ViewBuilder
