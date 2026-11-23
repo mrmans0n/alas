@@ -92,7 +92,7 @@ struct ACPMarkdownBlockCacheTests {
     @Test("cached output equals direct parse at every point of a stream", arguments: [
         "# Heading\n\nFirst paragraph with **bold**.\n\n```\nlet x = 1\n```\n\nClosing paragraph.",
         "Intro\n\n<details>\n<summary>Log</summary>\n\nfirst\n\n<details open>\n\ninner\n\n</details>\n\nlast\n\n</details>\n\nAfter",
-        "<details>\n\na\n\n</details><details>\n\nb\n\n</details>\n\nAfter",
+        "<details>\n\na\n\n</details><details>\n\n<details>\n\nb\n\n</details></details>\n\nAfter",
     ])
     func cacheParityWithDirectParse(raw: String) {
         let cache = ACPMarkdownBlockCache()

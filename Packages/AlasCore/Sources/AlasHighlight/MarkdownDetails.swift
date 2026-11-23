@@ -49,6 +49,30 @@ public enum MarkdownDetails: Sendable {
         return depthChange(after) - 1
     }
 
+    /// Walks the tags a line starts with, in order, updating `depth`; when one of them closes the
+    /// section (`depth` reaches 0), the text before that tag, which the body keeps, and the text after it.
+    /// `</details></details>` closes a nested section and then its parent; `</details><details>` closes
+    /// one and opens the next.
+    private static func closingTagEndingSection(_ line: String, depth: inout Int) -> (before: String, after: String)? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        var rest = trimmed
+        while true {
+            if let after = afterClosingTag(rest) {
+                depth -= 1
+                if depth == 0 { return (String(trimmed.dropLast(rest.count)), after) }
+                rest = after
+            } else if let open = opening(rest) {
+                guard let close = open.rest.range(of: closeTag, options: .caseInsensitive) else {
+                    depth += 1
+                    return nil
+                }
+                rest = open.rest[close.upperBound...].trimmingCharacters(in: .whitespaces)
+            } else {
+                return nil
+            }
+        }
+    }
+
     /// The rest of a line that starts with `</details>`, trimmed; nil for any other line.
     private static func afterClosingTag(_ trimmed: String) -> String? {
         guard trimmed.lowercased().hasPrefix(closeTag) else { return nil }
@@ -89,17 +113,11 @@ public enum MarkdownDetails: Sendable {
                 if current.isClosed(by: line) { fence = nil }
             } else if let opened = Fence(opening: line) {
                 fence = opened
-            } else if !isIndentedCode(line), let after = afterClosingTag(line.trimmingCharacters(in: .whitespaces)) {
-                // Text after the tag may open a section of its own, as in `</details><details>`.
-                depth -= 1
-                if depth == 0 {
-                    trailing = after.isEmpty ? nil : after
-                    closed = true
-                    break
-                }
-                depth += depthChange(after)
-            } else {
-                depth += depthChange(line)
+            } else if !isIndentedCode(line), let end = closingTagEndingSection(line, depth: &depth) {
+                if !end.before.isEmpty { inner.append(end.before) }
+                trailing = end.after.isEmpty ? nil : end.after
+                closed = true
+                break
             }
             inner.append(line)
         }

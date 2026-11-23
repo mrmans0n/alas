@@ -166,6 +166,10 @@ struct ACPMarkdownParserTests {
         ("<details>\n\na\n\n</details><details>\n\nb\n\n</details>",
          [.details(summary: "Details", isOpen: false, blocks: [.paragraph("a")]),
           .details(summary: "Details", isOpen: false, blocks: [.paragraph("b")])]),
+        ("<details>\n<details>\ninside\n</details></details>\n\nVisible",
+         [.details(summary: "Details", isOpen: false, blocks: [
+             .details(summary: "Details", isOpen: false, blocks: [.paragraph("inside")]),
+         ]), .paragraph("Visible")]),
         ("Intro\n<details><summary>Log</summary>ok</details>",
          [.paragraph("Intro"), .details(summary: "Log", isOpen: false, blocks: [.paragraph("ok")])]),
         ("```html\n<details>\n```", [.code(language: "html", body: "<details>")]),
