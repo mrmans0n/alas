@@ -77,27 +77,59 @@ public enum RemoteChangesRules {
         return "\(count)" + (loaded != nil && truncated ? "+" : "")
     }
 
-    /// Files grouped by directory (no trailing slash, "" for the root),
-    /// directories and files sorted by path.
-    public static func grouped(_ files: [RemoteChangedFile]) -> [(directory: String, files: [RemoteChangedFile])] {
-        func split(_ path: String) -> (dir: String, name: String) {
-            guard let slash = path.lastIndex(of: "/") else { return ("", path) }
-            return (String(path[..<slash]), String(path[path.index(after: slash)...]))
+    /// The staged and unstaged lists as one entry per path, as the Mac's working tree shows them:
+    /// the unstaged side names the status, and the counts are the larger of the two sides.
+    public static func workingTree(staged: [RemoteChangedFile], unstaged: [RemoteChangedFile]) -> [RemoteWorkingTreeFile] {
+        let stagedByPath = Dictionary(staged.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        let unstagedPaths = Set(unstaged.map(\.path))
+        let merged = unstaged.map { file -> RemoteWorkingTreeFile in
+            guard let other = stagedByPath[file.path] else { return RemoteWorkingTreeFile(file: file, stage: .unstaged) }
+            return RemoteWorkingTreeFile(
+                file: RemoteChangedFile(path: file.path, status: file.status, add: max(file.add, other.add),
+                                        del: max(file.del, other.del), conflict: file.conflict ?? other.conflict,
+                                        renameFrom: file.renameFrom ?? other.renameFrom),
+                stage: .mixed)
         }
-        let sorted = files.sorted {
-            let a = split($0.path), b = split($1.path)
-            return a.dir == b.dir ? a.name < b.name : a.dir < b.dir
+        return merged + staged.filter { !unstagedPaths.contains($0.path) }.map { RemoteWorkingTreeFile(file: $0, stage: .staged) }
+    }
+
+    /// Files as a folder tree flattened to rows: folders before files, each in Finder order, a folder whose
+    /// only child is a folder merged into it ("Sources/App"), and the contents of `collapsed` folders left out.
+    public static func tree<Item>(_ items: [Item], path: (Item) -> String,
+                                  collapsed: Set<String> = []) -> [RemoteChangeTreeRow<Item>] {
+        let root = TreeNode<Item>()
+        for item in items {
+            let parts = path(item).split(separator: "/").map(String.init)
+            var node = root
+            for part in parts.dropLast() {
+                let next = node.dirs[part] ?? TreeNode()
+                node.dirs[part] = next
+                node = next
+                node.items.append(item)
+            }
+            node.files.append((parts.last ?? path(item), item))
         }
-        var groups: [(directory: String, files: [RemoteChangedFile])] = []
-        for file in sorted {
-            let dir = split(file.path).dir
-            if groups.last?.directory == dir {
-                groups[groups.count - 1].files.append(file)
-            } else {
-                groups.append((dir, [file]))
+        func before(_ a: String, _ b: String) -> Bool { a.localizedStandardCompare(b) == .orderedAscending }
+        var rows: [RemoteChangeTreeRow<Item>] = []
+        func walk(_ node: TreeNode<Item>, prefix: String, depth: Int) {
+            for name in node.dirs.keys.sorted(by: before) {
+                var dir = node.dirs[name]!
+                var label = name
+                var full = prefix.isEmpty ? name : "\(prefix)/\(name)"
+                while dir.files.isEmpty, dir.dirs.count == 1, let (child, next) = dir.dirs.first {
+                    label += "/\(child)"
+                    full += "/\(child)"
+                    dir = next
+                }
+                rows.append(RemoteChangeTreeRow(name: label, path: full, depth: depth, isDirectory: true, items: dir.items))
+                if !collapsed.contains(full) { walk(dir, prefix: full, depth: depth + 1) }
+            }
+            for (name, item) in node.files.sorted(by: { before($0.0, $1.0) }) {
+                rows.append(RemoteChangeTreeRow(name: name, path: path(item), depth: depth, isDirectory: false, items: [item]))
             }
         }
-        return groups
+        walk(root, prefix: "", depth: 0)
+        return rows
     }
 
     public static func accessMessage(_ reason: RemoteFileAccessReason, message: String?, byteSize: Int?) -> String {
@@ -115,4 +147,52 @@ public enum RemoteChangesRules {
             return "Could not read this file."
         }
     }
+}
+
+/// How much of a working-tree file, or of a folder's files, is staged.
+public enum RemoteStageState: Equatable, Sendable {
+    case unstaged, staged, mixed
+
+    /// Staged only when every file is, unstaged only when none is.
+    public init(_ states: some Sequence<RemoteStageState>) {
+        var staged = false, unstaged = false
+        for state in states {
+            switch state {
+            case .mixed: self = .mixed; return
+            case .staged: staged = true
+            case .unstaged: unstaged = true
+            }
+        }
+        self = staged && unstaged ? .mixed : staged ? .staged : .unstaged
+    }
+}
+
+/// One path of the working tree, its staged and unstaged sides merged.
+public struct RemoteWorkingTreeFile: Equatable, Sendable {
+    public let file: RemoteChangedFile
+    public let stage: RemoteStageState
+
+    public init(file: RemoteChangedFile, stage: RemoteStageState) {
+        self.file = file
+        self.stage = stage
+    }
+}
+
+/// A folder or file row of `RemoteChangesRules.tree`; a folder's `items` are every file under it.
+public struct RemoteChangeTreeRow<Item> {
+    public let name: String
+    public let path: String
+    public let depth: Int
+    public let isDirectory: Bool
+    public let items: [Item]
+
+    public var id: String { (isDirectory ? "dir:" : "file:") + path }
+}
+
+extension RemoteChangeTreeRow: Sendable where Item: Sendable {}
+
+private final class TreeNode<Item> {
+    var dirs: [String: TreeNode] = [:]
+    var files: [(String, Item)] = []
+    var items: [Item] = []
 }

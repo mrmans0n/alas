@@ -2,7 +2,7 @@ import AlasRemoteKit
 import FoundationModels
 import SwiftUI
 
-/// The Changes tab: branch, staged, unstaged and commit sections as a flat list; a file opens the review at it.
+/// The Changes tab: the working tree, branch changes and commits, files as folder trees; a file opens the review at it.
 struct ChangesView: View {
     let workspace: SessionWorkspace
     let owner: UUID
@@ -63,25 +63,13 @@ private struct ChangeList: View {
     let workspace: SessionWorkspace
     let owner: UUID
 
-    private struct Section: Identifiable {
-        let title: String
-        let files: [RemoteChangedFile]
-        let stage: String?
-        let commits: [RemoteCommit]
-        var id: String { title }
+    private var working: [RemoteWorkingTreeFile] {
+        RemoteChangesRules.workingTree(staged: reply.staged, unstaged: reply.unstaged)
     }
 
-    /// `changeSections` in changes-view.js.
-    private var sections: [Section] {
-        var out: [Section] = []
-        let working = !reply.staged.isEmpty || !reply.unstaged.isEmpty
-        if !reply.files.isEmpty, !reply.commits.isEmpty || !working {
-            out.append(Section(title: "Branch Changes", files: reply.files, stage: nil, commits: []))
-        }
-        if !reply.staged.isEmpty { out.append(Section(title: "Staged", files: reply.staged, stage: "staged", commits: [])) }
-        if !reply.unstaged.isEmpty { out.append(Section(title: "Unstaged", files: reply.unstaged, stage: "unstaged", commits: [])) }
-        if !reply.commits.isEmpty { out.append(Section(title: "Commits", files: [], stage: nil, commits: reply.commits)) }
-        return out
+    /// `changeSections` in changes-view.js: the branch's files show beside a working tree only with commits.
+    private var showsBranch: Bool {
+        !reply.files.isEmpty && (!reply.commits.isEmpty || (reply.staged.isEmpty && reply.unstaged.isEmpty))
     }
 
     private var summary: String {
@@ -96,6 +84,8 @@ private struct ChangeList: View {
     @State private var committing = false
     /// Paths a Discard waits to confirm.
     @State private var discarding: [String]?
+    @State private var collapsedWorking: Set<String> = []
+    @State private var collapsedBranch: Set<String> = []
 
     private var canGit: Bool { workspace.canUseGit }
 
@@ -144,57 +134,48 @@ private struct ChangeList: View {
     @ViewBuilder private var content: some View {
         if !reply.metricsAvailable {
             ContentUnavailableView("Change metrics are unavailable for this worktree.", systemImage: "chart.bar.xaxis")
-        } else if sections.isEmpty, workspace.pullRequest == nil {
+        } else if working.isEmpty, !showsBranch, reply.commits.isEmpty, workspace.pullRequest == nil {
             // With a pull request, the list still shows it, as for a merged branch now level with its base.
             ContentUnavailableView("No changes yet.", systemImage: "checkmark.circle")
         } else {
             List {
                 if let pr = workspace.pullRequest { PullRequestSection(pr: pr) }
                 Text(summary).font(.footnote).foregroundStyle(.secondary).listRowSeparator(.hidden)
-                ForEach(sections) { section in
+                let working = working
+                if !working.isEmpty {
                     SwiftUI.Section {
-                        ForEach(RemoteChangesRules.grouped(section.files), id: \.directory) { group in
-                            if !group.directory.isEmpty {
-                                Label(group.directory, systemImage: "folder")
-                                    .font(.footnote).foregroundStyle(.secondary).listRowSeparator(.hidden)
-                            }
-                            ForEach(group.files, id: \.path) { file in
-                                Button { open(file.path, stage: section.stage) } label: {
-                                    FileRow(file: file, nested: !group.directory.isEmpty)
-                                }
-                                .buttonStyle(.plain)
-                                .swipeActions(edge: .leading) {
-                                    if canGit, section.stage == "unstaged" {
-                                        Button("Stage", systemImage: "plus") { run(.stage(paths: [file.path])) }.tint(.green)
-                                    } else if canGit, section.stage == "staged" {
-                                        Button("Unstage", systemImage: "minus") { run(.unstage(paths: [file.path])) }.tint(.orange)
-                                    }
-                                }
-                                .swipeActions(edge: .trailing) {
-                                    if canGit, section.stage == "unstaged" {
-                                        Button("Discard", systemImage: "trash", role: .destructive) { discarding = [file.path] }
-                                    }
-                                }
+                        ForEach(RemoteChangesRules.tree(working, path: \.file.path, collapsed: collapsedWorking), id: \.id) {
+                            workingRow($0)
+                        }
+                    } header: {
+                        SectionCard(title: "Working tree", systemImage: "plusminus", count: "\(working.count)",
+                                    add: working.reduce(0) { $0 + $1.file.add }, del: working.reduce(0) { $0 + $1.file.del }) {
+                            workingMenu(working)
+                        }
+                    }
+                }
+                if showsBranch {
+                    SwiftUI.Section {
+                        ForEach(RemoteChangesRules.tree(reply.files, path: \.path, collapsed: collapsedBranch), id: \.id) { row in
+                            ChangeTreeRow(name: row.name, path: row.path, depth: row.depth, file: row.isDirectory ? nil : row.items.first,
+                                          collapsed: collapsedBranch.contains(row.path), fileCount: row.items.count) {
+                                if row.isDirectory { collapsedBranch.formSymmetricDifference([row.path]) } else { open(row.path, stage: nil) }
                             }
                         }
-                        ForEach(section.commits, id: \.revision) { commit in
+                    } header: {
+                        SectionCard(title: "Branch changes", systemImage: "arrow.triangle.branch", count: "\(reply.files.count)",
+                                    add: reply.files.reduce(0) { $0 + $1.add }, del: reply.files.reduce(0) { $0 + $1.del }) {}
+                    }
+                }
+                if !reply.commits.isEmpty {
+                    SwiftUI.Section {
+                        ForEach(reply.commits, id: \.revision) { commit in
                             Button { workspace.openCommit(commit, by: owner) } label: { CommitRow(commit: commit) }
                                 .buttonStyle(.plain)
                         }
                     } header: {
-                        HStack {
-                            Text(section.title)
-                            Spacer()
-                            // A truncated list doesn't name every file, so "all" would not be all.
-                            if canGit, !reply.truncated, let stage = section.stage {
-                                let paths = section.files.map(\.path)
-                                Button(stage == "staged" ? "Unstage All" : "Stage All") {
-                                    run(stage == "staged" ? .unstage(paths: paths) : .stage(paths: paths))
-                                }
-                                .font(.footnote.weight(.semibold))
-                                .disabled(workspace.gitRunning != nil)
-                            }
-                        }
+                        SectionCard(title: "Commits", systemImage: "smallcircle.filled.circle",
+                                    count: "\(reply.commits.count)\(reply.commitsTruncated ? "+" : "")") {}
                     }
                 }
                 if reply.truncated {
@@ -205,7 +186,97 @@ private struct ChangeList: View {
                 }
             }
             .listStyle(.plain)
+            .environment(\.defaultMinListRowHeight, 36)
         }
+    }
+
+    /// A working-tree folder or file: its chip stages what isn't staged yet, or unstages a fully staged one.
+    @ViewBuilder private func workingRow(_ row: RemoteChangeTreeRow<RemoteWorkingTreeFile>) -> some View {
+        let state = RemoteStageState(row.items.map(\.stage))
+        let unstaged = row.items.filter { $0.stage != .staged }.map(\.file.path)
+        let stage = { run(.stage(paths: unstaged)) }
+        let unstage = { run(.unstage(paths: row.items.filter { $0.stage != .unstaged }.map(\.file.path))) }
+        ChangeTreeRow(
+            name: row.name, path: row.path, depth: row.depth, file: row.isDirectory ? nil : row.items.first?.file,
+            collapsed: collapsedWorking.contains(row.path), fileCount: row.items.count,
+            stage: canGit ? state : nil, stageDisabled: workspace.gitRunning != nil,
+            toggleStage: state == .staged ? unstage : stage
+        ) {
+            if row.isDirectory {
+                collapsedWorking.formSymmetricDifference([row.path])
+            } else {
+                open(row.path, stage: state == .staged ? "staged" : "unstaged")
+            }
+        }
+        .contextMenu {
+            if canGit {
+                if state != .staged { Button("Stage", systemImage: "plus", action: stage) }
+                if state != .unstaged { Button("Unstage", systemImage: "minus", action: unstage) }
+                if !unstaged.isEmpty {
+                    Button("Discard Changes…", systemImage: "trash", role: .destructive) { discarding = unstaged }
+                }
+            }
+        }
+        .swipeActions(edge: .leading) {
+            if canGit, !row.isDirectory {
+                if state == .staged {
+                    Button("Unstage", systemImage: "minus", action: unstage).tint(.orange)
+                } else {
+                    Button("Stage", systemImage: "plus", action: stage).tint(.green)
+                }
+            }
+        }
+        .swipeActions(edge: .trailing) {
+            if canGit, !row.isDirectory, !unstaged.isEmpty {
+                Button("Discard", systemImage: "trash", role: .destructive) { discarding = unstaged }
+            }
+        }
+    }
+
+    /// A truncated list doesn't name every file, so "all" would not be all.
+    @ViewBuilder private func workingMenu(_ working: [RemoteWorkingTreeFile]) -> some View {
+        if canGit, !reply.truncated {
+            let unstaged = working.filter { $0.stage != .staged }.map(\.file.path)
+            let staged = working.filter { $0.stage != .unstaged }.map(\.file.path)
+            Menu("Working Tree Actions", systemImage: "ellipsis.circle") {
+                if !unstaged.isEmpty { Button("Stage All", systemImage: "plus") { run(.stage(paths: unstaged)) } }
+                if !staged.isEmpty { Button("Unstage All", systemImage: "minus") { run(.unstage(paths: staged)) } }
+                if !unstaged.isEmpty {
+                    Divider()
+                    Button("Discard All…", systemImage: "trash", role: .destructive) { discarding = unstaged }
+                }
+            }
+            .labelStyle(.iconOnly)
+            .disabled(workspace.gitRunning != nil)
+        }
+    }
+}
+
+/// A Changes section's title bar, as on the Mac: title, count, totals and its actions.
+private struct SectionCard<Actions: View>: View {
+    let title: String
+    let systemImage: String
+    let count: String
+    var add: Int?
+    var del: Int?
+    @ViewBuilder let actions: Actions
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).frame(width: 18)
+            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+            Text(count)
+                .font(.caption.weight(.semibold).monospacedDigit()).foregroundStyle(.secondary)
+                .padding(.horizontal, 7).padding(.vertical, 1)
+                .background(.fill.secondary, in: Capsule())
+            Spacer(minLength: 8)
+            if let add, let del { Counts(add: add, del: del) }
+            actions
+        }
+        .textCase(nil)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
     }
 }
 
@@ -299,38 +370,123 @@ private struct Counts: View {
     }
 }
 
-private struct FileRow: View {
-    let file: RemoteChangedFile
-    let nested: Bool
+/// A folder or file of a Changes tree, as on the Mac: stage chip, icon, name, then counts and
+/// status letter in fixed columns. A tap opens a file or folds a folder.
+private struct ChangeTreeRow: View {
+    let name: String
+    let path: String
+    let depth: Int
+    /// Nil for a folder.
+    let file: RemoteChangedFile?
+    let collapsed: Bool
+    let fileCount: Int
+    /// Nil where nothing can be staged.
+    var stage: RemoteStageState? = nil
+    var stageDisabled = false
+    var toggleStage: () -> Void = {}
+    let tap: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            StatusBadge(status: file.status)
-            Text(file.path.split(separator: "/").last.map(String.init) ?? file.path)
-                .lineLimit(1).truncationMode(.middle)
-            if file.conflict != nil {
-                Text("conflict").font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+        HStack(spacing: 8) {
+            if let stage { StageChip(state: stage, action: toggleStage).disabled(stageDisabled) }
+            if let file {
+                FileTypeIconGlyph(filename: name)
+                Text(name).lineLimit(1).truncationMode(.middle)
+                if file.conflict != nil {
+                    Text("conflict").font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+                }
+                Spacer(minLength: 8)
+                column(file.add > 0 ? "+\(file.add)" : "", template: "+999").foregroundStyle(.green)
+                column(file.del > 0 ? "\u{2212}\(file.del)" : "", template: "\u{2212}999").foregroundStyle(.red)
+                StatusBadge(status: file.status)
+            } else {
+                FileTypeIconGlyph(folder: path)
+                Text(name).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 8)
+                if collapsed { Text("\(fileCount)").font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
             }
-            Spacer(minLength: 8)
-            if file.add + file.del > 0 { Counts(add: file.add, del: file.del) }
-            Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
         }
-        .padding(.leading, nested ? 16 : 0)
+        .font(.subheadline)
+        .padding(.leading, CGFloat(depth) * 16 + (stage == nil ? 8 : 0))
         .contentShape(Rectangle())
+        .onTapGesture(perform: tap)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: file == nil ? (collapsed ? "Expand" : "Collapse") : "Open", tap)
+        .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 12))
+        .listRowSeparator(.hidden)
+    }
+
+    /// Wide enough for a three-digit count, right-aligned, so counts line up down the list.
+    private func column(_ text: String, template: String) -> some View {
+        ZStack(alignment: .trailing) {
+            Text(template).hidden()
+            Text(text)
+        }
+        .font(.caption.monospacedDigit())
     }
 }
 
-/// Git's status letter on its color, as in Xcode's navigator: green added, blue modified, red deleted.
+/// The Mac's stage chip: empty when unstaged, a check when staged, a dash when partly staged.
+private struct StageChip: View {
+    let state: RemoteStageState
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 4, style: .continuous).fill(fill)
+                RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(border, lineWidth: 1)
+                Image(systemName: glyph).font(.system(size: 9, weight: .bold)).foregroundStyle(tint)
+            }
+            .frame(width: 17, height: 17)
+            .frame(width: 30, height: 36)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(label)
+    }
+
+    private var glyph: String {
+        switch state {
+        case .unstaged: "plus"
+        case .staged: "checkmark"
+        case .mixed: "minus"
+        }
+    }
+
+    private var tint: Color {
+        switch state {
+        case .unstaged: .secondary
+        case .staged: .green
+        case .mixed: .orange
+        }
+    }
+
+    private var fill: Color { state == .unstaged ? .clear : tint.opacity(0.18) }
+    private var border: Color { state == .unstaged ? Color.secondary.opacity(0.6) : tint.opacity(0.6) }
+
+    private var label: String {
+        switch state {
+        case .unstaged: "Stage"
+        case .staged: "Unstage"
+        case .mixed: "Stage remaining changes"
+        }
+    }
+}
+
+/// Git's status letter on a soft tint of its color, as on the Mac.
 struct StatusBadge: View {
     let status: String
 
     var body: some View {
         let letter = String(status.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
+        let color = color(letter)
         Text(letter.isEmpty ? "·" : letter)
             .font(.caption2.weight(.bold).monospaced())
-            .foregroundStyle(.white)
+            .foregroundStyle(color)
             .frame(width: 18, height: 18)
-            .background(color(letter), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .background(color.opacity(0.2), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
             .accessibilityLabel(name(letter))
     }
 
@@ -338,9 +494,9 @@ struct StatusBadge: View {
         switch letter {
         case "A", "?": .green
         case "D": .red
-        case "R", "C": .purple
+        case "R", "C": .blue
         case "U": .orange
-        default: .blue
+        default: .yellow
         }
     }
 
@@ -378,6 +534,7 @@ private struct CommitRow: View {
 /// One commit's files, pushed from the Commits section; a file opens the commit's review at it.
 struct CommitFilesView: View {
     let workspace: SessionWorkspace
+    @State private var collapsed: Set<String> = []
 
     var body: some View {
         Group {
@@ -389,14 +546,10 @@ struct CommitFilesView: View {
                     if let commit = workspace.commit?.commit {
                         Text(commit.subject).font(.subheadline).listRowSeparator(.hidden)
                     }
-                    ForEach(RemoteChangesRules.grouped(reply.files), id: \.directory) { group in
-                        if !group.directory.isEmpty {
-                            Label(group.directory, systemImage: "folder")
-                                .font(.footnote).foregroundStyle(.secondary).listRowSeparator(.hidden)
-                        }
-                        ForEach(group.files, id: \.path) { file in
-                            Button { open(file.path) } label: { FileRow(file: file, nested: !group.directory.isEmpty) }
-                                .buttonStyle(.plain)
+                    ForEach(RemoteChangesRules.tree(reply.files, path: \.path, collapsed: collapsed), id: \.id) { row in
+                        ChangeTreeRow(name: row.name, path: row.path, depth: row.depth, file: row.isDirectory ? nil : row.items.first,
+                                      collapsed: collapsed.contains(row.path), fileCount: row.items.count) {
+                            if row.isDirectory { collapsed.formSymmetricDifference([row.path]) } else { open(row.path) }
                         }
                     }
                     if reply.truncated {
@@ -404,6 +557,7 @@ struct CommitFilesView: View {
                     }
                 }
                 .listStyle(.plain)
+                .environment(\.defaultMinListRowHeight, 36)
             case .failed(let message):
                 ContentUnavailableView(message, systemImage: "exclamationmark.triangle")
             default:
