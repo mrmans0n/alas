@@ -866,6 +866,8 @@ public final class ACPSessionManager: ChangeTracking {
     private var modelModeSelectionTails: [ACPSession.ID: ModelModeSelectionQueueTail] = [:]
     private var modelModeSelectionGenerations: [ACPSession.ID: UUID] = [:]
     private var queuedPromptDispatchWaiters: [ACPSession.ID: [UUID: @Sendable () -> Void]] = [:]
+    /// Unattended review turns waiting on their result; see `runReviewTurn`.
+    var reviewTurnWaiters: [ACPSession.ID: ACPReviewTurnWaiter] = [:]
 
     /// Toggle auto-run for a remotely-driven session. Writer-gated; persists.
     public func setAutoRun(for id: ACPSession.ID, enabled: Bool) async {
@@ -2686,7 +2688,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// Moves a side session out of modes that run tool calls without asking,
     /// through whichever source backs its mode chip, and waits for the agent
     /// to accept. False when the session would stay in such a mode.
-    private func enterReadOnlyMode(_ side: ACPSession) async -> Bool {
+    func enterReadOnlyMode(_ side: ACPSession) async -> Bool {
         // Supported agents always advertise modes once attached; none means
         // the attach failed or the mode can't be checked.
         guard let mode = side.chipState.mode else { return false }
@@ -2760,7 +2762,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// SSH dismissal keeps a durable cleanup reservation until both the
     /// native process and its replica are deleted. Failed teardown retires
     /// the local runner without erasing the identity needed by a cold purge.
-    private func discardSideSession(id: ACPSession.ID) async {
+    func discardSideSession(id: ACPSession.ID) async {
         if effectiveRemoteHost() != nil {
             await flushPersistence()
             do {
@@ -3336,6 +3338,7 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     private func forgetSession(id: ACPSession.ID) {
+        endReviewTurn(sessionId: id)
         abandonFirstAttach(of: id)
         killRemoteHelperACPProcIfPossible(sessionId: id)
         onSessionEnded?(id)
@@ -6060,6 +6063,7 @@ extension ACPSessionManager {
     /// in-flight prompt, tear down the runner/agent, and become a mirror.
     private func standDown(sessionId: ACPSession.ID, leaseToken: String) async {
         guard _ownedLeases.contains(sessionId), ownedLeaseTokens[sessionId] == leaseToken else { return }
+        endReviewTurn(sessionId: sessionId)
         v2PreviewOwners[sessionId]?.owner.withdraw()
         invalidateHookReview(sessionId: sessionId, retire: true)
         retireBuiltInMCPAttachment(sessionId: sessionId)
@@ -6186,6 +6190,7 @@ extension ACPSessionManager {
     /// Remote writer heartbeats end with their lease release, not with preparation.
     public func prepareForDisposal() {
         isDisposed = true   // must be first: in-flight attach resumes after this and checks the flag
+        endAllReviewTurns()
         for entry in v2PreviewOwners.values { entry.owner.prepareForEnd() }
         for sid in Array(hookReviewOwners.keys) { invalidateHookReview(sessionId: sid, retire: true) }
         for sid in Array(builtInMCPAttachments.keys) { retireBuiltInMCPAttachment(sessionId: sid) }
@@ -7874,9 +7879,12 @@ extension ACPSessionManager {
                                           },
                                           onTurnCompleted: { [weak self] completion in
                                               guard let self,
-                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID,
-                                                    self.sessions[sessionId]?.readOnlyRestricted != true
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
                                               else { return }
+                                              // A review turn waits on its own completion, which read-only
+                                              // sessions never report below.
+                                              self.reviewTurnCompleted(completion, sessionId: sessionId)
+                                              guard self.sessions[sessionId]?.readOnlyRestricted != true else { return }
                                               self.onTurnCompleted?(completion)
                                           },
                                           // A side question's spend is usage too, unlike its completion.
@@ -8996,7 +9004,11 @@ extension ACPSessionManager {
             // session re-enters a read-only one before its queue can drain,
             // and stays unready if it relies on one and can't.
             if session.readOnlyRestricted {
-                let modeAccepted = await enterSideSessionMode(session)
+                // An unattended reviewer has no fallback: nobody reads a
+                // warning that read-only isn't guaranteed.
+                let modeAccepted = session.unattendedReview
+                    ? await enterReadOnlyMode(session)
+                    : await enterSideSessionMode(session)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
                       session.agentState == .spawning else { return }
                 guard modeAccepted else {
@@ -10675,6 +10687,7 @@ extension ACPSessionManager {
         sessionId: ACPSession.ID
     ) async {
         guard runners[sessionId] === runner else { return }
+        endReviewTurn(sessionId: sessionId)
         recordUnreportedUsage(of: runner)
         runner.invalidateActivePrompt()
         if let session = sessions[sessionId] {
@@ -10970,6 +10983,7 @@ extension ACPSessionManager {
     }
 
     private func tearDownSession(sessionId: ACPSession.ID, closeRemote: Bool) async throws {
+        endReviewTurn(sessionId: sessionId)
         abandonFirstAttach(of: sessionId)
         invalidateHookReview(sessionId: sessionId, retire: true)
         sessions[sessionId]?.nextPromptActivity.send()

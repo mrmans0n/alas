@@ -36,14 +36,19 @@ public enum ACPSideQuestionSupportPolicy: Sendable {
 
 /// What a read-only `/btw` side session may run. Reads are allowed so the
 /// side agent can look things up; `fetch` asks because it sends data off the
-/// machine; anything else, including unknown kinds, is rejected.
+/// machine, and is rejected when the session runs unattended, since nobody
+/// would answer; anything else, including unknown kinds, is rejected.
 public enum ACPSideQuestionPermissionRule: Sendable {
     public enum Decision: Equatable, Sendable { case allow, ask, reject }
 
     public static func decide(kind: String?) -> Decision {
+        decide(kind: kind, unattended: false)
+    }
+
+    public static func decide(kind: String?, unattended: Bool) -> Decision {
         switch kind {
         case "read", "search", "think": .allow
-        case "fetch": .ask
+        case "fetch": unattended ? .reject : .ask
         default: .reject
         }
     }

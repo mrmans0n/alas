@@ -237,6 +237,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @Tracked public var readOnlyRestricted = false
     /// Tool calls the read-only gate rejected, for the side card.
     @Tracked public private(set) var readOnlyBlockedTools: [ACPBlockedToolCall] = []
+    /// A hidden reviewer session that runs unattended
+    /// (`ACPSessionManager.runReviewTurn`): nobody answers its permission
+    /// requests, so the read-only gate decides every one without asking.
+    /// In-memory only, like `readOnlyRestricted`.
+    public var unattendedReview = false
 
     public func recordReadOnlyBlock(_ title: String) {
         readOnlyBlockedTools.append(.init(title: title, messageIndex: transcript.messages.count))

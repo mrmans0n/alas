@@ -643,6 +643,99 @@ struct ACPSessionForkManagerTests {
         if let side { await manager.detach(sessionId: side.id) }
     }
 
+    // A plan mode to switch to, and a mode list with no way out of bypass.
+    private nonisolated static let planMode = #"""
+        {"sessionId":"remote","modes":{"currentModeId":"default","availableModes":[
+          {"id":"default","name":"Manual","_meta":{"kind":"standard"}},
+          {"id":"plan","name":"Plan","_meta":{"kind":"plan"}}]}}
+        """#
+    private nonisolated static let onlyBypass = #"""
+        {"sessionId":"remote","modes":{"currentModeId":"bypass","availableModes":[
+          {"id":"bypass","name":"Bypass","_meta":{"kind":"full_access"}}]}}
+        """#
+
+    @Test("an unattended review turn runs read-only and returns the whole final message")
+    func reviewTurnReturnsFinalText() async throws {
+        let client = ACPMockClient()
+        client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
+        client.script(method: "session/prompt") { _ in
+            client.emit(.init(sessionId: "remote", update: .agentMessageChunk(.text("No findings. "))))
+            client.emit(.init(sessionId: "remote", update: .agentMessageChunk(.text("Ready to push."))))
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        let (manager, _) = try reviewManager(client: client, sessionNewResponse: Self.planMode)
+        let parent = manager.createSession(agentId: "claude")
+
+        let outcome = await manager.runReviewTurn(reviewRequest(parentID: parent.id))
+
+        guard case .finished(let id, _) = outcome else {
+            Issue.record("expected a finished review turn, got \(outcome)")
+            return
+        }
+        #expect(outcome == .finished(sessionID: id, finalText: "No findings. Ready to push."))
+        #expect(manager.sessions[id]?.readOnlyRestricted == true)
+        #expect(!manager.recent.contains { $0.id == id })
+        let methods = client.sent.map(\.method)
+        let setMode = try #require(methods.firstIndex(of: "session/set_mode"))
+        let prompt = try #require(methods.firstIndex(of: "session/prompt"))
+        #expect(setMode < prompt)
+        #expect((client.sent[setMode].params as? ACPSessionSetModeParams)?.modeId == "plan")
+        await manager.discardReviewSession(id: id)
+    }
+
+    @Test("an unattended review turn fails when the agent can't enter a read-only mode")
+    func reviewTurnRefusesUnsafeMode() async throws {
+        let client = ACPMockClient()
+        let (manager, store) = try reviewManager(client: client, sessionNewResponse: Self.onlyBypass)
+        let parent = manager.createSession(agentId: "claude")
+
+        let outcome = await manager.runReviewTurn(reviewRequest(parentID: parent.id))
+
+        guard case .failed(let id?, .cannotRunReadOnly) = outcome else {
+            Issue.record("expected a read-only failure, got \(outcome)")
+            return
+        }
+        #expect(manager.sessions[id] == nil)
+        #expect(try store.loadSession(id: id) == nil)
+        #expect(!client.sent.contains { $0.method == "session/prompt" })
+    }
+
+    /// Built like `sideQuestionReadOnlyMode`'s manager.
+    private func reviewManager(
+        client: ACPMockClient,
+        sessionNewResponse: String
+    ) throws -> (ACPSessionManager, ACPSessionStore) {
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(sessionCapabilities: .init(resume: nil, close: nil)),
+                authMethods: []
+            ))
+        }
+        client.script(method: "session/new") { _ in Data(sessionNewResponse.utf8) }
+        let store = try ACPSessionStore(path: temporaryPath())
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        return (manager, store)
+    }
+
+    private func reviewRequest(parentID: ACPSession.ID) -> ACPReviewTurnRequest {
+        ACPReviewTurnRequest(
+            parentSessionID: parentID,
+            reuseSessionID: nil,
+            agentID: "claude",
+            modelID: nil,
+            title: "Review before push",
+            prompt: "Review the diff.",
+            timeout: .seconds(20 * 60)
+        )
+    }
+
     @Test("streaming agent is ineligible while earlier messages remain eligible")
     func messageEligibility() {
         let session = ACPSession(
