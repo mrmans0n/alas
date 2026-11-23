@@ -36,6 +36,7 @@ private final class FakeEffects {
     /// The reviewer's final messages, in order; approve once they run out.
     var replies: [String] = []
     var openFindings = 1
+    var autoFix = true
     /// The top entry a stack plan publishes, below HEAD; nil reads HEAD for every target.
     var stackTop: String?
     /// Runs inside the push effect, as `pr_create` re-entering the gate does.
@@ -100,7 +101,7 @@ private final class FakeEffects {
                 self.onPush?(id, target, headSHA)
                 return nil
             },
-            autoFix: { _ in true },
+            autoFix: { _ in self.autoFix },
             localCommitsToPush: { _ in nil },
             notify: { _, stop in self.stops.append(stop) },
             shipHead: shipHead
@@ -184,6 +185,27 @@ struct ShipReviewerTests {
         #expect(fake.runs.last?.prompt.contains(findingID) == true)
         #expect(fake.filings.last?.earlierRoundSessionIDs == [FakeEffects.reviewSessionID(0)])
         #expect(fake.pushes.map(\.headSHA) == ["h2"])
+    }
+
+    @Test func sendToSessionDeliversTheStoppedRoundsFindings() async throws {
+        let fake = FakeEffects()
+        fake.replies = [oneFinding]
+        fake.autoFix = false
+        let reviewer = makeReviewer(fake)
+
+        _ = reviewer.requestPush(id, target: pullRequest, headSHA: "h1")
+        await reviewer.settle()
+        #expect(reviewer.record(for: id)?.phase == .stopped(.findingsWithAutoFixOff(count: 1)))
+        #expect(fake.delivered.isEmpty)
+
+        reviewer.sendFindings(id)
+        await reviewer.settle()
+
+        let findingID = try #require(fake.filings.first?.findingIDs.first)
+        #expect(fake.delivered.map(\.card.title) == ["Review before push · 1 finding"])
+        #expect(fake.delivered.first?.text.contains(findingID) == true)
+        #expect(reviewer.record(for: id)?.phase == .awaitingFix(headSHA: "h1"))
+        #expect(fake.pushes.isEmpty)
     }
 
     @Test func unavailableReviewerStopsWithoutPushing() async {

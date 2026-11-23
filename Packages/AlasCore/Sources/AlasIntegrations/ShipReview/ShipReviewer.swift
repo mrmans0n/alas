@@ -413,6 +413,70 @@ public final class ShipReviewer {
         put(record)
     }
 
+    /// "Send to session" after a stop: the current round's open findings go
+    /// to the owning session, which then fixes them as in an auto-fix round.
+    public func sendFindings(_ id: ShipReviewID) {
+        guard let record = records[id], case .stopped = record.phase,
+              let round = record.currentRound, round.reviewedAt != nil, let reviewSessionID = round.reviewSessionID
+        else { return }
+        let generation = bumpGeneration(id)
+        deliveringFindings.insert(id)
+        spawn { [weak self] in
+            guard let self else { return }
+            guard let prompt = await resentFindingsPrompt(record, round: round, reviewSessionID: reviewSessionID),
+                  isCurrent(id, generation), var current = records[id], case .stopped = current.phase
+            else {
+                deliveringFindings.remove(id)
+                return
+            }
+            current.phase = .awaitingFix(headSHA: round.headSHA)
+            current.updatedAt = now()
+            put(current)
+            await deliverFindings(id, prompt: prompt, headSHA: round.headSHA, generation: generation)
+        }
+    }
+
+    /// The findings prompt for `round`, rebuilt from its findings still open in the pane.
+    private func resentFindingsPrompt(
+        _ record: ShipReviewRecord,
+        round: ShipReviewRound,
+        reviewSessionID: ReviewSessionID
+    ) async -> ShepherdPrompt? {
+        guard let effects, let context = effects.context(record.id.worktreeID) else { return nil }
+        let open = effects.earlierFindings([reviewSessionID])
+        guard !open.isEmpty else { return nil }
+        let base = record.pending?.pullRequestBase ?? context.baseBranch
+        var forkPoint = try? await effects.git.mergeBase(context.worktreePath, "origin/\(base)", round.headSHA)
+        if forkPoint == nil {
+            forkPoint = try? await effects.git.mergeBase(context.worktreePath, base, round.headSHA)
+        }
+        guard let forkPoint else { return nil }
+        let result = CodeReviewResult(
+            verdict: round.verdict ?? .requestChanges,
+            summary: round.summary ?? "",
+            findings: open.map { finding in
+                CodeReviewFinding(
+                    path: finding.path,
+                    anchor: finding.line.map { .line(start: $0, end: $0) } ?? .file,
+                    body: finding.body
+                )
+            },
+            resolvedIDs: []
+        )
+        return ShipReviewPromptBuilder.findings(
+            result: result, findingIDs: open.map(\.id), reviewerLabel: round.reviewerLabel,
+            branch: context.branch, base: base, headSHA: round.headSHA,
+            round: round.number, maxRounds: record.maxRounds,
+            target: .branch(
+                worktreeID: record.id.worktreeID,
+                repositoryPath: context.worktreePath,
+                base: forkPoint,
+                head: round.headSHA,
+                title: "Review before push · round \(round.number)"
+            )
+        )
+    }
+
     /// The bound request's head isn't clean or allowed and no review runs.
     /// Local HEAD on that head is reviewed like a fix; any other head is
     /// recorded as reaching the remote without a review.

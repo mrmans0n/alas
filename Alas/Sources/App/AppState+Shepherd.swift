@@ -34,8 +34,13 @@ extension AppState {
                 await self?.archiveShepherdWorktreeIfAllowed(
                     worktreeID, sessionID: sessionID, isStillWanted: isStillWanted
                 ) ?? .declined
-            }
+            },
+            reviewGate: { [weak self] in self?.core.reviewGate(for: $0) },
+            unreviewedHead: { [weak self] in self?.core.noteUnreviewedHead($0, headSHA: $1) }
         )
+        core.shipReviewNotice = { [weak self] id, message in
+            self?.notifyShipReviewStop(id, message: message)
+        }
     }
 
     /// Called once the worktree topology is loaded, because records resolve
@@ -43,6 +48,7 @@ extension AppState {
     func startReviewShepherd() {
         reviewShepherd.start()
         stackShepherd.start()
+        core.shipReviewer.start()
     }
 
     // MARK: - Eligibility, rules and base
@@ -201,7 +207,15 @@ extension AppState {
 
     /// The popover's Ship with agent button records an Alas action while
     /// asking the agent to commit what belongs to the work and call `pr_create`.
-    func requestShepherdCreatePR(sessionID: String, worktree: Worktree) {
+    /// `review` is the popover's review before push choice for this ship.
+    func requestShepherdCreatePR(
+        sessionID: String, worktree: Worktree, review: (enabled: Bool, reviewer: ReviewerChoice?)
+    ) {
+        core.shipReviewer.prepare(
+            ShipReviewID(worktreeID: worktree.id, sessionID: sessionID),
+            enabled: review.enabled,
+            reviewer: review.reviewer
+        )
         let session = acpManager(for: worktree)?.liveSession(for: sessionID)
         Task { @MainActor [weak self] in
             guard let self else { return }
