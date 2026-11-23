@@ -30,6 +30,7 @@ struct SidebarView: View {
     @State private var renamingBranchWorktree: Worktree?
     /// Transient: never persisted and never applied outside this sidebar.
     @State private var worktreeFilter = ""
+    @AppStorage("sidebar.groupWorktreesByMachine") private var groupWorktreesByMachine = false
     @State private var highlightedWorktreeId: String?
     @FocusState private var worktreeFilterFocused: Bool
     /// Per space, since every page keeps its own scroll view. Read only by the
@@ -90,7 +91,7 @@ struct SidebarView: View {
                                     return RepoGroupView(
                                         project: project,
                                         icon: { state.sidebarIcon(for: $0) },
-                                        worktrees: WorktreeSidebarFilter.apply(worktreeFilter, to: liveWorktrees),
+                                        worktrees: displayedWorktrees(liveWorktrees),
                                         collapsed: Binding(
                                             get: { collapsedProjects.contains(project.id) },
                                             set: { collapsed in
@@ -362,6 +363,7 @@ struct SidebarView: View {
                         scrollOffsets: scrollOffsets,
                         spaceID: state.spacesManager.activeSpaceId,
                         text: $worktreeFilter,
+                        groupByMachine: $groupWorktreesByMachine,
                         focused: $worktreeFilterFocused,
                         onMoveHighlight: moveFilterHighlight(by:),
                         onSubmit: openHighlightedWorktree,
@@ -572,16 +574,17 @@ struct SidebarView: View {
         return owned
     }
 
+    private func displayedWorktrees(_ worktrees: [Worktree]) -> [Worktree] {
+        WorktreeSidebarFilter.apply(worktreeFilter, to: worktrees, groupByMachine: groupWorktreesByMachine)
+    }
+
     /// Matched worktree ids of the active space, in sidebar display order.
     private func filteredWorktreeIds() -> [String] {
         let space = state.spacesManager.activeSpace
         let members = space?.members ?? space?.projectIds.map(SpaceMemberReference.project) ?? []
         return members.flatMap { member -> [String] in
             guard case .project(let projectId) = member else { return [] }
-            return WorktreeSidebarFilter.apply(
-                worktreeFilter,
-                to: state.projectsManager.visibleWorktrees(includingLinkedTo: projectId)
-            ).map(\.id)
+            return displayedWorktrees(state.projectsManager.visibleWorktrees(includingLinkedTo: projectId)).map(\.id)
         }
     }
 
@@ -893,6 +896,7 @@ private struct SidebarWorktreeFilterRow: View {
     let scrollOffsets: SidebarScrollOffsets
     let spaceID: String
     @Binding var text: String
+    @Binding var groupByMachine: Bool
     var focused: FocusState<Bool>.Binding
     let onMoveHighlight: (Int) -> Void
     let onSubmit: () -> Void
@@ -928,7 +932,8 @@ private struct SidebarWorktreeFilterRow: View {
             .onExitCommand(perform: onClear)
             WorktreeSortMenu(
                 selection: state.config.worktrees.defaultOrdering,
-                onSelect: { state.setDefaultWorktreeOrdering($0) }
+                onSelect: { state.setDefaultWorktreeOrdering($0) },
+                groupByMachine: $groupByMachine
             )
         }
         .frame(height: SidebarFilterRowMetrics.slotHeight)

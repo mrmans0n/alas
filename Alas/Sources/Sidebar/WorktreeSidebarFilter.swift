@@ -15,10 +15,12 @@ enum WorktreeSidebarFilter {
         }
     }
 
-    /// Keeps the input order, so callers pass lists already in sort order.
-    static func apply(_ query: String, to worktrees: [Worktree]) -> [Worktree] {
-        guard isActive(query) else { return worktrees }
-        return worktrees.filter { matches($0, query: query) }
+    /// Keeps the input order within each machine when grouping is enabled.
+    static func apply(_ query: String, to worktrees: [Worktree], groupByMachine: Bool = false) -> [Worktree] {
+        let matches = isActive(query) ? worktrees.filter { Self.matches($0, query: query) } : worktrees
+        guard groupByMachine else { return matches }
+        let byHost = Dictionary(grouping: matches) { RemotePath.split($0.path.path)?.host ?? "" }
+        return byHost.keys.sorted().flatMap { byHost[$0, default: []] }
     }
 
     /// Arrow-key cursor over the matched worktrees in display order. Clamps at

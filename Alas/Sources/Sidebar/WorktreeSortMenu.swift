@@ -2,6 +2,8 @@ import AppKit
 import SwiftUI
 
 enum WorktreeSortPresentation {
+    nonisolated static let groupByMachineTitle = "Group by Machine"
+
     nonisolated static let modes: [AppConfig.WorktreeSortMode] = [
         .lastUpdateDesc,
         .lastUpdateAsc,
@@ -26,6 +28,7 @@ enum WorktreeSortPresentation {
 struct WorktreeSortMenu: View {
     let selection: AppConfig.WorktreeSortMode
     let onSelect: (AppConfig.WorktreeSortMode) -> Void
+    @Binding var groupByMachine: Bool
 
     @Environment(\.theme) private var theme
     @State private var hovering = false
@@ -46,6 +49,8 @@ struct WorktreeSortMenu: View {
                     )
                 )
             }
+            Divider()
+            Toggle(WorktreeSortPresentation.groupByMachineTitle, isOn: $groupByMachine)
         } label: {
             Icon(
                 name: "arrow.up.arrow.down",
@@ -66,7 +71,7 @@ struct WorktreeSortMenu: View {
         )
         .accessibilityHidden(true)
         .background(
-            WorktreeSortAccessibilityButton(selection: selection, onSelect: onSelect)
+            WorktreeSortAccessibilityButton(selection: selection, onSelect: onSelect, groupByMachine: $groupByMachine)
         )
         .help("Sort worktrees")
     }
@@ -75,6 +80,7 @@ struct WorktreeSortMenu: View {
 private struct WorktreeSortAccessibilityButton: NSViewRepresentable {
     let selection: AppConfig.WorktreeSortMode
     let onSelect: (AppConfig.WorktreeSortMode) -> Void
+    @Binding var groupByMachine: Bool
 
     func makeNSView(context: Context) -> NSView {
         let button = PointerTransparentMenuButton(frame: .zero)
@@ -88,19 +94,23 @@ private struct WorktreeSortAccessibilityButton: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.onSelect = onSelect
+        context.coordinator.groupByMachine = $groupByMachine
         context.coordinator.updateSelection(selection)
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onSelect: onSelect)
+        Coordinator(onSelect: onSelect, groupByMachine: $groupByMachine)
     }
 
     final class Coordinator: NSObject {
         var onSelect: (AppConfig.WorktreeSortMode) -> Void
+        var groupByMachine: Binding<Bool>
         private weak var menu: NSMenu?
+        private weak var groupingItem: NSMenuItem?
 
-        init(onSelect: @escaping (AppConfig.WorktreeSortMode) -> Void) {
+        init(onSelect: @escaping (AppConfig.WorktreeSortMode) -> Void, groupByMachine: Binding<Bool>) {
             self.onSelect = onSelect
+            self.groupByMachine = groupByMachine
         }
 
         func makeMenu() -> NSMenu {
@@ -115,14 +125,29 @@ private struct WorktreeSortAccessibilityButton: NSViewRepresentable {
                 item.representedObject = mode.rawValue
                 menu.addItem(item)
             }
+            menu.addItem(.separator())
+            let groupingItem = NSMenuItem(
+                title: WorktreeSortPresentation.groupByMachineTitle,
+                action: #selector(toggleGrouping),
+                keyEquivalent: ""
+            )
+            groupingItem.target = self
+            menu.addItem(groupingItem)
+            self.groupingItem = groupingItem
             self.menu = menu
             return menu
         }
 
         func updateSelection(_ selection: AppConfig.WorktreeSortMode) {
-            menu?.items.forEach { item in
-                item.state = item.representedObject as? String == selection.rawValue ? .on : .off
+            for item in menu?.items ?? [] {
+                guard let mode = item.representedObject as? String else { continue }
+                item.state = mode == selection.rawValue ? .on : .off
             }
+            groupingItem?.state = groupByMachine.wrappedValue ? .on : .off
+        }
+
+        @objc private func toggleGrouping() {
+            groupByMachine.wrappedValue.toggle()
         }
 
         @objc private func select(_ sender: NSMenuItem) {
