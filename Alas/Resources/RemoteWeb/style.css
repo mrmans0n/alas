@@ -558,10 +558,12 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
    (body.side-collapsed, body.panel-collapsed) and the panel's width is dragged from its edge. */
 @media (min-width: 900px) {
   :root { --side-w: 280px; --panel-w: 440px; }
-  body { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr) var(--panel-w); grid-template-rows: auto auto minmax(0, 1fr) auto;
+  /* The panel keeps its dragged width only while the chat still gets 420px; below that it gives
+     way, down to 300px, and the chat takes what is left. */
+  body { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr) clamp(300px, var(--panel-w), calc(100vw - var(--side-w) - 420px)); grid-template-rows: auto auto minmax(0, 1fr) auto;
     grid-template-areas: "side bar bar" "side chat tabs" "side chat panel" "nav chat panel"; font-size: 13px; }
   body.side-collapsed { --side-w: 0px; }
-  body.panel-collapsed, body:not(:has(#bar.is-detail)) { --panel-w: 0px; }
+  body.panel-collapsed, body:not(:has(#bar.is-detail)) { grid-template-columns: var(--side-w) minmax(0, 1fr) 0px; }
   body.side-collapsed #sessions, body.side-collapsed main:has(#settings.hidden) #sessions.hidden, body.side-collapsed #settings, body.side-collapsed #bottom-tabbar { display: none !important; }
   body.panel-collapsed #detail-tabs, body.panel-collapsed #changes, body.panel-collapsed #files, body.panel-collapsed #terminal, body.panel-collapsed #panel-resize { display: none !important; }
   main { display: contents; }
