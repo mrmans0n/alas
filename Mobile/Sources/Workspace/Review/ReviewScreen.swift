@@ -6,6 +6,7 @@ struct ReviewScreen: View {
     let workspace: SessionWorkspace
     @State private var document: ReviewDocument
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var actionBarHeight: CGFloat = 0
 
     init(workspace: SessionWorkspace, source: ReviewSource, focus: ReviewEntryID?) {
         self.workspace = workspace
@@ -111,7 +112,10 @@ struct ReviewScreen: View {
         } else if document.entries.isEmpty {
             ContentUnavailableView("No changes to review.", systemImage: "checkmark.circle")
         } else {
-            ReviewCollectionView(document: document, wraps: ReviewPreferences.shared.wrapsLines)
+            // Runs under the action bar to the screen's edge. Only the home indicator reaches UIKit as safe area,
+            // so the bar's height goes in as a content inset for the last line to scroll clear of it.
+            ReviewCollectionView(document: document, wraps: ReviewPreferences.shared.wrapsLines, bottomInset: actionBarHeight)
+                .ignoresSafeArea(.container, edges: .bottom)
                 .safeAreaInset(edge: .top, spacing: 0) {
                     VStack(spacing: 0) {
                         FileStrip(document: document)
@@ -123,7 +127,10 @@ struct ReviewScreen: View {
                         }
                     }
                 }
-                .safeAreaInset(edge: .bottom, spacing: 0) { ActionBar(document: document) }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    ActionBar(document: document)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { actionBarHeight = $0 }
+                }
         }
     }
 }

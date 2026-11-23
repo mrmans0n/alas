@@ -7,6 +7,8 @@ import UIKit
 struct ReviewCollectionView: UIViewControllerRepresentable {
     let document: ReviewDocument
     let wraps: Bool
+    /// The action bar's height: the list runs under it but its last line scrolls clear of it.
+    let bottomInset: CGFloat
 
     func makeUIViewController(context: Context) -> ReviewCollectionController {
         ReviewCollectionController(document: document)
@@ -15,6 +17,7 @@ struct ReviewCollectionView: UIViewControllerRepresentable {
     /// Reads the document's state, so SwiftUI calls this again whenever it changes.
     func updateUIViewController(_ controller: ReviewCollectionController, context: Context) {
         controller.apply(wraps: wraps)
+        controller.setBottomInset(bottomInset)
     }
 }
 
@@ -230,6 +233,12 @@ final class ReviewCollectionController: UIViewController, UICollectionViewDelega
     }
 
     // MARK: Applying the document
+
+    func setBottomInset(_ inset: CGFloat) {
+        guard collectionView.contentInset.bottom != inset else { return }
+        collectionView.contentInset.bottom = inset
+        collectionView.verticalScrollIndicatorInsets.bottom = inset
+    }
 
     func apply(wraps: Bool) {
         let entries = document.entries
