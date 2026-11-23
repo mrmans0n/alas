@@ -14,6 +14,8 @@ final class ChipAttachment: NSTextAttachment {
     let sent: RemoteUserMention?
     /// Where a reference chip reads its kind, so it turns green or orange once looked up.
     let references: ReferenceCache?
+    /// Sized from the text it sits in.
+    let metrics: ChipMetrics
     private var rendered: (key: RenderKey, image: UIImage)?
 
     private struct RenderKey: Equatable {
@@ -28,9 +30,10 @@ final class ChipAttachment: NSTextAttachment {
         self.draftChip = draftChip
         self.sent = sent
         self.references = references
+        metrics = ChipMetrics(textFont: font)
         super.init(data: nil, ofType: nil)
-        let size = ChipStyle.size(of: chip)
-        bounds = CGRect(x: 0, y: ChipStyle.baselineOffset(for: font), width: size.width, height: size.height)
+        let size = ChipStyle.size(of: chip, metrics: metrics)
+        bounds = CGRect(x: 0, y: metrics.baselineOffset, width: size.width, height: size.height)
     }
 
     required init?(coder: NSCoder) { fatalError("not coded") }
@@ -57,7 +60,7 @@ final class ChipAttachment: NSTextAttachment {
             }
             let key = RenderKey(style: traits.userInterfaceStyle, scale: max(traits.displayScale, 1), kind: kind)
             if let rendered = attachment.rendered, rendered.key == key { return rendered.image }
-            let renderer = ImageRenderer(content: ChipView(model: attachment.chip, references: attachment.references)
+            let renderer = ImageRenderer(content: ChipView(model: attachment.chip, references: attachment.references, metrics: attachment.metrics)
                 .environment(\.colorScheme, key.style == .dark ? .dark : .light))
             renderer.scale = key.scale
             guard let image = renderer.uiImage else { return nil }

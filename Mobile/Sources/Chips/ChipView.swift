@@ -8,10 +8,12 @@ struct ChipView: View {
     let model: ChipModel
     /// A reference chip's kind once the host looked it up; the model's until then.
     var references: ReferenceCache?
+    /// `.compact` on its own; a chip inside text takes the text's.
+    var metrics: ChipMetrics = .compact
 
     var body: some View {
         content
-            .frame(width: ChipStyle.size(of: model).width, height: ChipStyle.height)
+            .frame(width: ChipStyle.size(of: model, metrics: metrics).width, height: metrics.height)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(model.accessibilityLabel)
     }
@@ -20,31 +22,32 @@ struct ChipView: View {
     private var content: some View {
         switch model {
         case .command(let name, let isAlas):
-            CappedChip(label: ChipStyle.displayName(name), tint: ChipStyle.commandTint, prism: isAlas) {
-                Image(systemName: "wand.and.sparkles").font(.system(size: 9, weight: .semibold))
+            CappedChip(label: ChipStyle.displayName(name), tint: ChipStyle.commandTint, prism: isAlas, metrics: metrics) {
+                Image(systemName: "wand.and.sparkles").font(.system(size: metrics.glyphSize, weight: .semibold))
             }
         case .reference(let reference, let host, let kind):
             let kind = references?.kind(of: reference, host: host) ?? kind
-            CappedChip(label: reference.spelling, tint: ChipStyle.referenceTint(kind), prism: false) {
+            let side = metrics.referenceGlyph
+            CappedChip(label: reference.spelling, tint: ChipStyle.referenceTint(kind), prism: false, metrics: metrics) {
                 switch host {
-                case .github: GitHubGlyph().fill(style: FillStyle(eoFill: true)).frame(width: 10, height: 10)
-                case .gitlab: GitLabGlyph().fill().frame(width: 10, height: 10)
+                case .github: GitHubGlyph().fill(style: FillStyle(eoFill: true)).frame(width: side, height: side)
+                case .gitlab: GitLabGlyph().fill().frame(width: side, height: side)
                 }
             }
         case .mention, .pasted:
             Text(ChipStyle.label(of: model))
-                .font(Font(ChipStyle.labelFont))
+                .font(Font(metrics.labelFont))
                 .foregroundStyle(Color(ChipStyle.labelColor(ChipStyle.mentionTint)))
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(ChipStyle.mentionTint).opacity(0.22))
-                .clipShape(.rect(cornerRadius: ChipStyle.radius))
+                .clipShape(.rect(cornerRadius: metrics.radius))
                 .overlay {
-                    RoundedRectangle(cornerRadius: ChipStyle.radius)
+                    RoundedRectangle(cornerRadius: metrics.radius)
                         .strokeBorder(Color(ChipStyle.mentionTint).opacity(0.55), lineWidth: ChipStyle.stroke)
                 }
         case .symbol(let name, let kind, let lines):
-            SymbolChip(name: name, kind: kind, lines: lines)
+            SymbolChip(name: name, kind: kind, lines: lines, metrics: metrics)
         }
     }
 }
@@ -54,27 +57,28 @@ private struct CappedChip<Glyph: View>: View {
     let label: String
     let tint: UIColor
     let prism: Bool
+    let metrics: ChipMetrics
     @ViewBuilder let glyph: Glyph
 
     var body: some View {
         HStack(spacing: 0) {
             glyph
                 .foregroundStyle(.white)
-                .frame(width: ChipStyle.capWidth, height: ChipStyle.height)
+                .frame(width: metrics.capWidth, height: metrics.height)
                 .background(prism ? Color.white.opacity(0.08) : Color(tint).opacity(0.55))
             Text(label)
-                .font(Font(ChipStyle.labelFont))
+                .font(Font(metrics.labelFont))
                 .foregroundStyle(prism ? Color.white : Color(ChipStyle.labelColor(tint)))
                 .lineLimit(1)
-                .padding(.horizontal, ChipStyle.labelPadding)
+                .padding(.horizontal, metrics.labelPadding)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
         .background {
             if prism { PrismBackground() } else { Color(tint).opacity(0.16) }
         }
-        .clipShape(.rect(cornerRadius: ChipStyle.radius))
+        .clipShape(.rect(cornerRadius: metrics.radius))
         .overlay {
-            RoundedRectangle(cornerRadius: ChipStyle.radius)
+            RoundedRectangle(cornerRadius: metrics.radius)
                 .strokeBorder(prism ? Prism.border : Color(tint).opacity(0.6), lineWidth: ChipStyle.stroke)
         }
     }
@@ -104,37 +108,42 @@ private struct SymbolChip: View {
     let name: String
     let kind: SymbolKind?
     let lines: Int?
+    let metrics: ChipMetrics
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let color = Color(ChipStyle.symbolColor(kind))
-        HStack(spacing: 4) {
-            SymbolKindBadge(kind: kind, side: ChipStyle.symbolBadge)
-            Text(name)
-                .font(Font(ChipStyle.labelFont))
-                .foregroundStyle(colorScheme == .dark ? color : color.mix(with: .black, by: 0.45))
-                .lineLimit(1)
-                .truncationMode(.tail)
+        let gap = metrics.symbolGap
+        // Spacing only between badge and name, the one gap `ChipStyle.size` counts there.
+        HStack(spacing: 0) {
+            HStack(spacing: gap) {
+                SymbolKindBadge(kind: kind, side: metrics.symbolBadge)
+                Text(name)
+                    .font(Font(metrics.labelFont))
+                    .foregroundStyle(colorScheme == .dark ? color : color.mix(with: .black, by: 0.45))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
             Spacer(minLength: 0)
             if let lines {
                 Text(ChipStyle.lineCount(lines))
-                    .font(Font(ChipStyle.countFont))
+                    .font(Font(metrics.countFont))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 5)
+                    .padding(.horizontal, gap + 1)
                     .frame(maxHeight: .infinity)
                     .background(colorScheme == .dark ? Color.white.opacity(0.04) : Color.black.opacity(0.04))
                     .overlay(alignment: .leading) { Rectangle().fill(.separator).frame(width: 0.5) }
             }
         }
-        .padding(.leading, 4)
-        .padding(.trailing, lines == nil ? ChipStyle.labelPadding : 0)
+        .padding(.leading, gap)
+        .padding(.trailing, lines == nil ? metrics.labelPadding : 0)
         .background(colorScheme == .dark ? Color.black.opacity(0.28) : Color.black.opacity(0.05))
         .overlay(alignment: .leading) {
             if lines != nil { Rectangle().fill(Color.accentColor).frame(width: 2) }
         }
-        .clipShape(.rect(cornerRadius: ChipStyle.radius))
+        .clipShape(.rect(cornerRadius: metrics.radius))
         .overlay {
-            RoundedRectangle(cornerRadius: ChipStyle.radius)
+            RoundedRectangle(cornerRadius: metrics.radius)
                 .strokeBorder(lines != nil ? Color.accentColor.opacity(0.6) : Color(.separator), lineWidth: ChipStyle.stroke)
         }
     }

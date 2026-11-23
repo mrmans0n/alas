@@ -26,16 +26,62 @@ enum ChipModel: Equatable {
     }
 }
 
-/// The Mac chips' geometry and colours (`ACPMentionChipMetrics`, `ACPCommandPillStyle`).
+/// A chip's geometry, from the Mac chips' (`ACPMentionChipMetrics`):
+/// `compact` is the Mac's size, for a chip shown on its own; a chip inside
+/// text is sized from that text's font so it grows with Dynamic Type.
+struct ChipMetrics: Equatable {
+    let height: CGFloat
+    let capWidth: CGFloat
+    let labelPadding: CGFloat
+    let radius: CGFloat
+    let glyphSize: CGFloat
+    let referenceGlyph: CGFloat
+    let symbolBadge: CGFloat
+    let labelFont: UIFont
+    let countFont: UIFont
+
+    static let compact = ChipMetrics(label: 11.5, height: 18)
+
+    /// A chip inside text set in `font`: its label a little smaller than the
+    /// text, the chip a little taller than the text's line.
+    init(textFont font: UIFont) {
+        self.init(label: (font.pointSize * 0.85 * 2).rounded() / 2, height: (font.pointSize * 1.25).rounded())
+    }
+
+    private init(label: CGFloat, height: CGFloat) {
+        let scale = label / 11.5
+        self.height = height
+        capWidth = height
+        labelPadding = (6 * scale).rounded()
+        radius = (5 * scale).rounded()
+        glyphSize = 9 * scale
+        referenceGlyph = 10 * scale
+        symbolBadge = (13 * scale).rounded()
+        labelFont = .monospacedSystemFont(ofSize: label, weight: .medium)
+        countFont = .monospacedSystemFont(ofSize: 9.5 * scale, weight: .regular)
+    }
+
+    /// Distance from the chip's bottom edge up to its label's baseline, with
+    /// the label centred in the chip. UIKit's descender is negative.
+    var labelBaselineInset: CGFloat {
+        (height - labelFont.ascender - labelFont.descender) / 2
+    }
+
+    /// Where the chip's bottom edge sits against the text baseline, so its
+    /// label shares the surrounding text's baseline, as on the Mac.
+    var baselineOffset: CGFloat { -labelBaselineInset }
+
+    /// The symbol chip's inset and the space around its badge and count.
+    var symbolGap: CGFloat { (4 * labelFont.pointSize / 11.5).rounded() }
+}
+
+/// The Mac chips' colours (`ACPCommandPillStyle`) and labels.
 enum ChipStyle {
-    static let height: CGFloat = 18
-    static let capWidth: CGFloat = 18
-    static let labelPadding: CGFloat = 6
-    static let radius: CGFloat = 5
     static let stroke: CGFloat = 0.75
-    static let labelFont = UIFont.monospacedSystemFont(ofSize: 11.5, weight: .medium)
-    static let countFont = UIFont.monospacedSystemFont(ofSize: 9.5, weight: .regular)
-    static let symbolBadge: CGFloat = 13
+    /// Labels outside a chip, such as a pasted card's title.
+    static let labelFont = ChipMetrics.compact.labelFont
+    /// Corner radius for chip-like shapes outside text.
+    static let radius = ChipMetrics.compact.radius
 
     static let commandTint = UIColor.systemPurple
     static let mentionTint = UIColor.tintColor
@@ -78,21 +124,17 @@ enum ChipStyle {
 
     /// The width a chip lays out at, so a text attachment reserves exactly
     /// what the SwiftUI view draws.
-    static func size(of chip: ChipModel) -> CGSize {
-        let label = ceil((label(of: chip) as NSString).size(withAttributes: [.font: labelFont]).width)
+    static func size(of chip: ChipModel, metrics m: ChipMetrics = .compact) -> CGSize {
+        let label = ceil((label(of: chip) as NSString).size(withAttributes: [.font: m.labelFont]).width)
+        let gap = m.symbolGap
         let width: CGFloat = switch chip {
-        case .command, .reference: capWidth + label + 2 * labelPadding
-        case .mention, .pasted: label + 14
+        case .command, .reference: m.capWidth + label + 2 * m.labelPadding
+        case .mention, .pasted: label + 2 * (m.labelPadding + 1)
         case .symbol(_, _, let lines):
-            4 + symbolBadge + 4 + label + labelPadding
-                + (lines.map { ceil((lineCount($0) as NSString).size(withAttributes: [.font: countFont]).width) + 10.5 } ?? 0)
+            gap + m.symbolBadge + gap + label + m.labelPadding
+                + (lines.map { ceil((lineCount($0) as NSString).size(withAttributes: [.font: m.countFont]).width) + 2 * gap + 2.5 } ?? 0)
         }
-        return CGSize(width: width, height: height)
-    }
-
-    /// The offset that centres a chip on a line of `font`, as the Mac's `baselineOffset`.
-    static func baselineOffset(for font: UIFont) -> CGFloat {
-        -((height - font.ascender + font.descender) / 2)
+        return CGSize(width: width, height: m.height)
     }
 
     /// Symbol kind colours from the Mac's symbol chips.
