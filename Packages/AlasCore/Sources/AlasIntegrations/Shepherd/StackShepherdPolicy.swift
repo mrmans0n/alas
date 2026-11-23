@@ -43,6 +43,8 @@ public struct StackShepherdObservation: Sendable {
     public var hasQueuedMerge: Bool
     public let rules: ShepherdRules
     public let now: Date
+    /// Review before push for this stack; nil when the lever is off.
+    public let reviewGate: ShepherdReviewGate?
 
     public init(
         requests: [Int: ReviewRequest],
@@ -57,7 +59,8 @@ public struct StackShepherdObservation: Sendable {
         hasUnpublishedEntries: Bool? = nil,
         hasQueuedMerge: Bool = false,
         rules: ShepherdRules,
-        now: Date
+        now: Date,
+        reviewGate: ShepherdReviewGate? = nil
     ) {
         self.requests = requests
         self.presentEntryIDs = presentEntryIDs
@@ -72,6 +75,7 @@ public struct StackShepherdObservation: Sendable {
         self.hasQueuedMerge = hasQueuedMerge
         self.rules = rules
         self.now = now
+        self.reviewGate = reviewGate
     }
 }
 
@@ -290,7 +294,9 @@ public enum StackShepherdPolicy {
                 headReviewers: observation.headReviewers[entry.requestNumber],
                 session: session,
                 rules: observation.rules,
-                now: observation.now
+                now: observation.now,
+                // A fix held for review is not an ineffective turn.
+                reviewGate: observation.reviewGate
             ))
             entry.shepherd = single.record
             switch single.action {
@@ -335,10 +341,13 @@ public enum StackShepherdPolicy {
         } else {
             next.restackRequestedFor = nil
         }
+        // Readiness waits for the review before the ready notice is recorded,
+        // so a head that passes later is still announced.
         decision.gatePasses = next.landedEntryIDs == nil && isReady(
             next, requests: observation.requests, isStackPublished: observation.isStackPublished,
             capabilities: observation.capabilities, rules: observation.rules,
-            headReviewers: observation.headReviewers, now: observation.now
+            headReviewers: observation.headReviewers, now: observation.now,
+            reviewPassed: reviewPassed(next, requests: observation.requests, gate: observation.reviewGate)
         )
         if decision.gatePasses {
             let heads = open.map { "\($0.requestNumber):\(observation.requests[$0.requestNumber]?.headSHA ?? "")" }
@@ -387,6 +396,18 @@ public enum StackShepherdPolicy {
                     headReviewers: headReviewers[entry.requestNumber], now: now
                 )
         }
+    }
+
+    /// With review before push on, only a stack whose top open entry's head
+    /// passed review can land.
+    public static func reviewPassed(
+        _ record: StackShepherdRecord, requests: [Int: ReviewRequest], gate: ShepherdReviewGate?
+    ) -> Bool {
+        guard let gate else { return true }
+        guard let top = record.openEntries.max(by: { $0.position < $1.position }),
+              let head = requests[top.requestNumber]?.headSHA
+        else { return false }
+        return gate.passedSHAs.contains(head)
     }
 
     /// One row of a `pr_status` read.

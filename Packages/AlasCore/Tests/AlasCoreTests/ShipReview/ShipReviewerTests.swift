@@ -427,4 +427,32 @@ struct ShipReviewerTests {
         #expect(fake.runs.count == 1)
         #expect(fake.runs.first?.reuseSessionID == nil)
     }
+
+    /// "Review again" after the round cap: the user asked, so the commit they
+    /// made since is reviewed with a fresh allowance instead of stopping at once.
+    @Test func reviewAgainAfterTheRoundCapReviewsTheNewHead() async throws {
+        let store = MemoryStore()
+        var exhausted = ShipReviewRecord(id: id, enabled: true, reviewer: nil, maxRounds: 3, now: t0)
+        exhausted.pending = pullRequest
+        exhausted.roundsThisPush = 3
+        exhausted.rounds = (1...3).map {
+            ShipReviewRound(
+                number: $0, headSHA: "h1", reviewSessionID: FakeEffects.reviewSessionID($0 - 1), verdict: .requestChanges,
+                openFindingIDs: ["f\($0)"], reviewerLabel: "Codex", reviewedAt: t0
+            )
+        }
+        exhausted.phase = .stopped(.roundsExhausted(openFindings: 1))
+        try store.write(ShipReviewsFile(records: [exhausted]), to: fileURL)
+        let fake = FakeEffects()
+        fake.head = "h2"
+        let reviewer = makeReviewer(fake, store: store)
+        reviewer.start()
+
+        reviewer.retry(id)
+        await reviewer.settle()
+
+        #expect(fake.runs.count == 1)
+        #expect(fake.pushes == [.init(target: pullRequest, headSHA: "h2")])
+        #expect(reviewer.record(for: id)?.passedSHAs.contains("h2") == true)
+    }
 }

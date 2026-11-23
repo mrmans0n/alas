@@ -310,18 +310,8 @@ public final class StackShepherd {
                 of: stack, local: probed.local, landed: landed, shipPlan: latest.shipPlan ?? .wholeStack
             ).isPublished,
             capabilities: provider.capabilities, rules: rules, headReviewers: headReviewers, now: now(),
-            reviewPassed: reviewPassed(current, requests: freshRequests)
+            reviewPassed: StackShepherdPolicy.reviewPassed(current, requests: freshRequests, gate: effects?.reviewGate(current))
         )
-    }
-
-    /// With review before push on, only a stack whose top open entry's head
-    /// passed review can land.
-    private func reviewPassed(_ record: StackShepherdRecord, requests: [Int: ReviewRequest]) -> Bool {
-        guard let gate = effects?.reviewGate(record) else { return true }
-        guard let top = record.openEntries.max(by: { $0.position < $1.position }),
-              let head = requests[top.requestNumber]?.headSHA
-        else { return false }
-        return gate.passedSHAs.contains(head)
     }
 
     private static func preferred(_ candidates: [StackShepherdRecord]) -> StackShepherdRecord? {
@@ -713,7 +703,8 @@ public final class StackShepherd {
             isStackPublished: publication.isPublished,
             hasUnpublishedEntries: publication.hasUnpublishedEntries,
             rules: rules,
-            now: now()
+            now: now(),
+            reviewGate: effects.reviewGate(current)
         )
         var decision = StackShepherdPolicy.decide(current, observation)
         // Only a restack about to be requested needs to know whether a merge
@@ -732,10 +723,6 @@ public final class StackShepherd {
             return
         }
         requests[id] = fetched
-        if decision.gatePasses, !reviewPassed(current, requests: fetched) {
-            decision.gatePasses = false
-            decision.notifyReady = false
-        }
         gatePasses[id] = decision.gatePasses
         if decision.record != current { put(decision.record) }
         let generation = bumpGeneration(id)

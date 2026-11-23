@@ -408,13 +408,18 @@ public final class ShipReviewer {
         execute(action, for: id)
     }
 
-    /// Reviews HEAD again after a stop, or retries a failed push of a head that passed.
+    /// Reviews HEAD again after a stop, or retries a failed push of a head
+    /// that passed. Asking for it is the user's call, so the push gets a fresh
+    /// allowance of rounds; unattended rounds stay capped at `maxRounds`.
     public func retry(_ id: ShipReviewID) {
         guard let record = records[id], case .stopped = record.phase else { return }
         spawn { [weak self] in
             guard let self, let head = await localHead(id),
-                  let current = records[id], case .stopped = current.phase
+                  var current = records[id], case .stopped = current.phase
             else { return }
+            current.roundsThisPush = 0
+            current.updatedAt = now()
+            put(current)
             reviewOrPush(id, target: current.pending ?? .pushedHead, headSHA: head)
         }
     }

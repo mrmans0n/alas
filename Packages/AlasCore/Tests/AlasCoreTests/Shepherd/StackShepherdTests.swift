@@ -61,6 +61,7 @@ struct StackShepherdTests {
         isStackPublished: Bool = true,
         hasUnpublishedEntries: Bool? = nil,
         hasQueuedMerge: Bool = false,
+        reviewGate: ShepherdReviewGate? = nil,
         now: Date = F.now
     ) -> StackShepherdObservation {
         StackShepherdObservation(
@@ -76,7 +77,8 @@ struct StackShepherdTests {
             hasUnpublishedEntries: hasUnpublishedEntries,
             hasQueuedMerge: hasQueuedMerge,
             rules: .none,
-            now: now
+            now: now,
+            reviewGate: reviewGate
         )
     }
 
@@ -149,6 +151,42 @@ struct StackShepherdTests {
             capabilities: observation.capabilities, rules: observation.rules,
             headReviewers: observation.headReviewers, now: observation.now, reviewPassed: reviewPassed
         ) == reviewPassed)
+    }
+
+    /// A stack otherwise ready before its head passes review is announced
+    /// once the review passes, not marked as already announced while held.
+    @Test func readyIsAnnouncedOnceTheReviewPasses() {
+        let green = [Self.request(41), Self.request(42)]
+        let record = StackShepherdPolicy.decide(Self.record([41, 42]), Self.observation(green, now: F.earlier)).record
+
+        let held = StackShepherdPolicy.decide(record, Self.observation(
+            green, reviewGate: ShepherdReviewGate(passedSHAs: [], reviewing: true)
+        ))
+        let passed = StackShepherdPolicy.decide(held.record, Self.observation(
+            green, reviewGate: ShepherdReviewGate(passedSHAs: [F.head], reviewing: false)
+        ))
+
+        #expect(!held.gatePasses && !held.notifyReady)
+        #expect(passed.gatePasses && passed.notifyReady)
+    }
+
+    /// A fix turn whose commits wait on review before `gg sync` is not an
+    /// ineffective turn: no follow-up fix goes out while the review runs.
+    @Test("an entry's idle follow-up waits while its stack is reviewed", arguments: [true, false])
+    func entryFixWaitsWhileReviewing(reviewing: Bool) {
+        var record = Self.record([41])
+        record.entries[0].shepherd.phase = .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0)
+        record.entries[0].shepherd.fixAttempts = 1
+        record.entries[0].shepherd.lastDispatchedFingerprint = F.fingerprint(
+            ShepherdFixRequest(hasConflict: false, failingChecks: [F.failing], threads: [])
+        )
+
+        let decision = StackShepherdPolicy.decide(record, Self.observation(
+            [Self.request(41, checks: [F.failing])],
+            reviewGate: ShepherdReviewGate(passedSHAs: [], reviewing: reviewing)
+        ))
+
+        #expect(decision.fixes.isEmpty == reviewing)
     }
 
     /// After a stack lands the worktree can move to a new one; the finished
