@@ -1100,6 +1100,7 @@ function updateChangesTabBadge() {
 }
 
 function openDiff(path, stage = null) {
+  if (wideLayout.matches && paneState.panelCollapsed) togglePane("panelCollapsed");   // asked for a diff: show the panel
   detailStack.push({ tab: "changes", path, stage });
   $("changes-list").classList.add("hidden");
   $("changes-header").classList.add("hidden");
@@ -1466,8 +1467,13 @@ function homeTab() {
   return isFolderSummary(currentSession ? listedSessions.get(currentSession) : null) ? "files" : "changes";
 }
 
+// Crossing the breakpoint only changes what is visible. The one tab change: a window that turns
+// wide while on Chat moves the panel to its own first tab, since Chat is the middle column there.
+// Any other tab keeps its navigation, such as an open diff or a live terminal.
 wideLayout.addEventListener("change", () => {
-  if (currentSession) showTab(activeTab === "chat" ? homeTab() : activeTab);
+  if (!currentSession) return;
+  if (wideLayout.matches && activeTab === "chat") showTab(homeTab());
+  else $("transcript").classList.toggle("hidden", activeTab !== "chat" && !wideLayout.matches);
 });
 
 // Desktop panes: either side folds away, and the panel is as wide as it was last dragged.
