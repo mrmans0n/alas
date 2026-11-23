@@ -98,6 +98,7 @@ import AlasModel
         ])
         #expect(result.summary.contains("Docs/X.md:3") && result.summary.contains("not in diff"))
         #expect(result.resolvedIDs == ["f1"])
+        #expect(result.unfiledCount == 1)
         #expect(!result.isClean)
     }
 
@@ -108,6 +109,9 @@ import AlasModel
 
     @Test func parserRejectsAnUnknownVerdict() {
         let result = CodeReviewResultParser.parse(#"{"verdict":"lgtm","summary":"","findings":[]}"#, diff: CodeReviewDiff(rawDiff: ""))
-        guard case .failure(.malformed) = result else { Issue.record("expected malformed, got \(result)"); return }
+        guard case .failure(.malformed) = result else {
+            Issue.record("expected malformed, got \(result)")
+            return
+        }
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 import AlasModel
 
 public struct CodeReviewFinding: Equatable, Sendable {
@@ -25,12 +26,18 @@ public struct CodeReviewResult: Equatable, Sendable {
     public let findings: [CodeReviewFinding]
     /// Ids of earlier findings the reviewer reports fixed.
     public let resolvedIDs: [String]
+    /// Findings about paths outside the diff, folded into `summary`: no
+    /// comment holds them, so nothing but a new commit can answer them.
+    public let unfiledCount: Int
 
-    public init(verdict: ReviewVerdict, summary: String, findings: [CodeReviewFinding], resolvedIDs: [String]) {
+    public init(
+        verdict: ReviewVerdict, summary: String, findings: [CodeReviewFinding], resolvedIDs: [String], unfiledCount: Int = 0
+    ) {
         self.verdict = verdict
         self.summary = summary
         self.findings = findings
         self.resolvedIDs = resolvedIDs
+        self.unfiledCount = unfiledCount
     }
 
     /// `request_changes` is never clean; `comment` is clean only without findings.
@@ -75,7 +82,10 @@ public enum CodeReviewResultParser {
         while index < lines.count {
             let opener = lines[index].drop(while: { $0 == " " || $0 == "\t" })
             let ticks = opener.prefix(while: { $0 == "`" }).count
-            guard ticks >= 3 else { index += 1; continue }
+            guard ticks >= 3 else {
+                index += 1
+                continue
+            }
             let info = opener.dropFirst(ticks).trimmingCharacters(in: .whitespaces).lowercased()
             var body: [Substring] = []
             var cursor = index + 1
@@ -148,12 +158,14 @@ public enum CodeReviewResultParser {
             summary = summary.isEmpty ? folded : "\(summary)\n\n\(folded)"
         }
         let resolved = (object["resolved"] as? [Any])?.compactMap { $0 as? String } ?? []
-        return .success(CodeReviewResult(verdict: verdict, summary: summary, findings: findings, resolvedIDs: resolved))
+        return .success(CodeReviewResult(
+            verdict: verdict, summary: summary, findings: findings, resolvedIDs: resolved, unfiledCount: outsideDiff.count
+        ))
     }
 
     /// JSON numbers only; a Bool bridged through `NSNumber` is not a line.
     private static func integer(_ value: Any?) -> Int? {
-        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        guard let number = value as? NSNumber, !number.isJSONBoolean else { return nil }
         return number.intValue
     }
 

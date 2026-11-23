@@ -76,7 +76,9 @@ extension AlasCoreContext {
             },
             autoFix: { [weak self] id in
                 guard let self else { return false }
-                return shipReviewBoundRecord(id)?.autoFix ?? environment.configuration().changes.shepherd.autoFix
+                return shipReviewBoundRecord(id)?.autoFix
+                    ?? shipReviewBoundStack(id)?.autoFix
+                    ?? environment.configuration().changes.shepherd.autoFix
             },
             localCommitsToPush: { [weak self] id in
                 await self?.shipReviewLocalCommits(id)
@@ -199,6 +201,13 @@ extension AlasCoreContext {
     private func shipReviewBoundRecord(_ id: ShipReviewID) -> ShepherdRecord? {
         reviewShepherd.record(forSession: id.sessionID)
             .flatMap { $0.id.worktreeID == id.worktreeID && !$0.phase.isTerminal ? $0 : nil }
+    }
+
+    /// The live stack shepherd record the owning session has in the worktree.
+    private func shipReviewBoundStack(_ id: ShipReviewID) -> StackShepherdRecord? {
+        stackShepherd.records.values.first {
+            $0.id.worktreeID == id.worktreeID && $0.sessionID == id.sessionID && !$0.isFinished
+        }
     }
 
     /// "Codex · gpt-5.2", or "Codex" for the agent's default model; nil

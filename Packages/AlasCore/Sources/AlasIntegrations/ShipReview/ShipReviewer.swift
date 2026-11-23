@@ -730,6 +730,9 @@ public final class ShipReviewer {
            let index = next.rounds.lastIndex(where: { $0.number == prepared.round && $0.headSHA == headSHA }) {
             next.rounds[index].reviewSessionID = filed.sessionID
             next.rounds[index].openFindingIDs = filed.findingIDs
+            if case let .success(result) = outcome {
+                next.rounds[index].unfiledFindings = result.unfiledCount
+            }
             next.rounds[index].reviewerLabel = prepared.label
         }
         put(next)

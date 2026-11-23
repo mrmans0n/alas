@@ -67,6 +67,9 @@ public struct ShipReviewRound: Codable, Equatable, Sendable {
     public var verdict: ReviewVerdict?
     public var summary: String?
     public var openFindingIDs: [String]
+    /// Findings folded into the summary because their paths were outside
+    /// the diff; nil in rounds recorded before this was tracked.
+    public var unfiledFindings: Int?
     /// "Codex · gpt-5.2"
     public var reviewerLabel: String
     /// Nil until the reviewer's result is in.

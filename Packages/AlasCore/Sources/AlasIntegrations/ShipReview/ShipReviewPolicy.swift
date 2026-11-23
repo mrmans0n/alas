@@ -95,14 +95,18 @@ public enum ShipReviewPolicy {
         if headSHA != findingsHead {
             return beginRound(retargetedOffPushedHead(r), headSHA: headSHA, now: now)
         }
-        // A request_changes round with nothing filed put its findings in the
-        // summary (paths outside the diff): no comment can resolve them, only a commit.
-        let summaryOnly = r.currentRound.map { $0.verdict == .requestChanges && $0.openFindingIDs.isEmpty } ?? false
-        if openFindings == 0, !summaryOnly {
+        // Findings folded into the summary (paths outside the diff) sit in no
+        // comment the owner could resolve: a request_changes round with any of
+        // them, or with nothing filed at all, is answered only by a commit.
+        let unfiled = r.currentRound.map { round -> Int in
+            guard round.verdict == .requestChanges else { return 0 }
+            return max(round.unfiledFindings ?? 0, round.openFindingIDs.isEmpty ? 1 : 0)
+        } ?? 0
+        if openFindings == 0, unfiled == 0 {
             // The owner resolved every finding without a commit: the reviewed SHA goes out.
             return passAndPush(r, headSHA: findingsHead)
         }
-        return stop(r, .noProgress(openFindings: openFindings))
+        return stop(r, .noProgress(openFindings: openFindings + (r.currentRound?.unfiledFindings ?? 0)))
     }
 
     /// Settles the push the coordinator started. A newer request that began

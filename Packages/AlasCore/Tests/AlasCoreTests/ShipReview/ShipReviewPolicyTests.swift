@@ -260,16 +260,24 @@ let shipReviewLineCases: [ShipReviewLineCase] = {
     }
 
     /// Findings about paths outside the diff are folded into the summary and
-    /// filed nowhere: no comment can resolve them, so only a commit answers them.
-    @Test func requestChangesWithNothingFiledNeedsACommit() {
+    /// filed nowhere: no comment can resolve them, so only a commit answers
+    /// them, even when the round also filed findings the owner did resolve.
+    @Test("owner turn without a commit, request_changes round", arguments: [
+        ([String](), Int?.none, ShipReviewAction.stop(.noProgress(openFindings: 0))),
+        (["c1"], 1, .stop(.noProgress(openFindings: 1))),
+        (["c1"], 0, .push(headSHA: "h1")),
+        (["c1"], nil, .push(headSHA: "h1")),
+    ])
+    func unfiledFindingsNeedACommit(filed: [String], unfiled: Int?, expected: ShipReviewAction) {
         var r = record(.awaitingFix(headSHA: "h1"), rounds: 1)
-        r.rounds[r.rounds.count - 1].openFindingIDs = []
+        r.rounds[r.rounds.count - 1].verdict = .requestChanges
+        r.rounds[r.rounds.count - 1].openFindingIDs = filed
+        r.rounds[r.rounds.count - 1].unfiledFindings = unfiled
 
         let (next, action) = ShipReviewPolicy.ownerTurnEnded(r, headSHA: "h1", openFindings: 0, now: t1)
 
-        #expect(action == .stop(.noProgress(openFindings: 0)))
-        #expect(next.phase == .stopped(.noProgress(openFindings: 0)))
-        #expect(next.passedSHAs.isEmpty)
+        #expect(action == expected)
+        #expect(next.passedSHAs.isEmpty == (expected != .push(headSHA: "h1")))
     }
 
     @Test func relaunchRestartsRunningRound() {
