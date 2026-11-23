@@ -209,6 +209,8 @@ function onActiveOpen() {
   setStatus(connectedLabel(), "ok");
   hideGate();
   send({ type: "listSessions" });
+  applyActiveCapabilities();
+  terminals.reconnected();
   resubscribe();   // re-sync images and transcript after reconnect
   replayActiveDetailRequest();   // the file/diff request itself doesn't survive a dropped socket
   replayActiveListRequest();     // ...and neither does a listChanges/root listFiles request
@@ -222,6 +224,7 @@ function onActiveOpen() {
 
 function onActiveClose() {
   failCreateOnDisconnect();
+  terminals.disconnected();
   if (closeState(everConnected) === "loading") {
     // Initial load still in progress — keep the neutral loading overlay up
     // instead of flashing the alarming "Can't reach Alas" screen. Once we've
@@ -254,6 +257,9 @@ function showPairGate() {
 }
 
 function handleLinkHello(link, hello) {
+  // Kept on the link: an idle host says hello before it becomes the active one.
+  link.capabilities = Array.isArray(hello.capabilities) ? hello.capabilities : [];
+  if (link.role === "active") applyActiveCapabilities();
   const result = RemoteHubRegistry.applyHello(hub, link.id, hello);
   if (!result) return;
   RemoteHubRegistry.save(localStorage, hub);
@@ -360,6 +366,9 @@ function switchServer(id) {
 
 function handle(msg) {
   switch (msg.type) {
+    case "console":
+      terminals.handle(msg.console);
+      break;
     case "sessionList":
       gatewayCounts = RemoteHubRegistry.peerSessionCounts(msg.sessions, (activeServer() || {}).peers);
       renderSessions(msg.sessions);
@@ -903,6 +912,8 @@ function openSession(id) {
   // (a turn, a reconnect, a tab switch) happens to refresh it.
   if (summary && summary.worktree) requestChanges();
   updateChangesTabBadge();
+  terminals.setWorktree(summary && summary.worktree ? summary.worktreeId : null);
+  updateTerminalTab();
   showTab("chat");
   markCurrentSession();
 }
@@ -928,7 +939,7 @@ function showTab(name) {
   $("diff-view").classList.add("hidden");
   $("file-view").classList.add("hidden");
   showTabListLevel();
-  for (const [id, tab] of [["tab-chat", "chat"], ["tab-changes", "changes"], ["tab-files", "files"]]) {
+  for (const [id, tab] of [["tab-chat", "chat"], ["tab-changes", "changes"], ["tab-files", "files"], ["tab-terminal", "terminal"]]) {
     $(id).classList.toggle("is-active", tab === name);
     $(id).setAttribute("aria-selected", String(tab === name));
   }
@@ -941,6 +952,8 @@ function showTab(name) {
   // renamed files since the tree was last loaded, and there's no other
   // signal that would invalidate the cached listing otherwise.
   if (name === "files") refreshFileTree();
+  $("terminal").classList.toggle("hidden", name !== "terminal");
+  if (name === "terminal") terminals.show(); else terminals.hide();
 }
 
 function isFolderSummary(summary) {
@@ -980,6 +993,29 @@ function refreshFileTree() {
 $("tab-chat").addEventListener("click", () => showTab("chat"));
 $("tab-changes").addEventListener("click", () => showTab("changes"));
 $("tab-files").addEventListener("click", () => showTab("files"));
+$("tab-terminal").addEventListener("click", () => showTab("terminal"));
+
+const terminals = RemoteTerminals.createTerminals({
+  send,
+  el: {
+    listLevel: $("terminal-list-level"), list: $("terminal-list"), openButton: $("terminal-new"), error: $("terminal-error"),
+    viewLevel: $("terminal-view"), back: $("terminal-back"), title: $("terminal-title"), control: $("terminal-control"),
+    status: $("terminal-status"), screen: $("terminal-screen"),
+  },
+});
+
+// The host says in its hello whether this browser is served terminals: only once its owner allowed it.
+function applyActiveCapabilities() {
+  terminals.setCapabilities((links.activeLink() || {}).capabilities);
+  updateTerminalTab();
+}
+
+function updateTerminalTab() {
+  const summary = currentSession ? listedSessions.get(currentSession) : null;
+  const available = terminals.available && !!(summary && summary.worktree && summary.worktreeId);
+  $("tab-terminal").classList.toggle("hidden", !available);
+  if (!available && activeTab === "terminal") showTab("chat");
+}
 $("changes-refresh").addEventListener("click", requestChanges);
 
 function renderChanges() {
@@ -1343,6 +1379,9 @@ function showSessions() {
   $("detail-tabs").classList.add("hidden");
   $("changes").classList.add("hidden");
   $("files").classList.add("hidden");
+  $("terminal").classList.add("hidden");
+  terminals.hide();
+  terminals.setWorktree(null);
   send({ type: "listSessions" });
   markCurrentSession();
 }
