@@ -6,9 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixes
+## [0.24.8] - 2026-11-23
 
-- Start new sessions directly in the current peer worktree without loading other worktrees or offering to create one.
+### ✨ Features
+
+- On macOS 26 and later, use Liquid Glass for the agent and peer composer pills and the go-to-newest button ([#2685](https://github.com/mrmans0n/alas/pull/2685)).
+- At browser widths of 900px or more, keep the remote web session list in a sidebar beside the open session ([#2686](https://github.com/mrmans0n/alas/pull/2686)).
+- On iPhone, show the target agent and latest recorded non-failed handoff time for review comments sent to an agent, and note how many open comments were already sent ([#2687](https://github.com/mrmans0n/alas/pull/2687)).
+- Let host owners authorize terminal protocol access per full-scope paired browser from Mac Remote settings or the `alas-host` CLI, with browser access off by default ([#2688](https://github.com/mrmans0n/alas/pull/2688)).
+- Read default worktree VM creation and guest setup from `.alas/config.json` and `.alas/vm-setup.sh`, with per-project settings taking precedence ([#2689](https://github.com/mrmans0n/alas/pull/2689)).
+- Add a persistent Group by Machine option that orders each project's sidebar worktrees by machine while preserving their existing order within each machine ([#2690](https://github.com/mrmans0n/alas/pull/2690)).
+- On iPhone and iPad, present staged and unstaged files as one collapsible folder tree in Changes, with working-tree stage controls, aligned counts and statuses, and file-type icons ([#2691](https://github.com/mrmans0n/alas/pull/2691)).
+
+### 🐛 Fixes
+
+- On iPhone, let review diffs scroll beneath the action bar; on Mac, show a compact logo-based driver pill for identifiable agent sessions that aligns with portrait Dynamic Island simulators ([#2692](https://github.com/mrmans0n/alas/pull/2692)).
+- Start new sessions directly in the current peer worktree without loading or offering other worktrees ([#2693](https://github.com/mrmans0n/alas/pull/2693)).
+
+### 🏗️ Internal
+
+- Add a model-comparison harness and document the decision to keep Qwen3 for next-prompt suggestions ([#2694](https://github.com/mrmans0n/alas/pull/2694)).
 
 ## [0.24.7] - 2026-11-22
 
