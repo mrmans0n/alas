@@ -134,8 +134,9 @@ use the `gh` and `glab` CLIs, with their existing authentication.
   conflicts. Models download only with your consent, and inference stays on
   your machine.
 - **Shared through the repo.** Commit `.alas/config.json` and every teammate's
-  Alas picks up its MCP servers, logo, default agent, run scripts, and hooks,
-  each gated behind a trust prompt ([below](#repo-local-configuration-alas)).
+  Alas picks up its MCP servers, logo, default agent, run scripts, hooks,
+  worktree VM setup, and PR shepherd rules, with MCP servers and hooks gated
+  behind a trust prompt ([below](#repo-local-configuration-alas)).
 
 ![A plugin panel beside an agent session](art/alas-plugins.png)
 
@@ -219,6 +220,33 @@ byte prompts again. A one-time skip omits only the repository layer.
 
 An unreadable hook blocks that action until you retry or explicitly continue
 without the hook; a session-open action can also be cancelled.
+
+### Worktree VMs
+
+- **`"vmForNewWorktrees": true`** in `.alas/config.json` gives every new
+  worktree a macOS VM.
+- **`.alas/vm-setup.sh`** is the guest setup script. It runs inside the VM,
+  once per project, and later VMs start from its result.
+
+Both are read from the project's main checkout. The project settings dialog
+starts from them; anything you change there applies only to you, and clearing
+the script falls back to the repo's again.
+
+### PR shepherd rules
+
+`.alas/shepherd.md` holds the instructions Alas follows when it fixes or
+merges the repo's pull requests, with optional reviewers that must approve
+first:
+
+```markdown
+---
+required_reviewers: [chatgpt-codex-connector]
+---
+Squash-merge only. Never force-push to shared branches.
+```
+
+It replaces the per-project shepherd settings. An uncommitted
+`.alas/shepherd.local.md` replaces both for you alone.
 
 ## Develop
 

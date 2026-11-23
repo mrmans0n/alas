@@ -2228,8 +2228,8 @@ final class AppState {
         vmManager.onVMStarted = { [weak self] recordID in self?.vmStarted(recordID: recordID) }
         vmManager.isRunningSetup = { [weak self] recordID in self?.vmSetupScriptsRunning.contains(recordID) ?? false }
         vmManager.templateOwner = { [weak self] worktreeID in
-            guard let project = self?.projectAndWorktree(withWorktreeId: worktreeID)?.project,
-                  let hash = VMCleanPoint.scriptHash(project.vmGuestSetupScript) else { return nil }
+            guard let self, let project = projectAndWorktree(withWorktreeId: worktreeID)?.project,
+                  let hash = VMCleanPoint.scriptHash(effectiveVMGuestSetupScript(for: project)) else { return nil }
             return (project.id, hash)
         }
         // The test host shares the user's VM root, and an unreadable projects.json reads as no

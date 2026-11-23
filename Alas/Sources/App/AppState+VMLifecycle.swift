@@ -55,7 +55,27 @@ extension AppState {
 
     /// The project's guest setup script for VM `recordID`'s worktree; nil without one.
     func vmGuestSetupScript(recordID: String) -> String? {
-        projectAndWorktree(withWorktreeId: VMIdentity.parse(recordID: recordID).worktree)?.project.vmGuestSetupScript
+        projectAndWorktree(withWorktreeId: VMIdentity.parse(recordID: recordID).worktree)
+            .flatMap { effectiveVMGuestSetupScript(for: $0.project) }
+    }
+
+    /// The repo's `.alas/` VM defaults, read from the primary checkout: the
+    /// setup script runs once per project, so it must not vary by worktree.
+    /// Remote projects have no worktree VMs and read nothing.
+    func repoVMDefaults(for project: ProjectConfig) -> (forNewWorktrees: Bool?, guestSetupScript: String?) {
+        guard project.host == nil else { return (nil, nil) }
+        let checkout = URL(fileURLWithPath: project.path, isDirectory: true)
+        return (repoConfig(worktreeRoot: checkout)?.vmForNewWorktrees, RepoConfigStore.vmSetupScript(checkout: checkout))
+    }
+
+    /// The project's own setting, else the repo's, else off.
+    func effectiveVMForNewWorktrees(for project: ProjectConfig) -> Bool {
+        project.vmForNewWorktrees ?? repoVMDefaults(for: project).forNewWorktrees ?? false
+    }
+
+    /// The project's own script, else the repo's `.alas/vm-setup.sh`.
+    func effectiveVMGuestSetupScript(for project: ProjectConfig) -> String? {
+        project.vmGuestSetupScript ?? repoVMDefaults(for: project).guestSetupScript
     }
 
     /// Runs the project's setup script in VM `recordID` and takes its clean point on success: on
@@ -196,7 +216,7 @@ extension AppState {
         let isAppleSilicon = false
         #endif
         guard WorktreeVMManager.shouldCreateVM(
-            project: project, isAppleSilicon: isAppleSilicon,
+            requested: effectiveVMForNewWorktrees(for: project), isAppleSilicon: isAppleSilicon,
             goldenAvailable: vmManager.availableGolden() != nil,
             isRemote: project.host != nil || RemotePath.isReserved(worktree.id)
         ) else { return }

@@ -22,19 +22,31 @@ public struct RepoConfig: Equatable, Sendable {
     /// status identity across reloads. The trust-hash flow depends on the
     /// config, not this id; the presentation layer keys off the prefix.
     public var mcpServers: [ProjectMCPServer]
+    /// Whether new worktrees get a macOS VM, unless the project says otherwise.
+    public var vmForNewWorktrees: Bool?
 
     public static let repoServerIDPrefix = "repo:"
+    /// The worktree VM guest setup script, read from the primary checkout.
+    public static let vmSetupScriptPath = ".alas/vm-setup.sh"
 
-    public var isEmpty: Bool { icon == nil && defaultAgent == nil && mcpServers.isEmpty }
+    public var isEmpty: Bool {
+        icon == nil && defaultAgent == nil && mcpServers.isEmpty && vmForNewWorktrees == nil
+    }
 
-    public init(icon: Icon? = nil, defaultAgent: String? = nil, mcpServers: [ProjectMCPServer] = []) {
+    public init(
+        icon: Icon? = nil,
+        defaultAgent: String? = nil,
+        mcpServers: [ProjectMCPServer] = [],
+        vmForNewWorktrees: Bool? = nil
+    ) {
         self.icon = icon
         self.defaultAgent = defaultAgent
         self.mcpServers = mcpServers
+        self.vmForNewWorktrees = vmForNewWorktrees
     }
 
     private enum CodingKeys: String, CodingKey {
-        case icon, defaultAgent, mcpServers
+        case icon, defaultAgent, mcpServers, vmForNewWorktrees
     }
 
     private struct VersionProbe: Decodable {
@@ -92,6 +104,8 @@ public struct RepoConfig: Equatable, Sendable {
         let rawAgent = (try? raw.container.decodeIfPresent(String.self, forKey: .defaultAgent)) ?? nil
         let agent = rawAgent?.trimmingCharacters(in: .whitespacesAndNewlines)
         defaultAgent = agent.flatMap { $0.isEmpty ? nil : $0 }
+
+        vmForNewWorktrees = (try? raw.container.decodeIfPresent(Bool.self, forKey: .vmForNewWorktrees)) ?? nil
 
         let entries = (try? raw.container.decodeIfPresent([TolerantServer].self, forKey: .mcpServers)) ?? nil
         var seen = Set<String>()

@@ -147,6 +147,21 @@ public final class RepoConfigStore {
         return resolved
     }
 
+    /// The repo's committed worktree VM guest setup script, or nil when it has
+    /// none, it is blank, or it is not a regular file inside `.alas/`.
+    public static func vmSetupScript(checkout: URL) -> String? {
+        guard let file = confinedRegularFile(
+            checkout.appendingPathComponent(RepoConfig.vmSetupScriptPath),
+            under: checkout.appendingPathComponent(".alas", isDirectory: true),
+            checkout: checkout
+        ),
+            let data = try? Data(contentsOf: file), data.count <= 256 * 1024,
+            let script = String(data: data, encoding: .utf8),
+            !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return script
+    }
+
     /// A path that does not exist reads as missing. Anything else that cannot
     /// become a config — unreadable (permissions, or a directory in the file's
     /// place), or readable but undecodable — is malformed, so "this repo has no
