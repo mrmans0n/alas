@@ -14,6 +14,8 @@ public struct ProjectUpdate: Equatable, Sendable {
     public var worktreeBranchTemplate: String?
     /// Nil leaves the PR shepherd rules unchanged; empty settings clear them.
     public var shepherd: ProjectShepherdSettings?
+    /// Nil leaves the review-before-push settings unchanged; empty settings clear them.
+    public var codeReview: ProjectCodeReviewSettings?
 
     public init(
         name: String,
@@ -21,7 +23,8 @@ public struct ProjectUpdate: Equatable, Sendable {
         startupScripts: ProjectStartupScripts = .defaults,
         mcpServers: [ProjectMCPServer]? = nil,
         worktreeBranchTemplate: String? = nil,
-        shepherd: ProjectShepherdSettings? = nil
+        shepherd: ProjectShepherdSettings? = nil,
+        codeReview: ProjectCodeReviewSettings? = nil
     ) {
         self.name = name
         self.icon = icon
@@ -29,6 +32,7 @@ public struct ProjectUpdate: Equatable, Sendable {
         self.mcpServers = mcpServers
         self.worktreeBranchTemplate = worktreeBranchTemplate
         self.shepherd = shepherd
+        self.codeReview = codeReview
     }
 
     public init(
@@ -37,7 +41,8 @@ public struct ProjectUpdate: Equatable, Sendable {
         startupScripts: ProjectStartupScripts = .defaults,
         mcpServers: [ProjectMCPServer]? = nil,
         worktreeBranchTemplate: String? = nil,
-        shepherd: ProjectShepherdSettings? = nil
+        shepherd: ProjectShepherdSettings? = nil,
+        codeReview: ProjectCodeReviewSettings? = nil
     ) {
         self.init(
             name: name,
@@ -45,7 +50,8 @@ public struct ProjectUpdate: Equatable, Sendable {
             startupScripts: startupScripts,
             mcpServers: mcpServers,
             worktreeBranchTemplate: worktreeBranchTemplate,
-            shepherd: shepherd
+            shepherd: shepherd,
+            codeReview: codeReview
         )
     }
 }
@@ -195,6 +201,7 @@ public final class ProjectsManager {
             projects[index].worktreeOpenAfterCreate = primary.worktreeOpenAfterCreate
             projects[index].worktreeDefaultLauncherMode = primary.worktreeDefaultLauncherMode
             projects[index].shepherd = primary.shepherd
+            projects[index].codeReview = primary.codeReview
             projects[index].ggMode = primary.ggMode
         }
     }
@@ -367,6 +374,9 @@ public final class ProjectsManager {
         }
         if let shepherd = update.shepherd {
             projects[idx].shepherd = shepherd.isEmpty ? nil : shepherd
+        }
+        if let codeReview = update.codeReview {
+            projects[idx].codeReview = codeReview.isEmpty ? nil : codeReview
         }
         // A linked record's settings are its primary's: put them back.
         copySettings(toRecordsLinkedTo: projects[idx].linkedProjectId ?? id)

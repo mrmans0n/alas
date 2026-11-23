@@ -210,6 +210,9 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
     /// Project-level PR shepherd rules. A `.alas/shepherd.local.md` or
     /// `.alas/shepherd.md` file in the worktree overrides them completely.
     public var shepherd: ProjectShepherdSettings?
+    /// Project-level review-before-push reviewer and instructions. Nil inherits
+    /// the global settings.
+    public var codeReview: ProjectCodeReviewSettings?
     /// When true, creating a worktree here also creates its macOS VM. Nil
     /// inherits the repo's `.alas/config.json`, then off.
     public var vmForNewWorktrees: Bool?
@@ -223,7 +226,7 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
              mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, worktreeBranchTemplate, host, linkedProjectId, lastRunOnHost, kind, ggMode,
              ggWorktreeModes, issueAttachments, pendingAutoBranchNames, fileBookmarks,
              repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes, pendingLegacyWorktreeIDs,
-             shepherd, vmForNewWorktrees, vmGuestSetupScript
+             shepherd, codeReview, vmForNewWorktrees, vmGuestSetupScript
     }
 
     public init(
@@ -326,6 +329,7 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
         approvedRepoHookHashes = (try? c.decode([String].self, forKey: .approvedRepoHookHashes)) ?? []
         legacyWorktreeIDs = (try? c.decode([String: String].self, forKey: .pendingLegacyWorktreeIDs)) ?? [:]
         shepherd = try? c.decodeIfPresent(ProjectShepherdSettings.self, forKey: .shepherd)
+        codeReview = try? c.decodeIfPresent(ProjectCodeReviewSettings.self, forKey: .codeReview)
         vmForNewWorktrees = try? c.decodeIfPresent(Bool.self, forKey: .vmForNewWorktrees)
         vmGuestSetupScript = try? c.decodeIfPresent(String.self, forKey: .vmGuestSetupScript)
         if let host {
@@ -458,6 +462,9 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
         }
         if let shepherd, !shepherd.isEmpty {
             try c.encode(shepherd, forKey: .shepherd)
+        }
+        if let codeReview, !codeReview.isEmpty {
+            try c.encode(codeReview, forKey: .codeReview)
         }
         try c.encodeIfPresent(vmForNewWorktrees, forKey: .vmForNewWorktrees)
         try c.encodeIfPresent(vmGuestSetupScript, forKey: .vmGuestSetupScript)
