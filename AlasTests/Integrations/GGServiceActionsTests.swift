@@ -140,6 +140,44 @@ struct GGServiceActionsTests {
         #expect(runner.lastTimeout == nil)
     }
 
+    @Test(arguments: ["queued", "already_queued"])
+    @MainActor
+    func landJSONLTracksMergeTrainThroughCompletion(queueAction: String) async throws {
+        let runner = RecordingGGRunner()
+        runner.streamingLines = [
+            #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":2}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"entry","position":1,"gg_id":"c-a","pr_number":8,"action":"already_merged"}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"entry","position":2,"gg_id":"c-b","pr_number":9,"action":"\#(queueAction)"}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"wait","position":2,"pr_number":9,"phase":"merge_train","poll":1,"elapsed_seconds":0,"merge_train_status":"merging"}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"entry","position":2,"gg_id":"c-b","pr_number":9,"action":"merged"}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"summary","stack":"s","base":"main","landed":[{"position":1,"gg_id":"c-a","pr_number":8,"action":"already_merged"},{"position":2,"gg_id":"c-b","pr_number":9,"action":"merged"}],"remaining":0}"#,
+        ]
+        let store = GGLandingStore()
+        try #require(store.begin(.init(
+            projectId: "p", worktreeId: "w", stack: "s", base: "main", target: "c-b",
+            rows: [
+                .init(position: 1, title: "A", ggId: "c-a", prNumber: 8),
+                .init(position: 2, title: "B", ggId: "c-b", prNumber: 9),
+            ]
+        )))
+
+        var waiting: GGLandingSession?
+        for try await event in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-b").events {
+            try #require(store.receive(event, projectId: "p"))
+            if case .wait = event { waiting = store.sessions["p"] }
+        }
+
+        let waitingSession = try #require(waiting)
+        #expect(waitingSession.phase == .running)
+        #expect(waitingSession.activeWait?.phase == .mergeTrain)
+        #expect(waitingSession.rows[1].outcome?.action == queueAction)
+
+        let finished = try #require(store.sessions["p"])
+        #expect(finished.phase == .succeeded)
+        #expect(finished.rows[1].outcome?.action == "merged")
+        #expect(finished.activeWait == nil)
+    }
+
     @Test func landWithClientOperationPreservesUnlimitedWaitAndSingleOperationID() async throws {
         let runner = RecordingGGRunner()
         runner.streamingLines = [

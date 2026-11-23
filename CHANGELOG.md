@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Keep the Land tab waiting after GitLab queues a merge request instead of reporting a landing failure.
+
 ## [0.24.8] - 2026-11-23
 
 ### ✨ Features
