@@ -354,13 +354,13 @@ runtime, `mlx-vlm` 0.8.0, pinned with the model revisions in
 
 ```sh
 uv venv --python 3.13 "$ENV" && VIRTUAL_ENV="$ENV" uv pip install mlx-vlm==0.8.0 huggingface-hub
-"$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py "$PRIVATE_DIR" fetch
-HF_HUB_OFFLINE=1 "$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py "$PRIVATE_DIR" run qwen3
-HF_HUB_OFFLINE=1 "$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py "$PRIVATE_DIR" run lfm3
-HF_HUB_OFFLINE=1 "$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py "$PRIVATE_DIR" run inkling2-mini
-"$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py "$PRIVATE_DIR" blind
+"$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py fetch "$PRIVATE_DIR"
+HF_HUB_OFFLINE=1 "$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py run "$PRIVATE_DIR" qwen3
+HF_HUB_OFFLINE=1 "$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py run "$PRIVATE_DIR" lfm3
+HF_HUB_OFFLINE=1 "$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py run "$PRIVATE_DIR" inkling2-mini
+"$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py blind "$PRIVATE_DIR"
 # Grade review.md into grades.json before opening blind-key.json.
-"$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py "$PRIVATE_DIR" summarize
+"$ENV/bin/python" -I scripts/prototype-next-prompt/compare_followup.py summarize "$PRIVATE_DIR"
 ```
 
 Real-session cases go in `$PRIVATE_DIR/cases.json`, in the same shape as

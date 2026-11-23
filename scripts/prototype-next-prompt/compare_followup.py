@@ -115,11 +115,14 @@ def parse(text):
     """NextPromptPolicy.parse: ('suggestion', s), ('null', None) or ('invalid', reason)."""
     if len(text.encode()) > 16 * 1024:
         return "invalid", "too-large"
+    class Pairs(tuple):
+        """A decoded object's key/value pairs, kept apart from JSON arrays."""
+
     try:
-        pairs = json.loads(text, object_pairs_hook=lambda p: p)
+        pairs = json.loads(text, object_pairs_hook=Pairs)
     except json.JSONDecodeError:
         return "invalid", "not-json"
-    if not isinstance(pairs, list) or len(pairs) != 1 or pairs[0][0] != "suggestion":
+    if not isinstance(pairs, Pairs) or len(pairs) != 1 or pairs[0][0] != "suggestion":
         return "invalid", "wrong-shape"
     value = pairs[0][1]
     if value is None:
