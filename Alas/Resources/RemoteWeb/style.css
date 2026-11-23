@@ -559,24 +559,99 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 /* ---- Wide windows: the list stays as a sidebar beside the open session ---- */
 #empty-detail { display: none; }
 .session-card.sel { background: color-mix(in oklab, var(--accent) 15%, transparent); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 42%, transparent); }
+.desk-only { display: none; }
+/* Desktop: sidebar | chat | panel. The sidebar lists repos, worktrees and sessions; the chat stays
+   in the middle while the panel beside it shows Changes, Files or a terminal. Either side folds away
+   (body.side-collapsed, body.panel-collapsed) and the panel's width is dragged from its edge. */
 @media (min-width: 900px) {
-  body { display: grid; grid-template-columns: 360px minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto;
-    grid-template-areas: "side bar" "side tabs" "side detail" "nav detail"; }
+  :root { --side-w: 280px; --panel-w: 440px; }
+  /* The panel keeps its dragged width only while the chat still gets 420px; below that it gives
+     way, down to 300px, and the chat takes what is left. */
+  body { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr) clamp(300px, var(--panel-w), calc(100vw - var(--side-w) - 420px)); grid-template-rows: auto auto minmax(0, 1fr) auto;
+    grid-template-areas: "side bar bar" "side chat tabs" "side chat panel" "nav chat panel"; font-size: 13px; }
+  body.side-collapsed { --side-w: 0px; }
+  body.panel-collapsed, body:not(:has(#bar.is-detail)) { grid-template-columns: var(--side-w) minmax(0, 1fr) 0px; }
+  body.side-collapsed #sessions, body.side-collapsed main:has(#settings.hidden) #sessions.hidden, body.side-collapsed #settings, body.side-collapsed #bottom-tabbar { display: none !important; }
+  body.panel-collapsed #detail-tabs, body.panel-collapsed #changes, body.panel-collapsed #files, body.panel-collapsed #terminal, body.panel-collapsed #panel-resize { display: none !important; }
   main { display: contents; }
-  #bar { grid-area: bar; }
-  #detail-tabs { grid-area: tabs; }
-  #sessions, #settings { grid-area: side; padding-top: 12px; box-shadow: inset -0.5px 0 0 var(--line); }
-  #transcript, #changes, #files, #terminal, #empty-detail { grid-area: detail; }
-  #bottom-tabbar { grid-area: nav; box-shadow: inset 0 0.5px 0 var(--line), inset -0.5px 0 0 var(--line); }
-  /* A phone hides the list and the tab bar while a session is open; here they stay. */
+  .desk-only { display: grid; }
+
+  /* Top bar: what is open, and the two pane toggles. */
+  #bar { grid-area: bar; padding: 6px 10px; min-height: 44px; gap: 8px; box-shadow: inset 0 -1px 0 var(--line); }
+  #bar.is-detail { padding: 6px 10px; }
+  #back { display: none !important; }
+  #nav-title { font-size: 14px; font-weight: 600; letter-spacing: 0; color: var(--fg-muted); }
+  #detail-title-block { flex-direction: row; align-items: baseline; gap: 10px; }
+  #detail-title { font-size: 14px; }
+  #detail-subtitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status.chip { padding: 4px 9px; }
+  .pane-toggle { flex: 0 0 auto; place-items: center; width: 28px; height: 28px; padding: 0; border: none; border-radius: 7px; background: none; color: var(--fg-dim); cursor: pointer; }
+  .pane-toggle:hover { background: var(--fill); color: var(--fg); }
+  .pane-toggle svg { width: 16px; height: 16px; }
+  #toggle-panel { margin-left: 2px; }
+  body:not(:has(#bar.is-detail)) #toggle-panel { display: none; }
+
+  /* Sidebar */
+  #sessions, #settings { grid-area: side; grid-row: 1 / 4; padding: 10px 8px; box-shadow: inset -1px 0 0 var(--line); background: var(--bg-2); }
   main:has(#settings.hidden) #sessions.hidden { display: block !important; }
+  #repo-search { height: 30px; border-radius: 7px; margin: 0 2px 8px; }
+  #repo-search-input { font-size: 13px; }
+  #repo-filters { padding: 0 2px 6px; gap: 4px; }
+  .filter-chip { padding: 3px 9px; font-size: 11.5px; }
+  .rh { padding: 6px 4px; margin-top: 6px; border-radius: 6px; background: var(--bg-2); font-size: 12px; }
+  .rh .tile { transform: scale(0.8); }
+  .kids { gap: 1px; padding: 0 0 4px; }
+  .wt { min-height: 0; padding: 6px 8px; gap: 3px; border-radius: 6px; background: none; box-shadow: none; }
+  .wt.tap:hover, .wt-summary:hover, .session-card:hover { background: var(--fill); }
+  .wt.tap:active, .wt.sel, .session-card.sel { background: var(--fill-strong); box-shadow: inset 2px 0 0 var(--accent); }
+  .wt-summary { min-height: 0; border-radius: 6px; }
+  .r1 { font-size: 12.5px; }
+  .r2 { font-size: 11px; }
+  .session-card-list { gap: 1px; margin: 4px 0 0 10px; }
+  .session-card { min-height: 0; padding: 5px 8px; border-radius: 6px; background: none; box-shadow: none; }
+
+  /* Sidebar footer: what the phone's tab bar holds. */
+  #bottom-tabbar { grid-area: nav; align-items: center; gap: 4px; padding: 6px 8px; background: var(--bg-2); backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: inset 0 1px 0 var(--line), inset -1px 0 0 var(--line); }
   #bottom-tabbar.hidden { display: flex !important; }
-  #bar:not(.is-detail) ~ main #empty-detail { display: flex; align-items: center; justify-content: center; color: var(--fg-faint); font-size: 14px; }
-  /* Keep a readable line length: center the transcript and composer in a column. */
-  #messages, #drivebar { padding-inline: max(14px, calc((100% - 860px) / 2)); }
+  .bt-tab { flex: 0 0 auto; height: 30px; flex-direction: row; gap: 6px; padding: 0 9px; border-radius: 7px; font-size: 12px; }
+  .bt-tab:hover { background: var(--fill); }
+  .bt-tab svg { width: 15px; height: 15px; }
+  .bt-fabwrap { order: -1; flex: 1; display: flex; }
+  #fab-new-session { width: auto; height: 30px; padding: 0 10px; border-radius: 7px; box-shadow: none; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12.5px; font-weight: 600; }
+  #fab-new-session svg { width: 14px; height: 14px; }
+  #fab-new-session::after { content: "New session"; }
+
+  /* Chat */
+  #transcript, #empty-detail { grid-area: chat; grid-row: 2 / 5; }
+  #messages, #drivebar { padding-inline: max(16px, calc((100% - 760px) / 2)); }
+  #drivebar { background: none; backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: none; }
+  #bar:not(.is-detail) ~ main #empty-detail { grid-column: 2 / 4; display: flex; align-items: center; justify-content: center; color: var(--fg-faint); font-size: 14px; }
+
+  /* Panel: flat tabs over Changes, Files or a terminal. Chat is the middle column here. */
+  #detail-tabs { grid-area: tabs; margin: 0; padding: 0 8px; gap: 2px; border-radius: 0; background: none; box-shadow: inset 1px 0 0 var(--line), inset 0 -1px 0 var(--line); }
+  #tab-chat { display: none; }
+  .tab { flex: 0 0 auto; height: 34px; padding: 0 10px; border-radius: 0; font-size: 12.5px; }
+  .tab.is-active { background: none; box-shadow: inset 0 -2px 0 var(--accent); }
+  .tab:hover { color: var(--fg); }
+  #changes, #files, #terminal { grid-area: panel; padding: 0 10px 10px; box-shadow: inset 1px 0 0 var(--line); }
+  #panel-resize { grid-area: panel; grid-row: 2 / 5; justify-self: start; width: 6px; margin-left: -3px; z-index: 6; cursor: col-resize; }
+  #panel-resize:hover, body.resizing #panel-resize { background: color-mix(in oklab, var(--accent) 45%, transparent); }
+  body.resizing { cursor: col-resize; user-select: none; }
+
+  #changes .detail-path, #files .detail-path { cursor: pointer; }
+  #changes .detail-path::before, #files .detail-path::before { content: "‹ "; color: var(--accent); font-weight: 700; }
+  #changes .detail-path:hover, #files .detail-path:hover { color: var(--fg); }
+  .change-row, .file-row { min-height: 0; padding-block: 5px; font-size: 12.5px; border-radius: 5px; border-bottom: none; }
+  .change-row:hover, .file-row:hover { background: var(--fill); }
+  #bar .iconbtn { width: 28px; height: 28px; border-radius: 7px; background: none; }
+  #bar .iconbtn:hover { background: var(--fill); }
+  #bar .iconbtn svg { width: 15px; height: 15px; }
+  #fab-new-session { white-space: nowrap; }
+  #tab-repos > span:not(.tab-count), #tab-settings > span:not(.tab-count) { display: none; }
+
   /* Sheets become centered dialogs instead of bottom sheets. */
   .sheet { align-items: center; justify-content: center; padding: 24px; }
-  .sheet-card { width: min(520px, 100%); padding-bottom: 18px; border-radius: 18px; }
+  .sheet-card { width: min(520px, 100%); padding-bottom: 18px; border-radius: 14px; }
 }
 /* Settings opened beside a session on a wide window stays out of a narrow one. */
 @media (max-width: 899.98px) {
