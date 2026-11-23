@@ -370,9 +370,8 @@ Real-session cases go in `$PRIVATE_DIR/cases.json`, in the same shape as
 
 This run used the 22 public cases in `native-synthetic.json`, on an Apple M4
 with 16 GiB of RAM. The downloaded Qwen3 snapshot matched every digest in the
-production manifest. Inkling-2-Mini was not run: its 4-bit weights are 17.3 GB,
-the upstream card asks for 32 GB or more, and the runner refuses machines below
-that.
+production manifest. Inkling-2-Mini needs 32 GB or more, so it ran separately
+on a larger machine; see the decision below.
 
 | Measurement | Qwen3-4B Instruct 2507 | LFM3-1.7B |
 |---|---:|---:|
@@ -398,7 +397,23 @@ These grades are one unblinded review, not the blind protocol above:
   including approving a production database reset that Qwen3 refused. The
   production input policy blocks several of these cases before inference.
 
-LFM3 is twice as fast and uses half the memory, but it is not a replacement on
-this evidence. Inkling-2-Mini still needs a run on a machine with at least
-32 GB, and the real-session cases still need blind grading. Shipping Inkling
-would also need an Inkling 2 port in `mlx-swift-lm`, which has none.
+LFM3 is twice as fast and uses half the mem### Decision
+
+Keep Qwen3-4B-Instruct-2507 as the only local model, and do not add a model
+selector.
+
+- **LFM3-1.7B** is twice as fast and uses half the memory, but its suggestions
+  are worse on the failures that matter here. Qwen3's speed and memory are not
+  a problem for ghost text shown after a turn finishes.
+- **Inkling-2-Mini** ran on a larger machine and was not useful for this task.
+  It also needs 32 GB or more, a 17.3 GB download, and an Inkling 2 port in
+  `mlx-swift-lm`, which has none. Its numbers were not recorded.
+- **A selector** would need a model catalog with separate downloads, consent and
+  install state; prompt and policy checks per model for every local-model
+  feature; and a choice users cannot judge from settings.
+
+Revisit LFM3 only if it roughly matches Qwen3 in blind grading on real-session
+cases, or if low-memory Macs need a smaller model. In that case, choose the
+model from available memory rather than asking the user. Rerun this comparison
+when a new small model appears; adding one is a single entry in
+`comparison-models.json`.
