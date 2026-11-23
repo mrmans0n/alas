@@ -160,6 +160,9 @@ struct ACPMarkdownParserTests {
         ("Intro\n<details>\n<summary>S</summary>\nbody\n</details> tail",
          [.paragraph("Intro"), .details(summary: "S", isOpen: false, blocks: [.paragraph("body")]), .paragraph("tail")]),
         ("a\n</details>\nb", [.paragraph("a"), .paragraph("b")]),
+        ("<details><summary>Log</summary>ok</details> tail\n\nVisible",
+         [.details(summary: "Log", isOpen: false, blocks: [.paragraph("ok")]), .paragraph("tail"), .paragraph("Visible")]),
+        ("    <details>\n    <summary>Example</summary>", [.paragraph("    <details>\n    <summary>Example</summary>")]),
         ("```html\n<details>\n```", [.code(language: "html", body: "<details>")]),
     ] as [(String, [ACPMarkdownParser.Block])])
     func detailsSectionsNestAroundTheirBlocks(source: String, expected: [ACPMarkdownParser.Block]) {

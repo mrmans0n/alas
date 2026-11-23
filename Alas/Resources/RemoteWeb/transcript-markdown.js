@@ -78,10 +78,12 @@ const REFERENCE_DEFINITION = /^ {0,3}\[[^\]]+\]:\s*\S/;
 const DETAILS_OPEN = /^<details(\s[^>]*)?>/i;
 
 // How a line outside code fences moves the <details> nesting depth, as MarkdownDetails counts it.
+// A tag indented four spaces or more is an indented code block's text.
 function detailsDepthChange(line) {
+  if (/^ {0,3}\t| {4}/.test(String(line).match(/^[ \t]*/)[0])) return 0;
   const trimmed = String(line).trim();
   const open = DETAILS_OPEN.exec(trimmed);
-  if (open) return trimmed.slice(open[0].length).trim().toLowerCase().endsWith("</details>") ? 0 : 1;
+  if (open) return trimmed.slice(open[0].length).toLowerCase().includes("</details>") ? 0 : 1;
   return trimmed.toLowerCase().startsWith("</details>") ? -1 : 0;
 }
 

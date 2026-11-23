@@ -36,10 +36,12 @@ public enum MarkdownDetails: Sendable {
     private static let closeTag = "</details>"
 
     /// How a line outside code fences moves the nesting depth: 1 when it opens a section, -1 when it
-    /// closes one, 0 otherwise, as `section(in:at:)` counts them.
+    /// closes one, 0 otherwise, as `section(in:at:)` counts them. A tag indented four spaces or more
+    /// is an indented code block's text, as in CommonMark, so it counts for nothing.
     public static func depthChange(_ line: some StringProtocol) -> Int {
+        guard !isIndentedCode(line) else { return 0 }
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if let open = opening(trimmed) { return open.rest.lowercased().hasSuffix(closeTag) ? 0 : 1 }
+        if let open = opening(trimmed) { return open.rest.range(of: closeTag, options: .caseInsensitive) == nil ? 1 : 0 }
         return trimmed.lowercased().hasPrefix(closeTag) ? -1 : 0
     }
 
@@ -48,15 +50,17 @@ public enum MarkdownDetails: Sendable {
     public static func section(
         in lines: [String], at start: Int
     ) -> (section: Section, lineCount: Int, trailing: String?)? {
-        guard lines.indices.contains(start),
+        guard lines.indices.contains(start), !isIndentedCode(lines[start]),
               let open = opening(lines[start].trimmingCharacters(in: .whitespaces))
         else { return nil }
         var inner: [String] = []
         var trailing: String?
         var end = start + 1
         var closed = false
-        if open.rest.lowercased().hasSuffix(closeTag) {
-            inner.append(String(open.rest.dropLast(closeTag.count)))
+        if let close = open.rest.range(of: closeTag, options: .caseInsensitive) {
+            inner.append(String(open.rest[..<close.lowerBound]))
+            let after = open.rest[close.upperBound...].trimmingCharacters(in: .whitespaces)
+            trailing = after.isEmpty ? nil : after
             closed = true
         } else if !open.rest.isEmpty {
             inner.append(String(open.rest))
@@ -130,6 +134,19 @@ public enum MarkdownDetails: Sendable {
             case .details(let s): .details(Section(summary: s.summary, isOpen: s.isOpen, body: s.body + suffix))
             }
         }
+    }
+
+    /// Four leading spaces, or a tab within them: the line is an indented code block's, or that block's
+    /// continuation, never a tag.
+    private static func isIndentedCode(_ line: some StringProtocol) -> Bool {
+        var spaces = 0
+        for character in line {
+            if character == "\t" { return true }
+            guard character == " " else { return false }
+            spaces += 1
+            if spaces == 4 { return true }
+        }
+        return false
     }
 
     private static func opening(_ trimmed: String) -> (isOpen: Bool, rest: Substring)? {
