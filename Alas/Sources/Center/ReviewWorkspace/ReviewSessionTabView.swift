@@ -119,6 +119,8 @@ struct ReviewSessionTabView: View {
     @State private var providerPublishConfirmation: ProviderReviewPublishConfirmationState?
     @State private var selectedProviderDecision = ProviderReviewDecision.comment
     @State private var providerReviewSummaryBody = ""
+    /// The reviewed head is on no remote ref: the header says it isn't pushed.
+    @State private var reviewedHeadIsLocalOnly = false
     @State private var isProviderPublishing = false
     @State private var providerPublishError: String?
     /// What a publish or thread change that went through could not finish:
@@ -225,6 +227,15 @@ struct ReviewSessionTabView: View {
         VStack(spacing: 0) {
             header
             Divider().overlay(theme.color("line"))
+            if let verdict = record?.verdict {
+                ReviewVerdictBanner(
+                    verdict: verdict,
+                    ship: shipContext,
+                    actions: shipActions,
+                    now: now
+                )
+                Divider().overlay(theme.color("line"))
+            }
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -236,6 +247,9 @@ struct ReviewSessionTabView: View {
             if await loadReviewSession(token: token) {
                 onStartupRecoveryReady()
             }
+        }
+        .task(id: reviewedHeadSHA) {
+            await checkReviewedHeadOnRemote()
         }
         .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
             selectionPersister.flush()
@@ -253,6 +267,79 @@ struct ReviewSessionTabView: View {
         .onDisappear {
             selectionPersister.flush()
         }
+    }
+
+    // MARK: - Verdict banner
+
+    /// The ship review round this session holds, with its record.
+    private var shipRound: (id: ShipReviewID, record: ShipReviewRecord, round: ShipReviewRound)? {
+        guard let appState, let sessionID = record?.id else { return nil }
+        for (id, shipRecord) in appState.core.shipReviewer.records {
+            if let round = shipRecord.rounds.last(where: { $0.reviewSessionID == sessionID }) {
+                return (id, shipRecord, round)
+            }
+        }
+        return nil
+    }
+
+    private var shipContext: ReviewVerdictShipContext? {
+        guard let appState, let ship = shipRound else { return nil }
+        let shipRecord = ship.record
+        let isCurrent = shipRecord.currentRound?.number == ship.round.number
+        let sent: Bool = {
+            guard !ship.round.isClean else { return false }
+            guard isCurrent else { return true }
+            switch shipRecord.phase {
+            case .awaitingFix, .pushing: return true
+            case .idle, .reviewing, .stopped: return false
+            }
+        }()
+        let ownerTitle = appState.acpManager(forSession: ship.id.sessionID)?
+            .liveSession(for: ship.id.sessionID)?.title
+        let isPushing: Bool = { if case .pushing = shipRecord.phase { return true } else { return false } }()
+        let reviewerLive = shipRecord.reviewerSessionID.flatMap { id in
+            appState.acpManager(forSession: id)?.liveSession(for: id)
+        } != nil
+        return ReviewVerdictShipContext(
+            round: ship.round,
+            maxRounds: shipRecord.maxRounds,
+            sentToOwner: sent ? "Sent to \(ownerTitle ?? "owner") session" : nil,
+            canShipAnyway: shipRecord.pending != nil && !isPushing,
+            reviewerSessionLive: reviewerLive
+        )
+    }
+
+    private var shipActions: ReviewVerdictBannerActions {
+        guard let appState, let id = shipRound?.id else { return ReviewVerdictBannerActions() }
+        return ReviewVerdictBannerActions(
+            reviewAgain: { appState.retryShipReview(id) },
+            shipAnyway: { appState.shipWithoutReview(id) },
+            openReviewerSession: { appState.openReviewerSession(id) }
+        )
+    }
+
+    /// The head a commit or range review is pinned to.
+    private var reviewedHeadSHA: String? {
+        switch headerRecord?.target.payload {
+        case .commit(let sha): sha
+        case .commitRange(_, let head): head
+        case .branch(_, let head) where head.count == 40 && head.allSatisfy(\.isHexDigit): head
+        default: nil
+        }
+    }
+
+    /// `git branch -r --contains <sha>` once per head: empty means no push has it.
+    private func checkReviewedHeadOnRemote() async {
+        guard let sha = reviewedHeadSHA, let path = headerRecord?.target.repositoryPath else {
+            reviewedHeadIsLocalOnly = false
+            return
+        }
+        guard let result = try? await Process.git(["branch", "-r", "--contains", sha], cwd: path),
+              result.exitCode == 0 else {
+            reviewedHeadIsLocalOnly = false
+            return
+        }
+        reviewedHeadIsLocalOnly = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var loadTaskID: String {
@@ -288,7 +375,7 @@ struct ReviewSessionTabView: View {
                         .lineLimit(1)
                         .accessibilityLabel(headerRecord?.target.title ?? tabState.title)
                     if let sourceDescription = headerRecord?.target.sourceDescription {
-                        Text(sourceDescription)
+                        Text(sourceDescription + (reviewedHeadIsLocalOnly ? " · local, not pushed" : ""))
                             .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-muted"))
                             .lineLimit(1)

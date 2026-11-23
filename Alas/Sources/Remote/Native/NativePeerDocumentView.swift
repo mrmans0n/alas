@@ -952,14 +952,3 @@ struct NativePeerReviewView: View {
             .background(theme.color("bg-2"))
     }
 }
-
-extension ReviewVerdict {
-    /// How a peer review's header and the Reviews list show the verdict.
-    var peerLabel: String {
-        switch self {
-        case .approve: "Approved"
-        case .requestChanges: "Changes requested"
-        case .comment: "Commented"
-        }
-    }
-}
