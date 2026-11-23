@@ -35,6 +35,19 @@ public struct ACPTurnChanges: Equatable, Sendable {
 
     /// Merged by path, in the order each was first edited.
     public let files: [File]
+
+    /// The same for the same files and counts on every launch and machine, unlike `hashValue`: a stored
+    /// caption describes these edits only while its digest matches. FNV-1a over each file's line.
+    public var digest: String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for file in files {
+            for byte in "\(file.path)\t\(file.added)\t\(file.removed)\n".utf8 {
+                hash ^= UInt64(byte)
+                hash = hash &* 0x0000_0100_0000_01b3
+            }
+        }
+        return String(hash, radix: 16)
+    }
     /// Where the turn starts: its user message.
     public let userIndex: Int
 

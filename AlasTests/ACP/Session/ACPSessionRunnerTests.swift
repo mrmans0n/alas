@@ -6497,6 +6497,8 @@ struct ACPSessionRunnerTests {
         // A submitted draft recorded after "two" must still name that row.
         try store.upsertComposerDraft(sessionId: "s", draft: .empty, updatedAt: 0,
                                       submittedRecovery: true, submittedAfterSeq: 2)
+        // So must a caption saved for it.
+        try store.saveTurnCaption(sessionId: "s", .init(answerIndex: 2, filesDigest: "d", caption: "Two"))
 
         let session: ACPSession
         if reloadedFromStore {
@@ -6520,6 +6522,7 @@ struct ACPSessionRunnerTests {
             ? ["0:zero", "1:two", "2:three"]
             : ["0:zero", "2:two", "3:three"]))
         #expect(try store.loadComposerDraftRecord(sessionId: "s")?.submittedAfterSeq == (reloadedFromStore ? 1 : 2))
+        #expect(try store.loadTurnCaptions(sessionId: "s").map(\.answerIndex) == [reloadedFromStore ? 1 : 2])
     }
 
     @Test("onChipsObserved fires when a live availableModelsUpdate names new models")

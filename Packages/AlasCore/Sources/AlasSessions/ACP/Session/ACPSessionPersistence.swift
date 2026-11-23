@@ -108,6 +108,14 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         try openedStore().deleteAllSessionSummaries()
     }
 
+    public func loadTurnCaptions(sessionId: String) throws -> [StoredTurnCaption] {
+        try openedStore().loadTurnCaptions(sessionId: sessionId)
+    }
+
+    public func saveTurnCaption(sessionId: String, _ caption: StoredTurnCaption) throws {
+        try openedStore().saveTurnCaption(sessionId: sessionId, caption)
+    }
+
     public func createFork(
         session: ACPSessionRow,
         messages: [ACPStoredMessage],

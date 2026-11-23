@@ -13113,6 +13113,7 @@ final class AppState {
             onTurnCompleted: { [weak self] completion in
                 Task { @MainActor [weak self] in
                     self?.computerUseTurnEnded(sessionID: completion.sessionId, owner: owner)
+                    self?.captionFinishedTurn(completion)
                     self?.scheduledAgentTurns.deliver(completion)
                     self?.reviewShepherd.turnCompleted(sessionID: completion.sessionId)
                     self?.stackShepherd.turnCompleted(sessionID: completion.sessionId)
@@ -13642,6 +13643,7 @@ final class AppState {
             onTurnCompleted: { [weak self] completion in
                 Task { @MainActor [weak self] in
                     self?.computerUseTurnEnded(sessionID: completion.sessionId, owner: owner)
+                    self?.captionFinishedTurn(completion)
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
             },

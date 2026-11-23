@@ -6,7 +6,7 @@ struct ACPTurnChangesCard: View {
     /// Where the card's caption comes from, and what it is written from.
     struct Caption {
         let store: ACPTurnCaptionStore
-        let key: String
+        let key: ACPTurnCaptionStore.Key
         let input: () -> ACPTurnCaptionPolicy.Input?
     }
 
@@ -142,5 +142,44 @@ private struct CaptionedHeader: View {
             }
             .padding(.horizontal, scale.space[3]).padding(.top, scale.space[2]).padding(.bottom, scale.space[1])
         }
+    }
+}
+
+extension ACPTurnChanges {
+    /// The files the turn that `answerIndex` ends changed, read from this Mac's transcript.
+    static func forAnswer(
+        at answerIndex: Int, in messages: [ACPMessage], isTurnActive: Bool, worktreeRoot: String?
+    ) -> ACPTurnChanges? {
+        guard messages.indices.contains(answerIndex), case .agent = messages[answerIndex] else { return nil }
+        return forAnswer(at: answerIndex, count: messages.count, isTurnActive: isTurnActive) { index in
+            switch messages[index] {
+            case .user: .user
+            case .agent: .agent
+            case .fileEdit(_, let edit): .fileEdit(.init(path: edit.path, added: edit.added, removed: edit.removed))
+            case .toolCall(let call): .toolCallEdits(written(by: call, worktreeRoot: worktreeRoot))
+            default: .other
+            }
+        }
+    }
+
+    /// The turn's request and patches, for its caption. File writes become patches of their
+    /// changed hunks.
+    func captionInput(messages: [ACPMessage], answerIndex: Int, worktreeRoot: String?) -> ACPTurnCaptionPolicy.Input? {
+        guard messages.indices.contains(userIndex), userIndex < answerIndex, answerIndex <= messages.count
+        else { return nil }
+        var request: String?
+        if case .user(_, _, let text, _, _, _) = messages[userIndex] { request = text }
+        var patches: [String] = []
+        for message in messages[(userIndex + 1)..<answerIndex] {
+            switch message {
+            case .fileEdit(_, let edit):
+                patches.append(ACPTurnCaptionPolicy.patch(path: edit.path, old: edit.oldText, new: edit.newText))
+            case .toolCall(let call) where !Self.written(by: call, worktreeRoot: worktreeRoot).isEmpty:
+                patches += call.diffs.filter { $0.source == .toolCall && $0.isValid }.compactMap(\.patch)
+            default:
+                break
+            }
+        }
+        return ACPTurnCaptionPolicy.Input(request: request, files: files, patches: patches)
     }
 }
