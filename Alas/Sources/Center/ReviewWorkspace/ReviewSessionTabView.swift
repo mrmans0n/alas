@@ -248,7 +248,7 @@ struct ReviewSessionTabView: View {
                 onStartupRecoveryReady()
             }
         }
-        .task(id: reviewedHeadSHA) {
+        .task(id: reviewedHeadCheckID) {
             await checkReviewedHeadOnRemote()
         }
         .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
@@ -283,12 +283,13 @@ struct ReviewSessionTabView: View {
     }
 
     private var shipContext: ReviewVerdictShipContext? {
-        guard let appState, let ship = shipRound else { return nil }
+        guard let appState, let sessionID = record?.id, let ship = shipRound else { return nil }
         let shipRecord = ship.record
-        let isCurrent = shipRecord.currentRound?.number == ship.round.number
+        let isLive = ShipReviewPresentation.isLiveRound(shipRecord, roundSessionID: sessionID)
+        let actions = ShipReviewPresentation.bannerActions(record: shipRecord, roundSessionID: sessionID)
         let sent: Bool = {
             guard !ship.round.isClean else { return false }
-            guard isCurrent else { return true }
+            guard isLive else { return true }
             switch shipRecord.phase {
             case .awaitingFix, .pushing: return true
             case .idle, .reviewing, .stopped: return false
@@ -296,7 +297,6 @@ struct ReviewSessionTabView: View {
         }()
         let ownerTitle = appState.acpManager(forSession: ship.id.sessionID)?
             .liveSession(for: ship.id.sessionID)?.title
-        let isPushing: Bool = { if case .pushing = shipRecord.phase { return true } else { return false } }()
         let reviewerLive = shipRecord.reviewerSessionID.flatMap { id in
             appState.acpManager(forSession: id)?.liveSession(for: id)
         } != nil
@@ -304,18 +304,29 @@ struct ReviewSessionTabView: View {
             round: ship.round,
             maxRounds: shipRecord.maxRounds,
             sentToOwner: sent ? "Sent to \(ownerTitle ?? "owner") session" : nil,
-            canShipAnyway: shipRecord.pending != nil && !isPushing,
+            canReviewAgain: actions.contains(.retry),
+            canShipAnyway: actions.contains(.shipAnyway),
             reviewerSessionLive: reviewerLive
         )
     }
 
     private var shipActions: ReviewVerdictBannerActions {
-        guard let appState, let id = shipRound?.id else { return ReviewVerdictBannerActions() }
+        guard let appState, let ship = shipRound else { return ReviewVerdictBannerActions() }
+        let id = ship.id
+        let headSHA = ship.round.headSHA
         return ReviewVerdictBannerActions(
             reviewAgain: { appState.retryShipReview(id) },
-            shipAnyway: { appState.shipWithoutReview(id) },
+            shipAnyway: { appState.shipReviewedHead(id, headSHA: headSHA) },
             openReviewerSession: { appState.openReviewerSession(id) }
         )
+    }
+
+    /// Reruns the remote check once the ship review pushes or passes the head.
+    private var reviewedHeadCheckID: String {
+        guard let sha = reviewedHeadSHA else { return "" }
+        let ship = shipRound?.record
+        let passed = ship?.passedSHAs.contains(sha) ?? false
+        return "\(sha):\(passed):\(ship.map { String(describing: $0.phase) } ?? "")"
     }
 
     /// The head a commit or range review is pinned to.

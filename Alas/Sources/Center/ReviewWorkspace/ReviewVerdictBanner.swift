@@ -6,6 +6,8 @@ struct ReviewVerdictShipContext {
     let maxRounds: Int
     /// "Sent to <owner> session", when this round's findings went to the owner.
     let sentToOwner: String?
+    /// The record stopped on this round, its latest, so a retry applies.
+    let canReviewAgain: Bool
     let canShipAnyway: Bool
     let reviewerSessionLive: Bool
 }
@@ -93,7 +95,9 @@ struct ReviewVerdictBanner: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-            AlasButton(title: "Review again", style: .normal, compact: true, action: actions.reviewAgain)
+            if ship.canReviewAgain {
+                AlasButton(title: "Review again", style: .normal, compact: true, action: actions.reviewAgain)
+            }
             if ship.canShipAnyway {
                 AlasButton(title: "Ship anyway", style: .normal, compact: true, action: actions.shipAnyway)
             }

@@ -306,4 +306,29 @@ let shipReviewLineCases: [ShipReviewLineCase] = {
     func reviewLine(_ c: ShipReviewLineCase) {
         #expect(ShipReviewPresentation.line(c.record, reviewerName: "Codex", providerName: "GitHub") == c.expected)
     }
+    @Test("verdict banner actions by round", arguments: [
+        // (phase, round's session is the latest, pending, expected)
+        (ShipReviewPhase.stopped(.reviewerFailed("x")), true, true, [ShipReviewLineAction.retry, .shipAnyway]),
+        (.stopped(.pushFailed("x")), true, false, [.retry]),
+        (.stopped(.reviewerFailed("x")), false, true, []),
+        (.awaitingFix(headSHA: "h2"), true, true, [.shipAnyway]),
+        (.awaitingFix(headSHA: "h3"), true, true, []),
+        (.awaitingFix(headSHA: "h2"), false, true, []),
+        (.reviewing(headSHA: "h2", startedAt: t0), true, true, [.shipAnyway]),
+        (.pushing(headSHA: "h2"), true, true, []),
+        (.idle, true, true, []),
+        (.idle, true, false, []),
+    ] as [(ShipReviewPhase, Bool, Bool, [ShipReviewLineAction])])
+    func bannerActions(_ phase: ShipReviewPhase, latest: Bool, pending: Bool, expected: [ShipReviewLineAction]) {
+        var r = record()
+        r.pending = pending ? pullRequest : nil
+        r.phase = phase
+        // Round numbers restart per push: both rounds are round 1.
+        r.rounds = [
+            ShipReviewRound(number: 1, headSHA: "h1", reviewSessionID: ReviewSessionID(rawValue: "old"), verdict: .requestChanges, openFindingIDs: ["f"], reviewerLabel: "Codex", reviewedAt: t0),
+            ShipReviewRound(number: 1, headSHA: "h2", reviewSessionID: ReviewSessionID(rawValue: "new"), verdict: .requestChanges, openFindingIDs: ["f"], reviewerLabel: "Codex", reviewedAt: t1),
+        ]
+        let session = ReviewSessionID(rawValue: latest ? "new" : "old")
+        #expect(ShipReviewPresentation.bannerActions(record: r, roundSessionID: session) == expected)
+    }
 }

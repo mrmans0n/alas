@@ -36,7 +36,8 @@ struct ACPShepherdButton: View {
         let review = ShipReviewContext(sessionID: session.id, worktree: worktree, state: state, ownerAgentID: session.agentId)
         if shipsStack {
             let context = StackShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state)
-            if context.record == nil, let held = review.heldShip(stack: true) {
+            // A stack review held by a later Ship stack leads until it settles.
+            if let held = review.heldShip(stack: true), context.record == nil || held.phase != .idle {
                 return Self.heldShipPill(held)
             }
             return PillState(

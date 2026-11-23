@@ -1,4 +1,5 @@
 import Foundation
+import AlasModel
 
 /// The review line under a shepherded ship, with the links it offers.
 public struct ShipReviewLine: Equatable, Sendable {
@@ -48,6 +49,34 @@ public enum ShipReviewPresentation {
             guard let round = r.currentRound else { return nil }
             return cleanLine(r, headSHA: round.headSHA, reviewerName: reviewerName)
         }
+    }
+
+    /// Whether the round `roundSessionID` holds is the record's live round:
+    /// its latest, on the head the pending push would ship. Round numbers
+    /// restart with each push, so the round is matched by its review session.
+    public static func isLiveRound(_ r: ShipReviewRecord, roundSessionID: ReviewSessionID) -> Bool {
+        guard r.pending != nil, let latest = r.rounds.last, latest.reviewSessionID == roundSessionID else { return false }
+        switch r.phase {
+        case let .reviewing(headSHA, _), let .awaitingFix(headSHA), let .pushing(headSHA):
+            return headSHA == latest.headSHA
+        case .stopped:
+            return true
+        case .idle:
+            return false
+        }
+    }
+
+    /// The verdict banner's ship actions for the round `roundSessionID`
+    /// holds, on the record's latest round only: `.retry` ("Review again")
+    /// while it is stopped, `.shipAnyway` while it is live and not pushing.
+    public static func bannerActions(record r: ShipReviewRecord, roundSessionID: ReviewSessionID) -> [ShipReviewLineAction] {
+        guard r.rounds.last?.reviewSessionID == roundSessionID else { return [] }
+        var actions: [ShipReviewLineAction] = []
+        if case .stopped = r.phase { actions.append(.retry) }
+        if isLiveRound(r, roundSessionID: roundSessionID), r.phase != .pushing(headSHA: r.rounds.last?.headSHA ?? "") {
+            actions.append(.shipAnyway)
+        }
+        return actions
     }
 
     /// The stop's message; `maxRounds` is the record's round cap.

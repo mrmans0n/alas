@@ -32,6 +32,7 @@ extension AppState {
     func shipWithoutReview(_ id: ShipReviewID) {
         let shipReviewer = core.shipReviewer
         guard let effects = shipReviewer.effects, let record = shipReviewer.record(for: id) else { return }
+        clearShipReviewStopActivity(id)
         Task { @MainActor [weak self] in
             do {
                 let head = try await effects.shipHead(id, record.pending)
@@ -46,17 +47,45 @@ extension AppState {
         }
     }
 
+    /// The verdict banner's "Ship anyway": exactly the head that round reviewed
+    /// passes, and the held-back push goes out.
+    func shipReviewedHead(_ id: ShipReviewID, headSHA: String) {
+        clearShipReviewStopActivity(id)
+        core.shipReviewer.allow(id, headSHA: headSHA)
+    }
+
     func retryShipReview(_ id: ShipReviewID) {
+        clearShipReviewStopActivity(id)
         core.shipReviewer.retry(id)
     }
 
     func stopShipReview(_ id: ShipReviewID) {
+        clearShipReviewStopActivity(id)
         core.shipReviewer.cancel(id)
     }
 
     /// "Send to session": the latest round's open findings go to the owning session.
     func sendShipReviewFindings(_ id: ShipReviewID) {
+        clearShipReviewStopActivity(id)
         core.shipReviewer.sendFindings(id)
+    }
+
+    /// Clears the attention `notifyShipReviewStop` set on the owning session
+    /// once the user handles the stop. Live activity the session reported
+    /// since (a new turn, a permission prompt) is left alone. Call before the
+    /// action moves the record off its stop.
+    private func clearShipReviewStopActivity(_ id: ShipReviewID) {
+        guard let record = core.shipReviewer.record(for: id), case let .stopped(stop) = record.phase,
+              let activity = harness.activityBySession[id.sessionID],
+              activity.state == .awaitingInput,
+              activity.lastBody == ShipReviewPresentation.stopMessage(stop, maxRounds: record.maxRounds)
+        else { return }
+        harness.finishExternalActivity(
+            sessionId: id.sessionID,
+            owner: .worktree(id.worktreeID),
+            agent: activity.agent,
+            recordIdleTransition: false
+        )
     }
 
     /// A stopped review: nothing was pushed until the user acts. Posted like

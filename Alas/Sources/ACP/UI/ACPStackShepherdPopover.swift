@@ -69,10 +69,12 @@ struct StackShepherdPopover: View {
         let context = StackShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state)
         let review = ShipReviewContext(sessionID: session.id, worktree: worktree, state: state, ownerAgentID: session.agentId)
         VStack(alignment: .leading, spacing: 0) {
-            if let record = context.record {
-                boundContent(record: record, context: context)
-            } else if let held = review.heldShip(stack: true) {
+            // A stack review held by a later Ship stack leads until it settles;
+            // then the bound stack returns.
+            if let held = review.heldShip(stack: true), context.record == nil || held.phase != .idle {
                 reviewingContent(held: held, review: review)
+            } else if let record = context.record {
+                boundContent(record: record, context: context)
             } else {
                 unboundContent(context: context, review: review)
             }
