@@ -34,10 +34,7 @@ struct NativePeerNewSessionSheet: View {
 
     /// Agents the peer can launch in the selected worktree's project.
     private var agents: [RemoteAgentOption] {
-        let projectId = createsWorktree || request?.fixedWorktreeId != nil
-            ? request?.projectId
-            : request?.worktrees?.first { $0.id == worktreeId }?.projectId
-        return (request?.agents ?? []).filter { $0.isAvailable(inProjectId: projectId) }
+        request?.availableAgents(worktreeId: worktreeId, createsWorktree: createsWorktree) ?? []
     }
     private var selectedAgent: RemoteAgentOption? { agents.first { $0.id == agentId } }
     private var visibility: NativePeerNewSession.ChipVisibility? {

@@ -1378,34 +1378,38 @@ final class NativePeerSessions {
     }
     func takeOver() { routeWhileOnline { .takeOver(sessionId: $0) } }
 
-    func beginNewSession(peer: NativePeerGroup, repo: NativePeerRepoGroup, fixedWorktreeId: String? = nil) {
+    func beginNewSession(
+        peer: NativePeerGroup, repo: NativePeerRepoGroup, fixedWorktree: (id: String, projectId: String)? = nil
+    ) {
         guard downstream != nil, peer.state.carriesSessions else { return }
         pendingSessionId = nil
         newSession = NativePeerNewSession(
-            serverId: peer.serverId, peerName: peer.name, projectId: repo.projectId,
-            repoName: repo.name, fixedWorktreeId: fixedWorktreeId
+            serverId: peer.serverId, peerName: peer.name, projectId: fixedWorktree?.projectId ?? repo.projectId,
+            repoName: repo.name, fixedWorktreeId: fixedWorktree?.id
         )
         requestNewSessionOptions()
     }
 
-    /// The peer, project and host worktree id for a session in `selection`.
+    /// A worktree's launch target, with the sidebar group kept for its display name.
     func newSessionTarget(
         in selection: NativePeerWorktreeSelection
-    ) -> (peer: NativePeerGroup, repo: NativePeerRepoGroup, worktreeId: String)? {
+    ) -> (peer: NativePeerGroup, repo: NativePeerRepoGroup, worktree: (id: String, projectId: String))? {
         guard let peer = snapshot.groups.first(where: { $0.serverId == selection.serverId }),
               peer.state.carriesSessions
         else { return nil }
-        for repo in peer.repos(ordering: .manual) where repo.projectId != nil {
-            if let worktreeId = repo.worktrees.first(where: { $0.id == selection.worktreeId })?.peerWorktreeId {
-                return (peer, repo, worktreeId)
-            }
+        for repo in peer.repos(ordering: .manual) {
+            guard let repoProjectId = repo.projectId,
+                  let worktree = repo.worktrees.first(where: { $0.id == selection.worktreeId }),
+                  let worktreeId = worktree.peerWorktreeId
+            else { continue }
+            return (peer, repo, (worktreeId, worktree.owningProjectId ?? repoProjectId))
         }
         return nil
     }
 
     func beginNewSession(in selection: NativePeerWorktreeSelection) {
         guard let target = newSessionTarget(in: selection) else { return }
-        beginNewSession(peer: target.peer, repo: target.repo, fixedWorktreeId: target.worktreeId)
+        beginNewSession(peer: target.peer, repo: target.repo, fixedWorktree: target.worktree)
     }
 
     func createNewSession(worktreeId: String?, agentId: String, modelId: String?, effortId: String?) {

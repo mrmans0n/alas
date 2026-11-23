@@ -2543,8 +2543,12 @@ struct NativePeerSessionsTests {
 
     @Test func aWorktreesNewSessionNeedsOnlyAgentOptions() throws {
         let (links, client, _, _) = startedClientWithPeerRepo()
+        links.receive(.projectList(projects: [
+            .init(id: "p", name: "alas"),
+            .init(id: "p-ssh", name: "alas", linkedProjectId: "p"),
+        ]), from: "B")
         let history = RemoteSessionSummary(id: "s", title: "s", agentId: "claude", status: "idle", canDrive: true,
-                                           isActive: false, projectId: "p", worktreeId: "w1",
+                                           isActive: false, projectId: "p-ssh", worktreeId: "w1",
                                            worktree: projectRow("s").worktree)
         links.receive(.sessionList(sessions: [history]), from: "B")
         let worktree = try #require(client.snapshot.groups.first?.repos(ordering: .manual).first?.worktrees.first)
@@ -2557,13 +2561,20 @@ struct NativePeerSessionsTests {
         client.beginNewSession(in: selection)
 
         #expect(links.sent(to: "B") == [.listAgents])
-        links.receive(.agentList(agents: [.init(id: "claude", name: "Claude", isDefault: true)]), from: "B")
+        links.receive(.agentList(agents: [
+            .init(id: "local", name: "Local only", isDefault: true, unavailableProjectIds: ["p-ssh"]),
+            .init(id: "claude", name: "Claude", isDefault: false),
+        ]), from: "B")
         #expect(client.newSession?.isLoading == false)
+        let request = try #require(client.newSession)
+        let agents = request.availableAgents(worktreeId: nil, createsWorktree: false)
+        #expect(agents.map(\.id) == ["claude"])
+        let agentId = try #require(NativePeerNewSession.preselectedAgentId(in: agents))
 
         client.createNewWorktreeSession(base: "main", branch: "feature/x", agentId: "claude", modelId: nil, effortId: nil)
         #expect(links.sent(to: "B") == [.listAgents])
 
-        client.createNewSession(worktreeId: "w2", agentId: "claude", modelId: "opus", effortId: "high")
+        client.createNewSession(worktreeId: "w2", agentId: agentId, modelId: "opus", effortId: "high")
         #expect(links.sent(to: "B").last
             == .createSession(worktreeId: "w1", agentId: "claude", modelId: "opus", effortId: "high"))
         links.offline("B")

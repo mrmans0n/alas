@@ -4,6 +4,13 @@ import Foundation
 typealias NativePeerNewSession = RemoteNewSession
 
 extension RemoteNewSession {
+    func availableAgents(worktreeId: String?, createsWorktree: Bool) -> [RemoteAgentOption] {
+        let launchProjectId = createsWorktree || fixedWorktreeId != nil
+            ? projectId
+            : worktrees?.first { $0.id == worktreeId }?.projectId
+        return Self.agents(agents ?? [], projectId: launchProjectId)
+    }
+
     /// Nil while the name is empty, so an untouched field shows no error;
     /// the disabled Create button already says it is required.
     static func branchValidationMessage(_ branch: String) -> String? {
