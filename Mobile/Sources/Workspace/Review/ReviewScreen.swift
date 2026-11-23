@@ -220,12 +220,16 @@ private struct ActionBar: View {
                     ForEach(targets, id: \.self) { target in
                         Button(label(target)) { startSending(to: target) }
                     }
+                } message: {
+                    if let alreadySent { Text(alreadySent) }
                 }
                 .alert(confirming.map { "Send \(commentCount) to \(label($0))?" } ?? "",
                        isPresented: Binding { confirming != nil } set: { if !$0 { confirming = nil } },
                        presenting: confirming) { target in
                     Button("Send") { startSending(to: target) }
                     Button("Cancel", role: .cancel) {}
+                } message: { _ in
+                    if let alreadySent { Text(alreadySent) }
                 }
             }
             if document.pullRequest != nil {
@@ -249,6 +253,13 @@ private struct ActionBar: View {
     private var commentCount: String {
         let count = document.comments.count(where: \.isOpen)
         return count == 1 ? "1 comment" : "\(count) comments"
+    }
+
+    /// How many of the open comments a send already took, when any did.
+    private var alreadySent: String? {
+        let count = document.comments.count { $0.isOpen && document.sent[$0.id] != nil }
+        guard count > 0 else { return nil }
+        return count == 1 ? "1 was already sent." : "\(count) were already sent."
     }
 
     private func label(_ target: RemoteAgentTarget) -> String {
