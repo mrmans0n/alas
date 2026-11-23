@@ -75,12 +75,22 @@ function chartHTML(info, body) {
 
 const FENCE_OPEN = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const REFERENCE_DEFINITION = /^ {0,3}\[[^\]]+\]:\s*\S/;
+const DETAILS_OPEN = /^<details(\s[^>]*)?>/i;
+
+// How a line outside code fences moves the <details> nesting depth, as MarkdownDetails counts it.
+function detailsDepthChange(line) {
+  const trimmed = String(line).trim();
+  const open = DETAILS_OPEN.exec(trimmed);
+  if (open) return trimmed.slice(open[0].length).trim().toLowerCase().endsWith("</details>") ? 0 : 1;
+  return trimmed.toLowerCase().startsWith("</details>") ? -1 : 0;
+}
 
 // Splits agent markdown at its top-level ```visual and ```chart fences. Returns segments in order:
 //   { type: "markdown", text }  prose and every other fence, for the markdown renderer
 //   { type: "visual", title, html }  a closed fence drawn as an embedded visual
 //   { type: "drawing", title }  a visual or chart fence still streaming
-// A fence whose body draws nothing (an empty visual, chart data the component rejects) stays markdown.
+// A fence whose body draws nothing (an empty visual, chart data the component rejects) stays markdown,
+// and so does one inside a <details> section, which the browser could not keep whole around a visual.
 // Each markdown segment renders on its own, so when the text has a visual, every one of them also gets
 // the text's link reference definitions: a [link][ref] before a visual keeps its definition after it.
 function splitVisualFences(text) {
@@ -92,12 +102,14 @@ function splitVisualFences(text) {
     prose = [];
   };
   const definitions = [];
+  let detailsDepth = 0;
   let i = 0;
   while (i < lines.length) {
     const open = FENCE_OPEN.exec(lines[i]);
     // A backtick fence's info string cannot hold a backtick.
     if (!open || (open[2][0] === "`" && open[3].includes("`"))) {
       if (REFERENCE_DEFINITION.test(lines[i])) definitions.push(lines[i].trim());
+      detailsDepth = Math.max(0, detailsDepth + detailsDepthChange(lines[i]));
       prose.push(lines[i]);
       i++;
       continue;
@@ -108,7 +120,7 @@ function splitVisualFences(text) {
     while (end < lines.length && !close.test(lines[end])) end++;
     const closed = end < lines.length;
     const tag = firstWord(open[3]);
-    if (tag !== VISUAL_TAG && tag !== CHART_TAG) {
+    if ((tag !== VISUAL_TAG && tag !== CHART_TAG) || detailsDepth > 0) {
       prose.push(...lines.slice(i, closed ? end + 1 : lines.length));
       i = closed ? end + 1 : lines.length;
       continue;

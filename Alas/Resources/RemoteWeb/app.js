@@ -3271,9 +3271,12 @@ function md(text) {
 function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
 // Markdown into `node`, with GitHub alerts drawn as alerts.
+// Re-rendering a streaming message keeps each <details> section the reader opened or closed.
 function setMarkdown(node, text) {
+  const open = [...node.querySelectorAll("details")].map((section) => section.open);
   node.innerHTML = md(text);
   decorateAlerts(node);
+  node.querySelectorAll("details").forEach((section, index) => { if (index < open.length) section.open = open[index]; });
 }
 
 // A blockquote whose first line is "[!NOTE]", "[!TIP]", "[!IMPORTANT]", "[!WARNING]" or "[!CAUTION]"

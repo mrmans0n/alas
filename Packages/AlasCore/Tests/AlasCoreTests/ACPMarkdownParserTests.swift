@@ -145,4 +145,24 @@ struct ACPMarkdownParserTests {
     func onlyKnownMarkersOnTheFirstLineMakeAlerts(source: String, expected: [ACPMarkdownParser.Block]) {
         #expect(ACPMarkdownParser.parse(source) == expected)
     }
+
+    @Test(arguments: [
+        ("<details>\n<summary>Output</summary>\n\nline **one**\n\n</details>\nAfter",
+         [.details(summary: "Output", isOpen: false, blocks: [.paragraph("line **one**")]), .paragraph("After")]),
+        ("<DETAILS open><summary><code>swift test</code> <b>log</b></summary>\n\n```\nok\n```\n</details>",
+         [.details(summary: "`swift test` log", isOpen: true, blocks: [.code(language: nil, body: "ok")])]),
+        ("<details>\n<details>\n<summary>Inner</summary>\n\n```\n</details>\n```\n</details>\n\ntext\n</details>",
+         [.details(summary: "Details", isOpen: false, blocks: [
+             .details(summary: "Inner", isOpen: false, blocks: [.code(language: nil, body: "</details>")]),
+             .paragraph("text"),
+         ])]),
+        ("<details>\n<summary>Log</summary>\n\npartial", [.details(summary: "Log", isOpen: false, blocks: [.paragraph("partial")])]),
+        ("Intro\n<details>\n<summary>S</summary>\nbody\n</details> tail",
+         [.paragraph("Intro"), .details(summary: "S", isOpen: false, blocks: [.paragraph("body")]), .paragraph("tail")]),
+        ("a\n</details>\nb", [.paragraph("a"), .paragraph("b")]),
+        ("```html\n<details>\n```", [.code(language: "html", body: "<details>")]),
+    ] as [(String, [ACPMarkdownParser.Block])])
+    func detailsSectionsNestAroundTheirBlocks(source: String, expected: [ACPMarkdownParser.Block]) {
+        #expect(ACPMarkdownParser.parse(source) == expected)
+    }
 }

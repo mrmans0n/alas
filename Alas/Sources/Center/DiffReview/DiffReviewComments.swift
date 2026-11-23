@@ -571,7 +571,7 @@ enum DiffReviewInlineFeedbackMarkdown {
     @MainActor
     static func inlineMarkdown(_ source: String) -> AttributedString {
         var result = AttributedString()
-        for block in ACPMarkdownText.parse(source) {
+        for block in ACPMarkdownParser.flatteningDetails(ACPMarkdownText.parse(source)) {
             let (text, literal) = {
             switch block {
             case .heading(_, let text), .paragraph(let text), .quote(let text):
@@ -584,6 +584,8 @@ enum DiffReviewInlineFeedbackMarkdown {
                 return (body, true)
             case .chart(let chart):
                 return (chart.title ?? "Chart", true)
+            case .details(let summary, _, _):
+                return (summary, false)
             case .image(let alt, let source):
                 return (alt.isEmpty ? source : alt, true)
             case .table(let header, let rows):
@@ -598,7 +600,7 @@ enum DiffReviewInlineFeedbackMarkdown {
 
     @MainActor
     static func plainText(_ source: String) -> String {
-        ACPMarkdownText.parse(source).compactMap { block -> String? in
+        ACPMarkdownParser.flatteningDetails(ACPMarkdownText.parse(source)).compactMap { block -> String? in
             switch block {
             case .heading(_, let text), .paragraph(let text), .quote(let text):
                 return ACPMarkdownInlineRenderer.plainText(text)
@@ -614,6 +616,8 @@ enum DiffReviewInlineFeedbackMarkdown {
                 return title ?? "Visual"
             case .chart(let chart):
                 return chart.title ?? "Chart"
+            case .details(let summary, _, _):
+                return ACPMarkdownInlineRenderer.plainText(summary)
             case .image(let alt, let source):
                 return alt.isEmpty ? source : alt
             case .table(let header, let rows):
