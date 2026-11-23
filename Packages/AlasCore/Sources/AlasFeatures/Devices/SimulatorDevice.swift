@@ -33,6 +33,19 @@ public struct SimulatorDevice: Equatable, Sendable, Identifiable {
         self.state = state
         self.deviceTypeIdentifier = deviceTypeIdentifier
     }
+
+    /// Whether its screen has a Dynamic Island: the iPhone 14 Pro, every iPhone from the 15 on but the
+    /// cheaper "e" models, and the Air. A type it can't read, such as an iPad, has none.
+    public var hasDynamicIsland: Bool {
+        guard let model = deviceTypeIdentifier?.split(separator: ".").last, model.hasPrefix("iPhone-") else { return false }
+        let parts = model.dropFirst("iPhone-".count).split(separator: "-")
+        if parts == ["Air"] { return true }
+        guard let first = parts.first else { return false }
+        let digits = first.prefix { $0.isNumber }
+        guard let generation = Int(digits) else { return false }
+        if first.count > digits.count { return false } // "16e", "17e"
+        return generation >= 15 || (generation == 14 && parts.dropFirst().first == "Pro")
+    }
 }
 
 public enum SimulatorDeviceList {

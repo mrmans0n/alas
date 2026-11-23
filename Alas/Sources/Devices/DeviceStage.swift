@@ -10,6 +10,8 @@ struct DeviceStage: View {
     let control: DeviceAgentControl
     /// Names the agent session driving the device.
     let agentName: (String) -> String
+    /// The agent of a session driving the device, for its logo.
+    var agent: (String) -> AgentDefinition? = { _ in nil }
     let now: Date
     /// The app the user dropped on this simulator, while it installs or after it failed.
     let appInstall: DevicePaneModel.AppInstall?
@@ -36,6 +38,8 @@ struct DeviceStage: View {
     @State private var hover: CGPoint?
     /// Bumped by the user's input and rotations, so the overlay reads the screen again.
     @State private var overlayReadKey = 0
+    /// The drawn screen's width, which scales the Dynamic Island.
+    @State private var screenWidth: CGFloat = 0
 
     var body: some View {
         let driver = control.driver(udid: device.udid, at: now)
@@ -85,14 +89,16 @@ struct DeviceStage: View {
                     }
                 )
             } else if driver != .idle {
+                let island = islandScale(landscape: landscape)
                 DeviceDriverPill(
                     driver: driver, waiting: control.waitingSessions(udid: device.udid).first, agentName: agentName,
                     flow: control.flowRuns[device.udid], pulse: pulse, onTakeOver: { control.takeOver(udid: device.udid) },
-                    onHandBack: { control.handBack(udid: device.udid) }
+                    onHandBack: { control.handBack(udid: device.udid) }, agent: agent, islandScale: island
                 )
-                .padding(.top, scale.space[2])
+                .padding(.top, island.map(DeviceDriverPill.islandTopPadding(scale:)) ?? scale.space[2])
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { screenWidth = $0 }
         .overlay(alignment: .bottom) {
             if let appInstall {
                 DeviceAppInstallPill(install: appInstall, onDismiss: onDismissAppInstall)
@@ -102,6 +108,12 @@ struct DeviceStage: View {
                     .padding(.bottom, scale.space[3])
             }
         }
+    }
+
+    /// Device points to view points while the island sits at the top of the drawn screen.
+    private func islandScale(landscape: Bool) -> CGFloat? {
+        guard device.hasDynamicIsland, !landscape, let shape, shape.widthPoints > 0, screenWidth > 0 else { return nil }
+        return screenWidth / shape.widthPoints
     }
 
     /// A click while an agent drives: draw the eye to Take over.
