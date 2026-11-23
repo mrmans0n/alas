@@ -52,6 +52,8 @@ private final class FakeEffects {
     var delivered: [ShepherdPrompt] = []
     var pushes: [Push] = []
     var stops: [ShipReviewStop] = []
+    var discarded: [String] = []
+    var removedCheckouts: [ShipReviewID] = []
 
     func effects() -> ShipReviewer.Effects {
         var shipHead: (@MainActor (ShipReviewID, ShipReviewTarget?) async throws -> String)?
@@ -88,7 +90,7 @@ private final class FakeEffects {
                 let reply = self.replies.isEmpty ? approve : self.replies.removeFirst()
                 return .finished(sessionID: "reviewer-\(self.runs.count)", finalText: reply)
             },
-            discardReviewer: { _, _ in },
+            discardReviewer: { _, sessionID in self.discarded.append(sessionID) },
             earlierFindings: { sessionIDs in
                 self.filings.enumerated()
                     .filter { sessionIDs.contains(Self.reviewSessionID($0.offset)) }
@@ -115,7 +117,8 @@ private final class FakeEffects {
             autoFix: { _ in self.autoFix },
             localCommitsToPush: { _ in nil },
             notify: { _, stop in self.stops.append(stop) },
-            shipHead: shipHead
+            shipHead: shipHead,
+            removeReviewCheckout: { id in self.removedCheckouts.append(id) }
         )
     }
 
@@ -332,6 +335,22 @@ struct ShipReviewerTests {
         #expect(fake.delivered.first?.text.contains(findingID) == true)
         #expect(reviewer.record(for: id)?.phase == .awaitingFix(headSHA: "h1"))
         #expect(fake.pushes.isEmpty)
+    }
+
+    /// "Stop" ends this push's reviewer session, then removes its checkout.
+    @Test func stopDiscardsTheReviewerAndItsCheckout() async {
+        let fake = FakeEffects()
+        fake.replies = [oneFinding]
+        let reviewer = makeReviewer(fake)
+        _ = reviewer.requestPush(id, target: pullRequest, headSHA: "h1")
+        await reviewer.settle()
+        #expect(fake.removedCheckouts.isEmpty)
+
+        reviewer.cancel(id)
+        await reviewer.settle()
+
+        #expect(fake.discarded == ["reviewer-1"])
+        #expect(fake.removedCheckouts == [id])
     }
 
     @Test func unavailableReviewerStopsWithoutPushing() async {

@@ -1182,7 +1182,7 @@ private struct ProjectDialog: View {
                             from: state.enabledAgents(forProjectId: project.id)
                         ),
                         modelCatalog: state.acpModelCatalog,
-                        readOnlyAgentsOnly: true
+                        picksReviewer: true
                     )
                 }
                 VStack(alignment: .leading, spacing: 8) {

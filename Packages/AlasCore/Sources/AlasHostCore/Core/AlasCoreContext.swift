@@ -38,6 +38,8 @@ public final class AlasCoreContext {
     public let stackShepherd: StackShepherd
     /// Review before push: reviews the commits Alas is about to push.
     public let shipReviewer: ShipReviewer
+    /// The throwaway checkouts of reviewers that can't run read-only.
+    @ObservationIgnored let shipReviewCheckouts = ReviewScratchCheckouts()
     /// Told why a ship review stopped, with the message to show; the app
     /// installs it, a headless host notifies through the harness.
     @ObservationIgnored public var shipReviewNotice: (@MainActor (ShipReviewID, String) -> Void)?

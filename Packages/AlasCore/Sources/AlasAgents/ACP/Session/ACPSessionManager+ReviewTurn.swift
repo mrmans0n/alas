@@ -14,6 +14,10 @@ public struct ACPReviewTurnRequest: Sendable {
     public var title: String
     public var prompt: String
     public var timeout: Duration
+    /// Where the reviewer runs; nil runs it in the manager's worktree. An
+    /// agent whose read-only mode Alas can't enforce needs one: a checkout
+    /// its edits can't harm.
+    public var workingDirectory: String?
 
     public init(
         parentSessionID: ACPSession.ID,
@@ -22,7 +26,8 @@ public struct ACPReviewTurnRequest: Sendable {
         modelID: String?,
         title: String,
         prompt: String,
-        timeout: Duration
+        timeout: Duration,
+        workingDirectory: String? = nil
     ) {
         self.parentSessionID = parentSessionID
         self.reuseSessionID = reuseSessionID
@@ -31,6 +36,7 @@ public struct ACPReviewTurnRequest: Sendable {
         self.title = title
         self.prompt = prompt
         self.timeout = timeout
+        self.workingDirectory = workingDirectory
     }
 }
 
@@ -63,14 +69,17 @@ struct ACPReviewTurnWaiter {
 extension ACPSessionManager {
     /// Runs one turn of `request.prompt` in an unattended read-only reviewer
     /// session and returns the turn's whole final message. An agent whose
-    /// read-only mode Alas can't rely on is refused before any session
-    /// starts. A session that can't attach or enter a read-only mode is
-    /// discarded; any other session is kept for the next round, and
-    /// `discardReviewSession(id:)` ends it.
+    /// read-only mode Alas relies on must enter it; any other agent runs
+    /// only in `request.workingDirectory`, and is refused before any session
+    /// starts without one. A session that can't attach or enter a needed
+    /// read-only mode is discarded; any other session is kept for the next
+    /// round, and `discardReviewSession(id:)` ends it.
     public func runReviewTurn(_ request: ACPReviewTurnRequest) async -> ACPReviewTurnOutcome {
         // Nobody watches this session: tools the agent runs without asking
-        // could edit the worktree.
-        guard ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: request.agentID) else {
+        // could edit the worktree, so an agent whose read-only mode doesn't
+        // hold reviews elsewhere.
+        let enforced = ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: request.agentID)
+        guard enforced || request.workingDirectory != nil else {
             return .failed(sessionID: nil, .cannotRunReadOnly)
         }
         let session = await reviewSession(for: request)
@@ -80,8 +89,9 @@ extension ACPSessionManager {
             await discardReviewSession(id: id)
             return .failed(sessionID: id, failure)
         }
-        // A mode Alas relies on, or no review.
-        guard await enterReadOnlyMode(session), sessions[id] === session else {
+        // A mode Alas relies on, or no review; elsewhere, read-only where the agent offers it.
+        let readOnly = await enterReadOnlyMode(session)
+        guard sessions[id] === session, readOnly || !enforced else {
             await discardReviewSession(id: id)
             return .failed(sessionID: id, .cannotRunReadOnly)
         }
@@ -144,6 +154,7 @@ extension ACPSessionManager {
            let previous = liveSession(for: previousID),
            previous.unattendedReview {
             if previous.agentId == request.agentID,
+               previous.workingDirectory == request.workingDirectory,
                previous.agentState == .ready,
                previous.transcript.streamingState == .idle,
                reviewTurnWaiters[previousID] == nil {
@@ -158,6 +169,7 @@ extension ACPSessionManager {
             ephemeralTitle: request.title
         )
         session.unattendedReview = true
+        session.workingDirectory = request.workingDirectory
         if let modelID = request.modelID {
             pendingModel[session.id] = modelID
         }

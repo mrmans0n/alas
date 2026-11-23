@@ -251,7 +251,10 @@ It replaces the per-project shepherd settings. An uncommitted
 ### Code review
 
 With **Review before push** on (Settings › Changes, or the Ship button), a
-reviewer agent checks every push Ship makes before Alas pushes it.
+reviewer agent checks every push Ship makes before Alas pushes it. Claude
+Code and Codex review in place in a read-only mode; other agents review in a
+throwaway checkout of the commit, deleted afterwards, and only for local
+worktrees.
 `.alas/code-review.md` adds the repository's review instructions to the
 global prompt from Settings, for example:
 

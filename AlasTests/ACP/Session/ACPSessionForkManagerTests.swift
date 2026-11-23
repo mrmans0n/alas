@@ -701,38 +701,83 @@ struct ACPSessionForkManagerTests {
     }
 
     @Test(
-        "an unattended review turn runs only on agents whose read-only mode holds",
-        arguments: [("claude", true), ("opencode", false), ("pi", false)]
+        "an agent whose read-only mode holds reviews in place; any other only in a directory of its own",
+        arguments: [
+            ("claude", nil, planMode, "/tmp/wt"),
+            ("pi", "/tmp/review-checkout", noModes, "/tmp/review-checkout"),
+            ("pi", nil, noModes, nil),
+        ] as [(String, String?, String, String?)]
     )
-    func reviewTurnNeedsEnforcedReadOnly(agentID: String, runs: Bool) async throws {
+    func reviewTurnWorkingDirectory(
+        agentID: String, workingDirectory: String?, sessionNewResponse: String, expectedCwd: String?
+    ) async throws {
         let client = ACPMockClient()
         client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
         client.script(method: "session/prompt") { _ in
             client.emit(.init(sessionId: "remote", update: .agentMessageChunk(.text("No findings."))))
             return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
-        let (manager, _) = try reviewManager(client: client, sessionNewResponse: Self.planMode)
+        let (manager, _) = try reviewManager(client: client, sessionNewResponse: sessionNewResponse)
         let parent = manager.createSession(agentId: agentID)
+        var request = reviewRequest(parentID: parent.id, agentID: agentID)
+        request.workingDirectory = workingDirectory
 
-        let outcome = await manager.runReviewTurn(reviewRequest(parentID: parent.id, agentID: agentID))
+        let outcome = await manager.runReviewTurn(request)
 
-        if runs {
-            guard case .finished(let id, "No findings.") = outcome else {
-                Issue.record("expected a finished review turn, got \(outcome)")
-                return
-            }
-            await manager.discardReviewSession(id: id)
-        } else {
+        guard let expectedCwd else {
             #expect(outcome == .failed(sessionID: nil, .cannotRunReadOnly))
             #expect(manager.sessions.keys.allSatisfy { $0 == parent.id })
-            #expect(!client.sent.contains { $0.method == "session/prompt" })
+            #expect(!client.sent.contains { $0.method == "session/new" })
+            return
         }
+        guard case .finished(let id, "No findings.") = outcome else {
+            Issue.record("expected a finished review turn, got \(outcome)")
+            return
+        }
+        let sessionNew = try #require(client.sent.first { $0.method == "session/new" }?.params as? ACPSessionNewParams)
+        #expect(sessionNew.cwd == expectedCwd)
+        #expect(manager.sessions[id]?.readOnlyRestricted == true)
+        await manager.discardReviewSession(id: id)
+    }
+
+    @Test("an unattended reviewer gets neither the built-in alas MCP server nor the alas CLI")
+    func reviewTurnGetsNoAlasTools() async throws {
+        @MainActor final class Calls { var builtIn = 0, cliEnv = 0 }
+        let calls = Calls()
+        let client = ACPMockClient()
+        client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
+        client.script(method: "session/prompt") { _ in
+            client.emit(.init(sessionId: "remote", update: .agentMessageChunk(.text("No findings."))))
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        let (manager, _) = try reviewManager(client: client, sessionNewResponse: Self.planMode) { _ in
+            calls.builtIn += 1
+            return .omitted
+        }
+        manager.alasCLIEnvProvider = { _, _ in
+            calls.cliEnv += 1
+            return ["ALAS_SOCKET": "/tmp/alas.sock"]
+        }
+        let parent = manager.createSession(agentId: "claude")
+
+        let outcome = await manager.runReviewTurn(reviewRequest(parentID: parent.id))
+
+        guard case .finished(let id, _) = outcome else {
+            Issue.record("expected a finished review turn, got \(outcome)")
+            return
+        }
+        let sessionNew = try #require(client.sent.first { $0.method == "session/new" }?.params as? ACPSessionNewParams)
+        #expect(sessionNew.mcpServers.isEmpty)
+        #expect(calls.builtIn == 0)
+        #expect(calls.cliEnv == 0)
+        await manager.discardReviewSession(id: id)
     }
 
     /// Built like `sideQuestionReadOnlyMode`'s manager.
     private func reviewManager(
         client: ACPMockClient,
-        sessionNewResponse: String
+        sessionNewResponse: String,
+        builtInMCPProvider: ACPSessionManager.BuiltInMCPProvider? = nil
     ) throws -> (ACPSessionManager, ACPSessionStore) {
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(
@@ -748,7 +793,8 @@ struct ACPSessionForkManagerTests {
             worktreePath: "/tmp/wt",
             store: store,
             setupEvaluator: { _ in .ready },
-            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+            connectionFactory: { _, _, _ in ACPConnection(client: client) },
+            builtInMCPProvider: builtInMCPProvider
         )
         return (manager, store)
     }

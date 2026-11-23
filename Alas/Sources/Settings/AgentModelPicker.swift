@@ -2,10 +2,11 @@ import SwiftUI
 
 /// Agent and model menus for a `ReviewerChoice`. A nil choice inherits from a
 /// wider setting and shows `inheritLabel`; `.sameAsSession` is offered only
-/// when `allowsSameAsSession` is set. `readOnlyAgentsOnly` lists only agents
-/// whose read-only mode holds, as an unattended reviewer needs. A saved
-/// agent or model the lists no longer carry stays selectable and is named
-/// as such, so the menu never claims a choice the stored value does not hold.
+/// when `allowsSameAsSession` is set. With `picksReviewer`, agents whose
+/// read-only mode Alas can't enforce say they review in a separate checkout.
+/// A saved agent or model the lists no longer carry stays selectable and is
+/// named as such, so the menu never claims a choice the stored value does
+/// not hold.
 ///
 /// `body` lays the two menus out side by side; screens that label each menu
 /// separately place `agentMenu` and `modelMenu` themselves.
@@ -15,7 +16,7 @@ struct AgentModelPicker: View {
     let inheritLabel: String?
     let agents: [AgentDefinition]
     let modelCatalog: ACPAgentModelCatalog
-    var readOnlyAgentsOnly = false
+    var picksReviewer = false
 
     @Environment(\.designScale) private var scale
 
@@ -32,7 +33,6 @@ struct AgentModelPicker: View {
     }
 
     var agentMenu: some View {
-        let agents = listedAgents
         let missingAgentID = selectedAgentID.flatMap { id in
             agents.contains { $0.id == id } ? nil : id
         }
@@ -45,7 +45,15 @@ struct AgentModelPicker: View {
                     Text(Self.sameAsSessionLabel).tag(AgentSelection.sameAsSession)
                 }
                 ForEach(agents) { agent in
-                    Text(agent.displayName).tag(AgentSelection.agent(agent.id))
+                    if let note = reviewerNote(agentID: agent.id) {
+                        VStack(alignment: .leading) {
+                            Text(agent.displayName)
+                            Text(note).foregroundStyle(.secondary)
+                        }
+                        .tag(AgentSelection.agent(agent.id))
+                    } else {
+                        Text(agent.displayName).tag(AgentSelection.agent(agent.id))
+                    }
                 }
                 if let missingAgentID {
                     Divider()
@@ -114,9 +122,10 @@ struct AgentModelPicker: View {
         case agent(String)
     }
 
-    private var listedAgents: [AgentDefinition] {
-        guard readOnlyAgentsOnly else { return agents }
-        return agents.filter { ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: $0.id) }
+    /// Where a reviewer that can't be held read-only works instead.
+    private func reviewerNote(agentID: String) -> String? {
+        guard picksReviewer, !ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: agentID) else { return nil }
+        return "reviews in a separate checkout"
     }
 
     private var selectedAgentID: String? {
@@ -136,7 +145,7 @@ struct AgentModelPicker: View {
         case .sameAsSession:
             return Self.sameAsSessionLabel
         case let .agent(id, _):
-            if let agent = listedAgents.first(where: { $0.id == id }) { return agent.displayName }
+            if let agent = agents.first(where: { $0.id == id }) { return agent.displayName }
             return "\(id) · unavailable"
         }
     }

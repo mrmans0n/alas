@@ -255,7 +255,7 @@ struct ChangesPane: View {
             inheritLabel: nil,
             agents: RepositoryAgentMenuPolicy.acpAgents(from: state.agentRegistry.enabled()),
             modelCatalog: state.acpModelCatalog,
-            readOnlyAgentsOnly: true
+            picksReviewer: true
         )
     }
 

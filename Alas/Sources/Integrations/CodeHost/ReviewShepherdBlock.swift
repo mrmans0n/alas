@@ -245,7 +245,7 @@ struct ShipReviewSwitchRow: View {
                 inheritLabel: lever.inheritLabel,
                 agents: lever.agents,
                 modelCatalog: lever.modelCatalog,
-                readOnlyAgentsOnly: true
+                picksReviewer: true
             )
             .controlSize(.small)
             .disabled(lever.isDisabled)

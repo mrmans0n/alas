@@ -242,6 +242,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// requests, so the read-only gate decides every one without asking.
     /// In-memory only, like `readOnlyRestricted`.
     public var unattendedReview = false
+    /// Where this session's agent runs when not its manager's worktree: the
+    /// throwaway checkout of a reviewer whose read-only mode Alas can't
+    /// enforce. Its `session/new` cwd and its runner's terminal and file
+    /// root. In-memory only, like `unattendedReview`.
+    public var workingDirectory: String?
 
     public func recordReadOnlyBlock(_ title: String) {
         readOnlyBlockedTools.append(.init(title: title, messageIndex: transcript.messages.count))

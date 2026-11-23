@@ -4651,7 +4651,7 @@ public final class ACPSessionManager: ChangeTracking {
             sessionId: sessionId,
             command: launchSpec.command,
             args: launchSpec.arguments,
-            cwd: worktreePath,
+            cwd: session.workingDirectory ?? worktreePath,
             env: environment,
             operationKeyPrefix: "\(instanceId):\(sessionId):\(UUID().uuidString)",
             initialBrokerGeneration: usesPersistedBrokerNamespace
@@ -6879,6 +6879,10 @@ extension ACPSessionManager {
         guard let session = sessions[sessionId],
               isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
         else { return }
+        // The session's own directory, when it has one, stands in for the
+        // worktree everywhere this attach uses it: the agent's cwd, its
+        // runner's terminal and file root, MCP and CLI context.
+        let worktreePath = session.workingDirectory ?? self.worktreePath
         switch session.agentState {
         case .spawning, .ready: return
         case .idle, .disconnected, .failed: break
@@ -7114,7 +7118,9 @@ extension ACPSessionManager {
             let resolvedSpec = try await resolvedLaunchSpec(for: spec, host: host)
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             var launchSpec = launchSpecTransformer(resolvedSpec, !session.readOnlyRestricted)
-            if host == nil {
+            // An unattended reviewer gets no Alas tools: nobody answers its
+            // permission requests, and Alas tools could push past review.
+            if host == nil, !session.unattendedReview {
                 let cliEnv = await alasCLIEnvProvider?(worktreePath, sessionId)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
                 if let cliEnv {
@@ -7560,7 +7566,7 @@ extension ACPSessionManager {
                 builtInLocation = .local(adapterSupportsHTTP: initialized.mcpCapabilities.http)
             }
             let builtInAttachment: BuiltInMCPAttachment
-            if let builtInMCPProvider, let builtInLocation {
+            if let builtInMCPProvider, let builtInLocation, !session.unattendedReview {
                 builtInAttachment = await builtInMCPProvider(builtInMCPAttachmentContext(
                     sessionId: sessionId,
                     agentID: session.agentId,
@@ -7698,7 +7704,7 @@ extension ACPSessionManager {
             // gg-mcp composes after planning like the alas built-in and is
             // suppressed by a user-configured server of the same name
             // (checked inside the injection), but it stays local-only.
-            let ggMCP = remoteHost == nil ? ggMCPProvider?(worktreePath) : nil
+            let ggMCP = remoteHost == nil && !session.unattendedReview ? ggMCPProvider?(worktreePath) : nil
             if let ggMCP {
                 plannedWireServers.append(ggMCP.server)
                 plannedStatuses.append(ggMCP.status)
@@ -9005,9 +9011,10 @@ extension ACPSessionManager {
             // and stays unready if it relies on one and can't.
             if session.readOnlyRestricted {
                 // An unattended reviewer has no fallback: nobody reads a
-                // warning that read-only isn't guaranteed.
+                // warning that read-only isn't guaranteed. One in a checkout
+                // of its own can't edit the worktree, so it runs without.
                 let modeAccepted = session.unattendedReview
-                    ? await enterReadOnlyMode(session)
+                    ? await enterReadOnlyMode(session) || session.workingDirectory != nil
                     : await enterSideSessionMode(session)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
                       session.agentState == .spawning else { return }

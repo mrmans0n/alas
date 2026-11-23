@@ -106,18 +106,20 @@ public final class ShipReviewer {
         }
     }
 
-    /// One reviewer turn. `reuseSessionID` is the reviewer of this push's
-    /// earlier rounds, which remembers their findings.
+    /// One reviewer turn on `headSHA`. `reuseSessionID` is the reviewer of
+    /// this push's earlier rounds, which remembers their findings.
     public struct ReviewerRun: Sendable {
         public let id: ShipReviewID
         public let reviewer: ResolvedReviewer
         public let reuseSessionID: String?
+        public let headSHA: String
         public let prompt: String
 
-        public init(id: ShipReviewID, reviewer: ResolvedReviewer, reuseSessionID: String?, prompt: String) {
+        public init(id: ShipReviewID, reviewer: ResolvedReviewer, reuseSessionID: String?, headSHA: String, prompt: String) {
             self.id = id
             self.reviewer = reviewer
             self.reuseSessionID = reuseSessionID
+            self.headSHA = headSHA
             self.prompt = prompt
         }
     }
@@ -180,6 +182,10 @@ public final class ShipReviewer {
         public var instructions: @MainActor (_ path: URL, _ project: String?) async throws -> CodeReviewInstructions
         public var runReviewer: @MainActor (ReviewerRun) async -> ReviewerOutcome
         public var discardReviewer: @MainActor (_ id: ShipReviewID, _ sessionID: String) async -> Void
+        /// Removes the review's throwaway checkout, if it has one.
+        public var removeReviewCheckout: @MainActor (_ id: ShipReviewID) async -> Void
+        /// Removes every throwaway checkout none of `live` owns.
+        public var pruneReviewCheckouts: @MainActor (_ live: Set<ShipReviewID>) async -> Void
         public var earlierFindings: @MainActor (_ reviewSessionIDs: [ReviewSessionID]) -> [CodeReviewEarlierFinding]
         /// Findings still active in the review session; nil when it can't be read.
         public var openFindingCount: @MainActor (_ reviewSessionID: ReviewSessionID) -> Int?
@@ -214,7 +220,9 @@ public final class ShipReviewer {
             autoFix: @escaping @MainActor (_ id: ShipReviewID) -> Bool,
             localCommitsToPush: @escaping @MainActor (_ id: ShipReviewID) async -> String?,
             notify: @escaping @MainActor (_ id: ShipReviewID, _ stop: ShipReviewStop) -> Void,
-            shipHead: (@MainActor (_ id: ShipReviewID, _ target: ShipReviewTarget?) async throws -> String)? = nil
+            shipHead: (@MainActor (_ id: ShipReviewID, _ target: ShipReviewTarget?) async throws -> String)? = nil,
+            removeReviewCheckout: @escaping @MainActor (_ id: ShipReviewID) async -> Void = { _ in },
+            pruneReviewCheckouts: @escaping @MainActor (_ live: Set<ShipReviewID>) async -> Void = { _ in }
         ) {
             self.context = context
             self.settings = settings
@@ -224,6 +232,8 @@ public final class ShipReviewer {
             self.instructions = instructions
             self.runReviewer = runReviewer
             self.discardReviewer = discardReviewer
+            self.removeReviewCheckout = removeReviewCheckout
+            self.pruneReviewCheckouts = pruneReviewCheckouts
             self.earlierFindings = earlierFindings
             self.openFindingCount = openFindingCount
             self.fileRound = fileRound
@@ -283,10 +293,13 @@ public final class ShipReviewer {
     // MARK: - Lifecycle
 
     /// Restarts each round that was running when Alas quit, with a fresh
-    /// reviewer and uncounted, and retries an interrupted push. Once per run.
+    /// reviewer and uncounted, and retries an interrupted push; removes the
+    /// throwaway checkouts of reviews with nothing pending. Once per run.
     public func start() {
         guard !started else { return }
         started = true
+        let live = Set(records.values.filter { $0.pending != nil }.map(\.id))
+        spawn { [weak self] in await self?.effects?.pruneReviewCheckouts(live) }
         for record in records.values.sorted(by: { $0.createdAt < $1.createdAt }) {
             let (next, action) = ShipReviewPolicy.relaunched(record, now: now())
             if next != record { put(next) }
@@ -527,9 +540,10 @@ public final class ShipReviewer {
             break
         case let .stop(stop):
             // Nothing goes out until the user acts; a retry starts a fresh reviewer.
-            if var record = records[id], record.reviewerSessionID != nil {
+            if var record = records[id] {
+                let hadReviewer = record.reviewerSessionID != nil
                 dropReviewer(&record)
-                put(record)
+                if hadReviewer { put(record) }
             }
             effects?.notify(id, stop)
         }
@@ -641,7 +655,8 @@ public final class ShipReviewer {
         }
 
         let outcome = await effects.runReviewer(ReviewerRun(
-            id: id, reviewer: prepared.reviewer, reuseSessionID: current.reviewerSessionID, prompt: prepared.prompt
+            id: id, reviewer: prepared.reviewer, reuseSessionID: current.reviewerSessionID, headSHA: headSHA,
+            prompt: prepared.prompt
         ))
         guard isCurrent(id, generation), var reviewed = records[id] else {
             // A newer round or a stop took over. Its reviewer is the record's;
@@ -889,12 +904,18 @@ public final class ShipReviewer {
         dropReviewer(&record)
     }
 
-    /// Discards this push's reviewer session.
+    /// Discards this push's reviewer session, then its throwaway checkout
+    /// unless a round has started meanwhile and works in it.
     private func dropReviewer(_ record: inout ShipReviewRecord) {
-        guard let sessionID = record.reviewerSessionID else { return }
-        record.reviewerSessionID = nil
         let id = record.id
-        spawn { [weak self] in await self?.effects?.discardReviewer(id, sessionID) }
+        let sessionID = record.reviewerSessionID
+        record.reviewerSessionID = nil
+        spawn { [weak self] in
+            if let sessionID { await self?.effects?.discardReviewer(id, sessionID) }
+            guard let self, let effects else { return }
+            if case .reviewing = records[id]?.phase { return }
+            await effects.removeReviewCheckout(id)
+        }
     }
 
     @discardableResult

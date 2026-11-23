@@ -53,7 +53,7 @@ Out of scope:
 | Concern | Decision |
 | --- | --- |
 | When the review runs | Before each push Alas makes for a shipped branch or stack, on the local commits. Never on uncommitted changes. |
-| Who reviews | An ephemeral read-only ACP session with the resolved reviewer agent and model. It never edits. |
+| Who reviews | An ephemeral ACP session with the resolved reviewer agent and model. Claude Code and Codex review in place in a read-only mode; other agents review in a throwaway checkout of the commit, deleted afterwards, so their edits never reach the worktree. |
 | Who fixes | The owning session, through Auto-fix. Findings reach it as a shepherd prompt with a card. |
 | How findings come back | The reviewer ends its turn with a JSON block. Alas parses it and files the findings itself, attributed to the reviewer. The reviewer does not call MCP tools. |
 | Clean | Verdict `approve`, or `comment` with no open findings. |
@@ -124,7 +124,8 @@ and pushes nothing until the user acts.
 | Unreadable file | "Couldn't read .alas/code-review.md: <reason>. Nothing was pushed." | Retry, Ship anyway |
 
 Reasons for a failed reviewer: the agent isn't installed or enabled, it can't
-attach (signed out, crashed), it can't run read-only, the turn ended without a
+attach (signed out, crashed), it can't run read-only, its review checkout
+couldn't be made or the worktree is over SSH, the turn ended without a
 parseable result, or it ran past the review timeout (20 minutes).
 
 "Ship anyway" pushes HEAD, records it as allowed and continues as if the
@@ -137,7 +138,8 @@ A new "Code review" group above "PR shepherd":
 - **Reviewer.** "Agent and model that review shipped branches before Alas
   pushes them. A project can override it, and each ship can change it from the
   Ship button." Two menus: agent ("Same as the session" or any enabled ACP
-  agent whose read-only mode Alas enforces, today Claude and Codex) and model
+  agent; those whose read-only mode Alas doesn't enforce read "reviews in a
+  separate checkout") and model
   ("Agent default" or the models that agent last advertised, from
   `ACPAgentModelCatalog`).
 - **Prompt.** "What every review looks for. Project instructions and
@@ -275,13 +277,23 @@ built on the `/btw` side session machinery in `ACPSessionManager`:
 
 - Created with the resolved agent, with the model staged through
   `pendingModel` as run schedules do.
-- Only for agents whose read-only mode holds whatever the user's own rules
-  allow (`ACPSideQuestionSupportPolicy.enforcesReadOnly`: Claude, Codex).
-  Any other agent, "Same as the session" included, fails the review with
-  "<agent> can't run read-only" before a session starts.
-- Put in a read-only mode with `enterReadOnlyMode`. An agent Alas can't move
-  out of auto-approving modes fails the review with "<agent> can't run
+- Any ACP agent can review. One whose read-only mode holds whatever the
+  user's own rules allow (`ACPSideQuestionSupportPolicy.enforcesReadOnly`:
+  Claude, Codex) reviews in place: it runs in the worktree, put in a
+  read-only mode with `enterReadOnlyMode`, and an agent Alas can't move out
+  of auto-approving modes fails the review with "<agent> can't run
   read-only".
+- Any other agent reviews in a throwaway checkout of the reviewed commit
+  (`ReviewScratchCheckouts`): a detached `git worktree add` under
+  Application Support's `review-checkouts`, one per ship review, moved to
+  each round's head with `checkout --force` and `clean -fdx` so nothing it
+  wrote carries over. The session's cwd, terminals and file root are that
+  checkout, never the user's worktree. It still tries a read-only mode but
+  runs without one. Local worktrees only: on an SSH worktree it fails with
+  "<agent> can't review an SSH worktree; pick Claude Code or Codex", and a
+  checkout git can't make fails with "couldn't prepare a review checkout:
+  <error>". The checkout is removed with the reviewer, and on launch Alas
+  removes every checkout no pending review owns.
 - Permission requests use a reviewer rule: allow `read`, `search` and
   `think`; reject everything else, `fetch` included. The reviewer never asks,
   so it can't stall an unattended ship.

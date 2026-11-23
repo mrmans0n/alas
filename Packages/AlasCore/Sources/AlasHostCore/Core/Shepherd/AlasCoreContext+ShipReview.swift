@@ -88,6 +88,12 @@ extension AlasCoreContext {
             shipHead: { [weak self] id, target in
                 guard let self else { throw ShipHeadUnreadable(errorDescription: "Alas is shutting down") }
                 return try await shipReviewHead(id, target: target)
+            },
+            removeReviewCheckout: { [weak self] id in
+                await self?.shipReviewCheckouts.remove(id)
+            },
+            pruneReviewCheckouts: { [weak self] live in
+                await self?.shipReviewCheckouts.pruneLeftovers(keeping: live)
             }
         )
     }
@@ -206,9 +212,27 @@ extension AlasCoreContext {
         return "\(agent.displayName) · \(model)"
     }
 
+    /// Runs the round's reviewer. One whose read-only mode Alas can't enforce
+    /// reviews in a throwaway checkout of the round's head instead of the
+    /// worktree; that needs a local worktree.
     private func runShipReviewer(_ run: ShipReviewer.ReviewerRun) async -> ShipReviewer.ReviewerOutcome {
         guard let worktree = worktree(withId: run.id.worktreeID), let manager = orchestrationManager(for: worktree) else {
             return .failed(sessionID: nil, reason: "the worktree is gone")
+        }
+        var workingDirectory: String?
+        if !ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: run.reviewer.agentID) {
+            guard manager.executionRemoteHost == nil else {
+                let agent = environment.agent(id: run.reviewer.agentID)?.displayName ?? run.reviewer.agentID
+                return .failed(sessionID: nil, reason: "\(agent) can't review an SSH worktree; pick Claude Code or Codex")
+            }
+            do {
+                workingDirectory = try await shipReviewCheckouts.prepare(
+                    run.id, repository: URL(fileURLWithPath: manager.worktreePath), sha: run.headSHA
+                ).path
+            } catch {
+                return .failed(sessionID: nil, reason: "couldn't prepare a review checkout: \(error.localizedDescription)")
+            }
+            guard !Task.isCancelled else { return .failed(sessionID: nil, reason: "the review was cancelled") }
         }
         let outcome = await manager.runReviewTurn(ACPReviewTurnRequest(
             parentSessionID: run.id.sessionID,
@@ -217,7 +241,8 @@ extension AlasCoreContext {
             modelID: run.reviewer.modelID,
             title: "Review before push",
             prompt: run.prompt,
-            timeout: .seconds(Self.shipReviewTimeoutMinutes * 60)
+            timeout: .seconds(Self.shipReviewTimeoutMinutes * 60),
+            workingDirectory: workingDirectory
         ))
         switch outcome {
         case .finished(let sessionID, let finalText):
