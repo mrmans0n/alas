@@ -239,6 +239,9 @@ def display(record):
 
 
 def blind(directory):
+    # New labels would silently reassign existing grades to other models.
+    if (directory / "grades.json").exists():
+        die("grades.json exists; move it, blind-key.json and review.md aside before regenerating packets")
     runs = read_runs(directory)
     aliases = sorted(runs)
     cases = {c["id"]: c for c in load_cases(directory)}
