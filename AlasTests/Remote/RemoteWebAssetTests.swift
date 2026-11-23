@@ -135,6 +135,7 @@ struct RemoteWebAssetTests {
             function send(message) { sent.push(message); }
             function clearEscalation() {} function setStatus() {} function connectedLabel() { return 'online'; }
             function hideGate() {} function replayActiveDetailRequest() {} function replayActiveListRequest() {}
+            function applyActiveCapabilities() {} var terminals = { reconnected() {} };
             var transcriptImageLoader = createTranscriptImageLoader(send, () => {});
             transcriptImageLoader.track('before', currentSession, '/tmp/shot.png');
             """)
