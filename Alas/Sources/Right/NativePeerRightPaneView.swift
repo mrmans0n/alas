@@ -850,7 +850,7 @@ struct NativePeerRightPaneView: View {
                 .truncationMode(.middle)
                 Spacer(minLength: 4)
                 if let verdict {
-                    Text(verdict.peerLabel).foregroundColor(theme.color("fg-dim"))
+                    Text(verdict.displayLabel).foregroundColor(theme.color("fg-dim"))
                 }
                 if openCount > 0 {
                     Text("\(openCount) open").foregroundColor(theme.color("accent"))
