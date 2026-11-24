@@ -630,6 +630,30 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
   #empty-detail { grid-area: chat; grid-row: 2 / 5; }
   #messages, #drivebar { padding-inline: max(16px, calc((100% - 760px) / 2)); }
   #drivebar { background: none; backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: none; }
+  /* A desktop reading column: the Mac's type size, quiet tool rows, a neutral bubble for what you sent. */
+  .msg { font-size: 14px; line-height: 1.55; }
+  .m-user { max-width: 72%; padding: 8px 12px; border-radius: 12px; background: var(--bg-3); box-shadow: inset 0 0 0 0.5px var(--line); }
+  .md code { font-size: 12px; }
+  .md pre { border-radius: 8px; }
+  .md table { font-size: 12.5px; }
+  .m-tool { background: none; box-shadow: none; border-radius: 6px; }
+  .m-tool + .m-tool { margin-top: -8px; }   /* a run of tool calls reads as one list */
+  .m-tool.is-open { background: var(--bg-2); box-shadow: inset 0 0 0 0.5px var(--ring); }
+  .tool-toggle { min-height: 28px; padding: 4px 8px; gap: 8px; border-radius: 6px; }
+  .tool-toggle:hover { background: var(--fill); }
+  .tool-verb { color: var(--fg-faint); font-size: 9.5px; }
+  .tool-cmd { font-size: 12px; letter-spacing: 0; }
+  .tool-status svg { width: 12px; height: 12px; }
+  .m-thought .thought-body, .thought-toggle { font-size: 12.5px; }
+  #field { min-height: 40px; border-radius: 10px; }
+  #prompt { margin: 9px 0; font-size: 14px; }
+  #attach, #config, #usage { height: 40px; }
+  .action-btn { width: 40px; height: 40px; border-radius: 10px; }
+  #send svg { width: 17px; height: 17px; }
+  #takeover { padding: 5px 14px; font-size: 12px; }
+  /* Sheet buttons sized for a pointer, not a thumb. */
+  .sheet-card button { padding: 8px 12px; margin: 6px 0; border-radius: 8px; font-size: 13px; font-weight: 600; }
+  .sheet-title { font-size: 14px; }
   #bar:not(.is-detail) ~ main #empty-detail { grid-column: 2 / 4; display: flex; align-items: center; justify-content: center; color: var(--fg-faint); font-size: 14px; }
 
   /* Panel: flat tabs over Changes, Files or a terminal. Chat is the middle column here. */
