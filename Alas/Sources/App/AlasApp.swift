@@ -97,6 +97,7 @@ struct AlasApp: App {
         .commands {
             appCommands
             EditorCommands(availability: editorCommandAvailability)
+            FindCommands(state: state)
         }
 
         Window("Settings", id: "settings") {
@@ -272,47 +273,6 @@ struct AlasApp: App {
             Button("Edit Spaces…") {
                 state.pendingSettingsSection = .spaces
                 NotificationCenter.default.post(name: .alasOpenSettings, object: SettingsSection.spaces)
-            }
-        }
-        CommandGroup(after: .pasteboard) {
-            Button("Search Files…") {
-                NotificationCenter.default.post(name: .alasOpenSearch, object: nil)
-            }
-            .keyboardShortcut(state.shortcut(for: .searchFiles))
-            .disabled(state.peerCoversCenterPane)
-            Divider()
-            Button("Split Selection into Lines") {
-                NSApp.sendAction(#selector(CodeTextView.splitSelectionIntoLines(_:)), to: nil, from: nil)
-            }
-            .keyboardShortcut(state.shortcut(for: .splitSelectionIntoLines))
-            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
-            Divider()
-            Button("Find") {
-                NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.showFind)
-            }
-            .keyboardShortcut(state.shortcut(for: .findAndReplace))
-            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
-            Button("Find and Replace") {
-                NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.showReplace)
-            }
-            .keyboardShortcut(state.shortcut(for: .replaceInEditor))
-            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
-            Button("Find Next") {
-                NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.findNext)
-            }
-            .keyboardShortcut("g", modifiers: .command)
-            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
-            Button("Find Previous") {
-                NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.findPrevious)
-            }
-            .keyboardShortcut("g", modifiers: [.command, .shift])
-            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
-            if AppKitMenuInjection.isAffectedOS {
-                Divider()
-                Button(SystemMenuItems.emojiAndSymbolsTitle) {
-                    SystemMenuItems.showEmojiAndSymbols()
-                }
-                .keyboardShortcut(SystemMenuItems.emojiAndSymbolsShortcut)
             }
         }
         CommandGroup(after: .toolbar) {
@@ -564,6 +524,58 @@ struct AlasApp: App {
             }
         }
         #endif
+    }
+}
+
+private struct FindCommands: Commands {
+    let state: AppState
+    @FocusedValue(\.reviewFind) private var reviewFind
+
+    private var canFindInEditor: Bool { state.hasActiveCodeEditorTab || state.hasOpenPeerHostFile }
+    private var canFind: Bool { reviewFind != nil || canFindInEditor }
+
+    var body: some Commands {
+        CommandGroup(after: .pasteboard) {
+            Button("Search Files…") {
+                NotificationCenter.default.post(name: .alasOpenSearch, object: nil)
+            }
+            .keyboardShortcut(state.shortcut(for: .searchFiles))
+            .disabled(state.peerCoversCenterPane)
+            Divider()
+            Button("Split Selection into Lines") {
+                NSApp.sendAction(#selector(CodeTextView.splitSelectionIntoLines(_:)), to: nil, from: nil)
+            }
+            .keyboardShortcut(state.shortcut(for: .splitSelectionIntoLines))
+            .disabled(!canFindInEditor)
+            Divider()
+            Button("Find") { perform(.showFind) }
+                .keyboardShortcut(state.shortcut(for: .findAndReplace))
+                .disabled(!canFind)
+            Button("Find and Replace") { perform(.showReplace) }
+                .keyboardShortcut(state.shortcut(for: .replaceInEditor))
+                .disabled(reviewFind != nil || !canFindInEditor)
+            Button("Find Next") { perform(.findNext) }
+                .keyboardShortcut("g", modifiers: .command)
+                .disabled(!canFind)
+            Button("Find Previous") { perform(.findPrevious) }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(!canFind)
+            if AppKitMenuInjection.isAffectedOS {
+                Divider()
+                Button(SystemMenuItems.emojiAndSymbolsTitle) {
+                    SystemMenuItems.showEmojiAndSymbols()
+                }
+                .keyboardShortcut(SystemMenuItems.emojiAndSymbolsShortcut)
+            }
+        }
+    }
+
+    private func perform(_ request: EditorFindRequest) {
+        if let reviewFind, request != .showReplace {
+            reviewFind.perform(request)
+        } else {
+            NotificationCenter.default.post(name: .alasShowFindReplace, object: request)
+        }
     }
 }
 

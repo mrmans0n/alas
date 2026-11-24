@@ -106,6 +106,32 @@ struct AppKitDiffReviewScrollerTests {
         #expect(request?.lineTarget == AppKitDiffScrollLineTarget(side: .new, line: 42))
     }
 
+    @Test func reviewFindReachesBothDiffSidesAndCountsCollapsedContextOnce() async throws {
+        let id = fileID()
+        let diff = ParsedDiff(hunks: [
+            .init(header: "@@ -30,4 +40,4 @@", oldStart: 30, newStart: 40, lines: [
+                .init(kind: .delete, text: "🧪 Match MATCH", oldNumber: 30, newNumber: nil),
+                .init(kind: .add, text: "match", oldNumber: nil, newNumber: 40),
+                .init(kind: .context, text: "edge", oldNumber: 31, newNumber: 41),
+                .init(kind: .context, text: "match", oldNumber: 32, newNumber: 42),
+                .init(kind: .context, text: "edge", oldNumber: 33, newNumber: 43),
+            ]),
+        ])
+        let display = DiffDisplayModelBuilder.build(
+            diff: diff, filePath: "Sources/Example.swift", collapseContextThreshold: 2, contextEdgeCount: 1
+        )
+        let collapsed = try #require(display.groups.first?.rows.first { $0.kind == .collapsed })
+        let input = DiffReviewFindInput(query: "match", caseSensitive: false, files: [.init(id: id, model: display)])
+
+        let matches = await input.matches()
+        #expect(matches == [
+            .init(fileID: id, side: .old, line: 30, range: NSRange(location: 3, length: 5), collapsedRowID: nil),
+            .init(fileID: id, side: .old, line: 30, range: NSRange(location: 9, length: 5), collapsedRowID: nil),
+            .init(fileID: id, side: .new, line: 40, range: NSRange(location: 0, length: 5), collapsedRowID: nil),
+            .init(fileID: id, side: .new, line: 42, range: NSRange(location: 0, length: 5), collapsedRowID: collapsed.id),
+        ])
+    }
+
     @Test func unknownSideLineCommandsResolveThroughEitherRenderedSide() {
         let fileID = fileID()
         let rowID = "file:\(fileID.rawValue):segment:seg:rows:block"

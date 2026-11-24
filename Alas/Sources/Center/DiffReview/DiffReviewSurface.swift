@@ -105,6 +105,9 @@ struct DiffReviewSurface: View {
     @State private var scrollCommandController = DiffReviewScrollCommandController()
     @State private var scrollCommand: DiffReviewScrollCommand?
     @State private var appKitProgrammaticScroll: AppKitDiffReviewProgrammaticScroll?
+    @State private var findRequest = DiffReviewFindRequest()
+    @State private var findScrollController = DiffReviewLineScrollController()
+    @State private var findScrollCommand: DiffReviewLineScrollCommand?
     @State private var appKitScrollCompletionGate = AppKitDiffReviewScrollCompletionGate()
     /// Held, not observed: only the rail re-renders as the scroll spy moves.
     @State private var scrollSpy = DiffReviewScrollSpySelection()
@@ -274,6 +277,7 @@ struct DiffReviewSurface: View {
                     .background(theme.color("bg-1"))
             }
         }
+        .focusedSceneValue(\.reviewFind, findRequest)
         .onAppear {
             synchronizeSelectionWithSession()
         }
@@ -316,7 +320,10 @@ struct DiffReviewSurface: View {
                     onSelectFile: scrollToFile
                 )
             }
-            appKitMainReviewStream(session, trailingRows: inlineSummaryRows(for: summaryPlacement))
+            VStack(spacing: 0) {
+                DiffReviewFindBar(request: findRequest, session: session, selectedFileID: selectedFileID, reveal: revealFindMatch)
+                appKitMainReviewStream(session, trailingRows: inlineSummaryRows(for: summaryPlacement))
+            }
             if shouldShowReviewSummaryRail, summaryPlacement == .rail {
                 ReviewDraftSummaryRail(
                     comments: allDraftComments,
@@ -349,6 +356,7 @@ struct DiffReviewSurface: View {
             inlineFeedbackCommand: inlineFeedbackScrollCommand,
             draftCommentCommand: draftCommentScrollCommand,
             lineCommand: lineScrollCommand,
+            findCommand: findScrollCommand,
             onNavigationFile: selectAppKitNavigationFile,
             onActiveFileChange: updateSelectedFileFromAppKitViewport,
             onUserScroll: { scrollSpy.userDidScroll() },
@@ -357,6 +365,20 @@ struct DiffReviewSurface: View {
             trailingRows: trailingRows
         )
         .background(theme.color("bg-1"))
+    }
+
+    private func revealFindMatch(_ match: DiffReviewFindMatch) {
+        guard let file = session.files.first(where: { $0.id == match.fileID }) else { return }
+        let state = appKitPresentationStore.state(for: file)
+        if !state.showFullDiffOverride {
+            state.showFullDiffOverride = true
+        }
+        if let rowID = match.collapsedRowID, !state.expandedCollapsedRowIDs.contains(rowID) {
+            state.expandedCollapsedRowIDs.insert(rowID)
+        }
+        findScrollCommand = findScrollController.command(
+            fileID: match.fileID, side: match.side, line: match.line, findRange: match.range
+        )
     }
 
     /// The draft review summary as a single scroller row after the diff

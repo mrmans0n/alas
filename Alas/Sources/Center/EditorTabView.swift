@@ -167,20 +167,21 @@ struct EditorTabView: View {
                 if findPresentation != .hidden {
                     EditorFindBarView(
                         findText: $findText,
-                        replaceText: $replaceText,
                         isCaseSensitive: $isCaseSensitive,
                         findFieldFocused: $findFieldFocused,
-                        replaceFieldFocused: $replaceFieldFocused,
-                        showsReplace: findPresentation == .replace,
+                        replacement: findPresentation == .replace ? .init(
+                            text: $replaceText,
+                            focused: $replaceFieldFocused,
+                            canReplace: canReplaceMatches,
+                            replace: replaceCurrentMatch,
+                            replaceAll: replaceAllMatches
+                        ) : nil,
                         statusText: findStatusText,
-                        canReplace: canReplaceMatches,
-                        onFindChanged: refreshFindFromUserInput,
-                        onToggleCaseSensitive: toggleCaseSensitive,
                         onFind: navigateFind,
-                        onReplace: replaceCurrentMatch,
-                        onReplaceAll: replaceAllMatches,
                         onDone: closeFindBar
                     )
+                    .onChange(of: findText) { refreshFindFromUserInput() }
+                    .onChange(of: isCaseSensitive) { refreshFindFromUserInput() }
                 }
                 CodeEditorView(
                     worktreeId: worktreeId,
@@ -343,10 +344,6 @@ struct EditorTabView: View {
     }
 
     private func refreshFindFromUserInput() {
-        refreshFindMatches(selecting: findText.isEmpty ? .none : .nearestFromSelection)
-    }
-
-    private func toggleCaseSensitive() {
         refreshFindMatches(selecting: findText.isEmpty ? .none : .nearestFromSelection)
     }
 

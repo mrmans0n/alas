@@ -10,14 +10,17 @@ struct DiffReviewLineScrollCommand: Equatable {
     let side: DiffReviewInlineFeedbackSide
     let line: Int?
     let generation: Int
+    var findRange: NSRange? = nil
 }
 
 struct DiffReviewLineScrollController: Equatable {
     private(set) var generation = 0
 
-    mutating func command(fileID: DiffReviewFileID, side: DiffReviewInlineFeedbackSide, line: Int?) -> DiffReviewLineScrollCommand {
+    mutating func command(
+        fileID: DiffReviewFileID, side: DiffReviewInlineFeedbackSide, line: Int?, findRange: NSRange? = nil
+    ) -> DiffReviewLineScrollCommand {
         generation += 1
-        return DiffReviewLineScrollCommand(fileID: fileID, side: side, line: line, generation: generation)
+        return DiffReviewLineScrollCommand(fileID: fileID, side: side, line: line, generation: generation, findRange: findRange)
     }
 }
 
@@ -161,9 +164,9 @@ enum AppKitDiffReviewScrollRequestResolver {
             targetID: exactTarget?.rowID ?? headerID ?? AppKitDiffReviewRowID.header(fileID: command.fileID),
             fallbackID: headerID,
             alignment: .center,
-            animated: true,
+            animated: command.findRange == nil,
             generation: commandGeneration(command.generation, kind: .line),
-            lineTarget: exactTarget.map { AppKitDiffScrollLineTarget(side: $0.side, line: $0.line) }
+            lineTarget: exactTarget.map { .init(side: $0.side, line: $0.line, findRange: command.findRange) }
         )
     }
 }
@@ -201,6 +204,7 @@ struct AppKitDiffReviewScroller: View {
     let inlineFeedbackCommand: DiffReviewInlineFeedbackScrollCommand?
     let draftCommentCommand: DiffReviewDraftCommentScrollCommand?
     var lineCommand: DiffReviewLineScrollCommand? = nil
+    var findCommand: DiffReviewLineScrollCommand? = nil
     let onNavigationFile: (DiffReviewFileID, Int) -> Void
     let onActiveFileChange: (DiffReviewFileID) -> Void
     /// Called on every user scroll tick.
@@ -245,6 +249,9 @@ struct AppKitDiffReviewScroller: View {
             submit(command.map(AppKitDiffReviewScrollRequestResolver.Command.draftComment), using: plan)
         }
         .onChange(of: lineCommand) { _, command in
+            submit(command.map(AppKitDiffReviewScrollRequestResolver.Command.line), using: plan)
+        }
+        .onChange(of: findCommand) { _, command in
             submit(command.map(AppKitDiffReviewScrollRequestResolver.Command.line), using: plan)
         }
         .copyFeedbackOverlay(message: inputs.lazy.compactMap { $0.state.copyFeedback.message }.first)
