@@ -38,7 +38,7 @@ time launching test hosts than running tests. See
 `docs/testing/test-cost-baseline-2026-09.md`.
 
 The build runner publishes compiled products and the test plan, then finishes.
-Four dependent test runners balance all ten ordinary batches and the subprocess
+Three dependent test runners balance all ten ordinary batches and the subprocess
 invocations by measured duration. Subprocess invocations still contain at most
 three suites. The macOS shell harnesses run on the builder. Each invocation
 has a wall-clock deadline, including startup and teardown: 480 seconds ordinary,
@@ -141,11 +141,11 @@ the old prototype's runner-minute adoption criterion does not fit this deliberat
 tradeoff. Record actual queue, wait, setup, transfer, test, and upload durations
 before declaring the experiment successful.
 
-The current layout uses one build job followed by four balanced test jobs.
+The current layout uses one build job followed by three balanced test jobs.
 Workers depend on `build-test`, so no macOS slot is reserved while waiting for
 compilation. This trades a second queue wait for lower runner occupancy across
-concurrent PRs. Both ordinary and subprocess work run on those four workers.
-The four-worker trial uses timings from passing run
+concurrent PRs. Both ordinary and subprocess work run on those three workers.
+The earlier four-worker trial used timings from passing run
 [36342387386](https://github.com/mrmans0n/alas/actions/runs/36342387386).
 Its 40 measured invocations total 1,887 seconds. An ideal four-way assignment
 would take at least 472 seconds of test work per worker, compared with 1,037
