@@ -564,9 +564,16 @@ extension AlasCoreContext {
         }
         switch launch {
         case .hosted(let sessionID):
-            observeRun(runID: runID, sessionID: sessionID, location: request.location, scriptKey: script.key, worktreeID: worktree.id, onFinished: onFinished)
             runRecords.markRunning(runID: runID, sessionID: sessionID)
-            if launcher.hostSessionIsIdle(sessionID) {
+            let isIdle = launcher.hostSessionIsIdle(sessionID)
+            // An attach failure can leave a completed local capture. Apply
+            // it before a grace timer can cancel an asynchronous observer.
+            if isIdle, let completion = RunScriptCompletionMonitor.takePublishedLocalCompletion(for: request.location) {
+                finishObservedRun(completion, runID: runID, scriptKey: script.key, worktreeID: worktree.id, at: Date(), onFinished: onFinished)
+                return
+            }
+            observeRun(runID: runID, sessionID: sessionID, location: request.location, scriptKey: script.key, worktreeID: worktree.id, onFinished: onFinished)
+            if isIdle {
                 // The shell may already be gone: give up on the run unless it
                 // reports completion first.
                 stopObservingRuns(hostedBy: sessionID, after: runHostGrace.local, includeRemote: false, onlyIfIdle: true)

@@ -471,7 +471,12 @@ struct HostConsolesTests {
     /// zmx's `attach` fails when the command exits before it connects, though
     /// the command ran: the run settles by its completion, not as never started.
     @Test func aRunWhoseAttachFailsSettlesByItsCompletion() async throws {
-        let fixture = try Fixture()
+        let (waiting, finishWaiting) = AsyncStream<Void>.makeStream()
+        defer { finishWaiting.finish() }
+        let fixture = try Fixture(runCompletionWaiter: { _ in
+            for await _ in waiting {}
+            throw CancellationError()
+        })
         defer { fixture.tearDown() }
         fixture.fakes.withLock { $0.launchFails = true }
         let consoles = fixture.consoles()
@@ -491,8 +496,9 @@ struct HostConsolesTests {
         let core = fixture.core
         let worktreeID = fixture.worktree.id
         try await eventually {
-            await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.failed(exitCode: 3))
+            await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status.isActive == false
         }
+        #expect(core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.failed(exitCode: 3)))
     }
 
     enum Ending: CaseIterable { case stop, rerun }
@@ -753,7 +759,8 @@ struct HostConsolesTests {
 
         init(
             host: String? = nil, zmxAvailable: Bool = true,
-            environment: any AlasHostEnvironment = HeadlessHostEnvironment(), startupScripts: ProjectStartupScripts = .defaults
+            environment: any AlasHostEnvironment = HeadlessHostEnvironment(), startupScripts: ProjectStartupScripts = .defaults,
+            runCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) }
         ) throws {
             let fm = FileManager.default
             root = fm.temporaryDirectory.appendingPathComponent("alas-hostconsoles-\(UUID().uuidString)")
@@ -777,6 +784,7 @@ struct HostConsolesTests {
                 runHistoryStore: nil,
                 workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
                 attentionStore: .scratch(),
+                runCompletionWaiter: runCompletionWaiter,
                 environment: environment,
                 // Short enough for `eventually`, not zero: an already-written
                 // `.done` wins over the idle check.

@@ -106,24 +106,13 @@ extension AlasCoreContext {
                     } else {
                         completion = try await runCompletionWaiter(location)
                     }
-                    guard runRecords.isCurrentActiveRun(runID: runID, worktreeID: worktreeID, scriptKey: scriptKey) else {
-                        // Something replaced this run's slot while it was in
-                        // flight, so its exit status no longer describes what
-                        // the row holds. Nobody waiting can be told a result.
-                        resolveRunSettlement(runID: runID, .finished(.unknown))
-                        return
-                    }
-                    let failed = completion.exitCode != 0
-                    let finalized = runRecords.finish(
-                        runID: runID,
-                        outcome: failed ? .failed(exitCode: completion.exitCode) : .succeeded,
+                    finishObservedRun(
+                        completion, runID: runID, scriptKey: scriptKey, worktreeID: worktreeID,
                         // A process's completion is timed on this machine; a
                         // terminal run's file may come from another host's clock.
                         at: awaitCompletion == nil ? Date() : completion.completedAt,
-                        failureID: failed ? runID : nil
+                        onFinished: onFinished
                     )
-                    finalizeRun(finalized, capture: .completion(completion))
-                    if let finalized { onFinished(finalized, completion) }
                 } catch is RunUndone {
                     // The run never started and was already put back.
                 } catch is CancellationError where Task.isCancelled {
@@ -145,6 +134,26 @@ extension AlasCoreContext {
                 }
             }
         )
+    }
+
+    func finishObservedRun(
+        _ completion: RunScriptCompletion, runID: String, scriptKey: String, worktreeID: String, at: Date,
+        onFinished: (RunRecord, RunScriptCompletion) -> Void
+    ) {
+        guard runRecords.isCurrentActiveRun(runID: runID, worktreeID: worktreeID, scriptKey: scriptKey) else {
+            // Something replaced this run's slot before its exit arrived.
+            resolveRunSettlement(runID: runID, .finished(.unknown))
+            return
+        }
+        let failed = completion.exitCode != 0
+        let finalized = runRecords.finish(
+            runID: runID,
+            outcome: failed ? .failed(exitCode: completion.exitCode) : .succeeded,
+            at: at,
+            failureID: failed ? runID : nil
+        )
+        finalizeRun(finalized, capture: .completion(completion))
+        if let finalized { onFinished(finalized, completion) }
     }
 
     /// Gives up on observing a run. Every caller reaches here because the run's

@@ -224,6 +224,19 @@ public enum RunScriptCompletionMonitor: Sendable {
             try Task.checkCancellation()
             try await Task.sleep(for: .milliseconds(200))
         }
+        return try readLocalCompletion(paths: paths)
+    }
+
+    /// Takes a completed local capture without waiting. An unreadable or
+    /// malformed capture remains available to the normal completion monitor.
+    public static func takePublishedLocalCompletion(for location: RunScriptCaptureLocation) -> RunScriptCompletion? {
+        guard case let .local(paths) = location,
+              let completion = try? readLocalCompletion(paths: paths) else { return nil }
+        removeLocalCapture(paths)
+        return completion
+    }
+
+    private static func readLocalCompletion(paths: RunScriptCapturePaths) throws -> RunScriptCompletion {
         let statusText = try String(contentsOfFile: paths.completion, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let snapshot = localTranscript(paths: paths)
