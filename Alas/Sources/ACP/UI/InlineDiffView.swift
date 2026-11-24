@@ -12,12 +12,12 @@ struct InlineDiffView: View {
     private static let codeFontSize: CGFloat = 11
     private static let codeFontFamily: String = ""
 
-    private var allLines: [ParsedDiff.Hunk.Line] {
-        diff.hunks.flatMap(\.lines)
+    private var lineCount: Int {
+        diff.hunks.reduce(0) { $0 + $1.lines.count }
     }
 
     private var truncated: Bool {
-        allLines.count > maxLines
+        maxLines != .max && lineCount > maxLines
     }
 
     private var visibleHunks: [ParsedDiff.Hunk] {
@@ -71,7 +71,7 @@ struct InlineDiffView: View {
             if truncated, let onShowAll {
                 Button(action: onShowAll) {
                     HStack(spacing: scale.space[1]) {
-                        Text("Show all \(allLines.count) lines")
+                        Text("Show all \(lineCount) lines")
                         Image(systemName: "arrow.forward")
                     }
                     .font(scale.metaFont)

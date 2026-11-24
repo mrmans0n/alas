@@ -63,6 +63,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     var composerSpacerHeight: CGFloat = ACPComposerMetrics.restingTailSpacerHeight
     /// Nil shows turn changes cards without captions.
     var turnCaptions: ACPTurnCaptionStore? = nil
+    var onOpenTurnDiff: ((ACPTurnDiffTabState) -> Void)?
 
     /// Ambient theme at the point this representable sits in the SwiftUI
     /// tree. Individual rows are hosted in their own, otherwise-disconnected
@@ -1329,6 +1330,19 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             messages: [ACPMessage]
         ) -> ACPTranscriptRowSpec {
             let worktreeRoot = host.trustedImageRoot?.path
+            let onOpenDiff: ((String?) -> Void)? = host.onOpenTurnDiff.map { open in
+                { filePath in
+                    let files = changes.recordedDiffs(before: answer.index, filePath: filePath, worktreeRoot: worktreeRoot) {
+                        switch messages[$0] {
+                        case .fileEdit(_, let edit): .fileEdit(edit)
+                        case .toolCall(let call): .toolCall(call)
+                        default: nil
+                        }
+                    }
+                    open(ACPTurnDiffTabState(
+                        sessionID: host.session.id, answerID: answer.stableId, filePath: filePath, files: files))
+                }
+            }
             let caption = host.turnCaptions.map { store in
                 ACPTurnChangesCard.Caption(
                     store: store,
@@ -1345,7 +1359,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 equalityToken: token(changes, host: host),
                 build: {
                     wrapRow(host: host) {
-                        ACPTurnChangesCard(changes: changes, caption: caption, onOpenDiff: host.onOpenDiff)
+                        ACPTurnChangesCard(changes: changes, caption: caption, onOpenDiff: onOpenDiff)
                     }
                 }
             )

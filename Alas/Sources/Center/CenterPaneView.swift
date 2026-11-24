@@ -75,7 +75,7 @@ struct CenterTabComposition {
 private extension Tab {
     var isSharedSessionTab: Bool {
         switch self {
-        case .terminal, .acpSession, .webPreview, .visualAid:
+        case .terminal, .acpSession, .webPreview, .visualAid, .turnDiff:
             true
         default:
             false
@@ -588,6 +588,9 @@ struct CenterPaneView: View {
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                         .id(s.id)
+                    case .turnDiff(let s):
+                        ACPTurnDiffTabView(state: s)
+                            .id(s.id)
                     case .commit(let s):
                         CommitTabView(
                             worktreePath: worktree.path,

@@ -63,6 +63,7 @@ struct ACPMessageList: View {
     var composerSpacerHeight: CGFloat = ACPComposerMetrics.restingTailSpacerHeight
     /// Nil shows turn changes cards without captions.
     var turnCaptions: ACPTurnCaptionStore? = nil
+    var onOpenTurnDiff: ((ACPTurnDiffTabState) -> Void)?
     @Environment(\.theme) private var theme
     @Environment(\.acpChatBackgroundIsMaterial) private var backgroundIsMaterial
 
@@ -116,7 +117,8 @@ struct ACPMessageList: View {
                 onOpenPlanFile: onOpenPlanFile,
                 reportedChangesActions: reportedChangesActions,
                 composerSpacerHeight: composerSpacerHeight,
-                turnCaptions: turnCaptions
+                turnCaptions: turnCaptions,
+                onOpenTurnDiff: onOpenTurnDiff
             )
             if Self.shouldShowGoToNewestAffordance(
                 followsTranscriptTail: session.followsTranscriptTail
