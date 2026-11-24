@@ -6,17 +6,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.10] - 2026-11-24
+
 ### ✨ Features
 
-- In Mac worktree chats, click the turn's file-change count or a file name to open its recorded diff in a read-only tab, even after the edits are committed.
-- Press Command-F in a review pane to find code across the loaded diffs, including expanded context. Use Command-G and Shift-Command-G to move between matches.
-- In the Agents tab, show each session's context usage, cost, effort, mode and plan on its card, unfolding into what fills the window and the token totals; show each subagent's model, effort and directory; and fold finished subagents behind "Show done" ([#2715](https://github.com/mrmans0n/alas/pull/2715)).
+- In Mac worktree chats, open a finished turn's recorded edits from its file count or file names in a read-only tab, even after later repository changes ([#2726](https://github.com/mrmans0n/alas/pull/2726)).
+- Press Command-F in a review pane to search loaded text diffs and expanded context, then use Command-G or Shift-Command-G to move between matches ([#2714](https://github.com/mrmans0n/alas/pull/2714)).
+- In the Agents tab, show live sessions' context, token, cost, effort, mode and plan details, label subagents with their reported configuration, and fold settled subagents behind Show done ([#2715](https://github.com/mrmans0n/alas/pull/2715)).
+- Give paired Macs distinct owner-selected icons across Mac, iPhone and web, add one Mac sidebar page per paired Mac, and reorganize Remote settings by device type ([#2720](https://github.com/mrmans0n/alas/pull/2720)).
+- Show host-generated turn captions above changed-file cards on iPhone, Remote Web and Mac peer sessions when Turn captions is enabled ([#2709](https://github.com/mrmans0n/alas/pull/2709)).
+- Bring wide Remote Web layouts closer to the app with its diff and file styling, chat typography, branch treatment, quieter sidebar states and compact terminal rows ([#2712](https://github.com/mrmans0n/alas/pull/2712), [#2716](https://github.com/mrmans0n/alas/pull/2716)).
+- Hide both sidebars or enter full screen from a running VM tab without changing saved pane visibility ([#2718](https://github.com/mrmans0n/alas/pull/2718)).
+- Use agent and model chips in the schedule editor while preserving unavailable saved choices and clearing the model when the agent changes ([#2710](https://github.com/mrmans0n/alas/pull/2710)).
+- Show agent logos and the shared model selector in code-review reviewer pickers ([#2725](https://github.com/mrmans0n/alas/pull/2725)).
 
 ### 🐛 Fixes
 
-- Keep Review before push from reporting “Alas is shutting down” after a successful push.
-- Keep the Ship popover compact when reviewer names are long, and line up its switches.
-- Reduce editor scroll stalls by reusing minimap bitmaps and avoiding repeated layout at the end of the file.
+- Keep added and removed line backgrounds rectangular in iPhone and iPad transcript diffs while preserving each card's rounded outer corners ([#2717](https://github.com/mrmans0n/alas/pull/2717)).
+- Keep the View menu's top-level item count stable as plugins start or stop, avoiding a macOS 26 menu-update crash ([#2711](https://github.com/mrmans0n/alas/pull/2711)).
+- Reduce editor scroll stalls by reusing minimap bitmaps and avoiding repeated layout at the end of the file ([#2721](https://github.com/mrmans0n/alas/pull/2721)).
+- Keep the Ship popover compact with long reviewer names and align its review switches consistently ([#2723](https://github.com/mrmans0n/alas/pull/2723)).
+- Prevent Review before push from reporting that Alas is shutting down after a successful push ([#2724](https://github.com/mrmans0n/alas/pull/2724)).
+- Polish Remote Web tool rows and Changes headings, and simplify the wide-screen terminal bar ([#2719](https://github.com/mrmans0n/alas/pull/2719)).
+- Use host-neutral wording in Remote Web and explain how to pair with a headless `alas-host` ([#2727](https://github.com/mrmans0n/alas/pull/2727)).
+- Preserve a run's published success or failure when its shell exits before Alas can attach.
+
+### 🏗️ Internal
+
+- Run Swift tests in three CI shards and cancel matching pull-request builds after merge ([#2713](https://github.com/mrmans0n/alas/pull/2713)).
+- Share Swift and Remote Web wire fixtures to catch protocol drift in CI ([#2722](https://github.com/mrmans0n/alas/pull/2722)).
+- Harden CI and test diagnostics around dependency downloads, result reads, stalls and subprocess cleanup.
 
 ## [0.24.9] - 2026-11-24
 

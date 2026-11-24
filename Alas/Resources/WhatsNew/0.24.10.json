@@ -1,0 +1,12 @@
+{
+  "version": "0.24.10",
+  "headline": {
+    "title": "Agent Details",
+    "body": "See reported context, cost, effort, mode and plan details at a glance, with finished subagents folded out of the way.",
+    "media": "media/0.24.10-agent-details.png"
+  },
+  "also": [
+    { "title": "Connected Macs" },
+    { "title": "Remote Web Refresh" }
+  ]
+}
