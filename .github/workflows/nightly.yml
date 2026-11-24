@@ -24,13 +24,16 @@ jobs:
     # `inputs.ref` selects the checkout; `github.ref` keeps manual cache
     # producers in the default-branch cache scope.
     if: github.event_name == 'schedule' || (github.ref == 'refs/heads/main' && (inputs.ref == '' || inputs.ref == 'main'))
-    runs-on: macos-26
-    timeout-minutes: 45
+    runs-on: xcode-27
+    timeout-minutes: 100
     strategy:
       fail-fast: false
       matrix:
         arch: [arm64, x86_64]
     steps:
+      - name: Select Xcode 27.2
+        run: sudo xcode-select --switch /Applications/Xcode_27.2.app/Contents/Developer
+
       - name: Checkout (with submodules)
         uses: actions/checkout@v7.0.1
         with:
@@ -54,9 +57,9 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/Library/Caches/Alas/GhosttyKit/${{ matrix.arch }}
-          key: ghostty-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.ghostty-pin') }}
+          key: ghostty-xcode27.2-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.ghostty-pin') }}
           restore-keys: |
-            ghostty-${{ runner.os }}-${{ matrix.arch }}-
+            ghostty-xcode27.2-${{ runner.os }}-${{ matrix.arch }}-
 
       - name: Build Ghostty xcframework (${{ matrix.arch }})
         env:
@@ -108,10 +111,10 @@ jobs:
             .build/cua-driver/*/cua-driver
             .build/cua-driver/*/CUA-DRIVER-LICENSE.txt
             .build/cua-driver/fingerprint
-          key: tools-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.tools-pin') }}
+          key: tools-xcode27.2-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.tools-pin') }}
           restore-keys: |
-            tools-${{ runner.os }}-${{ matrix.arch }}-
-            tools-${{ runner.os }}-arm64-
+            tools-xcode27.2-${{ runner.os }}-${{ matrix.arch }}-
+            tools-xcode27.2-${{ runner.os }}-arm64-
 
       - name: Prebuild zmx + fff + tree-sitter pack + Alas Helper + Alas CLI + Linux guest helper (${{ matrix.arch }})
         env:
@@ -154,7 +157,7 @@ jobs:
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
 
   nightly:
-    runs-on: macos-26
+    runs-on: xcode-27
     # Two notarytool --wait --timeout 30m calls in this job (one for the
     # .app, one for the .dmg) can each consume up to 30 min if Apple's
     # notary queue is slow, so worst-case notary time alone is 60 min. The
@@ -162,6 +165,9 @@ jobs:
     # most of the app, so this matches release.yml's 150 min.
     timeout-minutes: 150
     steps:
+      - name: Select Xcode 27.2
+        run: sudo xcode-select --switch /Applications/Xcode_27.2.app/Contents/Developer
+
       - name: Checkout (with submodules)
         uses: actions/checkout@v7.0.1
         with:
@@ -235,9 +241,9 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/Library/Caches/Alas/GhosttyKit/arm64
-          key: ghostty-${{ runner.os }}-arm64-${{ hashFiles('.ghostty-pin') }}
+          key: ghostty-xcode27.2-${{ runner.os }}-arm64-${{ hashFiles('.ghostty-pin') }}
           restore-keys: |
-            ghostty-${{ runner.os }}-arm64-
+            ghostty-xcode27.2-${{ runner.os }}-arm64-
 
       - name: Build Ghostty xcframework
         if: steps.skip-check.outputs.skip != 'true'
@@ -313,9 +319,9 @@ jobs:
             .build/cua-driver/*/cua-driver
             .build/cua-driver/*/CUA-DRIVER-LICENSE.txt
             .build/cua-driver/fingerprint
-          key: tools-${{ runner.os }}-arm64-${{ hashFiles('.tools-pin') }}
+          key: tools-xcode27.2-${{ runner.os }}-arm64-${{ hashFiles('.tools-pin') }}
           restore-keys: |
-            tools-${{ runner.os }}-arm64-
+            tools-xcode27.2-${{ runner.os }}-arm64-
 
       - name: Prebuild zmx + fff + tree-sitter pack + Alas Helper + Alas CLI + Linux guest helper
         if: steps.skip-check.outputs.skip != 'true'
@@ -382,9 +388,9 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: .build/xcode/SourcePackages
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: swiftpm-xcode27.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            swiftpm-${{ runner.os }}-${{ runner.arch }}-
+            swiftpm-xcode27.2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Resolve SwiftPM packages
         if: steps.skip-check.outputs.skip != 'true'

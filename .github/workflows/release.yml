@@ -18,10 +18,7 @@ permissions:
 
 jobs:
   macos-app:
-    # Same toolchain story as build.yml: macos-26 ships Xcode 26 (Ghostty
-    # 1.4's requirement). Submodule + zig@0.17 are required for the
-    # Ghostty xcframework build.
-    runs-on: macos-26
+    runs-on: xcode-27
     # Each matrix leg has two notarytool --wait --timeout 30m calls (one .app
     # and one DMG). Worst-case notary time alone is 60 min if Apple's queue is
     # slow on both submissions. Intel release builds can also approach 90 min
@@ -42,6 +39,9 @@ jobs:
       matrix:
         arch: [arm64, x86_64]
     steps:
+      - name: Select Xcode 27.2
+        run: sudo xcode-select --switch /Applications/Xcode_27.2.app/Contents/Developer
+
       - name: Checkout (with submodules)
         uses: actions/checkout@v7.0.1
         with:
@@ -82,9 +82,9 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/Library/Caches/Alas/GhosttyKit/${{ matrix.arch }}
-          key: ghostty-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.ghostty-pin') }}
+          key: ghostty-xcode27.2-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.ghostty-pin') }}
           restore-keys: |
-            ghostty-${{ runner.os }}-${{ matrix.arch }}-
+            ghostty-xcode27.2-${{ runner.os }}-${{ matrix.arch }}-
 
       - name: Compute version
         run: |
@@ -124,9 +124,9 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: .build/xcode/SourcePackages
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: swiftpm-xcode27.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            swiftpm-${{ runner.os }}-${{ runner.arch }}-
+            swiftpm-xcode27.2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Reset global SwiftPM repository cache
         # Xcode may consult ~/Library/Caches/org.swift.swiftpm even when
@@ -194,10 +194,10 @@ jobs:
             .build/cua-driver/*/cua-driver
             .build/cua-driver/*/CUA-DRIVER-LICENSE.txt
             .build/cua-driver/fingerprint
-          key: tools-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.tools-pin') }}
+          key: tools-xcode27.2-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.tools-pin') }}
           restore-keys: |
-            tools-${{ runner.os }}-${{ matrix.arch }}-
-            tools-${{ runner.os }}-arm64-
+            tools-xcode27.2-${{ runner.os }}-${{ matrix.arch }}-
+            tools-xcode27.2-${{ runner.os }}-arm64-
 
       - name: Prebuild zmx + fff + tree-sitter pack + Alas Helper + Alas CLI + Linux guest helper (${{ matrix.arch }})
         # These normally run as pre-build script phases *inside* xcodebuild,
@@ -330,9 +330,12 @@ jobs:
 
   whats-new-check:
     name: Validate What's New entries
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 30
     steps:
+      - name: Select Xcode 27.2
+        run: sudo xcode-select --switch /Applications/Xcode_27.2.app/Contents/Developer
+
       - name: Checkout
         uses: actions/checkout@v7.0.1
         with:
@@ -476,10 +479,13 @@ jobs:
 
   verify-homebrew:
     name: Verify Homebrew Cask
-    runs-on: macos-26
+    runs-on: xcode-27
     needs: update-homebrew
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
     steps:
+      - name: Select Xcode 27.2
+        run: sudo xcode-select --switch /Applications/Xcode_27.2.app/Contents/Developer
+
       - name: Get version
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
