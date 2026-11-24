@@ -100,7 +100,7 @@ struct RunServiceTests {
         run.cancel()
 
         await #expect(throws: CancellationError.self) { _ = try await run.value }
-        #expect(try await Self.processExits(pid), "the SIGTERM-ignoring child is gone")
+        #expect(try await Self.processExits(pid), Self.exitFailure(pid))
     }
 
     @Test(.timeLimit(.minutes(5)))
@@ -144,6 +144,20 @@ struct RunServiceTests {
             try await Task.sleep(for: .milliseconds(50))
         }
         return !isAlive(pid)
+    }
+
+    private static func exitFailure(_ pid: pid_t) -> Comment {
+        let processGroup = getpgid(pid)
+        #if os(Linux)
+        do {
+            let stat = try String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8)
+            return Comment(rawValue: "Child \(pid), group \(processGroup), still present: \(stat)")
+        } catch {
+            return Comment(rawValue: "Child \(pid), group \(processGroup), stat unavailable: \(error)")
+        }
+        #else
+        return Comment(rawValue: "Child \(pid), group \(processGroup), still present")
+        #endif
     }
 
     /// A zombie is dead, only not reaped yet: in a container whose init doesn't
