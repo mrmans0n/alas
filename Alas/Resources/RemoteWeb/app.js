@@ -110,14 +110,14 @@ function hideGate() {
 }
 
 function showUnreachableGate() {
-  showGate("Can't reach Alas", "Make sure your Mac is awake, Alas is running, and this device is on the same Wi-Fi or tailnet.", true);
+  showGate("Can't reach Alas", "Make sure the host is awake and running Alas or alas-host, and that this device can reach it on the same network or tailnet.", true);
 }
 
 // Neutral loading overlay shown while we're still trying to reach the Mac for
 // the first time. Reuses the gate DOM; the `connecting` class swaps the icon
 // for a spinner (see style.css) and there is no "Try again" button.
 function showConnectingGate() {
-  showGate("Connecting…", "Reaching your Mac…", false);
+  showGate("Connecting…", "Reaching the host…", false);
   $("gate").classList.add("connecting");
 }
 
@@ -240,20 +240,20 @@ function onActiveClose() {
 
 function showPairAgainGate(link) {
   const server = hub.servers.find((s) => s.id === link.id);
-  const name = server ? (server.name || server.lastOrigin) : "This Mac";
+  const name = server ? (server.name || server.lastOrigin) : "This host";
   showGate("Pair again", `${name} no longer recognizes this device. Copy a fresh pairing link from Alas → Settings → Remote and paste it here.`, false);
   $("gate-pair").classList.remove("hidden");
 }
 
 function showOriginBlockedGate(link) {
   const server = hub.servers.find((s) => s.id === link.id);
-  const name = server ? (server.name || server.lastOrigin) : "This Mac";
-  showGate("Address not allowed", `${name} is online but doesn't allow this address. Add it to Allowed origins in that Mac's Remote settings, then try again.`, true);
+  const name = server ? (server.name || server.lastOrigin) : "This host";
+  showGate("Address not allowed", `${name} is online but doesn't allow this address. Add it to Allowed origins in that host's Remote settings, then try again.`, true);
 }
 
 function showPairGate() {
   clearEscalation();
-  showGate("Pair this device", "On your Mac, open Alas → Settings → Remote and scan the QR code shown there.", false);
+  showGate("Pair this device", "In Alas, open Settings → Remote and scan the QR code shown there. On a host without the app, run alas-host pair and open the link it prints.", false);
   $("gate-pair").classList.remove("hidden");
 }
 
@@ -306,8 +306,8 @@ async function pairAndAdd(input, options) {
 function pairingErrorMessage(err) {
   switch (err && err.reason) {
     case "expired": return "That code expired. Tap New code in Alas and try again.";
-    case "origin": return "That Mac doesn't allow this address. Add this hub's address to Allowed origins in its Remote settings.";
-    case "net": return "Couldn't reach that Mac at any of its addresses.";
+    case "origin": return "That host doesn't allow this address. Add this hub's address to Allowed origins in its Remote settings.";
+    case "net": return "Couldn't reach that host at any of its addresses.";
     default: return "Pairing failed.";
   }
 }
