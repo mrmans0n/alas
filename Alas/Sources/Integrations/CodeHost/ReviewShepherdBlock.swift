@@ -147,9 +147,8 @@ struct ReviewShepherdBlock: View {
     }
 }
 
-/// A shepherd lever row, shared by the toolbar popover and the Changes
-/// drawer: title over a one-line description, switch trailing. `accessory`
-/// leads the description line, as the review row's reviewer menu does.
+/// The switch and its description share a row. The optional reviewer menus
+/// sit below so their labels can't squeeze the description into a narrow column.
 struct ShepherdSwitchRow<Accessory: View>: View {
     let title: String
     let detail: String
@@ -177,28 +176,28 @@ struct ShepherdSwitchRow<Accessory: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(scale.meta.font(weight: .medium))
-                    .foregroundStyle(theme.color("fg"))
-                HStack(spacing: scale.space[1]) {
-                    accessory
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(spacing: scale.space[2]) {
+                VStack(alignment: .leading, spacing: scale.space[0]) {
+                    Text(title)
+                        .font(scale.meta.font(weight: .medium))
+                        .foregroundStyle(theme.color("fg"))
                     Text(detail)
                         .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-muted"))
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .opacity(isDisabled ? 0.5 : 1)
+                Toggle(title, isOn: Binding(get: { isOn }, set: { set($0) }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .disabled(isDisabled)
+                    .accessibilityLabel(title)
+                    .accessibilityHint(detail)
             }
-            .opacity(isDisabled ? 0.5 : 1)
-            Spacer(minLength: 0)
-            Toggle(title, isOn: Binding(get: { isOn }, set: { set($0) }))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .disabled(isDisabled)
-                .accessibilityLabel(title)
-                .accessibilityHint(detail)
+            accessory
         }
         .help(detail)
     }

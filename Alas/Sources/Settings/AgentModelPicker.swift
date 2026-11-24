@@ -224,6 +224,6 @@ struct FieldChipMenu<Items: View>: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .fixedSize(horizontal: !grows, vertical: true)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
