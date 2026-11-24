@@ -68,8 +68,8 @@ extension AlasCoreContext {
                 guard let self else { throw PRShepherdCLIError(message: "Alas is shutting down") }
                 return try fileShipReviewRound(filing)
             },
-            deliverFindings: { [weak self] id, prompt in
-                await self?.reviewShepherd.effects?.deliverPrompt(id.sessionID, id.worktreeID, prompt) { true } ?? .failed
+            deliverFindings: { [weak self] id, prompt, isStillWanted in
+                await self?.reviewShepherd.effects?.deliverPrompt(id.sessionID, id.worktreeID, prompt, isStillWanted) ?? .failed
             },
             push: { [weak self] id, target, _ in
                 await self?.pushReviewedHead(id, target: target) ?? "Alas is shutting down"

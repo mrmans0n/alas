@@ -46,6 +46,10 @@ private final class FakeEffects {
     var stackTop: String?
     /// Runs inside the push effect, as `pr_create` re-entering the gate does.
     var onPush: ((ShipReviewID, ShipReviewTarget, String) -> Void)?
+    /// Runs while a findings delivery waits on the owning session.
+    var duringDelivery: (() -> Void)?
+    /// What each delivery's `isStillWanted` said once the session was ready.
+    var stillWanted: [Bool] = []
 
     var runs: [ShipReviewer.ReviewerRun] = []
     var filings: [ShipReviewer.Filing] = []
@@ -105,7 +109,9 @@ private final class FakeEffects {
                 self.filings.append(filing)
                 return Self.reviewSessionID(self.filings.count - 1)
             },
-            deliverFindings: { _, prompt in
+            deliverFindings: { _, prompt, isStillWanted in
+                self.duringDelivery?()
+                self.stillWanted.append(isStillWanted())
                 self.delivered.append(prompt)
                 return .delivered
             },
@@ -454,5 +460,47 @@ struct ShipReviewerTests {
         #expect(fake.runs.count == 1)
         #expect(fake.pushes == [.init(target: pullRequest, headSHA: "h2")])
         #expect(reviewer.record(for: id)?.passedSHAs.contains("h2") == true)
+    }
+
+    /// Stopping the review while its findings wait on the owning session
+    /// (hydrating, reattaching) keeps them from starting a fix turn.
+    @Test func stoppedReviewFindingsAreNoLongerWanted() async {
+        let fake = FakeEffects()
+        fake.replies = [oneFinding]
+        let reviewer = makeReviewer(fake)
+        fake.duringDelivery = { reviewer.cancel(id) }
+
+        _ = reviewer.requestPush(id, target: pullRequest, headSHA: "h1")
+        await reviewer.settle()
+
+        #expect(fake.stillWanted == [false])
+        #expect(fake.pushes.isEmpty)
+    }
+
+    /// A round that requests changes only in its summary (its findings sit
+    /// outside the diff) can still be sent to the session after a stop.
+    @Test func summaryOnlyFindingsCanBeSentToTheSession() async {
+        let fake = FakeEffects()
+        fake.autoFix = false
+        fake.openFindings = 0
+        fake.replies = [#"""
+            {"verdict": "request_changes", "summary": "The migration is missing.",
+             "findings": [{"path": "Migrations/001.sql", "line": 1, "body": "Add the column."}], "resolved": []}
+            """#]
+        let reviewer = makeReviewer(fake)
+        _ = reviewer.requestPush(id, target: pullRequest, headSHA: "h1")
+        await reviewer.settle()
+        guard case .stopped = reviewer.record(for: id)?.phase else {
+            Issue.record("expected a stop, got \(String(describing: reviewer.record(for: id)?.phase))")
+            return
+        }
+        #expect(fake.delivered.isEmpty)
+
+        reviewer.sendFindings(id)
+        await reviewer.settle()
+
+        #expect(fake.delivered.count == 1)
+        #expect(fake.stillWanted == [true])
+        #expect(reviewer.record(for: id)?.phase == .awaitingFix(headSHA: "h1"))
     }
 }

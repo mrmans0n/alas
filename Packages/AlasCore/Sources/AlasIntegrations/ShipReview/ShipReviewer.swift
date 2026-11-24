@@ -191,7 +191,12 @@ public final class ShipReviewer {
         public var openFindingCount: @MainActor (_ reviewSessionID: ReviewSessionID) -> Int?
         /// Files the round and returns its review session.
         public var fileRound: @MainActor (Filing) throws -> ReviewSessionID
-        public var deliverFindings: @MainActor (_ id: ShipReviewID, _ prompt: ShepherdPrompt) async -> ReviewShepherd.Delivery
+        /// `isStillWanted` turns false once the review that found them was
+        /// stopped, allowed through or replaced, so a delivery still waiting on
+        /// the owning session never starts a fix turn for it.
+        public var deliverFindings: @MainActor (
+            _ id: ShipReviewID, _ prompt: ShepherdPrompt, _ isStillWanted: @escaping @MainActor () -> Bool
+        ) async -> ReviewShepherd.Delivery
         /// Nil on success, else why the push failed.
         public var push: @MainActor (_ id: ShipReviewID, _ target: ShipReviewTarget, _ headSHA: String) async -> String?
         public var autoFix: @MainActor (_ id: ShipReviewID) -> Bool
@@ -215,7 +220,9 @@ public final class ShipReviewer {
             earlierFindings: @escaping @MainActor (_ reviewSessionIDs: [ReviewSessionID]) -> [CodeReviewEarlierFinding],
             openFindingCount: @escaping @MainActor (_ reviewSessionID: ReviewSessionID) -> Int?,
             fileRound: @escaping @MainActor (Filing) throws -> ReviewSessionID,
-            deliverFindings: @escaping @MainActor (_ id: ShipReviewID, _ prompt: ShepherdPrompt) async -> ReviewShepherd.Delivery,
+            deliverFindings: @escaping @MainActor (
+                _ id: ShipReviewID, _ prompt: ShepherdPrompt, _ isStillWanted: @escaping @MainActor () -> Bool
+            ) async -> ReviewShepherd.Delivery,
             push: @escaping @MainActor (_ id: ShipReviewID, _ target: ShipReviewTarget, _ headSHA: String) async -> String?,
             autoFix: @escaping @MainActor (_ id: ShipReviewID) -> Bool,
             localCommitsToPush: @escaping @MainActor (_ id: ShipReviewID) async -> String?,
@@ -462,7 +469,10 @@ public final class ShipReviewer {
     ) async -> ShepherdPrompt? {
         guard let effects, let context = effects.context(record.id.worktreeID) else { return nil }
         let open = effects.earlierFindings([reviewSessionID])
-        guard !open.isEmpty else { return nil }
+        // A round can request changes in its summary alone (findings outside
+        // the diff); that summary is still worth sending.
+        guard !open.isEmpty || !(round.summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
         let base = record.pending?.reviewBase ?? context.baseBranch
         var forkPoint = try? await effects.git.mergeBase(context.worktreePath, "origin/\(base)", round.headSHA)
         if forkPoint == nil {
@@ -762,7 +772,10 @@ public final class ShipReviewer {
             deliveringFindings.remove(id)
             return
         }
-        let delivery = await effects.deliverFindings(id, prompt)
+        let delivery = await effects.deliverFindings(id, prompt) { [weak self] in
+            guard let self else { return false }
+            return isCurrent(id, generation) && records[id]?.phase == .awaitingFix(headSHA: headSHA)
+        }
         deliveringFindings.remove(id)
         guard delivery == .failed, isCurrent(id, generation), var record = records[id],
               record.phase == .awaitingFix(headSHA: headSHA)
