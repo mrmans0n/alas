@@ -1063,7 +1063,10 @@ private struct ACPSessionView: View {
             },
             reportedChangesActions: reportedChangesActions,
             composerSpacerHeight: transcriptTailSpacerHeight,
-            turnCaptions: state.turnCaptions
+            turnCaptions: state.turnCaptions,
+            onOpenTurnDiff: { diff in
+                state.tabs.openOrFocusTurnDiff(owner: owner ?? .worktree(worktree.id), state: diff)
+            }
         )
     }
 

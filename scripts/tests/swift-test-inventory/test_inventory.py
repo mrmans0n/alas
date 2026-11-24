@@ -473,6 +473,21 @@ class InventoryTests(unittest.TestCase):
             self.assertTrue(second_report["ok"])
             self.assertEqual(second_report["executed"], 1)
 
+    def test_result_reader_timeout_retries_without_rerunning_tests(self):
+        plan = self.module.make_plan(enumeration("AlasTests/A/a()"), [], 1)
+        document = results(("A/a()", "Passed"))
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(self.module, "bounded", return_value=0) as execute, patch.object(
+                self.module.subprocess, "run", side_effect=[
+                    subprocess.TimeoutExpired(["xcresulttool"], 30),
+                    subprocess.CompletedProcess([], 0, stdout=json.dumps(document)),
+                ],
+            ) as read:
+                self.assertTrue(self.module.run_batch(plan, Path(directory), "ordinary", 0))
+            execute.assert_called_once()
+            self.assertEqual(read.call_count, 2)
+            self.assertEqual(read.call_args_list[0], read.call_args_list[1])
+
     def test_timeout_prints_test_progress_even_without_a_readable_result_bundle(self):
         plan = self.module.make_plan(enumeration("AlasTests/A/a()"), [], 1)
         def execute(command, log, timeout):

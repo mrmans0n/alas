@@ -23,44 +23,46 @@ struct WebPreviewAutomationBrowserTests {
         // while cold WebContent process startup can exceed that deadline on CI.
         browser.navigate(url)
         try await waitUntil("page load failed: \(String(describing: browser.error))") { browser.webView.url == url && !browser.loading }
-        _ = try await browser.automation(command: WebPreviewCommand(action: .navigate, url: url.absoluteString))
+        // WebContent can stall after launch on a loaded CI runner.
+        let budget = 20_000
+        _ = try await browser.automation(command: WebPreviewCommand(action: .navigate, url: url.absoluteString, timeoutMS: budget))
 
-        let messageInspect = try await browser.automation(command: WebPreviewCommand(action: .inspect, selector: "#message", limit: 5))
+        let messageInspect = try await browser.automation(command: WebPreviewCommand(action: .inspect, selector: "#message", limit: 5, timeoutMS: budget))
         let messageElements = try #require(messageInspect["elements"] as? [[String: Any]])
         let message = try #require(messageElements.first { $0["selector"] as? String == "#message" })
         let elementID = try #require(message["element_id"] as? String)
         #expect(!elementID.contains("#message"))
         #expect(message["value"] as? String == "Initial")
 
-        let secretInspect = try await browser.automation(command: WebPreviewCommand(action: .inspect, selector: "#secret", limit: 1))
+        let secretInspect = try await browser.automation(command: WebPreviewCommand(action: .inspect, selector: "#secret", limit: 1, timeoutMS: budget))
         let secret = try #require((secretInspect["elements"] as? [[String: Any]])?.first)
         #expect(secret["value"] == nil)
 
-        let buttonInspect = try await browser.automation(command: WebPreviewCommand(action: .inspect, selector: "#go", limit: 1))
+        let buttonInspect = try await browser.automation(command: WebPreviewCommand(action: .inspect, selector: "#go", limit: 1, timeoutMS: budget))
         let button = try #require((buttonInspect["elements"] as? [[String: Any]])?.first)
         let buttonID = try #require(button["element_id"] as? String)
-        _ = try await browser.automation(command: WebPreviewCommand(action: .click, elementID: buttonID))
+        _ = try await browser.automation(command: WebPreviewCommand(action: .click, elementID: buttonID, timeoutMS: budget))
         let clicked = try await browser.webView.callAsyncJavaScript(
             "return document.body.dataset.clicked;",
             arguments: [:], in: nil, contentWorld: .page) as? String
         #expect(clicked == "yes")
 
-        _ = try await browser.automation(command: WebPreviewCommand(action: .type, elementID: elementID, text: "  exact\ntext  "))
+        _ = try await browser.automation(command: WebPreviewCommand(action: .type, elementID: elementID, text: "  exact\ntext  ", timeoutMS: budget))
         let value = try await browser.webView.callAsyncJavaScript(
             "return document.querySelector('#message').value;",
             arguments: [:], in: nil, contentWorld: .page) as? String
         #expect(value == "  exact\ntext  ")
 
-        _ = try await browser.automation(command: WebPreviewCommand(action: .scroll, x: 0, y: 300))
+        _ = try await browser.automation(command: WebPreviewCommand(action: .scroll, x: 0, y: 300, timeoutMS: budget))
         let scrolled = try await browser.webView.callAsyncJavaScript(
             "return Math.round(scrollY);",
             arguments: [:], in: nil, contentWorld: .page) as? Int
         #expect((scrolled ?? 0) >= 250)
 
-        _ = try await browser.automation(command: WebPreviewCommand(action: .scroll, x: 0, y: -300))
-        _ = try await browser.automation(command: WebPreviewCommand(action: .wait, selector: "#message", condition: "visible", timeoutMS: 2_000))
+        _ = try await browser.automation(command: WebPreviewCommand(action: .scroll, x: 0, y: -300, timeoutMS: budget))
+        _ = try await browser.automation(command: WebPreviewCommand(action: .wait, selector: "#message", condition: "visible", timeoutMS: budget))
 
-        let capture = try await browser.automation(command: WebPreviewCommand(action: .capture, elementID: elementID))
+        let capture = try await browser.automation(command: WebPreviewCommand(action: .capture, elementID: elementID, timeoutMS: budget))
         let image = try #require(capture["image"] as? [String: Any])
         #expect(image["mime_type"] as? String == "image/png")
         let base64 = try #require(image["data"] as? String)

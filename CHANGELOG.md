@@ -8,12 +8,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
+- In Mac worktree chats, click the turn's file-change count or a file name to open its recorded diff in a read-only tab, even after the edits are committed.
 - Press Command-F in a review pane to find code across the loaded diffs, including expanded context. Use Command-G and Shift-Command-G to move between matches.
 - In the Agents tab, show each session's context usage, cost, effort, mode and plan on its card, unfolding into what fills the window and the token totals; show each subagent's model, effort and directory; and fold finished subagents behind "Show done" ([#2715](https://github.com/mrmans0n/alas/pull/2715)).
 
 ### 🐛 Fixes
 
 - Keep Review before push from reporting “Alas is shutting down” after a successful push.
+- Keep the Ship popover compact when reviewer names are long, and line up its switches.
 - Reduce editor scroll stalls by reusing minimap bitmaps and avoiding repeated layout at the end of the file.
 
 ## [0.24.9] - 2026-11-24
