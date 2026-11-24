@@ -603,11 +603,13 @@ public struct AppConfig: Codable, Equatable, Sendable {
         public var stackedDiffsEnabled: Bool = true
         /// Defaults for newly bound PR shepherd records (Settings > Changes).
         public var shepherd: ShepherdDefaults = .init()
+        /// Review-before-push reviewer and prompt (Settings > Changes).
+        public var codeReview: CodeReviewSettings = .init()
 
         public enum CodingKeys: String, CodingKey, Sendable {
             case aiToolId, prompt, reviewRequestPrompt, mergeBulkResolvePrompt,
                  mergeSingleResolvePrompt, comparisonMode,
-                 diffLayoutMode, diffShowWhitespace, stackedDiffsEnabled, shepherd
+                 diffLayoutMode, diffShowWhitespace, stackedDiffsEnabled, shepherd, codeReview
         }
 
         public init(aiToolId: String, prompt: String, reviewRequestPrompt: String, mergeBulkResolvePrompt: String, mergeSingleResolvePrompt: String, comparisonMode: ChangesComparisonMode, diffLayoutMode: DiffLayoutMode, diffShowWhitespace: Bool, stackedDiffsEnabled: Bool = true) {
@@ -1139,6 +1141,8 @@ extension AppConfig {
                 (try? changesContainer.decode(Bool.self, forKey: .stackedDiffsEnabled)) ?? true
             changes.shepherd =
                 (try? changesContainer.decode(ShepherdDefaults.self, forKey: .shepherd)) ?? .init()
+            changes.codeReview =
+                (try? changesContainer.decode(CodeReviewSettings.self, forKey: .codeReview)) ?? .init()
         } else {
             changes = Changes(
                 aiToolId: Changes.automaticAIToolID,

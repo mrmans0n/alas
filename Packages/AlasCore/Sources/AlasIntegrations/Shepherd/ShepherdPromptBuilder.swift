@@ -23,6 +23,15 @@ public struct ShepherdCheckLog: Equatable, Sendable {
 public struct ShepherdPrompt: Equatable, Sendable {
     public let text: String
     public let card: ACPPromptCard
+    /// The queued prompt's message id, which the turn that runs it reports;
+    /// nil gets a fresh one. Set by senders that wait for that turn.
+    public var messageID: UUID?
+
+    public init(text: String, card: ACPPromptCard, messageID: UUID? = nil) {
+        self.text = text
+        self.card = card
+        self.messageID = messageID
+    }
 }
 
 /// Pure text for the turns the shepherd sends to the owning session.
@@ -48,16 +57,18 @@ public enum ShepherdPromptBuilder {
         request: ReviewRequest,
         fix: ShepherdFixRequest,
         logs: [ShepherdCheckLog],
-        rules: ShepherdRules
+        rules: ShepherdRules,
+        reviewBeforePush: Bool = false
     ) -> ShepherdPrompt {
+        let label = request.provider.reviewRequestLabel
+        let instruction = reviewBeforePush
+            ? "The \(label) needs attention. Fix what's below and commit. Don't push: Alas reviews the commits and pushes them."
+            : "The \(label) needs attention. Fix what's below, commit, and push to \(request.headRefName)."
         var sections = [
             identity(request),
-            """
-            The \(request.provider.reviewRequestLabel) needs attention. Fix what's below, commit, and push to \(request.headRefName).
-            Never force-push or rewrite published history. When done, call pr_status to confirm.
-            """,
+            instruction + "\nNever force-push or rewrite published history. When done, call pr_status to confirm.",
         ]
-        if fix.hasConflict { sections.append(conflictSection(request)) }
+        if fix.hasConflict { sections.append(conflictSection(request, reviewBeforePush: reviewBeforePush)) }
         if !fix.failingChecks.isEmpty { sections.append(checksSection(fix.failingChecks, logs: logs)) }
         if !fix.threads.isEmpty { sections.append(threadsSection(fix.threads)) }
         sections.append(howToWork(request.provider))
@@ -68,15 +79,21 @@ public enum ShepherdPromptBuilder {
     /// Context for a session that just became the owner (bind, adopt, or
     /// rebind). Lists current problems by name only; the next fix turn
     /// carries logs and full threads.
-    public static func bindPrompt(request: ReviewRequest, fix: ShepherdFixRequest, rules: ShepherdRules) -> ShepherdPrompt {
+    public static func bindPrompt(
+        request: ReviewRequest,
+        fix: ShepherdFixRequest,
+        rules: ShepherdRules,
+        reviewBeforePush: Bool = false
+    ) -> ShepherdPrompt {
         let label = request.provider.reviewRequestLabel
-        var sections = [
-            identity(request),
-            """
+        var intro = """
             Alas is now watching this \(label) and will send problems to this session as new turns: failing checks, review threads from trusted reviewers, and merge conflicts with \(request.baseRefName).
             Never force-push or rewrite published history. Call pr_status any time to see the current state.
-            """,
-        ]
+            """
+        if reviewBeforePush {
+            intro += "\nAlas reviews your commits before it pushes them; don't push yourself."
+        }
+        var sections = [identity(request), intro]
         if fix.isEmpty {
             sections.append("Nothing needs attention right now.")
         } else {
@@ -109,10 +126,11 @@ public enum ShepherdPromptBuilder {
         return "\(header) · \(request.displayIdentity) \"\(request.title)\"\n\(branchLine)"
     }
 
-    private static func conflictSection(_ request: ReviewRequest) -> String {
-        """
+    private static func conflictSection(_ request: ReviewRequest, reviewBeforePush: Bool) -> String {
+        let finish = reviewBeforePush ? "commit." : "commit, push."
+        return """
         ## Merge conflict with \(request.baseRefName)
-        Merge \(request.remote.remoteName)/\(request.baseRefName) into \(request.headRefName), resolve each conflict from the intended behavior, commit, push.
+        Merge \(request.remote.remoteName)/\(request.baseRefName) into \(request.headRefName), resolve each conflict from the intended behavior, \(finish)
         """
     }
 

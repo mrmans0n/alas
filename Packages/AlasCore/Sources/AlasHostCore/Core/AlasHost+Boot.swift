@@ -148,6 +148,7 @@ extension AlasHost {
         guard !core.isStopping else { return }
         core.reviewShepherd.start()
         core.stackShepherd.start()
+        core.shipReviewer.start()
         core.runScheduler.start()
         // Peer children only: this host may share its profile with the app,
         // which owns the rest and may list worktrees this host does not.
@@ -162,6 +163,7 @@ extension AlasHost {
         // ponytail: stop() only ends the timers; an evaluation underway (a prompt delivery, a gg mutation) runs on, harmless since the process exits next
         core.reviewShepherd.stop()
         core.stackShepherd.stop()
+        core.shipReviewer.stop()
         core.runScheduler.stop()
         // First: a request still underway cannot start what this stops.
         core.isStopping = true

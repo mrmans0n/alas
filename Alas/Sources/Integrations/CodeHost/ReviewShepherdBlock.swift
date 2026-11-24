@@ -53,6 +53,12 @@ struct ReviewShepherdDrawerModel {
     let shepherdWithNewSession: (@MainActor () -> Void)?
     /// Reloads the worktree's recent sessions so the menus offer current ones.
     let refreshSessions: @MainActor () -> Void
+    /// Review before push for the owning session; nil leaves its row out,
+    /// as on a host.
+    var reviewLever: ShipReviewLever? = nil
+    /// The review line for the request's head.
+    var review: ShipReviewLine? = nil
+    var performReviewAction: @MainActor (ShipReviewLineAction) -> Void = { _ in }
 }
 
 /// Shepherd section inside the expanded review drawer, above the actions.
@@ -88,6 +94,13 @@ struct ReviewShepherdBlock: View {
             .foregroundColor(theme.color("fg-dim"))
             .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
+        if let review = model.review {
+            ShipReviewLineView(line: review, perform: model.performReviewAction)
+        }
+
+        if let lever = model.reviewLever {
+            ShipReviewSwitchRow(lever: lever)
+        }
 
         ShepherdSwitchRow(
             title: "Auto-fix",
@@ -134,16 +147,34 @@ struct ReviewShepherdBlock: View {
     }
 }
 
-/// An auto-fix or auto-merge row, shared by the toolbar popover and the
-/// Changes drawer: title over a one-line description, switch trailing.
-struct ShepherdSwitchRow: View {
+/// A shepherd lever row, shared by the toolbar popover and the Changes
+/// drawer: title over a one-line description, switch trailing. `accessory`
+/// leads the description line, as the review row's reviewer menu does.
+struct ShepherdSwitchRow<Accessory: View>: View {
     let title: String
     let detail: String
     let isOn: Bool
     let isDisabled: Bool
     let set: @MainActor (Bool) -> Void
+    let accessory: Accessory
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
+
+    init(
+        title: String,
+        detail: String,
+        isOn: Bool,
+        isDisabled: Bool,
+        set: @escaping @MainActor (Bool) -> Void,
+        @ViewBuilder accessory: () -> Accessory
+    ) {
+        self.title = title
+        self.detail = detail
+        self.isOn = isOn
+        self.isDisabled = isDisabled
+        self.set = set
+        self.accessory = accessory()
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -151,10 +182,13 @@ struct ShepherdSwitchRow: View {
                 Text(title)
                     .font(scale.meta.font(weight: .medium))
                     .foregroundStyle(theme.color("fg"))
-                Text(detail)
-                    .font(scale.caption.font(weight: .regular))
-                    .foregroundStyle(theme.color("fg-muted"))
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: scale.space[1]) {
+                    accessory
+                    Text(detail)
+                        .font(scale.caption.font(weight: .regular))
+                        .foregroundStyle(theme.color("fg-muted"))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .opacity(isDisabled ? 0.5 : 1)
             Spacer(minLength: 0)
@@ -167,6 +201,120 @@ struct ShepherdSwitchRow: View {
                 .accessibilityHint(detail)
         }
         .help(detail)
+    }
+}
+
+extension ShepherdSwitchRow where Accessory == EmptyView {
+    init(title: String, detail: String, isOn: Bool, isDisabled: Bool, set: @escaping @MainActor (Bool) -> Void) {
+        self.init(title: title, detail: detail, isOn: isOn, isDisabled: isDisabled, set: set) { EmptyView() }
+    }
+}
+
+/// The "Review before push" switch with its reviewer menu, for one ship or
+/// one shepherded request.
+struct ShipReviewLever {
+    let isOn: Bool
+    /// Nil uses `inheritLabel`'s reviewer, from the project or Settings.
+    let reviewer: ReviewerChoice?
+    /// "Codex · gpt-5.2"
+    let inheritLabel: String
+    let agents: [AgentDefinition]
+    let modelCatalog: ACPAgentModelCatalog
+    /// "up to 3 rounds", "every fix too"
+    let detail: String
+    let isDisabled: Bool
+    let setEnabled: @MainActor (Bool) -> Void
+    let setReviewer: @MainActor (ReviewerChoice?) -> Void
+}
+
+/// The review before push row, shared by the Ship popovers and the Changes drawer.
+struct ShipReviewSwitchRow: View {
+    let lever: ShipReviewLever
+
+    var body: some View {
+        ShepherdSwitchRow(
+            title: "Review before push",
+            detail: lever.detail,
+            isOn: lever.isOn,
+            isDisabled: lever.isDisabled,
+            set: lever.setEnabled
+        ) {
+            AgentModelPicker(
+                choice: Binding(get: { lever.reviewer }, set: { lever.setReviewer($0) }),
+                allowsSameAsSession: true,
+                inheritLabel: lever.inheritLabel,
+                agents: lever.agents,
+                modelCatalog: lever.modelCatalog,
+                picksReviewer: true
+            )
+            .controlSize(.small)
+            .disabled(lever.isDisabled)
+        }
+    }
+}
+
+/// The review before push line for a shepherded head, with its links.
+struct ShipReviewLineView: View {
+    let line: ShipReviewLine
+    let perform: @MainActor (ShipReviewLineAction) -> Void
+    @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
+            Image(systemName: symbol)
+                .font(scale.caption.font(weight: .semibold))
+                .foregroundStyle(theme.color(colorKey))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: scale.space[1]) {
+                Text(line.text)
+                    .font(scale.metaFont)
+                    .foregroundStyle(theme.color("fg-dim"))
+                    .fixedSize(horizontal: false, vertical: true)
+                if !line.actions.isEmpty {
+                    HStack(spacing: scale.space[3]) {
+                        ForEach(line.actions, id: \.self) { action in
+                            Button(action.title) { perform(action) }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(theme.color("accent"))
+                        }
+                    }
+                    .font(scale.meta.font(weight: .medium))
+                }
+            }
+        }
+    }
+
+    private var symbol: String {
+        switch line.tone {
+        case .running: ShepherdBadgeState.reviewing.symbolName
+        case .clean: "checkmark.seal.fill"
+        case .findings: "exclamationmark.bubble.fill"
+        case .stopped: ShepherdBadgeState.attention.symbolName
+        }
+    }
+
+    private var colorKey: String {
+        switch line.tone {
+        case .running: "accent"
+        case .clean: "add"
+        case .findings: "warn"
+        case .stopped: "del"
+        }
+    }
+}
+
+extension ShipReviewLineAction {
+    var title: String {
+        switch self {
+        case .openSession: "Open session"
+        case .openReview: "Open review"
+        case .retry: "Retry"
+        case .shipAnyway: "Ship anyway"
+        case .sendToSession: "Send to session"
+        case .allow: "Allow"
+        case .reviewNow: "Review now"
+        }
     }
 }
 

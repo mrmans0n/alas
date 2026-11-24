@@ -293,6 +293,7 @@ extension WorktreeRowPresentation {
         switch badge {
         case .waiting: (nil, false)
         case .fixing: ("agent fixing", false)
+        case .reviewing: ("reviewing", false)
         case .ready: ("ready to merge", false)
         case .merging: ("merging", false)
         case .queued: ("in merge queue", false)

@@ -40,6 +40,13 @@ private struct RepoIconOption: Equatable {
     let fileName: String
 }
 
+/// One line of the Code review block: a review instruction file the
+/// project's checkout has, or one it couldn't read.
+private enum CodeReviewRepoFileStatus: Hashable {
+    case found(String)
+    case unreadable(String)
+}
+
 private struct ProjectDialog: View {
     @Environment(\.designScale) private var scale
     @Bindable var state: AppState
@@ -123,6 +130,12 @@ private struct ProjectDialog: View {
     /// `.alas/shepherd.local.md` or `.alas/shepherd.md` when the project's
     /// main worktree has one; that file wins over these settings.
     @State private var shepherdRulesOverride: String?
+    @State private var codeReviewReviewer: ReviewerChoice?
+    @State private var codeReviewInstructions: String = ""
+    /// `.alas/code-review.md` and `.alas/code-review.local.md` in the
+    /// project's primary checkout, read once per project.
+    @State private var codeReviewRepoFiles: [CodeReviewRepoFileStatus] = []
+    @State private var codeReviewRepoFilesProjectID: String?
     @State private var mcpManagerPresented = false
     @State private var isValidating = false
     @State private var errorMessage: String?
@@ -218,6 +231,7 @@ private struct ProjectDialog: View {
                             startupScriptsSection
                             worktreeVMSection
                             shepherdSection
+                            codeReviewSection
                         case .integrations:
                             integrationsSection
                         }
@@ -1143,6 +1157,106 @@ private struct ProjectDialog: View {
         )
     }
 
+    /// Per-project review-before-push settings, under the PR shepherd block
+    /// and shown for the same projects.
+    @ViewBuilder
+    private var codeReviewSection: some View {
+        if case .edit(let project) = mode, !project.isFolder {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Code review")
+                    .font(scale.meta.font(weight: .semibold))
+                    .foregroundColor(theme.color("fg"))
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Reviewer")
+                        .font(scale.meta.font(weight: .medium))
+                        .foregroundColor(theme.color("fg"))
+                    AgentModelPicker(
+                        choice: $codeReviewReviewer,
+                        allowsSameAsSession: true,
+                        inheritLabel: "Use global setting · " + AgentModelPicker.label(
+                            for: state.config.changes.codeReview.reviewer,
+                            agents: state.agentRegistry.enabled(),
+                            modelCatalog: state.acpModelCatalog
+                        ),
+                        agents: RepositoryAgentMenuPolicy.acpAgents(
+                            from: state.enabledAgents(forProjectId: project.id)
+                        ),
+                        modelCatalog: state.acpModelCatalog,
+                        picksReviewer: true
+                    )
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Instructions")
+                        .font(scale.meta.font(weight: .medium))
+                        .foregroundColor(theme.color("fg"))
+                    ProjectStartupScriptEditor(text: $codeReviewInstructions, minHeight: 80)
+                        .accessibilityLabel("Code review instructions")
+                    Text("Added after the global prompt and .alas/code-review.md, for you alone.")
+                        .font(scale.metaFont)
+                        .foregroundColor(theme.color("fg-muted"))
+                }
+                ForEach(codeReviewRepoFiles, id: \.self) { status in
+                    codeReviewRepoFileLine(status)
+                }
+            }
+            .task(id: project.id) { await loadCodeReviewRepoFiles(project) }
+        }
+    }
+
+    @ViewBuilder
+    private func codeReviewRepoFileLine(_ status: CodeReviewRepoFileStatus) -> some View {
+        switch status {
+        case .found(let file):
+            Text("✓ \(file) found in the repo, added too")
+                .font(scale.metaFont)
+                .foregroundColor(theme.color("fg-muted"))
+        case .unreadable(let file):
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(scale.caption.font(weight: .regular))
+                Text("Couldn't read \(file)")
+                    .font(scale.metaFont)
+            }
+            .foregroundStyle(theme.color("warn"))
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    /// Trimmed instructions; empty settings clear the stored value.
+    private var draftCodeReviewSettings: ProjectCodeReviewSettings {
+        ProjectCodeReviewSettings(
+            reviewer: codeReviewReviewer,
+            instructions: codeReviewInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    /// Reads the repo files from the project's primary checkout once per
+    /// project, not on every return to the Automation tab.
+    private func loadCodeReviewRepoFiles(_ project: ProjectConfig) async {
+        guard codeReviewRepoFilesProjectID != project.id else { return }
+        let root = URL(fileURLWithPath: project.path, isDirectory: true)
+        var statuses: [CodeReviewRepoFileStatus] = []
+        do {
+            let instructions = try await CodeReviewInstructionsResolver.load(worktreePath: root, projectInstructions: nil)
+            if instructions.repoFile != nil { statuses.append(.found(CodeReviewInstructions.repoFilePath)) }
+            if instructions.localFile != nil { statuses.append(.found(CodeReviewInstructions.localFilePath)) }
+        } catch {
+            statuses = [.unreadable(Self.unreadableCodeReviewFile(error))]
+        }
+        guard !Task.isCancelled else { return }
+        codeReviewRepoFiles = statuses
+        codeReviewRepoFilesProjectID = project.id
+    }
+
+    /// The file a failed load names. The repo file is read first, so an
+    /// error that names neither is the repo file's.
+    private static func unreadableCodeReviewFile(_ error: Error) -> String {
+        let failedName = (error as? ShepherdRulesReadError)?.file
+            ?? (error as? CocoaError)?.filePath.map { URL(fileURLWithPath: $0).lastPathComponent }
+        let localName = URL(fileURLWithPath: CodeReviewInstructions.localFilePath).lastPathComponent
+        return failedName == localName ? CodeReviewInstructions.localFilePath : CodeReviewInstructions.repoFilePath
+    }
+
     /// Reads only the repo files (no project settings), so any non-`none`
     /// source means a file overrides this section.
     private func loadShepherdRulesOverride() {
@@ -1367,6 +1481,8 @@ private struct ProjectDialog: View {
             vmForNewWorktrees = state.effectiveVMForNewWorktrees(for: project)
             vmGuestSetupScript = state.effectiveVMGuestSetupScript(for: project) ?? ""
             shepherdRequiredReviewers = project.shepherd?.requiredReviewers ?? []
+            codeReviewReviewer = project.codeReview?.reviewer
+            codeReviewInstructions = project.codeReview?.instructions ?? ""
         }
     }
 
@@ -1680,7 +1796,8 @@ private struct ProjectDialog: View {
                 startupScripts: draftStartupScripts,
                 mcpServers: mcpServers,
                 worktreeBranchTemplate: worktreeBranchTemplate,
-                shepherd: draftShepherdSettings
+                shepherd: draftShepherdSettings,
+                codeReview: draftCodeReviewSettings
             )
             presented = false
         }

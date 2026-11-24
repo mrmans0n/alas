@@ -4606,7 +4606,7 @@ extension ACPSessionRunner {
                 // private context out of the recorded user message.
                 let context = await self.pluginContext?(self.sessionId) ?? []
                 wireBlocks.insert(contentsOf: context.map { .text($0) }, at: 0)
-                if self.session.readOnlyRestricted {
+                if self.session.readOnlyRestricted, !self.session.unattendedReview {
                     wireBlocks.insert(.text(ACPSideQuestion.guidance), at: context.count)
                 }
                 try ACPPromptSizeGuard.check(wireBlocks)
@@ -5229,7 +5229,10 @@ extension ACPSessionRunner {
                 if let pendingPreamble { privateBlocks.append(.text(pendingPreamble)) }
                 if let pendingForkContext { privateBlocks.append(.text(pendingForkContext)) }
                 for context in await self.pluginContext?(self.sessionId) ?? [] { privateBlocks.append(.text(context)) }
-                if self.session.readOnlyRestricted { privateBlocks.append(.text(ACPSideQuestion.guidance)) }
+                // An unattended reviewer's prompt goes out verbatim; it says what to do itself.
+                if self.session.readOnlyRestricted, !self.session.unattendedReview {
+                    privateBlocks.append(.text(ACPSideQuestion.guidance))
+                }
                 wireBlocks.insert(contentsOf: privateBlocks, at: 0)
                 do {
                     try ACPPromptSizeGuard.check(wireBlocks, forkContext: pendingForkContext)

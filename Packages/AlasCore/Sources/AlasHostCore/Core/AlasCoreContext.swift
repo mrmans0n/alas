@@ -36,6 +36,13 @@ public final class AlasCoreContext {
     public let reviewShepherd: ReviewShepherd
     /// Watches every request of a bound gg stack; AppState installs its effects.
     public let stackShepherd: StackShepherd
+    /// Review before push: reviews the commits Alas is about to push.
+    public let shipReviewer: ShipReviewer
+    /// The throwaway checkouts of reviewers that can't run read-only.
+    @ObservationIgnored let shipReviewCheckouts = ReviewScratchCheckouts()
+    /// Told why a ship review stopped, with the message to show; the app
+    /// installs it, a headless host notifies through the harness.
+    @ObservationIgnored public var shipReviewNotice: (@MainActor (ShipReviewID, String) -> Void)?
     /// Hands each scheduled chat session's first finished turn to its firing.
     @ObservationIgnored public let scheduledAgentTurns = ScheduledAgentTurns()
     /// Waits for a run's completion file. Injectable so tests can settle runs.
@@ -291,6 +298,7 @@ public final class AlasCoreContext {
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.reviewShepherd = reviewShepherd ?? ReviewShepherd(store: store)
         self.stackShepherd = StackShepherd(store: store)
+        self.shipReviewer = ShipReviewer(store: store)
         self.runCompletionWaiter = runCompletionWaiter
         self.runHistory = RunHistory(store: runHistoryStore)
         self.attention = AttentionIntake(store: attentionStore ?? AttentionStore())
@@ -313,6 +321,7 @@ public final class AlasCoreContext {
         self.store = store
         self.projectsFile = projectsFile
         self.makeSessionManager = makeSessionManager
+        installShipReviewerEffects()
     }
 
     /// Loads the projects persisted at `projectsFile`.

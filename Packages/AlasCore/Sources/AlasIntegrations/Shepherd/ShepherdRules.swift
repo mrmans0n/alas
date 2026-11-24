@@ -100,44 +100,14 @@ public enum ShepherdRulesResolver {
     /// can't fail the load.
     public static func load(worktreePath: URL, projectSettings: ProjectShepherdSettings?) async throws -> ShepherdRules {
         let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path)
-        if let localFile = try await read(worktreePath.appendingPathComponent(localFilePath), host: host) {
+        if let localFile = try await RepoTextFileReader.read(worktreePath.appendingPathComponent(localFilePath), host: host) {
             return resolve(localFile: localFile, repoFile: nil, projectSettings: projectSettings)
         }
         return try await resolve(
             localFile: nil,
-            repoFile: read(worktreePath.appendingPathComponent(repoFilePath), host: host),
+            repoFile: RepoTextFileReader.read(worktreePath.appendingPathComponent(repoFilePath), host: host),
             projectSettings: projectSettings
         )
-    }
-
-    /// Follows symlinks on both sides, so a linked rules file reads the same
-    /// locally and over ssh.
-    private static func read(_ url: URL, host: String?) async throws -> String? {
-        guard let host else {
-            do {
-                return try String(contentsOf: url, encoding: .utf8)
-            } catch CocoaError.fileReadNoSuchFile, CocoaError.fileNoSuchFile {
-                return nil
-            }
-        }
-        let script = "LC_ALL=C cat -- \(SSHCommand.shellQuote(url.path))"
-        let result = try await RemoteExec.runData(host: host, cwd: nil, command: script)
-        return try remoteReadContents(result, file: url.lastPathComponent, host: host)
-    }
-
-    /// The remote `cat`'s result. Only `cat` itself reporting ENOENT means
-    /// missing, as a local read's no-such-file does (a dangling link
-    /// included). A permission error on the file or a parent, an ssh failure,
-    /// or bytes that aren't UTF-8 throw.
-    static func remoteReadContents(_ result: ProcessResultData, file: String, host: String) throws -> String? {
-        if result.exitCode == 0, let text = String(data: result.stdout, encoding: .utf8) {
-            return text
-        }
-        let catReportedMissing = result.stderr.split(whereSeparator: \.isNewline).contains {
-            $0.hasPrefix("cat: ") && $0.hasSuffix(": No such file or directory")
-        }
-        if result.exitCode == 1, catReportedMissing { return nil }
-        throw ShepherdRulesReadError(file: file, host: host, detail: result.stderr)
     }
 
     private static func rules(fromFile contents: String, source: ShepherdRules.Source) -> ShepherdRules {
@@ -172,5 +142,39 @@ public enum ShepherdRulesResolver {
               first == "\"" || first == "'"
         else { return value }
         return String(value.dropFirst().dropLast())
+    }
+}
+
+/// Reads a text file under a worktree, over ssh for a remote worktree. Only a
+/// missing file is nil; any other failure throws.
+enum RepoTextFileReader {
+    /// Follows symlinks on both sides, so a linked file reads the same
+    /// locally and over ssh.
+    static func read(_ url: URL, host: String?) async throws -> String? {
+        guard let host else {
+            do {
+                return try String(contentsOf: url, encoding: .utf8)
+            } catch CocoaError.fileReadNoSuchFile, CocoaError.fileNoSuchFile {
+                return nil
+            }
+        }
+        let script = "LC_ALL=C cat -- \(SSHCommand.shellQuote(url.path))"
+        let result = try await RemoteExec.runData(host: host, cwd: nil, command: script)
+        return try remoteReadContents(result, file: url.lastPathComponent, host: host)
+    }
+
+    /// The remote `cat`'s result. Only `cat` itself reporting ENOENT means
+    /// missing, as a local read's no-such-file does (a dangling link
+    /// included). A permission error on the file or a parent, an ssh failure,
+    /// or bytes that aren't UTF-8 throw.
+    static func remoteReadContents(_ result: ProcessResultData, file: String, host: String) throws -> String? {
+        if result.exitCode == 0, let text = String(data: result.stdout, encoding: .utf8) {
+            return text
+        }
+        let catReportedMissing = result.stderr.split(whereSeparator: \.isNewline).contains {
+            $0.hasPrefix("cat: ") && $0.hasSuffix(": No such file or directory")
+        }
+        if result.exitCode == 1, catReportedMissing { return nil }
+        throw ShepherdRulesReadError(file: file, host: host, detail: result.stderr)
     }
 }

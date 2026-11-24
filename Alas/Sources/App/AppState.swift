@@ -2249,6 +2249,7 @@ final class AppState {
             self?.runScheduler.stop()
             self?.reviewShepherd.stop()
             self?.stackShepherd.stop()
+            self?.core.shipReviewer.stop()
             await GGLandingStore.shared.cancelAllAndWait()
             self?.cancelPendingRunScriptLaunches()
             self?.cancelAllRunScriptCompletionTasks()
@@ -7012,7 +7013,8 @@ final class AppState {
         startupScripts: ProjectStartupScripts,
         mcpServers: [ProjectMCPServer],
         worktreeBranchTemplate: String? = nil,
-        shepherd: ProjectShepherdSettings? = nil
+        shepherd: ProjectShepherdSettings? = nil,
+        codeReview: ProjectCodeReviewSettings? = nil
     ) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
@@ -7025,7 +7027,8 @@ final class AppState {
                 startupScripts: startupScripts,
                 mcpServers: mcpServers,
                 worktreeBranchTemplate: worktreeBranchTemplate,
-                shepherd: shepherd
+                shepherd: shepherd,
+                codeReview: codeReview
             )
         )
         saveProjects()
@@ -13117,6 +13120,10 @@ final class AppState {
                     self?.scheduledAgentTurns.deliver(completion)
                     self?.reviewShepherd.turnCompleted(sessionID: completion.sessionId)
                     self?.stackShepherd.turnCompleted(sessionID: completion.sessionId)
+                    self?.core.shipReviewer.ownerTurnCompleted(
+                        sessionID: completion.sessionId,
+                        promptMessageIDs: Set(completion.delegatedSource?.deliveries.map(\.messageId) ?? [])
+                    )
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
             },

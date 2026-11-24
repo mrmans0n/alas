@@ -237,6 +237,20 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @Tracked public var readOnlyRestricted = false
     /// Tool calls the read-only gate rejected, for the side card.
     @Tracked public private(set) var readOnlyBlockedTools: [ACPBlockedToolCall] = []
+    /// A hidden reviewer session that runs unattended
+    /// (`ACPSessionManager.runReviewTurn`): nobody answers its permission
+    /// requests, so the read-only gate decides every one without asking.
+    /// In-memory only, like `readOnlyRestricted`.
+    public var unattendedReview = false
+    /// Where this session's agent runs when not its manager's worktree: the
+    /// throwaway checkout of a reviewer whose read-only mode Alas can't
+    /// enforce. Its `session/new` cwd and its runner's terminal and file
+    /// root. In-memory only, like `unattendedReview`.
+    public var workingDirectory: String?
+    /// The model a reviewer session was asked to run (nil: the agent's
+    /// default), so a later round with a different choice starts a new
+    /// reviewer instead of reusing this one. In-memory only.
+    public var reviewModelID: String?
 
     public func recordReadOnlyBlock(_ title: String) {
         readOnlyBlockedTools.append(.init(title: title, messageIndex: transcript.messages.count))

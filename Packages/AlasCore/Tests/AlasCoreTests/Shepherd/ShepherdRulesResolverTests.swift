@@ -126,10 +126,43 @@ private let parseCases: [ShepherdRulesParseCase] = [
         let result = ProcessResultData(exitCode: exitCode, stdout: Data("rules".utf8), stderr: stderr)
         if expected == "throws" {
             #expect(throws: ShepherdRulesReadError.self) {
-                try ShepherdRulesResolver.remoteReadContents(result, file: "shepherd.md", host: "box")
+                try RepoTextFileReader.remoteReadContents(result, file: "shepherd.md", host: "box")
             }
         } else {
-            #expect(try ShepherdRulesResolver.remoteReadContents(result, file: "shepherd.md", host: "box") == expected)
+            #expect(try RepoTextFileReader.remoteReadContents(result, file: "shepherd.md", host: "box") == expected)
         }
+    }
+
+    /// `.alas/code-review.md` is a directory, so reading it fails.
+    @Test("code review instructions: an unreadable repo file throws")
+    func unreadableCodeReviewFile() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(CodeReviewInstructions.repoFilePath), withIntermediateDirectories: true
+        )
+        await #expect(throws: (any Error).self) {
+            try await CodeReviewInstructionsResolver.load(worktreePath: root, projectInstructions: "Project")
+        }
+    }
+
+    @Test("code review instructions read both files and keep project text", arguments: [
+        ("  Check tests.  ", "Check tests." as String?),
+        (" \n", nil),
+    ])
+    func codeReviewInstructionsLoad(project: String, expectedProject: String?) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".alas"), withIntermediateDirectories: true
+        )
+        try "Repo rules\n".write(
+            to: root.appendingPathComponent(CodeReviewInstructions.repoFilePath), atomically: true, encoding: .utf8
+        )
+        try "Local rules\n".write(
+            to: root.appendingPathComponent(CodeReviewInstructions.localFilePath), atomically: true, encoding: .utf8
+        )
+        let instructions = try await CodeReviewInstructionsResolver.load(worktreePath: root, projectInstructions: project)
+        #expect(instructions == CodeReviewInstructions(repoFile: "Repo rules\n", project: expectedProject, localFile: "Local rules\n"))
     }
 }

@@ -115,6 +115,8 @@ public enum StackShipPhase: String, Encodable, Sendable {
     case pushing
     /// Reading the published pull/merge requests and binding the shepherd.
     case reading
+    /// Review before push holds the sync back until the stack's commits pass.
+    case reviewing
 }
 
 /// A running `stack_ship`'s phase, and inside gg sync the entry it is on.
@@ -158,7 +160,8 @@ public struct StackShipProgress: Equatable, Sendable {
 
 /// `stack_ship`'s reply, and `pr_status`'s, while a ship still runs after
 /// Alas replied: the call returns before a slow gg sync (lint can take
-/// minutes) outlasts the agent's tool timeout.
+/// minutes) outlasts the agent's tool timeout. Also `stack_ship`'s reply
+/// while review before push holds the sync back.
 public struct StackShipProgressWire: Encodable, Equatable, Sendable {
     public var status = "in_progress"
     public var phase: StackShipPhase
@@ -166,12 +169,22 @@ public struct StackShipProgressWire: Encodable, Equatable, Sendable {
     public var progress: String
     public var elapsedSeconds: Int
     public var message: String
+    /// The shipping session's review before push; absent while the lever is off.
+    public var review: ShipReviewWire?
 
-    public init(progress: StackShipProgress, elapsedSeconds: Int, message: String) {
+    public init(progress: StackShipProgress, elapsedSeconds: Int, message: String, review: ShipReviewWire? = nil) {
         self.phase = progress.phase
         self.progress = progress.label
         self.elapsedSeconds = elapsedSeconds
         self.message = message
+        self.review = review
+    }
+
+    /// The sync waits for review before push; Alas runs it once the review is clean.
+    public static func reviewing(review: ShipReviewWire, message: String) -> StackShipProgressWire {
+        var wire = StackShipProgressWire(progress: .init(phase: .reviewing), elapsedSeconds: 0, message: message, review: review)
+        wire.status = "reviewing"
+        return wire
     }
 }
 
@@ -249,20 +262,24 @@ public struct StackStatusWire: Encodable, Equatable, Sendable {
 
     public var stack: Stack
     public var shepherd: Shepherd?
+    /// The calling session's review before push; null while the lever is off.
+    public var review: ShipReviewWire?
 
-    public init(stack: Stack, shepherd: Shepherd?) {
+    public init(stack: Stack, shepherd: Shepherd?, review: ShipReviewWire?) {
         self.stack = stack
         self.shepherd = shepherd
+        self.review = review
     }
 
     public enum CodingKeys: String, CodingKey {
-        case stack, shepherd
+        case stack, shepherd, review
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(stack, forKey: .stack)
         try container.encode(shepherd, forKey: .shepherd)
+        try container.encode(review, forKey: .review)
     }
 }
 

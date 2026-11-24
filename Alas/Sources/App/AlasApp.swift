@@ -123,6 +123,14 @@ struct AlasApp: App {
         .windowResizability(.contentSize)
         .defaultSize(width: 720, height: 560)
 
+        Window("Code Review Prompt", id: "code-review-prompt-editor") {
+            CodeReviewPromptEditorWindow(state: state)
+                .environment(\.designScale, .resolved(for: state.config.density))
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultSize(width: 720, height: 560)
+
         Window("Merge: Resolve All Prompt", id: "merge-bulk-prompt-editor") {
             MergeBulkResolvePromptEditorWindow(state: state)
                 .environment(\.designScale, .resolved(for: state.config.density))

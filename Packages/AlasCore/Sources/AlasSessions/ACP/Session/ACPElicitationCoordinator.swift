@@ -313,6 +313,12 @@ public final class ACPElicitationCoordinator {
             cancel(request)
             return
         }
+        // Nobody answers an unattended reviewer: decline at once, without a
+        // prompt card or notification, so its turn goes on.
+        guard !session.unattendedReview else {
+            decline(request)
+            return
+        }
         // An optional (Codex async) question never notifies, raises a child
         // blocker, or takes the session to awaiting input.
         let wasEmpty = !pendingByToken.values.contains(where: \.isBlocking)
@@ -376,6 +382,10 @@ public final class ACPElicitationCoordinator {
             client.respondToPlan(id: request.id, response: .init(outcome: .cancelled))
             return
         }
+        guard !session.unattendedReview else {
+            client.respondToPlan(id: request.id, response: .init(outcome: .rejected(reason: Self.unattendedReason)))
+            return
+        }
         pendingPlans.append(request)
         if notifiedRequestIds.insert(request.id).inserted {
             onPlanAwaiting(session, request)
@@ -435,6 +445,20 @@ public final class ACPElicitationCoordinator {
             break
         }
     }
+
+    private func decline(_ request: ACPUserInputRequest) {
+        switch request.source {
+        case .cursor(let id, _):
+            client.respondToQuestion(id: id, response: .init(outcome: .skipped(reason: Self.unattendedReason)))
+        case .elicitation(let id, _):
+            client.respondToElicitation(id: id, result: .success(.decline))
+        case .visualAid:
+            break
+        }
+    }
+
+    /// Tells an unattended reviewer why its question or plan went unanswered.
+    private static let unattendedReason = "No one can answer during this unattended review. Continue without it."
 
     private static let requestCancelled = JSONRPCError(code: -32800, message: "Request cancelled", data: nil)
 

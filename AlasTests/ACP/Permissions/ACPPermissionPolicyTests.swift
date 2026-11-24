@@ -122,18 +122,20 @@ struct ACPPermissionPolicyTests {
     }
 
     @Test(
-        "read-only side sessions run only reads, despite auto-run and remembered allows",
+        "read-only side sessions run only reads, despite auto-run and remembered allows; unattended ones reject fetch",
         arguments: [
-            ("read", true), ("search", true), ("think", true),
-            ("edit", false), ("execute", false), ("delete", false), ("switch_mode", false),
-            (nil, false),
-        ] as [(String?, Bool)]
+            ("read", false, true), ("search", false, true), ("think", false, true),
+            ("edit", false, false), ("execute", false, false), ("delete", false, false), ("switch_mode", false, false),
+            (nil, false, false),
+            ("read", true, true), ("fetch", true, false), ("edit", true, false),
+        ] as [(String?, Bool, Bool)]
     )
-    func readOnlyGate(kind: String?, allowed: Bool) async throws {
+    func readOnlyGate(kind: String?, unattended: Bool, allowed: Bool) async throws {
         let store = try makeStore()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         session.autoRunEnabled = true
         session.readOnlyRestricted = true
+        session.unattendedReview = unattended
         let log = ACPPermissionDecisionLog(store: store)
         try await log.record(sessionId: "s", scopeKey: "tool:x", decision: .allow, scope: .project)
         let policy = ACPPermissionPolicy(session: session, log: log)
@@ -152,6 +154,7 @@ struct ACPPermissionPolicyTests {
 
         #expect(resp.outcome == .selected(optionId: allowed ? "allow" : "deny"))
         #expect(session.readOnlyBlockedTools.map(\.title) == (allowed ? [] : ["Tool"]))
+        #expect(session.transcript.pendingPermission == nil)
     }
 
     @Test("a read-only rejection without a one-shot option cancels instead of persisting")

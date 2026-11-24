@@ -248,6 +248,24 @@ Squash-merge only. Never force-push to shared branches.
 It replaces the per-project shepherd settings. An uncommitted
 `.alas/shepherd.local.md` replaces both for you alone.
 
+### Code review
+
+With **Review before push** on (Settings › Changes, or the Ship button), a
+reviewer agent checks every push Ship makes before Alas pushes it. Claude
+Code and Codex review in place in a read-only mode; other agents review in a
+throwaway checkout of the commit, deleted afterwards, and only for local
+worktrees.
+`.alas/code-review.md` adds the repository's review instructions to the
+global prompt from Settings, for example:
+
+```markdown
+Watch out for `// ponytail` comments: keep the comment, remove the prefix.
+```
+
+Project instructions from Project Settings come next, then an uncommitted
+`.alas/code-review.local.md` for you alone. Unlike the shepherd rules, these
+layers add up rather than replace each other.
+
 ## Develop
 
 Use Xcode 26.3 or later, which includes Swift 6.3 required by the MLX dependency,

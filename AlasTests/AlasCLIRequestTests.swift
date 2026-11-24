@@ -487,7 +487,7 @@ struct AlasCLIRequestTests {
     /// Pins the agent-facing `pr_status` keys from the spec, including the
     /// explicit nulls agents rely on.
     @Test(arguments: [
-        (PRStatusWire(pullRequest: nil, shepherd: nil), #"{"pull_request":null,"shepherd":null}"#),
+        (PRStatusWire(pullRequest: nil, shepherd: nil, review: nil), #"{"pull_request":null,"review":null,"shepherd":null}"#),
         (
             PRStatusWire(
                 pullRequest: .init(
@@ -509,10 +509,14 @@ struct AlasCLIRequestTests {
                 ),
                 shepherd: .init(
                     phase: "fixing", autoFix: true, autoMerge: false, fixAttempts: 1, maxFixAttempts: 3,
-                    rulesSource: "repo_file"
+                    rulesSource: "repo_file", reviewBeforePush: true
+                ),
+                review: .init(
+                    state: "awaiting_fix", round: 1, maxRounds: 3, reviewer: "codex/gpt-5.2", headSha: "a3f9c1e",
+                    openFindings: 2, message: nil
                 )
             ),
-            #"{"pull_request":{"checks":{"failed":1,"failing":[{"name":"unit-tests","url":null,"workflow":"CI"}],"passed":10,"pending":1,"skipped":0},"draft":false,"head_sha":"a3f9c1e","merge_state":"blocked","missing_required_reviewers":["chatgpt-codex-connector"],"number":2041,"state":"open","threads":[{"author":"maintainer","body":"Back off.","id":"PRRT_1","line":88,"path":"Auth\/TokenRefresher.swift","trust":"trusted","url":null}],"url":"https:\/\/example.com\/pr\/2041"},"shepherd":{"auto_fix":true,"auto_merge":false,"fix_attempts":1,"max_fix_attempts":3,"phase":"fixing","rules_source":"repo_file"}}"#
+            #"{"pull_request":{"checks":{"failed":1,"failing":[{"name":"unit-tests","url":null,"workflow":"CI"}],"passed":10,"pending":1,"skipped":0},"draft":false,"head_sha":"a3f9c1e","merge_state":"blocked","missing_required_reviewers":["chatgpt-codex-connector"],"number":2041,"state":"open","threads":[{"author":"maintainer","body":"Back off.","id":"PRRT_1","line":88,"path":"Auth\/TokenRefresher.swift","trust":"trusted","url":null}],"url":"https:\/\/example.com\/pr\/2041"},"review":{"head_sha":"a3f9c1e","max_rounds":3,"message":null,"open_findings":2,"reviewer":"codex\/gpt-5.2","round":1,"state":"awaiting_fix"},"shepherd":{"auto_fix":true,"auto_merge":false,"fix_attempts":1,"max_fix_attempts":3,"phase":"fixing","review_before_push":true,"rules_source":"repo_file"}}"#
         ),
     ])
     func prStatusWireMatchesTheSpecKeys(status: PRStatusWire, expected: String) {

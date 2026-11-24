@@ -43,7 +43,7 @@ extension AlasCoreContext {
         let recordKey = stackShepherd.record(forSession: sessionID).flatMap { $0.isFinished ? nil : $0.id.storageKey }
             ?? reviewShepherd.record(forSession: sessionID)?.id.storageKey
             ?? worktreeID
-        let source = ACPDelegatedPromptSource.shepherd(recordKey: recordKey, messageID: UUID(), card: prompt.card)
+        let source = ACPDelegatedPromptSource.shepherd(recordKey: recordKey, messageID: prompt.messageID ?? UUID(), card: prompt.card)
         let queued = await manager.enqueueDelegatedPrompt(text: prompt.text, source: source, into: sessionID, requiringWriter: true)
         return queued ? .delivered : .failed
     }

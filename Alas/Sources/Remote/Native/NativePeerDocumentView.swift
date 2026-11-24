@@ -591,7 +591,7 @@ struct NativePeerReviewView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             if let verdict = review?.summary.record.verdict?.verdict {
-                Text(verdict.peerLabel)
+                Text(verdict.displayLabel)
                     .font(scale.caption.font(weight: .semibold))
                     .padding(.horizontal, scale.space[1])
                     .padding(.vertical, scale.space[0])
@@ -950,16 +950,5 @@ struct NativePeerReviewView: View {
             .padding(.vertical, scale.space[2])
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(theme.color("bg-2"))
-    }
-}
-
-extension ReviewVerdict {
-    /// How a peer review's header and the Reviews list show the verdict.
-    var peerLabel: String {
-        switch self {
-        case .approve: "Approved"
-        case .requestChanges: "Changes requested"
-        case .comment: "Commented"
-        }
     }
 }

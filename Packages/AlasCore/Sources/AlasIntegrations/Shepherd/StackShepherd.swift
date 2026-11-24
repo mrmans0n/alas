@@ -121,6 +121,8 @@ public final class StackShepherd {
         /// for a headless host): its records are that instance's, so this
         /// one never changes, escalates, archives or removes them.
         public var servesWorktree: @MainActor (_ worktreeID: String) -> Bool
+        /// Review before push state for the stack; nil when the lever is off.
+        public var reviewGate: @MainActor (_ record: StackShepherdRecord) -> ShepherdReviewGate? = { _ in nil }
 
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
@@ -144,7 +146,8 @@ public final class StackShepherd {
                 _ isStillWanted: @escaping @MainActor () -> Bool
             ) async -> ReviewShepherd.ArchiveResult,
             servesWorktree: @escaping @MainActor (_ worktreeID: String) -> Bool = { _ in true },
-            loadStackWithForgeState: @escaping @MainActor (_ path: URL) async throws -> GGStack? = { _ in nil }
+            loadStackWithForgeState: @escaping @MainActor (_ path: URL) async throws -> GGStack? = { _ in nil },
+            reviewGate: @escaping @MainActor (_ record: StackShepherdRecord) -> ShepherdReviewGate? = { _ in nil }
         ) {
             self.worktreeContext = worktreeContext
             self.loadStack = loadStack
@@ -157,6 +160,7 @@ public final class StackShepherd {
             self.notify = notify
             self.archiveWorktreeIfAllowed = archiveWorktreeIfAllowed
             self.servesWorktree = servesWorktree
+            self.reviewGate = reviewGate
         }
     }
 
@@ -305,7 +309,8 @@ public final class StackShepherd {
             isStackPublished: StackShepherdPolicy.publication(
                 of: stack, local: probed.local, landed: landed, shipPlan: latest.shipPlan ?? .wholeStack
             ).isPublished,
-            capabilities: provider.capabilities, rules: rules, headReviewers: headReviewers, now: now()
+            capabilities: provider.capabilities, rules: rules, headReviewers: headReviewers, now: now(),
+            reviewPassed: StackShepherdPolicy.reviewPassed(current, requests: freshRequests, gate: effects?.reviewGate(current))
         )
     }
 
@@ -698,7 +703,8 @@ public final class StackShepherd {
             isStackPublished: publication.isPublished,
             hasUnpublishedEntries: publication.hasUnpublishedEntries,
             rules: rules,
-            now: now()
+            now: now(),
+            reviewGate: effects.reviewGate(current)
         )
         var decision = StackShepherdPolicy.decide(current, observation)
         // Only a restack about to be requested needs to know whether a merge

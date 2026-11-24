@@ -17,13 +17,15 @@ public struct PRCreateResultWire: Encodable, Equatable, Sendable {
     }
 
     public struct Shepherd: Encodable, Equatable, Sendable {
-        public init(autoFix: Bool, autoMerge: Bool) {
+        public init(autoFix: Bool, autoMerge: Bool, reviewBeforePush: Bool) {
             self.autoFix = autoFix
             self.autoMerge = autoMerge
+            self.reviewBeforePush = reviewBeforePush
         }
 
         public var autoFix: Bool
         public var autoMerge: Bool
+        public var reviewBeforePush: Bool
     }
 
     public var number: Int
@@ -36,7 +38,10 @@ public struct PRCreateResultWire: Encodable, Equatable, Sendable {
 }
 
 extension PRCreateResultWire {
-    public init(request: ReviewRequest, headSHA: String, created: Bool, uncommittedChanges: Bool, record: ShepherdRecord) {
+    public init(
+        request: ReviewRequest, headSHA: String, created: Bool, uncommittedChanges: Bool, record: ShepherdRecord,
+        reviewBeforePush: Bool
+    ) {
         self.init(
             number: request.number,
             url: request.url.absoluteString,
@@ -44,17 +49,109 @@ extension PRCreateResultWire {
             headSha: headSHA,
             created: created,
             uncommittedChanges: uncommittedChanges,
-            shepherd: Shepherd(autoFix: record.autoFix, autoMerge: record.autoMerge)
+            shepherd: Shepherd(autoFix: record.autoFix, autoMerge: record.autoMerge, reviewBeforePush: reviewBeforePush)
         )
+    }
+}
+
+/// Review before push state for one owning session, as `pr_create` and
+/// `pr_status` report it. Optional fields encode as explicit `null`.
+public struct ShipReviewWire: Encodable, Equatable, Sendable {
+    public init(
+        state: String, round: Int, maxRounds: Int, reviewer: String, headSha: String?, openFindings: Int, message: String?
+    ) {
+        self.state = state
+        self.round = round
+        self.maxRounds = maxRounds
+        self.reviewer = reviewer
+        self.headSha = headSha
+        self.openFindings = openFindings
+        self.message = message
+    }
+
+    public var state: String
+    public var round: Int
+    public var maxRounds: Int
+    /// "codex/gpt-5.2", or the agent id alone for its default model.
+    public var reviewer: String
+    public var headSha: String?
+    public var openFindings: Int
+    /// Why the review stopped; nil while it hasn't.
+    public var message: String?
+
+    public enum CodingKeys: String, CodingKey {
+        case state, round, maxRounds, reviewer, headSha, openFindings, message
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(state, forKey: .state)
+        try container.encode(round, forKey: .round)
+        try container.encode(maxRounds, forKey: .maxRounds)
+        try container.encode(reviewer, forKey: .reviewer)
+        try container.encode(headSha, forKey: .headSha)
+        try container.encode(openFindings, forKey: .openFindings)
+        try container.encode(message, forKey: .message)
+    }
+}
+
+extension ShipReviewWire {
+    /// `reviewer` is the resolved reviewer, "agent/model" or "agent";
+    /// `openFindings` this push's findings still active in the pane.
+    public init(record: ShipReviewRecord, reviewer: String, openFindings: Int) {
+        let state: String
+        let head: String?
+        var message: String?
+        switch record.phase {
+        case .idle:
+            state = "idle"
+            head = record.currentRound?.headSHA
+        case let .reviewing(headSHA, _):
+            state = "reviewing"
+            head = headSHA
+        case let .awaitingFix(headSHA):
+            state = "awaiting_fix"
+            head = headSHA
+        case let .pushing(headSHA):
+            state = "pushing"
+            head = headSHA
+        case let .stopped(stop):
+            state = "stopped"
+            head = record.currentRound?.headSHA
+            message = ShipReviewPresentation.stopMessage(stop, maxRounds: record.maxRounds)
+        }
+        self.init(
+            state: state,
+            round: record.currentRound?.number ?? 0,
+            maxRounds: record.maxRounds,
+            reviewer: reviewer,
+            headSha: head,
+            openFindings: openFindings,
+            message: message
+        )
+    }
+}
+
+/// `pr_create` while the push waits for review before push. Not an error:
+/// Alas pushes and opens the request itself once the review is clean.
+public struct PRCreateReviewingWire: Encodable, Equatable, Sendable {
+    public var status = "reviewing"
+    public var review: ShipReviewWire
+    public var message: String
+
+    public init(review: ShipReviewWire, message: String) {
+        self.review = review
+        self.message = message
     }
 }
 
 /// Agent-facing JSON of the `pr_status` MCP tool. Optional fields encode as
 /// explicit `null` so agents always see the same keys.
 public struct PRStatusWire: Encodable, Equatable, Sendable {
-    public init(pullRequest: PullRequest?, shepherd: Shepherd?) {
+    public init(pullRequest: PullRequest?, shepherd: Shepherd?, review: ShipReviewWire?) {
         self.pullRequest = pullRequest
         self.shepherd = shepherd
+        self.review = review
     }
 
     public struct FailingCheck: Encodable, Equatable, Sendable {
@@ -174,7 +271,8 @@ public struct PRStatusWire: Encodable, Equatable, Sendable {
 
     public struct Shepherd: Encodable, Equatable, Sendable {
         public init(
-            phase: String, autoFix: Bool, autoMerge: Bool, fixAttempts: Int, maxFixAttempts: Int, rulesSource: String
+            phase: String, autoFix: Bool, autoMerge: Bool, fixAttempts: Int, maxFixAttempts: Int, rulesSource: String,
+            reviewBeforePush: Bool
         ) {
             self.phase = phase
             self.autoFix = autoFix
@@ -182,6 +280,7 @@ public struct PRStatusWire: Encodable, Equatable, Sendable {
             self.fixAttempts = fixAttempts
             self.maxFixAttempts = maxFixAttempts
             self.rulesSource = rulesSource
+            self.reviewBeforePush = reviewBeforePush
         }
 
         public var phase: String
@@ -190,19 +289,23 @@ public struct PRStatusWire: Encodable, Equatable, Sendable {
         public var fixAttempts: Int
         public var maxFixAttempts: Int
         public var rulesSource: String
+        public var reviewBeforePush: Bool
     }
 
     public var pullRequest: PullRequest?
     public var shepherd: Shepherd?
+    /// Nil when review before push is off for the session.
+    public var review: ShipReviewWire?
 
     public enum CodingKeys: String, CodingKey {
-        case pullRequest, shepherd
+        case pullRequest, shepherd, review
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(pullRequest, forKey: .pullRequest)
         try container.encode(shepherd, forKey: .shepherd)
+        try container.encode(review, forKey: .review)
     }
 }
 
@@ -246,14 +349,15 @@ extension PRStatusWire.PullRequest {
 }
 
 extension PRStatusWire.Shepherd {
-    public init(record: ShepherdRecord, rules: ShepherdRules) {
+    public init(record: ShepherdRecord, rules: ShepherdRules, reviewBeforePush: Bool) {
         self.init(
             phase: Self.wireName(record.phase),
             autoFix: record.autoFix,
             autoMerge: record.autoMerge,
             fixAttempts: record.fixAttempts,
             maxFixAttempts: record.fixAttemptBudget,
-            rulesSource: Self.wireName(rules.source)
+            rulesSource: Self.wireName(rules.source),
+            reviewBeforePush: reviewBeforePush
         )
     }
 

@@ -185,4 +185,17 @@ private typealias F = ShepherdFixtures
         #expect(card.sections[0].items.allSatisfy { $0.excerpt == nil })
         #expect(card.sections[0].items[1].bodyMarkdown == nil)
     }
+
+    @Test("fix prompt tells the session not to push when review is on", arguments: [true, false])
+    func fixPromptPushInstruction(reviewBeforePush: Bool) {
+        let request = F.request(mergeState: .dirty, checks: [F.failing])
+        let prompt = ShepherdPromptBuilder.fixPrompt(
+            request: request, fix: ShepherdPolicy.problems(in: request, handled: []), logs: [], rules: .none,
+            reviewBeforePush: reviewBeforePush
+        ).text
+        #expect(prompt.contains("Don't push: Alas reviews the commits and pushes them.") == reviewBeforePush)
+        #expect(prompt.contains("commit, and push to fix-login.") == !reviewBeforePush)
+        #expect(prompt.contains("resolve each conflict from the intended behavior, commit, push.") == !reviewBeforePush)
+        #expect(prompt.contains("Never force-push or rewrite published history. When done, call pr_status to confirm."))
+    }
 }

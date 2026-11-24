@@ -45,7 +45,8 @@ extension AppState {
                     worktreeID, sessionID: sessionID, isStillWanted: isStillWanted
                 ) ?? .declined
             },
-            loadStackWithForgeState: { path in try await GGService().currentStack(worktreePath: path.path) }
+            loadStackWithForgeState: { path in try await GGService().currentStack(worktreePath: path.path) },
+            reviewGate: { [weak self] in self?.core.stackReviewGate(for: $0) }
         )
     }
 
@@ -113,8 +114,16 @@ extension AppState {
 
     /// The toolbar's Ship stack button: remembers what to publish for the
     /// session's `stack_ship`, then asks the session to fold its work into
-    /// the stack and call it.
-    func requestShipStack(sessionID: String, worktree: Worktree, plan: StackShipPlan) {
+    /// the stack and call it. `review` is the popover's review before push
+    /// choice for this ship.
+    func requestShipStack(
+        sessionID: String, worktree: Worktree, plan: StackShipPlan, review: (enabled: Bool, reviewer: ReviewerChoice?)
+    ) {
+        core.shipReviewer.prepare(
+            ShipReviewID(worktreeID: worktree.id, sessionID: sessionID),
+            enabled: review.enabled,
+            reviewer: review.reviewer
+        )
         let session = acpManager(for: worktree)?.liveSession(for: sessionID)
         Task { @MainActor [weak self] in
             guard let self else { return }

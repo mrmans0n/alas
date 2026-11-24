@@ -43,7 +43,10 @@ public final class ACPPermissionPolicy {
         // Ahead of auto-run and remembered decisions: a project-wide "always
         // allow" must not let a read-only side session write.
         if session.readOnlyRestricted {
-            switch ACPSideQuestionPermissionRule.decide(kind: params.toolCall.kind) {
+            // Unattended, `fetch` rejects too, so nothing parks for a human.
+            let decision = ACPSideQuestionPermissionRule.decide(
+                kind: params.toolCall.kind, unattended: session.unattendedReview)
+            switch decision {
             case .allow:
                 // Never a persistent allow: the adapter could stop asking for
                 // that scope, and later calls would skip this gate.

@@ -57,16 +57,26 @@ struct StackShepherdPopover: View {
     @State private var moreShipThrough = Int.max
     @State private var moreOpensDrafts = false
     @State private var isShippingMore = false
+    /// This ship's review before push lever; nil until the user flips it,
+    /// which reads the Settings default.
+    @State private var shipReviewEnabled: Bool?
+    /// This ship's reviewer; nil uses the project's or Settings' reviewer.
+    @State private var shipReviewer: ReviewerChoice?
 
     private var isBusy: Bool { transcript.streamingState != .idle }
 
     var body: some View {
         let context = StackShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state)
+        let review = ShipReviewContext(sessionID: session.id, worktree: worktree, state: state, ownerAgentID: session.agentId)
         VStack(alignment: .leading, spacing: 0) {
-            if let record = context.record {
+            // A stack review held by a later Ship stack leads until it settles;
+            // then the bound stack returns.
+            if let held = review.heldShip(stack: true), context.record == nil || held.phase != .idle {
+                reviewingContent(held: held, review: review)
+            } else if let record = context.record {
                 boundContent(record: record, context: context)
             } else {
-                unboundContent(context: context)
+                unboundContent(context: context, review: review)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -298,6 +308,23 @@ struct StackShepherdPopover: View {
         .padding(scale.space[3])
     }
 
+    // MARK: Reviewing
+
+    /// A Ship stack whose sync waits on review before push.
+    private func reviewingContent(held: ShipReviewRecord, review: ShipReviewContext) -> some View {
+        let name = stack?.name ?? state.shepherdStackName(for: worktree) ?? worktree.branch
+        let base = stack?.base ?? state.shepherdBaseBranch(for: worktree)
+        return ShipReviewProgress(
+            record: held,
+            reviewerName: review.reviewerName(held.reviewer),
+            route: "\(name) → \(base)",
+            pushStep: "Publish the entries with gg sync",
+            perform: { ShipReviewContext.perform($0, id: held.id, state: state) },
+            shipWithoutReview: { state.shipWithoutReview(held.id) },
+            stop: { state.stopShipReview(held.id) }
+        )
+    }
+
     // MARK: Unbound
 
     /// Entries listed before the rest fold into a "more" line.
@@ -307,7 +334,7 @@ struct StackShepherdPopover: View {
     private static var canChooseEntries: Bool { GGAvailability.shared.capabilities.syncUntilDraft }
 
     @ViewBuilder
-    private func unboundContent(context: StackShepherdSessionContext) -> some View {
+    private func unboundContent(context: StackShepherdSessionContext, review: ShipReviewContext) -> some View {
         let name = context.otherRecord?.id.stackName ?? stack?.name ?? state.shepherdStackName(for: worktree) ?? worktree.branch
         let entries = stack?.entries ?? []
         let published = entries.filter { $0.prNumber != nil }.count
@@ -355,9 +382,9 @@ struct StackShepherdPopover: View {
         case .adopt:
             adoptRow(text: "Every entry has an open request.", buttonTitle: "Shepherd stack from this session")
         case .create:
-            createContent(reason: nil, picksEntries: picksEntries)
+            createContent(reason: nil, picksEntries: picksEntries, review: review)
         case .unavailable(let reason):
-            createContent(reason: reason, picksEntries: picksEntries)
+            createContent(reason: reason, picksEntries: picksEntries, review: review)
         case .shepherding:
             EmptyView()
         }
@@ -403,7 +430,7 @@ struct StackShepherdPopover: View {
     }
 
     @ViewBuilder
-    private func createContent(reason: String?, picksEntries: Bool) -> some View {
+    private func createContent(reason: String?, picksEntries: Bool, review: ShipReviewContext) -> some View {
         let entries = stack?.entries ?? []
         let top = entries.map(\.position).max() ?? 0
         let through = StackShipPlan.snap(shipThrough, to: StackShipPlan.linePositions(in: entries))
@@ -412,7 +439,13 @@ struct StackShepherdPopover: View {
         let plan = picksEntries
             ? stack.map { StackShipPlan(shipThroughPosition: shipThrough, of: $0, opensDrafts: opensDrafts) } ?? .wholeStack
             : .wholeStack
+        let reviewsFirst = shipReviewEnabled ?? review.defaults.reviewBeforePush
         VStack(alignment: .leading, spacing: scale.space[2]) {
+            if reviewsFirst {
+                ShipPopoverStep(symbol: ShepherdBadgeState.reviewing.symbolName) {
+                    Text("\(review.reviewerName(shipReviewer)) reviews the commits here first. Nothing is pushed until the review is clean.")
+                }
+            }
             ShipPopoverStep(symbol: "sparkles") {
                 Text(shipsAll
                     ? "The agent folds its work into the stack and publishes every entry with gg sync; Alas shepherds them all."
@@ -421,6 +454,17 @@ struct StackShepherdPopover: View {
             if picksEntries {
                 draftsSwitch(isOn: $opensDrafts)
             }
+            ShipReviewSwitchRow(lever: ShipReviewLever(
+                isOn: reviewsFirst,
+                reviewer: shipReviewer,
+                inheritLabel: review.reviewerLabel(nil),
+                agents: review.agents,
+                modelCatalog: review.modelCatalog,
+                detail: review.roundsDetail,
+                isDisabled: false,
+                setEnabled: { shipReviewEnabled = $0 },
+                setReviewer: { shipReviewer = $0 }
+            ))
         }
         .padding(.horizontal, scale.space[3])
         .padding(.vertical, scale.space[2])
@@ -435,7 +479,12 @@ struct StackShepherdPopover: View {
                 : "Ask this session to publish the entries below the line and shepherd them"
         ) {
             onClose()
-            state.requestShipStack(sessionID: session.id, worktree: worktree, plan: plan)
+            state.requestShipStack(
+                sessionID: session.id,
+                worktree: worktree,
+                plan: plan,
+                review: (enabled: reviewsFirst, reviewer: shipReviewer)
+            )
         }
     }
 

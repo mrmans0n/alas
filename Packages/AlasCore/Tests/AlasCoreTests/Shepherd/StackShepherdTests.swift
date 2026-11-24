@@ -61,6 +61,7 @@ struct StackShepherdTests {
         isStackPublished: Bool = true,
         hasUnpublishedEntries: Bool? = nil,
         hasQueuedMerge: Bool = false,
+        reviewGate: ShepherdReviewGate? = nil,
         now: Date = F.now
     ) -> StackShepherdObservation {
         StackShepherdObservation(
@@ -76,7 +77,8 @@ struct StackShepherdTests {
             hasUnpublishedEntries: hasUnpublishedEntries,
             hasQueuedMerge: hasQueuedMerge,
             rules: .none,
-            now: now
+            now: now,
+            reviewGate: reviewGate
         )
     }
 
@@ -135,6 +137,56 @@ struct StackShepherdTests {
 
         #expect(ready.gatePasses && ready.notifyReady)
         #expect(again.gatePasses && !again.notifyReady)
+    }
+
+    @Test("ready to land requires the review to have passed", arguments: [true, false])
+    func readyRequiresReviewPassed(reviewPassed: Bool) {
+        let green = [Self.request(41), Self.request(42)]
+        let record = StackShepherdPolicy.decide(Self.record([41, 42]), Self.observation(green, now: F.earlier)).record
+        let observation = Self.observation(green)
+        let ready = StackShepherdPolicy.decide(record, observation)
+        #expect(ready.gatePasses)
+        #expect(StackShepherdPolicy.isReady(
+            ready.record, requests: observation.requests, isStackPublished: observation.isStackPublished,
+            capabilities: observation.capabilities, rules: observation.rules,
+            headReviewers: observation.headReviewers, now: observation.now, reviewPassed: reviewPassed
+        ) == reviewPassed)
+    }
+
+    /// A stack otherwise ready before its head passes review is announced
+    /// once the review passes, not marked as already announced while held.
+    @Test func readyIsAnnouncedOnceTheReviewPasses() {
+        let green = [Self.request(41), Self.request(42)]
+        let record = StackShepherdPolicy.decide(Self.record([41, 42]), Self.observation(green, now: F.earlier)).record
+
+        let held = StackShepherdPolicy.decide(record, Self.observation(
+            green, reviewGate: ShepherdReviewGate(passedSHAs: [], reviewing: true)
+        ))
+        let passed = StackShepherdPolicy.decide(held.record, Self.observation(
+            green, reviewGate: ShepherdReviewGate(passedSHAs: [F.head], reviewing: false)
+        ))
+
+        #expect(!held.gatePasses && !held.notifyReady)
+        #expect(passed.gatePasses && passed.notifyReady)
+    }
+
+    /// A fix turn whose commits wait on review before `gg sync` is not an
+    /// ineffective turn: no follow-up fix goes out while the review runs.
+    @Test("an entry's idle follow-up waits while its stack is reviewed", arguments: [true, false])
+    func entryFixWaitsWhileReviewing(reviewing: Bool) {
+        var record = Self.record([41])
+        record.entries[0].shepherd.phase = .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0)
+        record.entries[0].shepherd.fixAttempts = 1
+        record.entries[0].shepherd.lastDispatchedFingerprint = F.fingerprint(
+            ShepherdFixRequest(hasConflict: false, failingChecks: [F.failing], threads: [])
+        )
+
+        let decision = StackShepherdPolicy.decide(record, Self.observation(
+            [Self.request(41, checks: [F.failing])],
+            reviewGate: ShepherdReviewGate(passedSHAs: [], reviewing: reviewing)
+        ))
+
+        #expect(decision.fixes.isEmpty == reviewing)
     }
 
     /// After a stack lands the worktree can move to a new one; the finished
@@ -625,11 +677,12 @@ struct StackShepherdTests {
             stack: .init(name: "auth", base: "main", entries: [
                 .init(position: 1, entryId: "c-41", title: "Add store", pullRequest: nil, phase: nil),
             ]),
-            shepherd: nil
+            shepherd: nil,
+            review: nil
         )
 
         #expect(ReviewCommentWireDTO.jsonLine(wire)
-            == #"{"shepherd":null,"stack":{"base":"main","entries":[{"entry_id":"c-41","phase":null,"position":1,"pull_request":null,"title":"Add store"}],"name":"auth"}}"#)
+            == #"{"review":null,"shepherd":null,"stack":{"base":"main","entries":[{"entry_id":"c-41","phase":null,"position":1,"pull_request":null,"title":"Add store"}],"name":"auth"}}"#)
     }
 
     // MARK: Service
@@ -1366,6 +1419,8 @@ struct StackShepherdTests {
         var isSyncing: Bool { syncWaiter != nil }
         var listed = 0
         var turns: [String] = []
+        /// The bases review before push looked for a fork point against.
+        var mergeBases: [String] = []
 
         func sync() async { await withCheckedContinuation { syncWaiter = $0 } }
         func finishSync() { syncWaiter?.resume()
@@ -1442,6 +1497,67 @@ struct StackShepherdTests {
             #expect(core.stackShipStatus(sessionID: "session-1", worktreeID: "wt-1") == nil)
             #expect(core.stackShipActivity["wt-1"] == nil)
         }
+    }
+
+    /// With review before push on, `stack_ship` answers `reviewing` and gg
+    /// sync waits. Once the review of the top entry it publishes is clean,
+    /// Alas syncs once, and the owning session gets that ship's outcome turn
+    /// and no other. The review diffs against the stack's base, not the worktree's.
+    @Test func stackShipWaitsForAReviewBeforeItSyncs() async throws {
+        let (core, log, stack, _) = try await stackShipCore(published: [false, false, false])
+        let probe = ShipProbe()
+        core.stackShepherd.effects?.deliverPrompt = { _, _, prompt, _ in
+            probe.turns.append(prompt.text)
+            return .delivered
+        }
+        let top = try #require(stack.entries.max { $0.position < $1.position })
+        var effects = try #require(core.shipReviewer.effects)
+        effects.context = { _ in
+            ShipReviewer.Context(
+                worktreePath: URL(fileURLWithPath: "/tmp/wt-1"), branch: "auth", baseBranch: "develop",
+                providerName: "GitHub", projectSettings: nil
+            )
+        }
+        effects.ownerAgentID = { _ in "codex" }
+        effects.agentLabel = { _ in "Codex" }
+        effects.instructions = { _, _ in CodeReviewInstructions() }
+        effects.git = ShipReviewGit(
+            headSHA: { _ in "unused" },
+            mergeBase: { _, base, _ in
+                await MainActor.run { probe.mergeBases.append(base) }
+                return "base0"
+            },
+            diff: { _, _, _ in "" }
+        )
+        effects.runReviewer = { _ in
+            .finished(sessionID: "reviewer-1", finalText: #"{"verdict": "approve", "summary": "Fine.", "findings": [], "resolved": []}"#)
+        }
+        effects.discardReviewer = { _, _ in }
+        effects.fileRound = { _ in ReviewSessionID(rawValue: "review-1") }
+        core.shipReviewer.effects = effects
+        let id = ShipReviewID(worktreeID: "wt-1", sessionID: "session-1")
+        core.shipReviewer.prepare(id, enabled: true, reviewer: nil)
+
+        let reply = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .seconds(60))
+        await core.shipReviewer.settle()
+
+        #expect(Self.text(reply).contains(#""status":"reviewing""#))
+        #expect(Self.text(reply).contains(#""phase":"reviewing""#))
+        #expect(Self.text(reply).contains(#""head_sha":"\#(top.sha)""#))
+        #expect(probe.mergeBases == ["origin/\(stack.base)"])
+        let record = try #require(core.shipReviewer.record(for: id))
+        #expect(record.rounds.map(\.headSHA) == [top.sha])
+        #expect(record.rounds.first?.verdict == .approve)
+        #expect(record.passedSHAs == [top.sha])
+        #expect(log.plans.count == 1)
+        // The fake gg opens no request, so the reviewed ship fails after its sync.
+        #expect(probe.turns.count == 1)
+        #expect(probe.turns.first?.contains("has no pull request") == true)
+        guard case .stopped(.pushFailed(let reason)) = record.phase else {
+            Issue.record("expected the failed ship to stop the review, got \(record.phase)")
+            return
+        }
+        #expect(reason.contains("has no pull request"))
     }
 
     /// gg sync streams lint, then push, events; `stack_ship` reports the

@@ -230,4 +230,44 @@ extension AppConfigDecodingTests {
         #expect(reloaded.machines == config.machines)
         #expect(try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8)).machines.isEmpty)
     }
+
+    @Test("old configs decode the review settings to their defaults", arguments: [
+        #"{"changes":{}}"#,
+        #"{"changes":{"shepherd":{"autoFix":true}}}"#,
+        #"{"changes":{"shepherd":{"maxReviewRounds":99},"codeReview":{"reviewer":"bogus"}}}"#,
+    ])
+    func reviewSettingsTolerateOldAndBadJSON(_ json: String) throws {
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(config.changes.shepherd.reviewBeforePush == false)
+        #expect(ShepherdDefaults.reviewRoundRange.contains(config.changes.shepherd.maxReviewRounds))
+        #expect(config.changes.codeReview.reviewer == .sameAsSession)
+        #expect(config.changes.codeReview.prompt == CodeReviewSettings.defaultPrompt)
+    }
+
+    @Test func reviewSettingsSurviveConfigurationRoundTrip() throws {
+        var config = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        config.changes.shepherd.reviewBeforePush = true
+        config.changes.shepherd.maxReviewRounds = 5
+        config.changes.codeReview = CodeReviewSettings(
+            reviewer: .agent(id: "codex", modelID: "gpt-5.2"), prompt: "Look for bugs.")
+        let reloaded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(reloaded.changes.shepherd == config.changes.shepherd)
+        #expect(reloaded.changes.codeReview == config.changes.codeReview)
+    }
+
+    @Test("reviewer precedence: ship, then project, then global", arguments: [
+        (ReviewerChoice?.some(.agent(id: "codex", modelID: "gpt-5.2")), ReviewerChoice?.some(.agent(id: "claude", modelID: nil)), ReviewerChoice.sameAsSession, ResolvedReviewer(agentID: "codex", modelID: "gpt-5.2")),
+        (nil, .some(.agent(id: "claude", modelID: "opus")), .agent(id: "codex", modelID: nil), ResolvedReviewer(agentID: "claude", modelID: "opus")),
+        (nil, nil, .agent(id: "codex", modelID: nil), ResolvedReviewer(agentID: "codex", modelID: nil)),
+        (nil, .some(.sameAsSession), .agent(id: "codex", modelID: nil), ResolvedReviewer(agentID: "pi", modelID: nil)),
+    ])
+    func reviewerPrecedence(ship: ReviewerChoice?, project: ReviewerChoice?, global: ReviewerChoice, expected: ResolvedReviewer) {
+        let resolved = ReviewerResolver.resolve(
+            ship: ship,
+            project: project.map { ProjectCodeReviewSettings(reviewer: $0) },
+            global: CodeReviewSettings(reviewer: global),
+            ownerAgentID: "pi"
+        )
+        #expect(resolved == expected)
+    }
 }
