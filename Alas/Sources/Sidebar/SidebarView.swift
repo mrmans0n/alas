@@ -53,8 +53,14 @@ struct SidebarView: View {
                     onSettings: onSettings,
                     // Projects land in a local space, so adding one from a
                     // peer's page goes back there first.
-                    onAddProject: { returnToLocalSpace(); onAddProject() },
-                    onAddFolder: { returnToLocalSpace(); onAddFolder() },
+                    onAddProject: {
+                        returnToLocalSpace()
+                        onAddProject()
+                    },
+                    onAddFolder: {
+                        returnToLocalSpace()
+                        onAddFolder()
+                    },
                     onHideSidebar: onHideSidebar,
                     showingNewWorkspace: $showingNewWorkspace
                 )

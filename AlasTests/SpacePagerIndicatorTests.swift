@@ -123,5 +123,4 @@ struct SpacePagerIndicatorTests {
     @Test func spaceIconAcceptsMultiScalarEmoji() {
         #expect(SpaceIcon.sanitized("🙈", fallback: "🏠") == "🙈")
     }
-
 }

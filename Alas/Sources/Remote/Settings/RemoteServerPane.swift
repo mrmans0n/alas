@@ -805,18 +805,19 @@ private enum AfterSheet {
 // MARK: - Paired Macs, phones and browsers
 
 extension RemoteServerPane {
-    /// Outbound peers only while the server runs: the manager is lazy, and
-    /// nothing else needs it while remote control is off.
+    /// Only while remote control is on. The outbound records live in the lazy
+    /// peer manager, which nothing loads while it is off; listing a Mac from
+    /// its inbound devices alone would describe it wrongly, and its Forget
+    /// would leave the outbound record to reconnect once remote control is
+    /// back on.
     private var pairedMacEntries: [PairedMacEntry] {
-        PairedMacEntry.entries(
-            peers: state.config.remote.enabled ? state.remotePeers.peers : [],
-            devices: state.remotePairing.devices
-        )
+        guard state.config.remote.enabled else { return [] }
+        return PairedMacEntry.entries(peers: state.remotePeers.peers, devices: state.remotePairing.devices)
     }
 
     @ViewBuilder fileprivate var pairedMacsGroup: some View {
         let entries = pairedMacEntries
-        if state.config.remote.enabled || !entries.isEmpty {
+        if state.config.remote.enabled {
             SettingsGroup(title: "Paired Macs") {
                 if entries.isEmpty {
                     SettingsRow(name: "No Macs yet", desc: "Pair another Mac running Alas to open its worktrees from your sidebar.") {
