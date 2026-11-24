@@ -159,7 +159,6 @@ final class FollowedSession {
         let references = manager.upstreamReferences.store(for: URL(fileURLWithPath: manager.worktreePath))
         references.resolveRemote()
         self.references = references
-        if turnCaptionsEnabled() { Self.loadSavedTurnCaptions(of: session, from: manager) }
         signals = [
             transcript.willChange.observe(mark), transcript.streamingTicks.observe(mark),
             session.willChange.observe(mark), manager.summaryWillChange.observe(mark),
@@ -221,13 +220,16 @@ final class FollowedSession {
 
     private func sessionState(of session: ACPSession) -> HostSessionState? {
         guard let manager else { return nil }
+        let captionsEnabled = turnCaptionsEnabled()
+        // Also when captions turn on while the session is followed.
+        if captionsEnabled { Self.loadSavedTurnCaptions(of: session, from: manager) }
         return HostSessionState(
             isWriter: manager.isWriter(for: id),
             hasCancellableBackgroundWork: session.hasCancellableBackgroundWork,
             config: RemoteSessionConfigProjection.config(
                 sessionId: id, session: session, codeHost: references?.remote?.codeHost),
             queue: RemoteQueueProjection.project(session.queue),
-            turnCaptions: turnCaptionsEnabled()
+            turnCaptions: captionsEnabled
                 ? session.turnCaptions.sorted { $0.key < $1.key }.map { RemoteTurnCaption(index: $0.key, caption: $0.value) }
                 : nil
         )

@@ -72,5 +72,8 @@ extension AppState {
                 "Could not save helper settings. Changes apply only to this session. Retry before quitting."
         }
         if !enabled { turnCaptions.reset() }
+        // Remote clients following a session get its captions, or lose them, without waiting for
+        // the session's next change.
+        for session in liveACPSessions { session.willChange.send(()) }
     }
 }
