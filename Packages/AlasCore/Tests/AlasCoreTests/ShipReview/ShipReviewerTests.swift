@@ -503,4 +503,25 @@ struct ShipReviewerTests {
         #expect(fake.stillWanted == [true])
         #expect(reviewer.record(for: id)?.phase == .awaitingFix(headSHA: "h1"))
     }
+
+    /// A headless host sharing the app's profile leaves a worktree it doesn't
+    /// serve to the app: its interrupted round is neither restarted nor stopped.
+    @Test func startLeavesReviewsOfUnservedWorktreesAlone() async throws {
+        let store = MemoryStore()
+        var running = ShipReviewRecord(id: id, enabled: true, reviewer: nil, maxRounds: 3, now: t0)
+        running.pending = pullRequest
+        running.rounds = [ShipReviewRound(number: 1, headSHA: "h1", reviewerLabel: "Codex")]
+        running.phase = .reviewing(headSHA: "h1", startedAt: t0)
+        try store.write(ShipReviewsFile(records: [running]), to: fileURL)
+        let fake = FakeEffects()
+        let reviewer = makeReviewer(fake, store: store)
+        reviewer.effects?.servesWorktree = { _ in false }
+
+        reviewer.start()
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID)
+        await reviewer.settle()
+
+        #expect(fake.runs.isEmpty)
+        #expect(reviewer.record(for: id) == running)
+    }
 }

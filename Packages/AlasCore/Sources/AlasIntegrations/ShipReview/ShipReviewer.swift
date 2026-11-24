@@ -207,6 +207,10 @@ public final class ShipReviewer {
         /// must still describe: HEAD, or for a stack the top entry its plan
         /// publishes. Defaults to HEAD.
         public var shipHead: @MainActor (_ id: ShipReviewID, _ target: ShipReviewTarget?) async throws -> String
+        /// Whether this process runs the worktree's reviews. A headless host
+        /// sharing the app's profile leaves unlisted worktrees, and their
+        /// records, to the app.
+        public var servesWorktree: @MainActor (_ worktreeID: String) -> Bool
 
         public init(
             context: @escaping @MainActor (_ worktreeID: String) -> Context?,
@@ -229,7 +233,8 @@ public final class ShipReviewer {
             notify: @escaping @MainActor (_ id: ShipReviewID, _ stop: ShipReviewStop) -> Void,
             shipHead: (@MainActor (_ id: ShipReviewID, _ target: ShipReviewTarget?) async throws -> String)? = nil,
             removeReviewCheckout: @escaping @MainActor (_ id: ShipReviewID) async -> Void = { _ in },
-            pruneReviewCheckouts: @escaping @MainActor (_ live: Set<ShipReviewID>) async -> Void = { _ in }
+            pruneReviewCheckouts: @escaping @MainActor (_ live: Set<ShipReviewID>) async -> Void = { _ in },
+            servesWorktree: @escaping @MainActor (_ worktreeID: String) -> Bool = { _ in true }
         ) {
             self.context = context
             self.settings = settings
@@ -249,6 +254,7 @@ public final class ShipReviewer {
             self.autoFix = autoFix
             self.localCommitsToPush = localCommitsToPush
             self.notify = notify
+            self.servesWorktree = servesWorktree
             self.shipHead = shipHead ?? { id, _ in
                 guard let path = context(id.worktreeID)?.worktreePath else { throw ShipReviewFailure.reviewer("the worktree is gone") }
                 return try await git.headSHA(path)
@@ -305,9 +311,11 @@ public final class ShipReviewer {
     public func start() {
         guard !started else { return }
         started = true
-        let live = Set(records.values.filter { $0.pending != nil }.map(\.id))
+        // Another process's records, and their checkouts, are left alone.
+        let served = records.values.filter { isServedHere($0.id.worktreeID) }
+        let live = Set(records.values.filter { $0.pending != nil || !isServedHere($0.id.worktreeID) }.map(\.id))
         spawn { [weak self] in await self?.effects?.pruneReviewCheckouts(live) }
-        for record in records.values.sorted(by: { $0.createdAt < $1.createdAt }) {
+        for record in served.sorted(by: { $0.createdAt < $1.createdAt }) {
             let (next, action) = ShipReviewPolicy.relaunched(record, now: now())
             if next != record { put(next) }
             execute(action, for: record.id)
@@ -392,7 +400,8 @@ public final class ShipReviewer {
     /// With nothing under review, fix commits ahead of the request's remote
     /// branch are reviewed and pushed by Alas.
     public func ownerTurnCompleted(sessionID: String) {
-        for record in records.values where record.id.sessionID == sessionID && !deliveringFindings.contains(record.id) {
+        for record in records.values
+            where record.id.sessionID == sessionID && !deliveringFindings.contains(record.id) && isServedHere(record.id.worktreeID) {
             let id = record.id
             switch record.phase {
             case .awaitingFix:
@@ -947,6 +956,10 @@ public final class ShipReviewer {
         lastGeneration += 1
         generations[id] = lastGeneration
         return lastGeneration
+    }
+
+    private func isServedHere(_ worktreeID: String) -> Bool {
+        effects?.servesWorktree(worktreeID) ?? true
     }
 
     private func isCurrent(_ id: ShipReviewID, _ generation: Int) -> Bool {

@@ -124,6 +124,7 @@ extension AlasCoreContext {
                 owner: .worktree(id.worktreeID), worktreeID: id.worktreeID
             )
         }
+        shipReviewer.effects?.servesWorktree = { [weak self] in self?.servesShepherdWorktree($0) ?? false }
     }
 
     /// A turn of a session this host runs ended: the shepherds and scheduled
