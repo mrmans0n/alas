@@ -18,6 +18,9 @@ public struct ACPReviewTurnRequest: Sendable {
     /// agent whose read-only mode Alas can't enforce needs one: a checkout
     /// its edits can't harm.
     public var workingDirectory: String?
+    /// Told the reviewer's session id once it is attached and read-only,
+    /// before the turn runs, so the review can be watched while it runs.
+    public var onSessionReady: (@MainActor @Sendable (ACPSession.ID) -> Void)?
 
     public init(
         parentSessionID: ACPSession.ID,
@@ -27,7 +30,8 @@ public struct ACPReviewTurnRequest: Sendable {
         title: String,
         prompt: String,
         timeout: Duration,
-        workingDirectory: String? = nil
+        workingDirectory: String? = nil,
+        onSessionReady: (@MainActor @Sendable (ACPSession.ID) -> Void)? = nil
     ) {
         self.parentSessionID = parentSessionID
         self.reuseSessionID = reuseSessionID
@@ -37,6 +41,7 @@ public struct ACPReviewTurnRequest: Sendable {
         self.prompt = prompt
         self.timeout = timeout
         self.workingDirectory = workingDirectory
+        self.onSessionReady = onSessionReady
     }
 }
 
@@ -95,6 +100,7 @@ extension ACPSessionManager {
             await discardReviewSession(id: id)
             return .failed(sessionID: id, .cannotRunReadOnly)
         }
+        request.onSessionReady?(id)
         let settlement = await awaitReviewTurn(in: session, prompt: request.prompt, timeout: request.timeout)
         switch settlement {
         case .failed(let failure):

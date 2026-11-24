@@ -251,7 +251,8 @@ extension AlasCoreContext {
             title: "Review before push",
             prompt: run.prompt,
             timeout: .seconds(Self.shipReviewTimeoutMinutes * 60),
-            workingDirectory: workingDirectory
+            workingDirectory: workingDirectory,
+            onSessionReady: run.sessionStarted
         ))
         switch outcome {
         case .finished(let sessionID, let finalText):

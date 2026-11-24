@@ -666,13 +666,19 @@ struct ACPSessionForkManagerTests {
         let (manager, _) = try reviewManager(client: client, sessionNewResponse: Self.planMode)
         let parent = manager.createSession(agentId: "claude")
 
-        let outcome = await manager.runReviewTurn(reviewRequest(parentID: parent.id))
+        @MainActor final class Ready { var id: ACPSession.ID? }
+        let ready = Ready()
+        var request = reviewRequest(parentID: parent.id)
+        request.onSessionReady = { ready.id = $0 }
+
+        let outcome = await manager.runReviewTurn(request)
 
         guard case .finished(let id, _) = outcome else {
             Issue.record("expected a finished review turn, got \(outcome)")
             return
         }
         #expect(outcome == .finished(sessionID: id, finalText: "No findings. Ready to push."))
+        #expect(ready.id == id)
         #expect(manager.sessions[id]?.readOnlyRestricted == true)
         #expect(!manager.recent.contains { $0.id == id })
         let methods = client.sent.map(\.method)

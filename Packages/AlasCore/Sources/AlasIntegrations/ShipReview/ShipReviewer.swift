@@ -114,13 +114,20 @@ public final class ShipReviewer {
         public let reuseSessionID: String?
         public let headSHA: String
         public let prompt: String
+        /// Called with the reviewer's session once it runs, before the turn
+        /// ends, so "Open session" can show the review in progress.
+        public let sessionStarted: @MainActor @Sendable (_ sessionID: String) -> Void
 
-        public init(id: ShipReviewID, reviewer: ResolvedReviewer, reuseSessionID: String?, headSHA: String, prompt: String) {
+        public init(
+            id: ShipReviewID, reviewer: ResolvedReviewer, reuseSessionID: String?, headSHA: String, prompt: String,
+            sessionStarted: @escaping @MainActor @Sendable (_ sessionID: String) -> Void = { _ in }
+        ) {
             self.id = id
             self.reviewer = reviewer
             self.reuseSessionID = reuseSessionID
             self.headSHA = headSHA
             self.prompt = prompt
+            self.sessionStarted = sessionStarted
         }
     }
 
@@ -680,7 +687,16 @@ public final class ShipReviewer {
 
         let outcome = await effects.runReviewer(ReviewerRun(
             id: id, reviewer: prepared.reviewer, reuseSessionID: current.reviewerSessionID, headSHA: headSHA,
-            prompt: prepared.prompt
+            prompt: prepared.prompt,
+            sessionStarted: { [weak self] sessionID in
+                // Only this round's record learns of it; a superseded round's
+                // session is discarded once its turn returns.
+                guard let self, isCurrent(id, generation), var running = records[id],
+                      running.reviewerSessionID != sessionID
+                else { return }
+                running.reviewerSessionID = sessionID
+                put(running)
+            }
         ))
         guard isCurrent(id, generation), var reviewed = records[id] else {
             // A newer round or a stop took over. Its reviewer is the record's;

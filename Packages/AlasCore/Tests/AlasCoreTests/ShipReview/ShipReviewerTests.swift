@@ -50,6 +50,8 @@ private final class FakeEffects {
     var duringDelivery: (() -> Void)?
     /// What each delivery's `isStillWanted` said once the session was ready.
     var stillWanted: [Bool] = []
+    /// Runs inside the reviewer's turn, after its session has started.
+    var duringRun: (() -> Void)?
 
     var runs: [ShipReviewer.ReviewerRun] = []
     var filings: [ShipReviewer.Filing] = []
@@ -91,6 +93,8 @@ private final class FakeEffects {
             },
             runReviewer: { run in
                 self.runs.append(run)
+                run.sessionStarted("reviewer-\(self.runs.count)")
+                self.duringRun?()
                 let reply = self.replies.isEmpty ? approve : self.replies.removeFirst()
                 return .finished(sessionID: "reviewer-\(self.runs.count)", finalText: reply)
             },
@@ -523,5 +527,19 @@ struct ShipReviewerTests {
 
         #expect(fake.runs.isEmpty)
         #expect(reviewer.record(for: id) == running)
+    }
+
+    /// "Open session" has a session to open while the first round runs, not
+    /// only once the reviewer's turn returns.
+    @Test func runningReviewerSessionIsKnownBeforeItsTurnEnds() async {
+        let fake = FakeEffects()
+        let reviewer = makeReviewer(fake)
+        var seen: String?
+        fake.duringRun = { seen = reviewer.record(for: id)?.reviewerSessionID }
+
+        _ = reviewer.requestPush(id, target: pullRequest, headSHA: "h1")
+        await reviewer.settle()
+
+        #expect(seen == "reviewer-1")
     }
 }
