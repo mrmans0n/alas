@@ -1294,6 +1294,9 @@ private struct RootBaseHandlers: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .alasToggleSidebar)) { _ in
                 state.toggleSidebarVisibility()
             }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
+                state.didExitFullScreen()
+            }
         let aRightPane = aSidebar
             .onReceive(NotificationCenter.default.publisher(for: .alasToggleRightPane)) { _ in
                 state.toggleRightPaneVisibility()

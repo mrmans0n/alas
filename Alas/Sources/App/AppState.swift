@@ -2559,7 +2559,16 @@ final class AppState {
     }
 
     /// The tab that hides both side panes while it is the active one. Not persisted.
-    var maximizedTabID: TabID?
+    var maximizedTabID: TabID? {
+        didSet { if maximizedTabID == nil { maximizedForFullScreen = false } }
+    }
+
+    /// Full screen set `maximizedTabID`, so leaving full screen clears it.
+    @ObservationIgnored var maximizedForFullScreen = false
+
+    func didExitFullScreen() {
+        if maximizedForFullScreen { maximizedTabID = nil }
+    }
 
     /// Whether the side panes are hidden for the maximized tab; leaves the saved visibility alone.
     var hidesSidePanes: Bool {
