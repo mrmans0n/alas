@@ -875,6 +875,7 @@ enum RemoteWireSamples {
         ]),
         .nextPromptSuggestion(sessionId: "s1", text: "Run the tests"),
         .nextPromptSuggestion(sessionId: "s1", text: nil),
+        .turnCaptions(sessionId: "s1", captions: [RemoteTurnCaption(index: 4, caption: "Retry failed uploads")]),
     ]
 
     static let clientMessages: [RemoteClientMessage] = [

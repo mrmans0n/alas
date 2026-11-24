@@ -14,6 +14,8 @@ struct ACPTurnChangesCard: View {
     let caption: Caption?
     /// Nil when the files live on another machine: the rows only list them.
     let onOpenDiff: ((String) -> Void)?
+    /// The caption the session's host wrote, when it runs on another machine.
+    var hostCaption: String? = nil
     @Environment(\.theme) private var theme
     @Environment(\.acpMarkdownProseMaxWidth) private var proseMaxWidth
     @Environment(\.designScale) private var scale
@@ -72,7 +74,11 @@ struct ACPTurnChangesCard: View {
         if let caption {
             CaptionedHeader(caption: caption, store: caption.store, changes: changes)
         } else {
-            CaptionedHeader.countsLine(changes: changes)
+            VStack(alignment: .leading, spacing: 0) {
+                if let hostCaption { CaptionedHeader.captionLine(hostCaption) }
+                CaptionedHeader.countsLine(changes: changes)
+            }
+            .animation(.easeOut(duration: 0.15), value: hostCaption)
         }
     }
 
@@ -106,14 +112,7 @@ private struct CaptionedHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let text = store.captions[caption.key] {
-                Text(text)
-                    .font(scale.meta.font(weight: .semibold))
-                    .foregroundStyle(theme.color("fg"))
-                    .lineLimit(2)
-                    .padding(.horizontal, scale.space[3]).padding(.top, scale.space[2])
-                    .transition(.opacity)
-            }
+            if let text = store.captions[caption.key] { Self.captionLine(text) }
             Self.countsLine(changes: changes)
         }
         .animation(.easeOut(duration: 0.15), value: store.captions[caption.key])
@@ -122,6 +121,25 @@ private struct CaptionedHeader: View {
 
     static func countsLine(changes: ACPTurnChanges) -> some View {
         CountsLine(changes: changes)
+    }
+
+    static func captionLine(_ text: String) -> some View {
+        CaptionLine(text: text)
+    }
+
+    private struct CaptionLine: View {
+        let text: String
+        @Environment(\.theme) private var theme
+        @Environment(\.designScale) private var scale
+
+        var body: some View {
+            Text(text)
+                .font(scale.meta.font(weight: .semibold))
+                .foregroundStyle(theme.color("fg"))
+                .lineLimit(2)
+                .padding(.horizontal, scale.space[3]).padding(.top, scale.space[2])
+                .transition(.opacity)
+        }
     }
 
     private struct CountsLine: View {

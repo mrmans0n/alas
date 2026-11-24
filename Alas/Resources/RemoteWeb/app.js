@@ -26,6 +26,7 @@ function listen(id, event, handler) {
 let currentSession = null, messages = new Map();   // stableId → wire message
 let messageNodes = new Map();                          // stableId → DOM node
 let transcriptMeta = null;   // {epoch, revision, firstIndex, totalCount} for the open session
+let turnCaptions = new Map();   // answer index → the host's caption for its turn changes card
 let olderFetchInFlight = false;
 let stopPending = false;
 let queueItems = [];             // [{id, text, imageCount, resourceCount, status, lastError, scheduledAt}] from queueState
@@ -380,6 +381,7 @@ function handle(msg) {
     case "transcriptPage": applyPage(msg); break;
     case "stopPending": if (msg.sessionId === currentSession) markStopping(true); break;
     case "queueState": applyQueueState(msg); break;
+    case "turnCaptions": applyTurnCaptions(msg); break;
     case "queueEditRestored": applyQueueEditRestored(msg); break;
     // Scope prompt events to the session currently open — a stale/in-flight
     // event for a session the user already left must not pop or close a sheet.
@@ -882,6 +884,7 @@ function openSession(id) {
   }
   if (!sameSession) { visualDrafts.clear(); visualSubmitted.clear(); }   // drafts and answered flags belong to one session
   currentSession = id; messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
+  turnCaptions = new Map();
   dismissedQuestion = null; canDrive = false; canDriveKnown = false;
   sessionConfig = null; clearAttachments(); markStopping(false);
   lastStreamingState = "idle";
@@ -1443,7 +1446,7 @@ function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
   currentSession = null; canDrive = false; canDriveKnown = false;
   resetVisualCards(false); visualDrafts.clear(); visualSubmitted.clear(); $("messages").innerHTML = "";   // leaving a session ends its frames, timers, drafts and answered flags
-  messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
+  messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false; turnCaptions = new Map();
   sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances(); markStopping(false);
   hidePermission(); hideQuestion(); hidePlan(); hideElicitation(); hideRenameSheet(); hideCreateSheet();   // never leave a sheet over the list
   $("bar").classList.remove("is-detail");
@@ -2370,6 +2373,13 @@ function applyDelta(msg) {
   if (atBottom) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
 }
 
+// Every caption the host holds for the session, replacing those it sent before.
+function applyTurnCaptions(msg) {
+  if (msg.sessionId !== currentSession) return;
+  turnCaptions = new Map((msg.captions || []).map((c) => [c.index, c.caption]));
+  refreshTurnChanges();
+}
+
 function applyQueueState(msg) {
   if (msg.sessionId !== currentSession) return;
   queueItems = msg.items || [];
@@ -2647,7 +2657,9 @@ function refreshTurnChanges() {
   rows.forEach((m, index) => {
     if (m.kind !== "agent") return;
     const changes = RemoteTurnChanges.forAnswer(items, index, active);
-    if (changes) wanted.set(m.stableId, { changes, signature: JSON.stringify(changes.files) });
+    if (!changes) return;
+    const caption = turnCaptions.get(m.index) || null;
+    wanted.set(m.stableId, { changes, caption, signature: JSON.stringify([changes.files, caption]) });
   });
   box.querySelectorAll(":scope > .m-turn-changes").forEach((card) => {
     const entry = wanted.get(card.dataset.answer);
@@ -2663,7 +2675,7 @@ function refreshTurnChanges() {
 
 const TURN_CHANGES_COLLAPSED = 5;
 
-function turnChangesCard(sid, answerIndex, { changes, signature }) {
+function turnChangesCard(sid, answerIndex, { changes, caption, signature }) {
   const card = el("div", "msg m-turn-changes");
   card.dataset.answer = sid;
   card.dataset.index = String(answerIndex + 0.5);
@@ -2686,6 +2698,7 @@ function turnChangesCard(sid, answerIndex, { changes, signature }) {
     return button;
   };
   changes.files.slice(0, TURN_CHANGES_COLLAPSED).forEach((file) => list.append(row(file)));
+  if (caption) card.append(el("div", "turn-changes-caption", caption));
   card.append(header, list);
   const hidden = changes.files.length - TURN_CHANGES_COLLAPSED;
   if (hidden > 0) {

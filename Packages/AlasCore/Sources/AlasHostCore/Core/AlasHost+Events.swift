@@ -180,6 +180,7 @@ public final class HostSubscription {
     private let pendingLimit: Int
     private let onCancel: (HostSubscription) -> Void
     private let liveSession: (String) -> (SessionOwnerID, ACPSession, ACPSessionManager)?
+    private let turnCaptionsEnabled: () -> Bool
     private var followed: [String: FollowedSession] = [:]
     private let reviewFollows: (follow: (String) -> Void, unfollow: (String) -> Void)
     private var followedWorktrees: Set<String> = []
@@ -201,6 +202,7 @@ public final class HostSubscription {
         after cursor: HostCursor,
         pendingLimit: Int,
         liveSession: @escaping (String) -> (SessionOwnerID, ACPSession, ACPSessionManager)? = { _ in nil },
+        turnCaptionsEnabled: @escaping () -> Bool = { false },
         reviewFollows: (follow: (String) -> Void, unfollow: (String) -> Void) = ({ _ in }, { _ in }),
         fileFollows: HostEventLog.FileFollows = ({ _, _ in }, { _, _ in }),
         onCancel: @escaping (HostSubscription) -> Void
@@ -211,6 +213,7 @@ public final class HostSubscription {
         pendingThrough = cursor
         self.pendingLimit = pendingLimit
         self.liveSession = liveSession
+        self.turnCaptionsEnabled = turnCaptionsEnabled
         self.onCancel = onCancel
     }
 
@@ -236,7 +239,9 @@ public final class HostSubscription {
         guard let (owner, session, manager) = liveSession(sessionID) else { throw SessionRefusal.notFound }
         // Retained before the old follow lets go, so the log keeps its epoch.
         let previous = followed[sessionID]
-        followed[sessionID] = FollowedSession(owner: owner, session: session, manager: manager, from: revision) { [weak self] in
+        followed[sessionID] = FollowedSession(
+            owner: owner, session: session, manager: manager, from: revision, turnCaptionsEnabled: turnCaptionsEnabled
+        ) { [weak self] in
             self?.scheduleWake()
         }
         previous?.release()
@@ -392,6 +397,8 @@ final class HostEventLog {
     private let pendingLimit: Int
     /// Finds a loaded session for subscriptions to follow.
     var liveSession: (String) -> (SessionOwnerID, ACPSession, ACPSessionManager)? = { _ in nil }
+    /// Whether followed sessions carry their turn captions, per the host's settings.
+    var turnCaptionsEnabled: () -> Bool = { false }
     /// Counts a subscription's follow of a worktree's review status.
     var reviewFollows: (follow: (String) -> Void, unfollow: (String) -> Void) = ({ _ in }, { _ in })
     typealias FileFollows = (follow: @MainActor (Worktree, String) async -> Void, unfollow: (_ worktreeID: String, _ path: String) -> Void)
@@ -431,7 +438,8 @@ final class HostEventLog {
     /// cursor is not one of this log's.
     func subscribe(after: HostCursor) -> HostSubscription {
         let subscription = HostSubscription(
-            after: after, pendingLimit: pendingLimit, liveSession: liveSession, reviewFollows: reviewFollows,
+            after: after, pendingLimit: pendingLimit, liveSession: liveSession,
+            turnCaptionsEnabled: turnCaptionsEnabled, reviewFollows: reviewFollows,
             fileFollows: fileFollows
         ) { [weak self] in
             self?.subscriptions.removeValue(forKey: ObjectIdentifier($0))
@@ -501,6 +509,7 @@ final class HostEventSource {
             }
             return nil
         }
+        log.turnCaptionsEnabled = { [weak core] in core?.environment.configuration().turnCaptionsEnabled ?? false }
         log.reviewFollows = (
             follow: { [weak core] in core?.followReviewStatus($0) },
             unfollow: { [weak core] in core?.unfollowReviewStatus($0) }
