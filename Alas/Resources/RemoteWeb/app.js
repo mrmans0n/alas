@@ -1694,22 +1694,27 @@ listen("palette-input", "keydown", event => {
   }
 });
 $("palette").onclick = event => { if (event.target.id === "palette") hidePalette(); };
+// Capture: a focused terminal swallows keys before they bubble. It keeps plain Ctrl ones, which its
+// shell uses (Ctrl+K kills the line), and gives up Cmd ones.
 document.addEventListener("keydown", event => {
   if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+  if (!event.metaKey && event.target.closest && event.target.closest("#terminal-screen")) return;
   const key = event.key.toLowerCase();
   const otherSheet = [...document.querySelectorAll(".sheet:not(.hidden)")].some(sheet => sheet.id !== "palette");
   if (otherSheet || !$("gate").classList.contains("hidden")) return;
   if (key === "k") {
     event.preventDefault();
+    event.stopPropagation();
     if ($("palette").classList.contains("hidden")) showPalette(); else hidePalette();
   } else if (/^[1-9]$/.test(key)) {
     const row = document.querySelectorAll("#session-list [data-session-id]")[Number(key) - 1];
     if (!row) return;
     event.preventDefault();
+    event.stopPropagation();
     hidePalette();
     openSession(row.dataset.sessionId);
   }
-});
+}, true);
 
 function serverDotClass(link, counts) {
   if (!link) return "off";
