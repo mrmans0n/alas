@@ -10,6 +10,7 @@ final class CodeEditorScrollView: MinimapScrollView {
     private var isUpdatingViewport = false
     private var needsViewportUpdate = false
     private var pendingViewportUpdate: DispatchWorkItem?
+    private var scrollEnd: (documentSize: NSSize, viewportSize: NSSize, linePosition: Double)?
 
     /// The system material ignores the code theme, so a themed editor drops
     /// it and paints the palette background instead.
@@ -31,7 +32,7 @@ final class CodeEditorScrollView: MinimapScrollView {
         minimap.onNavigate = { [weak self] value in
             guard let self, let view = self.documentView as? CodeTextView else { return }
             let maximumY = max(0, view.frame.height - self.contentView.bounds.height)
-            let lastPosition = view.sourceLinePosition(atViewY: maximumY)
+            let lastPosition = self.lastScrollableLinePosition(in: view)
             let position = max(0, min(1, value)) * lastPosition
             let line = Int(position)
             let top = view.sourceLineY(line) ?? maximumY
@@ -48,11 +49,17 @@ final class CodeEditorScrollView: MinimapScrollView {
             let center = NotificationCenter.default
             if let storage = sourceStorage {
                 observers.append(center.publisher(for: NSTextStorage.didProcessEditingNotification, object: storage).sink { [weak self] _ in
-                    MainActor.assumeIsolated { self?.scheduleDrawing() }
+                    MainActor.assumeIsolated {
+                        self?.scrollEnd = nil
+                        self?.scheduleDrawing()
+                    }
                 })
             }
             observers.append(center.publisher(for: .editorDisplayProjectionDidChange, object: textView).sink { [weak self] _ in
-                MainActor.assumeIsolated { self?.updateMinimapViewport() }
+                MainActor.assumeIsolated {
+                    self?.scrollEnd = nil
+                    self?.updateMinimapViewport()
+                }
             })
             contentView.postsBoundsChangedNotifications = true
             textView.postsFrameChangedNotifications = true
@@ -124,9 +131,25 @@ final class CodeEditorScrollView: MinimapScrollView {
         guard let view = documentView as? CodeTextView else { return }
         let first = view.sourceLinePosition(atViewY: contentView.bounds.minY)
         let last = view.sourceLinePosition(atViewY: contentView.bounds.maxY)
-        let maximum = view.sourceLinePosition(atViewY: max(0, view.frame.height - contentView.bounds.height))
+        let maximum = lastScrollableLinePosition(in: view)
         minimap.proportion = min(1, CGFloat(last - first) / CGFloat(max(1, view.sourceLineStarts.count)))
         minimap.value = maximum > 0 ? min(1, max(0, first / maximum)) : 0
+    }
+
+    private func lastScrollableLinePosition(in view: CodeTextView) -> Double {
+        let documentSize = view.frame.size
+        let viewportSize = contentView.bounds.size
+        if let scrollEnd, scrollEnd.documentSize == documentSize, scrollEnd.viewportSize == viewportSize {
+            return scrollEnd.linePosition
+        }
+        // A scroll changes the viewport origin but not the last scrollable
+        // line. Don't ask TextKit to visit the far end on every scroll step.
+        let maximumY = max(0, documentSize.height - viewportSize.height)
+        let position = maximumY > 0 ? view.sourceLinePosition(atViewY: maximumY) : 0
+        if view.frame.size == documentSize, contentView.bounds.size == viewportSize {
+            scrollEnd = (documentSize, viewportSize, position)
+        }
+        return position
     }
 
     private func stopObserving() {
@@ -135,6 +158,7 @@ final class CodeEditorScrollView: MinimapScrollView {
         pendingViewportUpdate?.cancel()
         pendingViewportUpdate = nil
         needsViewportUpdate = false
+        scrollEnd = nil
         observers.removeAll()
         observedStorage = nil
     }
