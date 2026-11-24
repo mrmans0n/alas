@@ -701,7 +701,10 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
   body[data-center="document"] #transcript, body[data-center="terminal"] #transcript { display: none !important; }
   body[data-center="document"] #terminal-view, body[data-center="terminal"] #diff-view, body[data-center="terminal"] #file-view { display: none !important; }
   #center-detail #terminal-view { flex: 1; }
-  #terminal-back { display: none; }
+  /* Its centre tab already names it. */
+  #terminal-back, #terminal-title { display: none; }
+  #terminal-bar { justify-content: flex-end; }
+  #terminal-bar:not(:has(#terminal-control:not(.hidden))) { display: none; }
   #changes-list.hidden, #file-list.hidden, #terminal-list-level.hidden { display: block !important; }
   #changes-header.hidden { display: flex !important; }
   .change-row, .file-row { min-height: 0; padding-block: 5px; font-size: 12.5px; border-radius: 5px; border-bottom: none; }

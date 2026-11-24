@@ -4191,7 +4191,10 @@ function toolDisplayName(tc, verb) {
     tc.toolCallId
   ];
   const name = candidates.find(v => typeof v === "string" && v.trim().length > 0) || "";
-  return name.toLowerCase() !== verb.toLowerCase() ? name : "";
+  // The row already shows the verb: "Read foo.js" keeps only "foo.js".
+  const lower = name.toLowerCase(), v = verb.toLowerCase();
+  if (lower === v) return "";
+  return lower.startsWith(v + " ") ? name.slice(v.length + 1).trimStart() : name;
 }
 
 function toolCollapsedPreview(tc) {
