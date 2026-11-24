@@ -7,9 +7,6 @@ import SwiftUI
 /// A saved agent or model the lists no longer carry stays selectable and is
 /// named as such, so the menu never claims a choice the stored value does
 /// not hold.
-///
-/// `body` lays the two menus out side by side; screens that label each menu
-/// separately place `agentMenu` and `modelMenu` themselves.
 struct AgentModelPicker: View {
     @Binding var choice: ReviewerChoice?
     let allowsSameAsSession: Bool
@@ -32,7 +29,7 @@ struct AgentModelPicker: View {
         }
     }
 
-    var agentMenu: some View {
+    private var agentMenu: some View {
         let missingAgentID = selectedAgentID.flatMap { id in
             agents.contains { $0.id == id } ? nil : id
         }
@@ -67,7 +64,7 @@ struct AgentModelPicker: View {
     }
 
     /// Models the selected agent advertised in earlier sessions.
-    var modelMenu: some View {
+    private var modelMenu: some View {
         let models = selectedAgentID.map { modelCatalog.models(for: $0) } ?? []
         let modelID = selectedModelID
         let missingModelID = modelID.flatMap { id in
