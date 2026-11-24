@@ -8,7 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
-- In the Agents tab, show each session's context usage, cost, effort, mode and plan on its card, unfolding into what fills the window and the token totals; show each subagent's model, effort and directory; and fold finished subagents behind "Show done".
+- In the Agents tab, show each session's context usage, cost, effort, mode and plan on its card, unfolding into what fills the window and the token totals; show each subagent's model, effort and directory; and fold finished subagents behind "Show done" ([#2715](https://github.com/mrmans0n/alas/pull/2715)).
 
 ## [0.24.9] - 2026-11-24
 
