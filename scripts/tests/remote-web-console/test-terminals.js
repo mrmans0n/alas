@@ -83,6 +83,9 @@ async function finishLoadingXterm() {
   desk.hide();
   desk.show();
   assert.equal(sent.filter(m => m.detach).length, 0);
+  const beforeReconnect = sent.length;
+  desk.reconnected();
+  assert.ok(sent.slice(beforeReconnect).some(m => m.list), "the list beside the open terminal refreshes");
   desk.closeView();
   assert.equal(sent.filter(m => m.detach).length, 1);
   assert.equal(viewTitle, null);

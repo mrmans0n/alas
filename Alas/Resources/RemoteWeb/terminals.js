@@ -258,7 +258,7 @@ function createTerminals({ send, el, keepView = () => false, onView = () => {} }
     reconnected() {
       opening = null;
       if (view) view.attachment.reconnected();
-      else if (shown) sendConsole({ list: {} });
+      if (shown) sendConsole({ list: {} });   // a desktop shows the list beside the open terminal
     },
     disconnected() {
       if (view) view.attachment.disconnected();

@@ -953,7 +953,7 @@ struct RemoteWebAssetTests {
 
     @Test func remoteWebWiresTabSwitching() throws {
         let js = try asset("app.js")
-        #expect(js.contains("function showTab(name)"))
+        #expect(js.contains("function showTab(name, keepDocument = false)"))
         #expect(js.contains("const changesTree = RemoteFileBrowser.createTree();"))
         #expect(js.contains(#"type: "listChanges""#))
         #expect(js.contains(#"type: "listFiles""#))
@@ -994,7 +994,7 @@ struct RemoteWebAssetTests {
         // `showTab`'s files branch must unconditionally refresh on every
         // reopen, not just the first time (`needsChildren(null)`).
         let showTabBody = try #require(
-            js.range(of: "function showTab(name) {").map { js[$0.lowerBound...].prefix(1200) })
+            js.range(of: "function showTab(name, keepDocument = false) {").map { js[$0.lowerBound...].prefix(1200) })
         #expect(showTabBody.contains(#"if (name === "files") refreshFileTree();"#))
         // The old gate (only fetch the FIRST time this tab is opened) must
         // be gone from the live condition — a bare `needsChildren` check
