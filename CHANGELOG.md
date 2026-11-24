@@ -14,6 +14,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### 🐛 Fixes
 
 - Keep the Ship popover compact when reviewer names are long, and line up its switches.
+- Reduce editor scroll stalls by reusing minimap bitmaps and avoiding repeated layout at the end of the file.
 
 ## [0.24.9] - 2026-11-24
 
