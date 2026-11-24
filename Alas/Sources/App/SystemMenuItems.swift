@@ -17,6 +17,10 @@ import SwiftUI
 /// path. The items Alas still wants are declared in its commands instead; see
 /// `SystemMenuItems`.
 ///
+/// The same insert happens when Alas's own commands change how many items a
+/// menu has while it is open, so keep item counts fixed and disable items
+/// instead of adding or removing them (the View menu's Plugins submenu).
+///
 /// Only macOS 26 is known to hit this crash (`isAffectedOS`), so older
 /// systems (`project.yml` supports back to macOS 15) keep AppKit's native
 /// Dictation, AutoFill, and Writing Tools items rather than losing them for a

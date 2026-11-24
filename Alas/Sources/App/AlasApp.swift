@@ -523,16 +523,17 @@ struct AlasApp: App {
             Divider()
             let pluginTabs = state.pluginTabContributions()
             let pluginCommands = state.pluginCommands(.menubar, projectID: state.selectedPluginProjectID)
-            if !pluginTabs.isEmpty || !pluginCommands.isEmpty {
-                Menu("Plugins") {
-                    ForEach(pluginTabs) { tab in
-                        Button(tab.title) { state.openPluginTab(tab) }
-                    }
-                    if !pluginTabs.isEmpty, !pluginCommands.isEmpty { Divider() }
-                    PluginCommandButtons(items: pluginCommands) { state.runPluginCommand($0, slot: .menubar) }
+            // Always present, so View keeps the same item count when plugins start or stop.
+            // Inserting into an open menu crashes AppKit on macOS 26; see `AppKitMenuInjection`.
+            Menu("Plugins") {
+                ForEach(pluginTabs) { tab in
+                    Button(tab.title) { state.openPluginTab(tab) }
                 }
-                Divider()
+                if !pluginTabs.isEmpty, !pluginCommands.isEmpty { Divider() }
+                PluginCommandButtons(items: pluginCommands) { state.runPluginCommand($0, slot: .menubar) }
             }
+            .disabled(pluginTabs.isEmpty && pluginCommands.isEmpty)
+            Divider()
             Button("Increase Font Size") {
                 NSApp.sendAction(#selector(FontSizeResponder.increaseFontSize(_:)), to: nil, from: nil)
             }
