@@ -66,8 +66,11 @@ In order, stopping where it is good enough:
   fails if it differs. The bundle keeps about 35 grammars and Pierre's themes;
   other languages show as plain text.
 - **Wire drift.** The JavaScript client decodes the same messages as
-  `AlasRemoteKit`. As it takes on more surface, shared JSON wire fixtures
-  decoded by both the Swift and the JavaScript tests would catch drift.
+  `AlasRemoteKit`. `AlasCoreTests/Fixtures/remote-web-wire.json` holds the
+  messages the web client reads and sends: `RemoteWireCompatibilityTests`
+  round-trips each through Swift, and `scripts/tests/remote-web-wire` feeds
+  them to the web client's modules. A new message the browser handles gets
+  an entry there.
 
 ## Order
 

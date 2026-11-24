@@ -956,6 +956,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/tests/remote-web-console/run.sh
 
+      - name: Test remote web wire fixtures
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/remote-web-wire/run.sh
+
       - name: Check the remote web diff bundle matches its sources
         if: ${{ !cancelled() }}
         run: |

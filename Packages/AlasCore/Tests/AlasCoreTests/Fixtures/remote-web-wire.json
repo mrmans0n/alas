@@ -1,0 +1,91 @@
+{
+  "server": {
+    "sessionList": {
+      "type": "sessionList",
+      "sessions": [
+        {
+          "id": "s1", "title": "Fix the parser", "agentId": "claude", "status": "streaming", "canDrive": true,
+          "isActive": true, "tabIndex": 0, "projectId": "p1", "worktreeId": "w1", "updatedAt": 1764000000000,
+          "worktree": {
+            "projectName": "alas", "worktreeName": "proud-walrus", "branch": "nacho/proud-walrus", "path": "/r/proud-walrus",
+            "metricsAvailable": true, "comparisonRef": "origin/main", "commitCount": 2, "changedFileCount": 3,
+            "addedLines": 40, "deletedLines": 7, "conflictCount": 0
+          }
+        },
+        {
+          "id": "s2", "title": "Old run", "agentId": "codex", "status": "idle", "canDrive": false,
+          "isActive": false, "projectId": "p1", "worktreeId": "w1", "updatedAt": 1763000000000,
+          "worktree": {
+            "projectName": "alas", "worktreeName": "proud-walrus", "branch": "nacho/proud-walrus", "path": "/r/proud-walrus",
+            "metricsAvailable": true, "comparisonRef": "origin/main", "commitCount": 2, "changedFileCount": 3,
+            "addedLines": 40, "deletedLines": 7, "conflictCount": 0
+          }
+        }
+      ]
+    },
+    "changeList": {
+      "type": "changeList", "sessionId": "s1", "comparisonRef": "origin/main", "metricsAvailable": true,
+      "files": [
+        { "path": "src/app.js", "status": "M", "add": 30, "del": 5 },
+        { "path": "README.md", "status": "R", "add": 2, "del": 2, "renameFrom": "README.txt" }
+      ],
+      "staged": [{ "path": "src/app.js", "status": "M", "add": 3, "del": 1 }],
+      "unstaged": [{ "path": "src/style.css", "status": "M", "add": 5, "del": 0, "conflict": "both" }],
+      "commits": [{ "sha": "0123456789abcdef0123456789abcdef01234567", "shortSha": "0123456", "subject": "Add parser", "author": "Ada", "add": 30, "del": 5 }],
+      "truncated": false, "commitsTruncated": false
+    },
+    "fileDiffResult": {
+      "type": "fileDiffResult", "sessionId": "s1", "path": "src/app.js", "stage": "staged", "truncated": false,
+      "hunks": [{
+        "header": "@@ -1,2 +1,2 @@", "oldStart": 1, "newStart": 1,
+        "lines": [
+          { "kind": "context", "text": "const a = 1;", "oldNumber": 1, "newNumber": 1, "noTrailingNewline": false },
+          { "kind": "delete", "text": "const b = 2;", "oldNumber": 2, "noTrailingNewline": false },
+          { "kind": "add", "text": "const b = 3;", "newNumber": 2, "noTrailingNewline": true }
+        ]
+      }]
+    },
+    "fileTree": {
+      "type": "fileTree", "sessionId": "s1", "truncated": false,
+      "nodes": [
+        { "name": "README.md", "path": "README.md", "kind": "file", "badge": "M", "childrenState": "unloaded", "isSubmodule": false },
+        { "name": "src", "path": "src", "kind": "dir", "childrenState": "unloaded", "isSubmodule": false }
+      ]
+    },
+    "consoleList": {
+      "type": "console",
+      "console": { "list": { "consoles": [
+        { "consoleId": "c1", "title": "zsh", "worktreeId": "w1", "projectId": "p1", "projectName": "alas", "worktreeName": "proud-walrus", "rows": 24, "columns": 80 }
+      ] } }
+    },
+    "consoleAttached": {
+      "type": "console",
+      "console": { "attached": { "attachmentId": "a1", "rows": 24, "columns": 80, "control": { "owner": "you", "generation": 3, "change": "granted" } } }
+    },
+    "consoleSnapshot": {
+      "type": "console",
+      "console": { "snapshot": { "attachmentId": "a1", "sequence": 7, "reason": "initial", "data": "JCA=" } }
+    },
+    "consoleOutput": {
+      "type": "console",
+      "console": { "output": { "attachmentId": "a1", "sequence": 8, "data": "aGkNCg==" } }
+    },
+    "consoleDetached": {
+      "type": "console",
+      "console": { "detached": { "attachmentId": "a1", "reason": "targetExited" } }
+    },
+    "consoleOpened": {
+      "type": "console",
+      "console": { "opened": { "requestId": "r1", "consoleId": "c1" } }
+    }
+  },
+  "client": {
+    "consoleList": { "type": "console", "console": { "list": {} } },
+    "consoleOpen": { "type": "console", "console": { "open": { "requestId": "r1", "worktreeId": "w1", "repoHook": { "skip": {} } } } },
+    "consoleAttach": { "type": "console", "console": { "attach": { "consoleId": "c1", "attachmentId": "a1", "scrollbackRows": 1000 } } },
+    "consoleInput": { "type": "console", "console": { "input": { "attachmentId": "a1", "generation": 3, "sequence": 1, "data": "bHMN" } } },
+    "consoleResize": { "type": "console", "console": { "resize": { "attachmentId": "a1", "rows": 30, "columns": 100 } } },
+    "consoleReleaseControl": { "type": "console", "console": { "releaseControl": { "attachmentId": "a1" } } },
+    "consoleDetach": { "type": "console", "console": { "detach": { "attachmentId": "a1" } } }
+  }
+}

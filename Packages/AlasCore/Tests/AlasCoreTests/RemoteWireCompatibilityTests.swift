@@ -729,6 +729,23 @@ import Testing
         let back = try JSONDecoder().decode(RemoteClientMessage.self, from: JSONEncoder.sorted.encode(phone))
         #expect(back == message)
     }
+
+    /// The web client's tests read the same file (`scripts/tests/remote-web-wire`), so a message
+    /// the Mac changes shape of fails here until the fixture, and with it the browser, follows.
+    @Test func webClientFixtureRoundTripsEveryMessage() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/remote-web-wire.json")
+        let fixture = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: [String: [String: Any]]])
+        func roundTrip<Message: Codable>(_ type: Message.Type, _ samples: [String: [String: Any]]?) throws {
+            for (name, sample) in try #require(samples) {
+                let message = try JSONDecoder().decode(type, from: JSONSerialization.data(withJSONObject: sample))
+                let reencoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(message))
+                #expect(reencoded as? NSDictionary == sample as NSDictionary, "\(name)")
+            }
+        }
+        try roundTrip(RemoteServerMessage.self, fixture["server"])
+        try roundTrip(RemoteClientMessage.self, fixture["client"])
+    }
 }
 
 @Suite struct PushRelayRegistrationTests {
