@@ -120,16 +120,21 @@ final class MinimapView: NSView {
     var onNavigationStart: (() -> Void)?
     var onNavigationEnd: (() -> Void)?
     var onScrollWheel: ((NSEvent) -> Void)?
-    var value: Double = 0 { didSet { needsDisplay = true } }
-    var proportion: CGFloat = 1 { didSet { needsDisplay = true } }
+    var value: Double = 0 { didSet { if value != oldValue { needsDisplay = true } } }
+    var proportion: CGFloat = 1 { didSet { if proportion != oldValue { needsDisplay = true } } }
     var backgroundColor = NSColor.textBackgroundColor { didSet { needsDisplay = true } }
     var indicatorColor = NSColor.secondaryLabelColor { didSet { needsDisplay = true } }
-    var preservesLineScale = false { didSet { raster = nil
-    needsDisplay = true } }
+    var preservesLineScale = false { didSet { invalidateRaster() } }
     private var drawing = MinimapDrawing()
-    private var raster: CGImage?
-    private var rasterSize = CGSize.zero
-    private var rasterOffset: CGFloat = -1
+    private struct RasterPage {
+        let index: Int
+        let image: NSImage
+    }
+
+    private var evenPage: RasterPage?
+    private var oddPage: RasterPage?
+    private var rasterViewportSize = CGSize.zero
+    private var rasterScale: CGFloat = 0
     private var dragStartY: CGFloat = 0
     private var dragStartValue: Double = 0
     private var dragTravel: CGFloat = 1
@@ -152,7 +157,12 @@ final class MinimapView: NSView {
 
     func update(drawing: MinimapDrawing) {
         self.drawing = drawing
-        raster = nil
+        invalidateRaster()
+    }
+
+    private func invalidateRaster() {
+        evenPage = nil
+        oddPage = nil
         needsDisplay = true
     }
 
@@ -175,40 +185,20 @@ final class MinimapView: NSView {
         bounds.fill()
         guard bounds.width > 0, bounds.height > 0 else { return }
         let scale = window?.backingScaleFactor ?? 2
-        let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
-        let offset = drawingOffset
-        if raster == nil || rasterSize != size || rasterOffset != offset {
-            rasterSize = size
-            rasterOffset = offset
-            if let context = CGContext(data: nil, width: Int(ceil(size.width)), height: Int(ceil(size.height)),
-                                       bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
-                context.translateBy(x: 0, y: size.height)
-                context.scaleBy(x: scale, y: -scale)
-                let sx = max(0, bounds.width - 8) / max(1, drawing.columns)
-                let sy = verticalScale
-                let marks: ArraySlice<MinimapDrawing.Mark>
-                if preservesLineScale, sy == 1 {
-                    var low = 0
-                    var high = drawing.marks.count
-                    while low < high {
-                        let mid = (low + high) / 2
-                        if drawing.marks[mid].rect.maxY < offset { low = mid + 1 } else { high = mid }
-                    }
-                    marks = drawing.marks[low...].prefix { $0.rect.minY <= offset + bounds.height }
-                } else {
-                    marks = drawing.marks[...]
-                }
-                for mark in marks {
-                    context.setFillColor(mark.color.cgColor)
-                    context.fill(CGRect(x: 4 + mark.rect.minX * sx, y: mark.rect.minY * sy - offset,
-                                        width: mark.rect.width * sx, height: max(0.5 / scale, mark.rect.height * sy)))
-                }
-                raster = context.makeImage()
-            }
+        let offset = (drawingOffset * scale).rounded() / scale
+        let pageHeight = ceil(bounds.height * scale) / scale
+        if rasterViewportSize != bounds.size || rasterScale != scale {
+            evenPage = nil
+            oddPage = nil
+            rasterViewportSize = bounds.size
+            rasterScale = scale
         }
-        if let raster {
-            NSImage(cgImage: raster, size: bounds.size).draw(in: bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.none.rawValue])
+        // The viewport overlaps at most two pages. Keep both so crossing a
+        // page boundary reuses the page that was already partially visible.
+        let firstPage = Int(floor(offset / pageHeight))
+        drawRasterPage(firstPage, height: pageHeight, offset: offset, scale: scale)
+        if CGFloat(firstPage + 1) * pageHeight < offset + bounds.height {
+            drawRasterPage(firstPage + 1, height: pageHeight, offset: offset, scale: scale)
         }
         indicatorColor.withAlphaComponent(indicatorColor.alphaComponent * 0.1).setFill()
         geometry.thumb.fill()
@@ -216,6 +206,54 @@ final class MinimapView: NSView {
         NSBezierPath(rect: geometry.thumb.insetBy(dx: 0.5, dy: 0.5)).stroke()
         indicatorColor.withAlphaComponent(indicatorColor.alphaComponent * 0.2).setFill()
         CGRect(x: 0, y: 0, width: 0.5, height: bounds.height).fill()
+    }
+
+    private func drawRasterPage(_ index: Int, height: CGFloat, offset: CGFloat, scale: CGFloat) {
+        let origin = CGFloat(index) * height
+        let isEven = index.isMultiple(of: 2)
+        let cached = isEven ? evenPage : oddPage
+        let image: NSImage
+        if let cached, cached.index == index {
+            image = cached.image
+        } else {
+            guard let raster = makeRaster(origin: origin, height: height, scale: scale) else { return }
+            image = raster
+            let page = RasterPage(index: index, image: image)
+            if isEven { evenPage = page } else { oddPage = page }
+        }
+        let destination = CGRect(origin: CGPoint(x: bounds.minX, y: bounds.minY + origin - offset), size: image.size)
+        image.draw(in: destination, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true,
+                   hints: [.interpolation: NSImageInterpolation.none.rawValue])
+    }
+
+    private func makeRaster(origin: CGFloat, height: CGFloat, scale: CGFloat) -> NSImage? {
+        let pixels = CGSize(width: ceil(bounds.width * scale), height: (height * scale).rounded())
+        guard let context = CGContext(data: nil, width: Int(pixels.width), height: Int(pixels.height),
+                                      bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.translateBy(x: 0, y: pixels.height)
+        context.scaleBy(x: scale, y: -scale)
+        let sx = max(0, bounds.width - 8) / max(1, drawing.columns)
+        let sy = verticalScale
+        let marks: ArraySlice<MinimapDrawing.Mark>
+        if preservesLineScale, sy == 1 {
+            var low = 0
+            var high = drawing.marks.count
+            while low < high {
+                let mid = (low + high) / 2
+                if drawing.marks[mid].rect.maxY < origin { low = mid + 1 } else { high = mid }
+            }
+            marks = drawing.marks[low...].prefix { $0.rect.minY <= origin + height }
+        } else {
+            marks = drawing.marks[...]
+        }
+        for mark in marks {
+            context.setFillColor(mark.color.cgColor)
+            context.fill(CGRect(x: 4 + mark.rect.minX * sx, y: mark.rect.minY * sy - origin,
+                                width: mark.rect.width * sx, height: max(0.5 / scale, mark.rect.height * sy)))
+        }
+        guard let image = context.makeImage() else { return nil }
+        return NSImage(cgImage: image, size: CGSize(width: pixels.width / scale, height: pixels.height / scale))
     }
 
     override func scrollWheel(with event: NSEvent) {
