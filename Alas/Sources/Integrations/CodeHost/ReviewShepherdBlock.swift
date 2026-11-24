@@ -246,7 +246,6 @@ struct ShipReviewSwitchRow: View {
                 modelCatalog: lever.modelCatalog,
                 picksReviewer: true
             )
-            .controlSize(.small)
             .disabled(lever.isDisabled)
         }
     }

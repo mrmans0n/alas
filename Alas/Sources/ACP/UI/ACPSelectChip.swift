@@ -17,7 +17,7 @@ struct ACPSelectChip: View {
         let name: String
         let description: String?
         /// Shown before the name: mode symbols in the composer, agent logos
-        /// in the peer new-session sheet. Absent for every other chip.
+        /// in agent chips. Absent for model and option chips.
         var icon: Icon? = nil
         /// A short note after the name, such as "Recommended".
         var badge: String? = nil

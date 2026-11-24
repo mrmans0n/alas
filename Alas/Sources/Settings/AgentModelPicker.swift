@@ -1,12 +1,13 @@
 import SwiftUI
 
-/// Agent and model menus for a `ReviewerChoice`. A nil choice inherits from a
-/// wider setting and shows `inheritLabel`; `.sameAsSession` is offered only
-/// when `allowsSameAsSession` is set. With `picksReviewer`, agents whose
-/// read-only mode Alas can't enforce say they review in a separate checkout.
-/// A saved agent or model the lists no longer carry stays selectable and is
-/// named as such, so the menu never claims a choice the stored value does
-/// not hold.
+/// Agent and model chips for a `ReviewerChoice`, in the same agent-logo
+/// `ACPSelectChip` pair as the new-worktree dialog and the schedule editor.
+/// A nil choice inherits from a wider setting and shows `inheritLabel`;
+/// `.sameAsSession` is offered only when `allowsSameAsSession` is set. With
+/// `picksReviewer`, agents whose read-only mode Alas can't enforce say they
+/// review in a separate checkout. A saved agent or model the lists no longer
+/// carry stays selectable and is named as such, so the chip never claims a
+/// choice the stored value does not hold.
 struct AgentModelPicker: View {
     @Binding var choice: ReviewerChoice?
     let allowsSameAsSession: Bool
@@ -15,6 +16,7 @@ struct AgentModelPicker: View {
     let modelCatalog: ACPAgentModelCatalog
     var picksReviewer = false
 
+    @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
 
     static let sameAsSessionLabel = "Same as the session"
@@ -22,74 +24,93 @@ struct AgentModelPicker: View {
 
     var body: some View {
         HStack(spacing: scale.space[2]) {
-            agentMenu
-            if selectedAgentID != nil {
-                modelMenu
+            agentChip
+            if let selectedAgentID {
+                modelChip(agentID: selectedAgentID)
             }
         }
     }
 
-    private var agentMenu: some View {
-        let missingAgentID = selectedAgentID.flatMap { id in
-            agents.contains { $0.id == id } ? nil : id
-        }
-        return FieldChipMenu(title: agentTitle) {
-            Picker("", selection: agentSelection) {
-                if let inheritLabel {
-                    Text(inheritLabel).tag(AgentSelection.inherit)
-                }
-                if allowsSameAsSession {
-                    Text(Self.sameAsSessionLabel).tag(AgentSelection.sameAsSession)
-                }
-                ForEach(agents) { agent in
-                    if let note = reviewerNote(agentID: agent.id) {
-                        VStack(alignment: .leading) {
-                            Text(agent.displayName)
-                            Text(note).foregroundStyle(.secondary)
-                        }
-                        .tag(AgentSelection.agent(agent.id))
-                    } else {
-                        Text(agent.displayName).tag(AgentSelection.agent(agent.id))
-                    }
-                }
-                if let missingAgentID {
-                    Divider()
-                    Text("\(missingAgentID) · unavailable").tag(AgentSelection.agent(missingAgentID))
-                }
+    private var agentChip: some View {
+        let items = agentItems
+        let selectedID = Self.itemID(for: agentSelection)
+        return ACPSelectChip(
+            label: items.first { $0.id == selectedID }?.name ?? "",
+            placeholder: "Agent",
+            accent: theme.color("fg-muted"),
+            items: items,
+            selectedId: selectedID,
+            searchDescriptions: false,
+            searchIdentifiers: false,
+            fillsWidth: false,
+            onSelect: { item in
+                guard let selection = Self.selection(forItemID: item.id) else { return }
+                select(selection)
             }
-            .pickerStyle(.inline)
-            .labelsHidden()
-        }
+        )
         .accessibilityLabel("Agent")
     }
 
+    private var agentItems: [ACPSelectChip.Item] {
+        var items: [ACPSelectChip.Item] = []
+        if let inheritLabel {
+            items.append(ACPSelectChip.Item(
+                id: Self.itemID(for: .inherit),
+                name: inheritLabel,
+                description: nil,
+                icon: .system("gearshape")
+            ))
+        }
+        if allowsSameAsSession {
+            items.append(ACPSelectChip.Item(
+                id: Self.itemID(for: .sameAsSession),
+                name: Self.sameAsSessionLabel,
+                description: nil,
+                icon: .system("bubble.left")
+            ))
+        }
+        items += agents.map { agent in
+            ACPSelectChip.Item(
+                id: Self.itemID(for: .agent(agent.id)),
+                name: agent.displayName,
+                description: reviewerNote(agentID: agent.id),
+                icon: .image(AgentLogoView.menuImage(for: agent, size: 14))
+            )
+        }
+        if let selectedAgentID, !agents.contains(where: { $0.id == selectedAgentID }) {
+            items.append(ACPSelectChip.Item(
+                id: Self.itemID(for: .agent(selectedAgentID)),
+                name: "\(selectedAgentID) · unavailable",
+                description: nil,
+                icon: .system("sparkles")
+            ))
+        }
+        return items
+    }
+
     /// Models the selected agent advertised in earlier sessions.
-    private var modelMenu: some View {
-        let models = selectedAgentID.map { modelCatalog.models(for: $0) } ?? []
-        let modelID = selectedModelID
-        let missingModelID = modelID.flatMap { id in
-            models.contains { $0.id == id } ? nil : id
+    private func modelChip(agentID: String) -> some View {
+        let models = modelCatalog.models(for: agentID)
+        var items = [ACPSelectChip.Item(id: Self.agentDefaultItemID, name: Self.agentDefaultLabel, description: nil)]
+        items += models.map { ACPSelectChip.Item(id: $0.id, name: $0.name, description: nil) }
+        if let selectedModelID, !models.contains(where: { $0.id == selectedModelID }) {
+            items.append(ACPSelectChip.Item(id: selectedModelID, name: "\(selectedModelID) · not listed", description: nil))
         }
-        let title: String = {
-            guard let modelID else { return Self.agentDefaultLabel }
-            if let model = models.first(where: { $0.id == modelID }) { return model.name }
-            return "\(modelID) · not listed"
-        }()
-        return FieldChipMenu(title: title) {
-            Picker("", selection: modelSelection) {
-                Text(Self.agentDefaultLabel).tag("")
-                ForEach(models) { model in
-                    Text(model.name).tag(model.id)
-                }
-                if let missingModelID {
-                    Divider()
-                    Text("\(missingModelID) · not listed").tag(missingModelID)
-                }
+        let selectedID = selectedModelID ?? Self.agentDefaultItemID
+        return ACPSelectChip(
+            label: items.first { $0.id == selectedID }?.name ?? "",
+            placeholder: "Model",
+            accent: theme.color("syntax-keyword"),
+            items: items,
+            selectedId: selectedID,
+            searchDescriptions: false,
+            searchIdentifiers: false,
+            fillsWidth: false,
+            onSelect: { item in
+                choice = .agent(id: agentID, modelID: item.id == Self.agentDefaultItemID ? nil : item.id)
             }
-            .pickerStyle(.inline)
-            .labelsHidden()
-        }
-        .disabled(models.isEmpty && missingModelID == nil)
+        )
+        .disabled(items.count == 1)
         .accessibilityLabel("Model")
     }
 
@@ -119,6 +140,28 @@ struct AgentModelPicker: View {
         case agent(String)
     }
 
+    /// Model ids are never empty, so this "use the default" row cannot
+    /// collide with a real one.
+    private static let agentDefaultItemID = ""
+    private static let agentItemPrefix = "agent:"
+
+    /// Agent rows are prefixed so no agent id can collide with the inherit
+    /// or same-as-session rows.
+    private static func itemID(for selection: AgentSelection) -> String {
+        switch selection {
+        case .inherit: "inherit"
+        case .sameAsSession: "same-as-session"
+        case let .agent(id): agentItemPrefix + id
+        }
+    }
+
+    private static func selection(forItemID id: String) -> AgentSelection? {
+        if id.hasPrefix(agentItemPrefix) { return .agent(String(id.dropFirst(agentItemPrefix.count))) }
+        if id == itemID(for: .inherit) { return .inherit }
+        if id == itemID(for: .sameAsSession) { return .sameAsSession }
+        return nil
+    }
+
     /// Where a reviewer that can't be held read-only works instead.
     private func reviewerNote(agentID: String) -> String? {
         guard picksReviewer, !ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: agentID) else { return nil }
@@ -135,50 +178,25 @@ struct AgentModelPicker: View {
         return nil
     }
 
-    private var agentTitle: String {
+    private var agentSelection: AgentSelection {
         switch choice {
-        case nil:
-            return inheritLabel ?? ""
-        case .sameAsSession:
-            return Self.sameAsSessionLabel
-        case let .agent(id, _):
-            if let agent = agents.first(where: { $0.id == id }) { return agent.displayName }
-            return "\(id) · unavailable"
+        case nil: .inherit
+        case .sameAsSession: .sameAsSession
+        case let .agent(id, _): .agent(id)
         }
     }
 
-    private var agentSelection: Binding<AgentSelection> {
-        Binding(
-            get: {
-                switch choice {
-                case nil: .inherit
-                case .sameAsSession: .sameAsSession
-                case let .agent(id, _): .agent(id)
-                }
-            },
-            set: { selected in
-                switch selected {
-                case .inherit:
-                    choice = nil
-                case .sameAsSession:
-                    choice = .sameAsSession
-                case let .agent(id):
-                    // A model belongs to the agent it was listed for.
-                    guard id != selectedAgentID else { return }
-                    choice = .agent(id: id, modelID: nil)
-                }
-            }
-        )
-    }
-
-    private var modelSelection: Binding<String> {
-        Binding(
-            get: { selectedModelID ?? "" },
-            set: { selected in
-                guard let agentID = selectedAgentID else { return }
-                choice = .agent(id: agentID, modelID: selected.isEmpty ? nil : selected)
-            }
-        )
+    private func select(_ selection: AgentSelection) {
+        switch selection {
+        case .inherit:
+            choice = nil
+        case .sameAsSession:
+            choice = .sameAsSession
+        case let .agent(id):
+            // A model belongs to the agent it was listed for.
+            guard id != selectedAgentID else { return }
+            choice = .agent(id: id, modelID: nil)
+        }
     }
 }
 
