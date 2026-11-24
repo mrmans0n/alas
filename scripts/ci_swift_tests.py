@@ -336,8 +336,12 @@ def run_batch(plan, directory, lane, index, shard=None):
                 command.extend(["-only-testing", selector])
             status = bounded(command, directory / f"{name}.log", batch["timeouts"][number - 1])
             report["exit_status"] = status
-            result = subprocess.run(["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", str(bundle)],
-                                    capture_output=True, text=True, timeout=30, check=True)
+            read_results = ["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", str(bundle)]
+            try:
+                result = subprocess.run(read_results, capture_output=True, text=True, timeout=30, check=True)
+            except subprocess.TimeoutExpired:
+                print(f"{name}: xcresulttool timed out; retrying the result read", flush=True)
+                result = subprocess.run(read_results, capture_output=True, text=True, timeout=30, check=True)
             document = json.loads(result.stdout)
             write_json(directory / f"{name}.tests.json", document)
             report.update(account(expected, document))
