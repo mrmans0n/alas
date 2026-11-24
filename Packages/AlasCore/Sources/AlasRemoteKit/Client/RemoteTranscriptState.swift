@@ -24,6 +24,8 @@ public struct RemoteTranscriptState<ServerHost: Codable & Equatable & Sendable, 
     public private(set) var pendingElicitation: RemoteElicitationPayload?
     public private(set) var config: RemoteSessionConfig?
     public private(set) var queue: [RemoteQueuedPrompt] = []
+    /// The host's captions for turn changes cards, by the answer's transcript index.
+    public private(set) var turnCaptions: [Int: String] = [:]
     /// One counter per request kind, bumped when a request frame carries a
     /// request that is not the one already pending for that kind. Wire
     /// request ids can repeat back to back (string JSON-RPC ids all forward
@@ -142,6 +144,8 @@ public struct RemoteTranscriptState<ServerHost: Codable & Equatable & Sendable, 
             config = incoming
         case .queueState(_, let items):
             queue = items
+        case .turnCaptions(_, let captions):
+            turnCaptions = Dictionary(captions.map { ($0.index, $0.caption) }, uniquingKeysWith: { _, last in last })
         case .sessionClosed:
             markUnavailable()
         default: break
@@ -198,7 +202,7 @@ private extension RemoteServerMessageOf {
              .transcriptPage(let id, _, _, _), .permissionRequest(let id, _), .permissionResolved(let id, _),
              .questionRequest(let id, _), .questionResolved(let id, _), .planRequest(let id, _),
              .planResolved(let id, _), .elicitationRequest(let id, _), .elicitationResolved(let id, _),
-             .queueState(let id, _), .sessionClosed(let id):
+             .queueState(let id, _), .turnCaptions(let id, _), .sessionClosed(let id):
             return id
         case .sessionConfig(let config):
             return config.sessionId

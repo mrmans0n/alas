@@ -32,8 +32,8 @@ struct TranscriptItem: Identifiable, Equatable {
     enum Kind: Equatable {
         case message
         case groupHeader(ACPTranscriptToolCallGroup, ACPToolCallGroupSummary, expanded: Bool, hiddenCount: Int)
-        /// The files a finished turn changed, under its answer.
-        case turnChanges(ACPTurnChanges)
+        /// The files a finished turn changed, under its answer, with the caption the host wrote for them.
+        case turnChanges(ACPTurnChanges, caption: String?)
     }
 
     let id: String
@@ -226,6 +226,7 @@ final class TranscriptSession {
         let messages: UInt64
         let expansion: UInt64
         let isTurnActive: Bool
+        let captions: [Int: String]
     }
     @ObservationIgnored private var fetchingOlder = false
     @ObservationIgnored private var listener: ListenerToken?
@@ -936,7 +937,7 @@ final class TranscriptSession {
             shownFold = nil
         }
         let fold = FoldKey(messages: state.messagesGeneration, expansion: seeds.generation,
-                           isTurnActive: state.streamingState != "idle")
+                           isTurnActive: state.streamingState != "idle", captions: state.turnCaptions)
         if fold != shownFold {
             shownFold = fold
             items = foldedItems(isTurnActive: fold.isTurnActive)
@@ -1095,7 +1096,9 @@ final class TranscriptSession {
                     at: visible.index, count: base.count, isTurnActive: isTurnActive,
                     item: { [worktreeRoot] in Self.turnChangesItem(base[$0].row, worktreeRoot: worktreeRoot) })
                 else { return [answer] }
-                return [answer, TranscriptItem(header: .turnChanges(changes), id: "turn-changes:" + answer.id, first: answer)]
+                let caption = state.turnCaptions[answer.message.index]
+                return [answer, TranscriptItem(header: .turnChanges(changes, caption: caption),
+                                               id: "turn-changes:" + answer.id, first: answer)]
             case .toolCallGroupMember(let visible, _):
                 var member = base[visible.index]
                 member.isGroupMember = true

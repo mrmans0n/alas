@@ -706,6 +706,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
     public var remoteSessionId: String?
     @Tracked public var queue: [QueuedPrompt] = [] { willSet { nextPromptActivity.send() } }
 
+    /// The captions of this session's turn changes cards by answer index, as Remote clients get them:
+    /// the saved ones, read when a client first follows the session, and each one written since.
+    @Tracked public var turnCaptions: [Int: String] = [:]
+    /// Whether the saved captions were read into `turnCaptions`, or are being read.
+    public var savedTurnCaptionsRequested = false
+
     /// Set while a provider usage limit has stopped this session; cleared by
     /// the next turn that completes. See `ACPUsageLimitResumePolicy`.
     @Tracked public var usageLimit: ACPUsageLimit?

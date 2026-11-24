@@ -127,6 +127,7 @@ extension RemoteServerMessage {
              .fileUnavailable(let id, _, _, _, _), .fileBytes(let id, _, _, _), .transcriptImage(let id, _, _), .mentionCandidates(let id, _, _),
              .referenceSummaries(let id, _),
              .toolTerminal(let id, _, _, _, _, _, _), .subagentTranscript(let id, _, _, _, _), .nextPromptSuggestion(let id, _),
+             .turnCaptions(let id, _),
              .fileHistory(let id, _, _, _), .fileHistoryFailed(let id, _, _, _):
             return id
         case .sessionConfig(let cfg):
@@ -219,6 +220,8 @@ extension RemoteServerMessage {
             return .subagentTranscript(sessionId: new, subagentId: subagentId, found: found, state: state, messages: messages)
         case .nextPromptSuggestion(_, let text):
             return .nextPromptSuggestion(sessionId: new, text: text)
+        case .turnCaptions(_, let captions):
+            return .turnCaptions(sessionId: new, captions: captions)
         case .fileBytes(_, let path, let data, let byteSize):
             return .fileBytes(sessionId: new, path: path, data: data, byteSize: byteSize)
         case .fileHistory(_, let path, let entries, let truncated):

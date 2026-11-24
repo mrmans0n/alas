@@ -15262,6 +15262,9 @@ extension AppState {
         acpManagers.values.first { $0.liveSession(for: id) != nil }
     }
 
+    /// Every loaded session, whoever owns it.
+    var liveACPSessions: [ACPSession] { acpManagers.values.flatMap { $0.sessions.values } }
+
     func answerQuestion(
         for id: String,
         requestId: JSONRPCID,

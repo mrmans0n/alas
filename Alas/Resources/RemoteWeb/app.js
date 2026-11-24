@@ -26,6 +26,7 @@ function listen(id, event, handler) {
 let currentSession = null, messages = new Map();   // stableId → wire message
 let messageNodes = new Map();                          // stableId → DOM node
 let transcriptMeta = null;   // {epoch, revision, firstIndex, totalCount} for the open session
+let turnCaptions = new Map();   // answer index → the host's caption for its turn changes card
 let olderFetchInFlight = false;
 let stopPending = false;
 let queueItems = [];             // [{id, text, imageCount, resourceCount, status, lastError, scheduledAt}] from queueState
@@ -380,6 +381,7 @@ function handle(msg) {
     case "transcriptPage": applyPage(msg); break;
     case "stopPending": if (msg.sessionId === currentSession) markStopping(true); break;
     case "queueState": applyQueueState(msg); break;
+    case "turnCaptions": applyTurnCaptions(msg); break;
     case "queueEditRestored": applyQueueEditRestored(msg); break;
     // Scope prompt events to the session currently open — a stale/in-flight
     // event for a session the user already left must not pop or close a sheet.
@@ -745,7 +747,12 @@ function worktreeRow1(section, worktree, singleSession, expanded) {
   const isPrimary = RemoteRepoFilter.worktreeIsPrimaryBranch(summary.branch);
   const iconWrap = el("span", "ico" + (RemoteRepoFilter.worktreeIsRunning(worktree) ? " run" : ""));
   iconWrap.append(icon(isPrimary ? "home" : "branch"));
-  row.append(iconWrap, el("span", "br", summary.branch));
+  // The shared prefix dim and the leaf plain, as on the Mac; a narrow row gives up the prefix first.
+  const slash = summary.branch.lastIndexOf("/") + 1;
+  const branch = el("span", "br");
+  if (slash > 0 && slash < summary.branch.length) branch.append(el("span", "br-prefix", summary.branch.slice(0, slash)));
+  branch.append(el("span", "br-leaf", summary.branch.slice(slash > 0 && slash < summary.branch.length ? slash : 0)));
+  row.append(iconWrap, branch);
   const runningAgentIds = [...new Set(
     worktree.activeSessions
       .filter(RemoteRepoFilter.sessionIsRunning)
@@ -882,6 +889,7 @@ function openSession(id) {
   }
   if (!sameSession) { visualDrafts.clear(); visualSubmitted.clear(); }   // drafts and answered flags belong to one session
   currentSession = id; messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
+  turnCaptions = new Map();
   dismissedQuestion = null; canDrive = false; canDriveKnown = false;
   sessionConfig = null; clearAttachments(); markStopping(false);
   lastStreamingState = "idle";
@@ -1118,13 +1126,19 @@ function updateChangesTabBadge() {
   badge.classList.toggle("hidden", count === 0);
 }
 
+// The folder quiet, the file's name plain. Its text stays the whole path, which replies match against.
+function setDetailPath(id, path) {
+  const slash = path.lastIndexOf("/") + 1;
+  $(id).replaceChildren(el("span", "detail-dir", path.slice(0, slash)), el("span", "detail-name", path.slice(slash)));
+}
+
 function openDiff(path, stage = null) {
   if (wideLayout.matches) closeDocument();   // one document tab: this diff replaces what it showed
   detailStack.push({ tab: "changes", path, stage });
   $("changes-list").classList.add("hidden");
   $("changes-header").classList.add("hidden");
   $("diff-view").classList.remove("hidden");
-  $("diff-path").textContent = path;
+  setDetailPath("diff-path", path);
   clearDiff();
   send({ type: "fileDiff", sessionId: currentSession, path, stage });
   setCenter("document");
@@ -1219,6 +1233,19 @@ function clearDiff() {
   $("diff-rows").innerHTML = "";
 }
 
+// The diff takes the app's own surface, type and add/delete colours; its theme only colours the code.
+const DIFF_CSS = `:host, pre {
+  --diffs-bg: var(--bg);
+  background-color: var(--bg);
+  --diffs-addition-color: var(--add);
+  --diffs-deletion-color: var(--del);
+  --diffs-font-family: var(--font-mono);
+  --diffs-header-font-family: var(--font-ui);
+  --diffs-font-size: 12px;
+  --diffs-line-height: 19px;
+  --diffs-bg-separator-override: var(--bg-2);
+}`;
+
 async function renderDiff(path, stage, hunks, truncated, metadataNote) {
   if (!isActiveDiff(path, stage)) return;
   clearDiff();
@@ -1235,7 +1262,8 @@ async function renderDiff(path, stage, hunks, truncated, metadataNote) {
     if (current !== diffRender) return;
     const fileDiff = getSingularPatch(RemoteChangesView.unifiedPatch(path, hunks));
     diffView = new FileDiff({
-      theme: "pierre-dark", themeType: "dark", disableFileHeader: true, overflow: "scroll",
+      theme: "pierre-dark", themeType: "dark", disableFileHeader: true, overflow: "scroll", hunkSeparators: "line-info-basic",
+      unsafeCSS: DIFF_CSS,
       diffStyle: container.clientWidth >= 760 ? "split" : "unified",   // side by side only where both sides fit
     });
     const holder = el("div", "diff-rich");
@@ -1312,7 +1340,7 @@ function openFileView(path) {
   detailStack.push({ tab: "files", path });
   $("file-list").classList.add("hidden");
   $("file-view").classList.remove("hidden");
-  $("file-view-path").textContent = path;
+  setDetailPath("file-view-path", path);
   $("file-view-body").textContent = "Loading…";
   send({ type: "readFile", sessionId: currentSession, path });
   setCenter("document");
@@ -1423,7 +1451,7 @@ function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
   currentSession = null; canDrive = false; canDriveKnown = false;
   resetVisualCards(false); visualDrafts.clear(); visualSubmitted.clear(); $("messages").innerHTML = "";   // leaving a session ends its frames, timers, drafts and answered flags
-  messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
+  messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false; turnCaptions = new Map();
   sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances(); markStopping(false);
   hidePermission(); hideQuestion(); hidePlan(); hideElicitation(); hideRenameSheet(); hideCreateSheet();   // never leave a sheet over the list
   $("bar").classList.remove("is-detail");
@@ -2350,6 +2378,13 @@ function applyDelta(msg) {
   if (atBottom) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
 }
 
+// Every caption the host holds for the session, replacing those it sent before.
+function applyTurnCaptions(msg) {
+  if (msg.sessionId !== currentSession) return;
+  turnCaptions = new Map((msg.captions || []).map((c) => [c.index, c.caption]));
+  refreshTurnChanges();
+}
+
 function applyQueueState(msg) {
   if (msg.sessionId !== currentSession) return;
   queueItems = msg.items || [];
@@ -2627,7 +2662,9 @@ function refreshTurnChanges() {
   rows.forEach((m, index) => {
     if (m.kind !== "agent") return;
     const changes = RemoteTurnChanges.forAnswer(items, index, active);
-    if (changes) wanted.set(m.stableId, { changes, signature: JSON.stringify(changes.files) });
+    if (!changes) return;
+    const caption = turnCaptions.get(m.index) || null;
+    wanted.set(m.stableId, { changes, caption, signature: JSON.stringify([changes.files, caption]) });
   });
   box.querySelectorAll(":scope > .m-turn-changes").forEach((card) => {
     const entry = wanted.get(card.dataset.answer);
@@ -2643,7 +2680,7 @@ function refreshTurnChanges() {
 
 const TURN_CHANGES_COLLAPSED = 5;
 
-function turnChangesCard(sid, answerIndex, { changes, signature }) {
+function turnChangesCard(sid, answerIndex, { changes, caption, signature }) {
   const card = el("div", "msg m-turn-changes");
   card.dataset.answer = sid;
   card.dataset.index = String(answerIndex + 0.5);
@@ -2666,6 +2703,7 @@ function turnChangesCard(sid, answerIndex, { changes, signature }) {
     return button;
   };
   changes.files.slice(0, TURN_CHANGES_COLLAPSED).forEach((file) => list.append(row(file)));
+  if (caption) card.append(el("div", "turn-changes-caption", caption));
   card.append(header, list);
   const hidden = changes.files.length - TURN_CHANGES_COLLAPSED;
   if (hidden > 0) {

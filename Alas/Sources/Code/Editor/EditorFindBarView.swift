@@ -2,20 +2,21 @@ import SwiftUI
 
 struct EditorFindBarView: View {
     @Binding var findText: String
-    @Binding var replaceText: String
     @Binding var isCaseSensitive: Bool
     @FocusState.Binding var findFieldFocused: Bool
-    @FocusState.Binding var replaceFieldFocused: Bool
-
-    let showsReplace: Bool
+    var replacement: Replacement? = nil
     let statusText: String
-    let canReplace: Bool
-    let onFindChanged: () -> Void
-    let onToggleCaseSensitive: () -> Void
+    private var showsReplace: Bool { replacement != nil }
     let onFind: (_ direction: FindDirection) -> Void
-    let onReplace: () -> Void
-    let onReplaceAll: () -> Void
     let onDone: () -> Void
+
+    struct Replacement {
+        let text: Binding<String>
+        let focused: FocusState<Bool>.Binding
+        let canReplace: Bool
+        let replace: () -> Void
+        let replaceAll: () -> Void
+    }
 
     enum FindDirection {
         case previous
@@ -38,24 +39,21 @@ struct EditorFindBarView: View {
                     .frame(minWidth: 36, idealWidth: showsReplace ? 120 : 180, maxWidth: .infinity)
                     .layoutPriority(2)
                     .onSubmit { onFind(.next) }
-                    .onChange(of: findText) {
-                        onFindChanged()
-                    }
             }
             .padding(.horizontal, showsReplace ? 6 : 8)
             .padding(.vertical, scale.space[1])
             .background(theme.color("bg-2"))
             .cornerRadius(6)
 
-            if showsReplace {
+            if let replacement {
                 HStack(spacing: 4) {
-                    TextField("Replace", text: $replaceText)
-                        .focused($replaceFieldFocused)
+                    TextField("Replace", text: replacement.text)
+                        .focused(replacement.focused)
                         .textFieldStyle(PlainTextFieldStyle())
                         .font(scale.meta.font)
                         .frame(minWidth: 36, idealWidth: 120, maxWidth: .infinity)
                         .layoutPriority(1)
-                        .onSubmit { onReplace() }
+                        .onSubmit { replacement.replace() }
                 }
                 .padding(.horizontal, scale.space[2])
                 .padding(.vertical, scale.space[1])
@@ -86,7 +84,6 @@ struct EditorFindBarView: View {
 
             Button(action: {
                 isCaseSensitive.toggle()
-                onToggleCaseSensitive()
             }) {
                 Text("Aa")
                     .font(scale.meta.font(weight: .semibold))
@@ -105,9 +102,9 @@ struct EditorFindBarView: View {
                 .truncationMode(.tail)
                 .frame(minWidth: 0, idealWidth: showsReplace ? 52 : 90, maxWidth: showsReplace ? 64 : 100, alignment: .trailing)
 
-            if showsReplace {
+            if let replacement {
                 Button {
-                    onReplace()
+                    replacement.replace()
                 } label: {
                     Image(systemName: "arrow.right")
                         .font(scale.glyph.font)
@@ -116,10 +113,10 @@ struct EditorFindBarView: View {
                 .buttonStyle(PlainButtonStyle())
                 .help("Replace current match")
                 .accessibilityLabel("Replace current match")
-                .disabled(!canReplace)
+                .disabled(!replacement.canReplace)
 
                 Button {
-                    onReplaceAll()
+                    replacement.replaceAll()
                 } label: {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .font(scale.glyph.font)
@@ -128,7 +125,7 @@ struct EditorFindBarView: View {
                 .buttonStyle(PlainButtonStyle())
                 .help("Replace all matches")
                 .accessibilityLabel("Replace all matches")
-                .disabled(!canReplace)
+                .disabled(!replacement.canReplace)
             }
 
             Button(action: onDone) {
