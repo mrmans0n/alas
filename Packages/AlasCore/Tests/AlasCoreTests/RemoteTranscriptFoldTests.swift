@@ -182,4 +182,46 @@ struct RemoteTranscriptFoldTests {
         let changes = ACPTurnChanges.forAnswer(at: answer, count: items.count, isTurnActive: isTurnActive) { items[$0] }
         #expect(changes?.files.map { "\($0.path)+\($0.added)-\($0.removed)" }.joined(separator: " ") == expected)
     }
+
+    @Test(arguments: [nil, "a.swift"] as [String?])
+    func turnDiffUsesOnlyTheRecordedEditsCountedOnItsCard(filePath: String?) {
+        func patch(_ added: String, source: ACPToolCallDiff.Source = .toolCall) -> ACPToolCallDiff {
+            let path = "/repo/a.swift"
+            return .init(path: path, source: source, patch: """
+                diff --git a/repo/a.swift b/repo/a.swift
+                --- a/repo/a.swift
+                +++ b/repo/a.swift
+                @@ -1 +1 @@
+                -old
+                +\(added)
+
+                """, failure: nil, change: .modified, added: 1, removed: 1)
+        }
+        func write(_ path: String, _ text: String) -> ACPTurnChanges.EditSource {
+            .fileEdit(.init(path: path, added: 1, removed: 0, newText: text))
+        }
+        let first = patch("first")
+        let second = patch("second")
+        let edits: [ACPTurnChanges.EditSource?] = [
+            write("a.swift", "previous turn"), nil,
+            write("a.swift", "duplicate client write"),
+            .toolCall(.init(toolCallId: "one", title: "Edit", status: "completed",
+                            diffs: [first, patch("approval", source: .permissionRequest)])),
+            write("b.swift", "other file"),
+            .toolCall(.init(toolCallId: "two", title: "Edit", status: "completed", diffs: [second])),
+            .toolCall(.init(toolCallId: "three", title: "Edit", status: "failed", diffs: [patch("failed")])),
+            nil, write("a.swift", "later edit"),
+        ]
+        let changes = ACPTurnChanges(files: [
+            .init(path: "a.swift", added: 2, removed: 2),
+            .init(path: "b.swift", added: 1, removed: 0),
+        ], userIndex: 1)
+
+        let diffs = changes.recordedDiffs(before: 7, filePath: filePath, worktreeRoot: "/repo") { edits[$0] }
+        #expect(diffs.map(\.path) == (filePath == nil ? ["a.swift", "b.swift"] : ["a.swift"]))
+        #expect(diffs.first?.edits == [.toolPatch(first), .toolPatch(second)])
+        if filePath == nil {
+            #expect(diffs.last?.edits == [.fileEdit(.init(path: "b.swift", added: 1, removed: 0, newText: "other file"))])
+        }
+    }
 }

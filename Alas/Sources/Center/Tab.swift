@@ -8,6 +8,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case diff(DiffTabState)
     case stashDiff(StashDiffTabState)
     case checkpointDiff(CheckpointDiffTabState)
+    case turnDiff(ACPTurnDiffTabState)
     case commit(CommitTabState)
     case commitEditor(CommitEditorTabState)
     case draftCommit(DraftCommitTabState)
@@ -39,6 +40,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .diff(let s):         return s.id
         case .stashDiff(let s):    return s.id
         case .checkpointDiff(let s): return s.id
+        case .turnDiff(let s):     return s.id
         case .commit(let s):       return s.id
         case .commitEditor(let s): return s.id
         case .draftCommit(let s):  return s.id
@@ -72,6 +74,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .diff(let s):         return s.title
         case .stashDiff(let s):    return s.title
         case .checkpointDiff(let s): return s.title
+        case .turnDiff(let s):     return s.title
         case .commit(let s):       return s.title
         case .commitEditor(let s): return s.title
         case .draftCommit:         return "Draft commit"
@@ -105,6 +108,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .diff:         return "diff"
         case .stashDiff:    return "archivebox"
         case .checkpointDiff: return "clock.arrow.circlepath"
+        case .turnDiff:      return "diff"
         case .commit:       return "commit"
         case .commitEditor: return "commit"
         case .draftCommit:  return "commit"
@@ -136,6 +140,8 @@ enum Tab: Codable, Equatable, Identifiable {
         if case .ggLanding = self { return false }
         // The visual lives in a session transcript that may not be live after relaunch.
         if case .visualAid = self { return false }
+        // Captured text stays in memory. The transcript already keeps the edits.
+        if case .turnDiff = self { return false }
         // The simulator may be gone after relaunch.
         if case .simulatorLogs = self { return false }
         return true

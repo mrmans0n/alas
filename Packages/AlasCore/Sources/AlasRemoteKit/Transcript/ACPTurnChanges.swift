@@ -27,10 +27,63 @@ public struct ACPTurnChanges: Equatable, Sendable {
     /// unreadable patches and failed calls change nothing.
     public static func written(by call: ACPToolCall, worktreeRoot: String?) -> [File] {
         guard call.status == "completed" else { return [] }
-        return call.diffs.filter { $0.source == .toolCall && $0.isValid }.map {
+        return Array(call.diffs.lazy.filter(isWrittenPatch).map {
             File(path: ACPToolCallPresentation.displayPath($0.path, worktreeRoot: worktreeRoot),
                  added: $0.added, removed: $0.removed)
+        })
+    }
+
+    private static func isWrittenPatch(_ patch: ACPToolCallDiff) -> Bool {
+        patch.source == .toolCall && patch.isValid
+    }
+
+    public enum EditSource {
+        case fileEdit(ACPFileEdit)
+        case toolCall(ACPToolCall)
+    }
+
+    public enum RecordedEdit: Codable, Equatable, Sendable {
+        case fileEdit(ACPFileEdit)
+        case toolPatch(ACPToolCallDiff)
+    }
+
+    public struct FileDiff: Codable, Equatable, Identifiable, Sendable {
+        public let path: String
+        public let edits: [RecordedEdit]
+        public var id: String { path }
+    }
+
+    /// Captured edits between this turn's prompt and answer, in the card's file order.
+    /// Each file keeps its edit order. As in the counts, completed tool patches take
+    /// precedence over client writes for a path reported by both.
+    public func recordedDiffs(
+        before answerIndex: Int, filePath: String?, worktreeRoot: String?, source: (Int) -> EditSource?
+    ) -> [FileDiff] {
+        guard userIndex >= 0, userIndex < answerIndex else { return [] }
+        var editsByPath: [String: [RecordedEdit]] = [:]
+        var reportedPaths: Set<String> = []
+        for index in (userIndex + 1)..<answerIndex {
+            switch source(index) {
+            case .fileEdit(let edit):
+                guard (filePath == nil || filePath == edit.path), !reportedPaths.contains(edit.path) else { continue }
+                editsByPath[edit.path, default: []].append(.fileEdit(edit))
+            case .toolCall(let call) where call.status == "completed":
+                for patch in call.diffs where Self.isWrittenPatch(patch) {
+                    let path = ACPToolCallPresentation.displayPath(patch.path, worktreeRoot: worktreeRoot)
+                    guard filePath == nil || filePath == path else { continue }
+                    if reportedPaths.insert(path).inserted {
+                        editsByPath.removeValue(forKey: path)
+                    }
+                    editsByPath[path, default: []].append(.toolPatch(patch))
+                }
+            default:
+                break
+            }
         }
+        if let filePath {
+            return files.contains { $0.path == filePath } ? [.init(path: filePath, edits: editsByPath[filePath] ?? [])] : []
+        }
+        return files.map { .init(path: $0.path, edits: editsByPath[$0.path] ?? []) }
     }
 
     /// Merged by path, in the order each was first edited.
