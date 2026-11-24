@@ -803,7 +803,6 @@ import Testing
         reloaded.setPushRelay(nil, for: "d1")
         #expect(RemotePairingService(store: FileDeviceStore(url: url)).pushRelays.isEmpty)
     }
-
 }
 
 private extension JSONEncoder {
