@@ -7,33 +7,29 @@ import Testing
 struct SymbolsFeatureTests {
     @Test func ignoresStaleDocumentSymbolResponse() async throws {
         let transport = FakeTransport()
+        defer { transport.finish() }
         let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
         let feature = SymbolsFeature()
-
-        transport.onSend = { sent in
-            guard let id = Self.requestID(in: sent) else { return }
-            if sent.contains(#""uri":"file:///tmp/old.swift""#) {
-                Task {
-                    try? await Task.sleep(nanoseconds: 80_000_000)
-                    transport.deliverFrame(Self.symbolResponse(id: id, name: "OldSymbol"))
-                }
-            } else if sent.contains(#""uri":"file:///tmp/new.swift""#) {
-                transport.deliverFrame(Self.symbolResponse(id: id, name: "NewSymbol"))
-            }
-        }
+        let oldURI = "file:///tmp/old.swift"
+        let newURI = "file:///tmp/new.swift"
 
         let oldRefresh = Task { @MainActor in
-            await feature.refresh(client: client, uri: "file:///tmp/old.swift")
+            await feature.refresh(client: client, uri: oldURI)
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
+        try await eventually("the old document symbol request") { transport.sent.count == 1 }
+        let oldID = try #require(transport.sent.first.flatMap { Self.requestID(in: $0, uri: oldURI) })
+
         let newRefresh = Task { @MainActor in
-            await feature.refresh(client: client, uri: "file:///tmp/new.swift")
+            await feature.refresh(client: client, uri: newURI)
         }
-        await oldRefresh.value
+        try await eventually("the new document symbol request") { transport.sent.count == 2 }
+        let newID = try #require(transport.sent.last.flatMap { Self.requestID(in: $0, uri: newURI) })
+        transport.deliverFrame(Self.symbolResponse(id: newID, name: "NewSymbol"))
         await newRefresh.value
+        transport.deliverFrame(Self.symbolResponse(id: oldID, name: "OldSymbol"))
+        await oldRefresh.value
 
         #expect(feature.symbols.map(\.name) == ["NewSymbol"])
-        transport.finish()
     }
 
     private static func symbolResponse(id: Int, name: String) -> String {
@@ -42,9 +38,13 @@ struct SymbolsFeatureTests {
         """
     }
 
-    private static func requestID(in json: String) -> Int? {
+    private static func requestID(in json: String, uri: String) -> Int? {
         guard let data = json.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["method"] as? String == "textDocument/documentSymbol",
+              let params = object["params"] as? [String: Any],
+              let document = params["textDocument"] as? [String: Any],
+              document["uri"] as? String == uri
         else { return nil }
         return object["id"] as? Int
     }
