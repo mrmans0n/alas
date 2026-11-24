@@ -65,4 +65,62 @@ async function finishLoadingXterm() {
   const attached = sent.filter(m => m.attach).map(m => m.attach.consoleId);
   assert.deepEqual(attached, ["B"]);
   console.log("✔ a terminal left while xterm loads is never attached");
+
+  // A desktop keeps an open terminal in its own tab: the list showing again leaves it attached, and
+  // only closing its tab detaches it.
+  sent.length = 0;
+  let viewTitle = "unset";
+  let wide = true;
+  const desk = globalThis.RemoteTerminals.createTerminals({
+    send: m => sent.push(m.console), el, keepView: () => wide, onView: title => { viewTitle = title; },
+  });
+  desk.setCapabilities([globalThis.RemoteTerminals.TERMINAL_CAPABILITY]);
+  desk.setWorktree("w");
+  desk.show();
+  desk.handle({ list: { consoles: [summary("A")] } });
+  el.list.children[0].children[0].click();
+  await finishLoadingXterm();
+  assert.equal(viewTitle, "A");
+  desk.hide();
+  desk.show();
+  assert.equal(sent.filter(m => m.detach).length, 0);
+  const beforeReconnect = sent.length;
+  desk.reconnected();
+  assert.ok(sent.slice(beforeReconnect).some(m => m.list), "the list beside the open terminal refreshes");
+  wide = false;   // the window narrows with the terminal selected
+  desk.show();
+  assert.equal(sent.filter(m => m.detach).length, 0);
+  wide = true;
+  desk.closeView();
+  assert.equal(sent.filter(m => m.detach).length, 1);
+  assert.equal(viewTitle, null);
+  console.log("✔ a desktop terminal stays attached until its tab closes");
+
+  // A terminal still loading when the worktree changes never attaches, though the desktop kept it
+  // through the panel moving to another tab.
+  delete globalThis.Terminal;
+  delete globalThis.FitAddon;
+  sent.length = 0;
+  desk.show();
+  desk.handle({ list: { consoles: [summary("A")] } });
+  el.list.children[0].children[0].click();
+  desk.hide();
+  desk.setWorktree("w2");
+  await finishLoadingXterm();
+  assert.equal(sent.filter(m => m.attach).length, 0);
+  console.log("✔ a terminal still loading when the worktree changes is never attached");
+
+  // xterm failing to load reports it in the list, as a desktop shows no tab for the view yet.
+  delete globalThis.Terminal;
+  delete globalThis.FitAddon;
+  desk.setWorktree("w");
+  desk.show();
+  desk.handle({ list: { consoles: [summary("A")] } });
+  el.list.children[0].children[0].click();
+  await new Promise(resolve => setTimeout(resolve));
+  pendingScripts.splice(0).forEach(script => script.onerror());
+  await new Promise(resolve => setTimeout(resolve));
+  assert.match(el.error.textContent, /Couldn't load/);
+  assert.ok(!el.listLevel.classList.contains("hidden"));
+  console.log("✔ a terminal whose xterm fails to load reports it in the list");
 })().catch(error => { console.error("✘", error); process.exit(1); });

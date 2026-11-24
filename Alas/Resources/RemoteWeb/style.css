@@ -568,7 +568,7 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
   /* The panel keeps its dragged width only while the chat still gets 420px; below that it gives
      way, down to 300px, and the chat takes what is left. */
   body { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr) clamp(300px, var(--panel-w), calc(100vw - var(--side-w) - 420px)); grid-template-rows: auto auto minmax(0, 1fr) auto;
-    grid-template-areas: "side bar bar" "side chat tabs" "side chat panel" "nav chat panel"; font-size: 13px; }
+    grid-template-areas: "side bar bar" "side ctabs tabs" "side chat panel" "nav chat panel"; font-size: 13px; }
   body.side-collapsed { --side-w: 0px; }
   body.panel-collapsed, body:not(:has(#bar.is-detail)) { grid-template-columns: var(--side-w) minmax(0, 1fr) 0px; }
   body.side-collapsed #sessions, body.side-collapsed main:has(#settings.hidden) #sessions.hidden, body.side-collapsed #settings, body.side-collapsed #bottom-tabbar { display: none !important; }
@@ -622,7 +622,8 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
   #fab-new-session::after { content: "New session"; }
 
   /* Chat */
-  #transcript, #empty-detail { grid-area: chat; grid-row: 2 / 5; }
+  #transcript, #center-detail { grid-area: chat; }
+  #empty-detail { grid-area: chat; grid-row: 2 / 5; }
   #messages, #drivebar { padding-inline: max(16px, calc((100% - 760px) / 2)); }
   #drivebar { background: none; backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: none; }
   #bar:not(.is-detail) ~ main #empty-detail { grid-column: 2 / 4; display: flex; align-items: center; justify-content: center; color: var(--fg-faint); font-size: 14px; }
@@ -638,9 +639,24 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
   #panel-resize:hover, body.resizing #panel-resize { background: color-mix(in oklab, var(--accent) 45%, transparent); }
   body.resizing { cursor: col-resize; user-select: none; }
 
-  #changes .detail-path, #files .detail-path { cursor: pointer; }
-  #changes .detail-path::before, #files .detail-path::before { content: "‹ "; color: var(--accent); font-weight: 700; }
-  #changes .detail-path:hover, #files .detail-path:hover { color: var(--fg); }
+  /* Middle tabs: the chat, the open document and the open terminal. Their views live in
+     #center-detail here, and the panel keeps showing its lists. */
+  #center-tabs { grid-area: ctabs; display: flex; align-items: stretch; gap: 2px; padding: 0 8px; overflow-x: auto; scrollbar-width: none; box-shadow: inset 0 -1px 0 var(--line); }
+  body:not(:has(#bar.is-detail)) #center-tabs { display: none; }
+  .ctab { display: flex; align-items: center; max-width: 240px; min-width: 0; box-shadow: none; }
+  .ctab.is-active { box-shadow: inset 0 -2px 0 var(--accent); }
+  .ctab-name { min-width: 0; height: 34px; padding: 0 10px; border: none; background: none; color: var(--fg-dim); font: inherit; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .ctab.is-active .ctab-name, .ctab-name:hover { color: var(--fg); }
+  .ctab-close { width: 20px; height: 20px; margin-right: 4px; padding: 0; border: none; border-radius: 5px; background: none; color: var(--fg-faint); font-size: 15px; line-height: 1; cursor: pointer; }
+  .ctab-close:hover { background: var(--fill); color: var(--fg); }
+  #center-detail { display: none; min-height: 0; overflow: auto; padding: 0 14px 14px; }
+  body[data-center="document"] #center-detail, body[data-center="terminal"] #center-detail { display: flex; flex-direction: column; }
+  body[data-center="document"] #transcript, body[data-center="terminal"] #transcript { display: none !important; }
+  body[data-center="document"] #terminal-view, body[data-center="terminal"] #diff-view, body[data-center="terminal"] #file-view { display: none !important; }
+  #center-detail #terminal-view { flex: 1; margin: 0 -14px -14px; }
+  #terminal-back { display: none; }
+  #changes-list.hidden, #file-list.hidden, #terminal-list-level.hidden { display: block !important; }
+  #changes-header.hidden { display: flex !important; }
   .change-row, .file-row { min-height: 0; padding-block: 5px; font-size: 12.5px; border-radius: 5px; border-bottom: none; }
   .change-row:hover, .file-row:hover { background: var(--fill); }
   #bar .iconbtn { width: 28px; height: 28px; border-radius: 7px; background: none; }
