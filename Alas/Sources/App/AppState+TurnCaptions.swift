@@ -35,14 +35,16 @@ extension AppState {
                 return (try? await persistence.loadTurnCaptions(sessionId: sessionId)) ?? []
             },
             save: { [weak self] sessionId, caption in
-                guard let persistence = self?.acpManager(forSession: sessionId)?.persistence else { return }
-                try? await persistence.saveTurnCaption(sessionId: sessionId, caption)
+                guard let manager = self?.acpManager(forSession: sessionId) else { return }
+                // Remote clients following the session get it now.
+                manager.liveSession(for: sessionId)?.turnCaptions[caption.answerIndex] = caption.caption
+                try? await manager.persistence.saveTurnCaption(sessionId: sessionId, caption)
             }
         )
     }
 
-    /// Captions the turn `sessionID` just finished, so it is saved before its card shows here or on a
-    /// Remote client. Turns without a card ask for nothing.
+    /// Captions the turn `sessionID` just finished, so it is saved before its card shows here and
+    /// reaches the Remote clients following the session. Turns without a card ask for nothing.
     func captionFinishedTurn(_ completion: ACPTurnCompletion) {
         guard completion.result == .completed else { return }
         let sessionID = completion.sessionId

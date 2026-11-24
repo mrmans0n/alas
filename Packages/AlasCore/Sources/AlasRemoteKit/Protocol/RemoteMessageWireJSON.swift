@@ -170,6 +170,18 @@ public struct RemoteVisualAid: Codable, Equatable, Sendable {
     }
 }
 
+/// The caption of the turn changes card under the answer at transcript `index`, written by the host's
+/// local model. A client shows it on the card it draws there.
+public struct RemoteTurnCaption: Codable, Equatable, Sendable {
+    public let index: Int
+    public let caption: String
+
+    public init(index: Int, caption: String) {
+        self.index = index
+        self.caption = caption
+    }
+}
+
 /// One queued prompt as sent to the web client. Deliberately carries an image
 /// COUNT, never image bytes or URIs — the web client has no authenticated way
 /// to fetch attachment data, and a queued bubble only needs to say "there are

@@ -75,6 +75,9 @@ public struct HostSessionState: Codable, Equatable, Sendable {
     public var hasCancellableBackgroundWork: Bool
     public var config: RemoteSessionConfig
     public var queue: [RemoteQueuedPrompt]
+    /// The captions of its turn changes cards, by answer index; nil from an older host, or while
+    /// captions are off.
+    public var turnCaptions: [RemoteTurnCaption]?
 }
 
 /// What changed in a followed transcript since the last delta.
@@ -131,10 +134,15 @@ final class FollowedSession {
     private var sentState: ACPSession.StreamingState?
     private var sentRequests: [HostPendingRequestID: HostPendingRequest] = [:]
     private var sentSessionState: HostSessionState?
+    private let turnCaptionsEnabled: () -> Bool
     private(set) var isDirty = true
 
-    init(owner: SessionOwnerID, session: ACPSession, manager: ACPSessionManager, from revision: TranscriptRevision?, changed: @escaping () -> Void) {
+    init(
+        owner: SessionOwnerID, session: ACPSession, manager: ACPSessionManager, from revision: TranscriptRevision?,
+        turnCaptionsEnabled: @escaping () -> Bool = { false }, changed: @escaping () -> Void
+    ) {
         self.owner = owner
+        self.turnCaptionsEnabled = turnCaptionsEnabled
         id = session.id
         transcript = session.transcript
         self.session = session
@@ -151,6 +159,7 @@ final class FollowedSession {
         let references = manager.upstreamReferences.store(for: URL(fileURLWithPath: manager.worktreePath))
         references.resolveRemote()
         self.references = references
+        if turnCaptionsEnabled() { Self.loadSavedTurnCaptions(of: session, from: manager) }
         signals = [
             transcript.willChange.observe(mark), transcript.streamingTicks.observe(mark),
             session.willChange.observe(mark), manager.summaryWillChange.observe(mark),
@@ -217,8 +226,25 @@ final class FollowedSession {
             hasCancellableBackgroundWork: session.hasCancellableBackgroundWork,
             config: RemoteSessionConfigProjection.config(
                 sessionId: id, session: session, codeHost: references?.remote?.codeHost),
-            queue: RemoteQueueProjection.project(session.queue)
+            queue: RemoteQueueProjection.project(session.queue),
+            turnCaptions: turnCaptionsEnabled()
+                ? session.turnCaptions.sorted { $0.key < $1.key }.map { RemoteTurnCaption(index: $0.key, caption: $0.value) }
+                : nil
         )
+    }
+
+    /// Reads the session's saved captions once per loaded session. A caption written meanwhile is newer
+    /// than the saved one for its turn, so it stays.
+    private static func loadSavedTurnCaptions(of session: ACPSession, from manager: ACPSessionManager) {
+        guard !session.savedTurnCaptionsRequested else { return }
+        session.savedTurnCaptionsRequested = true
+        let persistence = manager.persistence
+        let id = session.id
+        Task { @MainActor [weak session] in
+            guard let saved = try? await persistence.loadTurnCaptions(sessionId: id), !saved.isEmpty,
+                  let session else { return }
+            session.turnCaptions.merge(saved.map { ($0.answerIndex, $0.caption) }) { current, _ in current }
+        }
     }
 
     /// The requests a person can answer now, under the ids the verbs take.

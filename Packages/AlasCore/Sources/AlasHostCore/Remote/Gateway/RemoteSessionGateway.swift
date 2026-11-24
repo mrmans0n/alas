@@ -893,6 +893,10 @@ public final class RemoteSessionGateway {
             guard let sync = current(id), let state = sync.sessionState else { continue }
             if previous?.config != state.config { send(.sessionConfig(state.config)) }
             if previous?.queue != state.queue { send(.queueState(sessionId: id, items: state.queue)) }
+            // A new follow sends none until there are some: a client starts without them.
+            if (previous?.turnCaptions ?? []) != (state.turnCaptions ?? []) {
+                send(.turnCaptions(sessionId: id, captions: state.turnCaptions ?? []))
+            }
             // Who drives the session, or what it can stop, changed without
             // the transcript: a content-free delta carries it.
             if let previous, sync.snapshotSent, !transcriptSent.contains(id),
