@@ -1381,20 +1381,10 @@ public final class RemotePeerManager {
             // origin decides who this record is. The connection this manager
             // builds is handed the record's `serverId` and refuses a socket
             // reporting a different one, so in practice the frame's id
-            // already matches; ignoring it here is the backstop. Name and
-            // protocol version are cosmetic and safe to take from the peer.
-            peers[index].name = name
-            // An older build sends none; that must not erase what we know.
-            if let icon { peers[index].icon = icon }
+            // already matches; ignoring it here is the backstop. Name, icon
+            // and protocol version are cosmetic and safe to take from the peer.
             peers[index].protocolVersion = protocolVersion
-            // Keeps `durableStateByServerId` from going stale: a peer only
-            // gets `.hello` events once it's an active, confirmed link, so
-            // this row IS the current durable truth. Without this, a LATER
-            // re-pair attempt that fails would roll back to whatever name
-            // or protocol version this snapshot last had — reverting
-            // cosmetic metadata a working connection has since updated.
-            durableStateByServerId[peers[index].serverId] = peers[index]
-            savePeers()
+            adoptHelloIdentity(name: name, icon: icon, peerId: peerId, force: true)
         case .originChanged(let origin):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
             guard !isProvisional(peers[index].serverId) else { return }
@@ -1420,7 +1410,13 @@ public final class RemotePeerManager {
                 }
                 return
             }
-            if case .hello(_, _, _, _, _, _, let advertised, _) = message {
+            if case .hello(_, _, let name, let icon, _, _, let advertised, _) = message {
+                // A peer re-sends hello when its name or icon changes, so
+                // adopt them here too, as the first frame's `.hello` does,
+                // and tell the sidebar and this Mac's own clients.
+                if adoptHelloIdentity(name: name, icon: icon, peerId: peerId) {
+                    onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
+                }
                 // Policy can change while this authenticated control socket is up.
                 let capability = PeerDeviceCapability.v1
                 let hadDevices = capabilities[peer.serverId]?.contains(capability) == true
@@ -1489,6 +1485,28 @@ public final class RemotePeerManager {
         guard carriesSessions(peerId: peerId), let peer = peers.first(where: { $0.id == peerId }),
               Self.mayServePeerHost(peer) else { return nil }
         return peer
+    }
+
+    /// Takes the name and icon a confirmed link's hello reports. An older
+    /// build sends no icon; that must not erase the one we know. Saves only
+    /// when something changed, unless `force`, as the first hello of a link
+    /// does after updating other fields. True when the name or icon changed.
+    ///
+    /// Also refreshes `durableStateByServerId`: a peer only gets hellos once
+    /// it's an active, confirmed link, so this row IS the current durable
+    /// truth. Without this, a LATER re-pair attempt that fails would roll
+    /// back to whatever name this snapshot last had.
+    @discardableResult
+    private func adoptHelloIdentity(name: String, icon: PeerIcon?, peerId: String, force: Bool = false) -> Bool {
+        guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return false }
+        let before = peers[index]
+        peers[index].name = name
+        if let icon { peers[index].icon = icon }
+        let changed = peers[index] != before
+        guard force || changed else { return false }
+        durableStateByServerId[peers[index].serverId] = peers[index]
+        savePeers()
+        return changed
     }
 
     private func upsert(serverId: String, name: String, icon: PeerIcon?, origins: [String], lastOrigin: String?,

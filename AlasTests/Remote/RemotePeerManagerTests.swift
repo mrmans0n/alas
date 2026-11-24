@@ -1783,6 +1783,32 @@ struct RemotePeerManagerTests {
         #expect(manager.peers.first?.icon == .cloud)
     }
 
+    @Test func aRebroadcastHelloUpdatesTheNameAndIconOfALiveLink() throws {
+        let store = InMemoryPeerStore()
+        store.save([verifiedPeer()])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links)
+        var availability: [String] = []
+        manager.onFederationEvent = { if case .availabilityChanged(let serverId) = $0 { availability.append(serverId) } }
+        manager.connectAll()
+        let link = try #require(links.byPeerId["p1"])
+        link.emit(.hello(serverId: "srv-a", name: "Mac A", protocolVersion: 1, federationEnabled: true))
+        link.emit(.stateChanged(.online))
+        availability.removeAll()
+
+        // The peer picked a new icon and name while connected: no new socket.
+        link.emit(.message(.hello(protocolVersion: 1, serverId: "srv-a", name: "Studio", icon: .macStudio)))
+        #expect(manager.peers.first?.name == "Studio")
+        #expect(manager.peers.first?.icon == .macStudio)
+        #expect(store.saved.first?.icon == .macStudio)
+        #expect(manager.helloPeers.first?.icon == .macStudio)
+        #expect(availability == ["srv-a"])
+
+        // The same hello again changes nothing and tells nobody.
+        link.emit(.message(.hello(protocolVersion: 1, serverId: "srv-a", name: "Studio", icon: .macStudio)))
+        #expect(availability == ["srv-a"])
+    }
+
     // `.hello`/`.originChanged` update `peers` directly on an already
     // confirmed link, bypassing `upsert` entirely. If the durable snapshot
     // `addPeer` rolls back to on a later failed re-pair isn't refreshed the
