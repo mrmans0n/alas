@@ -1535,8 +1535,9 @@ function placeCenterViews() {
     if ($(id).parentElement !== parent) parent.appendChild($(id));
   }
   if (!wideLayout.matches) {
-    // A phone shows one section: the one holding the open document, which a tab switch would close.
-    if (detailStack.length) showTab(detailStack[detailStack.length - 1].tab, true);
+    // A phone shows one section: the one holding what the middle showed, which a tab switch would close.
+    if (centerTab === "terminal") showTab("terminal", true);
+    else if (detailStack.length) showTab(detailStack[detailStack.length - 1].tab, true);
     setCenter("chat");
   } else if (detailStack.length) setCenter("document");
   else renderCenterTabs();

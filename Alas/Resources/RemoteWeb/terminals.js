@@ -224,7 +224,11 @@ function createTerminals({ send, el, keepView = () => false, onView = () => {} }
     },
     show() {
       shown = true;
-      showList();
+      if (!view) return showList();
+      // A terminal kept open by a wide window that has since narrowed: show it, not the list.
+      el.listLevel.classList.add("hidden");
+      renderList();
+      sendConsole({ list: {} });
     },
     hide() {
       shown = false;

@@ -70,8 +70,9 @@ async function finishLoadingXterm() {
   // only closing its tab detaches it.
   sent.length = 0;
   let viewTitle = "unset";
+  let wide = true;
   const desk = globalThis.RemoteTerminals.createTerminals({
-    send: m => sent.push(m.console), el, keepView: () => true, onView: title => { viewTitle = title; },
+    send: m => sent.push(m.console), el, keepView: () => wide, onView: title => { viewTitle = title; },
   });
   desk.setCapabilities([globalThis.RemoteTerminals.TERMINAL_CAPABILITY]);
   desk.setWorktree("w");
@@ -86,6 +87,10 @@ async function finishLoadingXterm() {
   const beforeReconnect = sent.length;
   desk.reconnected();
   assert.ok(sent.slice(beforeReconnect).some(m => m.list), "the list beside the open terminal refreshes");
+  wide = false;   // the window narrows with the terminal selected
+  desk.show();
+  assert.equal(sent.filter(m => m.detach).length, 0);
+  wide = true;
   desk.closeView();
   assert.equal(sent.filter(m => m.detach).length, 1);
   assert.equal(viewTitle, null);
