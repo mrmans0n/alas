@@ -6,9 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.9] - 2026-11-24
+
+### ✨ Features
+
+- Let an explicitly authorized Remote Web browser list, open, close, view, and control terminals for worktree sessions ([#2695](https://github.com/mrmans0n/alas/pull/2695)).
+- Render Remote Web diffs with syntax highlighting, word-level changes, and split columns on wide windows, with a plain-row fallback when the rich renderer cannot load ([#2699](https://github.com/mrmans0n/alas/pull/2699)).
+- Render GitHub-style `<details>` sections in agent messages as collapsible content on Mac, iPhone, iPad, peer sessions, and Remote Web ([#2697](https://github.com/mrmans0n/alas/pull/2697)).
+- Give wide Remote Web windows a persistent three-pane desktop layout with collapsible, resizable panes whose state is saved locally ([#2700](https://github.com/mrmans0n/alas/pull/2700)).
+- Save enabled Mac turn captions with their session and reuse them after relaunch while the turn's edit digest still matches ([#2703](https://github.com/mrmans0n/alas/pull/2703)).
+- Open one diff or file and one terminal in tabs beside Chat on wide Remote Web windows while the right panel keeps its lists visible ([#2706](https://github.com/mrmans0n/alas/pull/2706)).
+- Add an optional, off-by-default Review before push gate that reviews local commits before Ship pushes them and routes findings through the review pane and owning session ([#2705](https://github.com/mrmans0n/alas/pull/2705)).
+
 ### 🐛 Fixes
 
-- Keep the Land tab waiting after GitLab queues a merge request instead of reporting a landing failure.
+- Keep Land waiting while GitLab processes a queued merge train instead of reporting a false landing failure ([#2698](https://github.com/mrmans0n/alas/pull/2698)).
+- On iPhone and iPad, align inline chips with surrounding text, scale them with Dynamic Type, and show full symbol names ([#2702](https://github.com/mrmans0n/alas/pull/2702)).
+- On iPhone and iPad, label standalone agent thoughts as Thinking disclosures and reveal the full selectable thought when tapped ([#2704](https://github.com/mrmans0n/alas/pull/2704)).
+
+### 🏗️ Internal
+
+- Update the esbuild dependency used to generate committed Remote Web assets to 0.28.2 ([#2701](https://github.com/mrmans0n/alas/pull/2701)).
+- Move pull-request CI to Xcode 27.2 and isolate native caches for cold linker coverage ([#2696](https://github.com/mrmans0n/alas/pull/2696)).
+- Move nightly, macOS release, iOS release, What's New validation, and Homebrew verification jobs to Xcode 27.2 with toolchain-specific caches ([#2707](https://github.com/mrmans0n/alas/pull/2707)).
 
 ## [0.24.8] - 2026-11-23
 

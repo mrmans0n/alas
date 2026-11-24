@@ -1,0 +1,11 @@
+{
+  "version": "0.24.9",
+  "headline": {
+    "title": "Review Before Push",
+    "body": "Turn on a reviewer agent to check local commits and surface findings before Ship pushes them.",
+    "media": "media/0.24.9-review-before-push.png"
+  },
+  "also": [
+    { "title": "Remote Web Workspace" }
+  ]
+}

@@ -12,7 +12,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas</title>
-  <link rel="stylesheet" href="/style.css?v=67" />
+  <link rel="stylesheet" href="/style.css?v=68" />
 </head>
 <body>
   <header id="bar">
@@ -302,6 +302,12 @@
       <button id="rename-cancel" class="sheet-close">Cancel</button>
     </div>
   </div>
+  <div id="palette" class="sheet hidden" role="dialog" aria-modal="true" aria-label="Go to a session or command">
+    <div class="sheet-card">
+      <input id="palette-input" class="sheet-input" type="text" autocomplete="off" spellcheck="false" placeholder="Go to a session or command…" aria-label="Search sessions and commands" aria-controls="palette-list" />
+      <div id="palette-list" role="listbox"></div>
+    </div>
+  </div>
   <div id="add-server-sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="add-server-title">
     <div class="sheet-card">
       <p id="add-server-title" class="sheet-title">Add server</p>
@@ -348,7 +354,7 @@
   <script src="/turn-changes.js?v=1"></script>
   <script src="/peer-console.js?v=1"></script>
   <script src="/terminals.js?v=7"></script>
-  <script src="/app.js?v=122"></script>
+  <script src="/app.js?v=124"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
