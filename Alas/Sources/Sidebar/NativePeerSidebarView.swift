@@ -63,7 +63,8 @@ struct NativePeerSidebarView: View {
     /// Resolves a repo tile for a peer's project name. Peers do not send icon
     /// metadata, so the caller can match a local project of the same name.
     var icon: (String) -> ProjectIcon = { _ in .default() }
-    var onRemoteSettings: () -> Void = {}
+    /// Opens this Mac's sheet in Settings › Remote.
+    var onEdit: () -> Void = {}
     /// The local sidebar's worktree ordering, applied to every peer's worktrees.
     var worktreeOrdering: AppConfig.WorktreeSortMode = .lastUpdateDesc
     /// Offers "Delete Worktree, Keep Branch…" under the local rule
@@ -99,7 +100,7 @@ struct NativePeerSidebarView: View {
                     repoGroup(repo, peer: group, filtering: filtering)
                 }
             } else {
-                NativePeerSpaceUnavailable(group: group, onRemoteSettings: onRemoteSettings)
+                NativePeerSpaceUnavailable(group: group, onEdit: onEdit)
             }
         }
     }
@@ -251,7 +252,7 @@ struct NativePeerSpaceHeader: View {
     let peer: NativePeerPage
     /// Nil while the peer is offline: its inventory is not known.
     let worktreeCount: Int?
-    let onRemoteSettings: () -> Void
+    let onEdit: () -> Void
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
 
@@ -281,7 +282,7 @@ struct NativePeerSpaceHeader: View {
         }
         .contentShape(Rectangle())
         .contextMenu {
-            Button("Remote Settings…", action: onRemoteSettings)
+            Button("Edit…", action: onEdit)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(peer.name)
@@ -298,7 +299,7 @@ struct NativePeerSpaceHeader: View {
 /// it is, so the page explains why instead of listing nothing.
 private struct NativePeerSpaceUnavailable: View {
     let group: NativePeerGroup
-    let onRemoteSettings: () -> Void
+    let onEdit: () -> Void
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
 
@@ -313,7 +314,7 @@ private struct NativePeerSpaceUnavailable: View {
                 .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
                 .multilineTextAlignment(.center)
-            Button("Remote Settings…", action: onRemoteSettings)
+            Button("Edit \(group.name)…", action: onEdit)
                 .controlSize(.small)
                 .padding(.top, scale.space[1])
         }

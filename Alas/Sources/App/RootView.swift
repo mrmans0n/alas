@@ -553,10 +553,10 @@ struct RootView: View {
                         : "Pick a worktree on \(peer.name) in the sidebar.",
                 actions: peer.state.carriesSessions ? [] : [EmptyTabAction(
                     icon: "gear",
-                    title: "Remote Settings…",
-                    subtitle: "Check how this Mac reaches \(peer.name)",
+                    title: "Edit \(peer.name)…",
+                    subtitle: "Check how this Mac reaches it",
                     action: {
-                        state.pendingSettingsSection = .remote
+                        state.requestPairedMacSettings(serverId: peer.serverId)
                         openSettingsWindow()
                     }
                 )]

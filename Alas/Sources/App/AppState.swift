@@ -501,6 +501,16 @@ final class AppState {
     private var startupRecoveryReadyRightPaneID: String?
     private(set) var isRefreshingProjectTopologies = false
     var pendingSettingsSection: SettingsSection?
+    /// The paired Mac whose sheet Settings › Remote opens next, by `serverId`.
+    var pendingPairedMacServerId: String?
+
+    /// Opens Settings › Remote on one paired Mac's sheet. The caller shows
+    /// the Settings window.
+    func requestPairedMacSettings(serverId: String) {
+        pendingPairedMacServerId = serverId
+        pendingSettingsSection = .remote
+    }
+
     @ObservationIgnored
     private var _tabs: TabsManager?
     var tabs: TabsManager {
@@ -1205,14 +1215,6 @@ final class AppState {
 
     func remoteConnectedDeviceCounts() -> [String: Int] {
         remoteConnectedDeviceCountsSnapshot
-    }
-
-    func revokeAllRemoteDevices() {
-        let ids = remotePairing.devices.map(\.id)
-        remotePairing.revokeAll()
-        for id in ids {
-            remoteServer?.disconnectDevice(id)
-        }
     }
 
     /// The Remote access toggle. Turning it off with unsaved host files asks first; Cancel leaves it on.

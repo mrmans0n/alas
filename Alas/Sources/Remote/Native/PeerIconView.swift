@@ -24,10 +24,22 @@ struct PeerIconView: View {
 
 /// The peer's glyph on a bordered tile, with a presence dot punched out of
 /// its bottom-trailing corner. 19pt beside repo headers; larger on the peer
-/// page's header.
+/// page's header and in Settings.
 struct PeerIconTile: View {
     let icon: PeerIcon
     /// Theme token for the presence dot; nil draws no dot.
+    var presenceToken: String?
+    var side: CGFloat = 19 // design-literal: icon tile
+
+    var body: some View {
+        SymbolTile(symbol: icon.symbolName, presenceToken: presenceToken, side: side)
+    }
+}
+
+/// Any SF Symbol on the tile `PeerIconTile` draws, for rows that stand for a
+/// device that is not a Mac, such as a phone or a browser.
+struct SymbolTile: View {
+    let symbol: String
     var presenceToken: String?
     var side: CGFloat = 19 // design-literal: icon tile
     @Environment(\.theme) private var theme
@@ -36,7 +48,8 @@ struct PeerIconTile: View {
     private var dot: CGFloat { side >= 24 ? 8 : 6 }
 
     var body: some View {
-        PeerIconView(icon: icon, size: side * 0.55)
+        Image(systemName: symbol)
+            .font(.system(size: side * 0.55))
             .foregroundColor(theme.color(side >= 24 ? "fg" : "fg-muted"))
             .frame(width: side, height: side)
             .background(theme.color("bg-4"), in: RoundedRectangle(cornerRadius: scale.radius.small))

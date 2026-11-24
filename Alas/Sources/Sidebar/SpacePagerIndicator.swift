@@ -128,7 +128,8 @@ struct SpacePagerIndicator: View {
     let titleVisible: Bool
     let onSelect: (SidebarPage) -> Void
     let onEditSpaces: () -> Void
-    let onRemoteSettings: () -> Void
+    /// Opens a paired Mac's sheet in Settings › Remote.
+    let onEditPeer: (String) -> Void
     let onScrollPage: (Int) -> Void
     @Environment(\.theme) var theme
     @Environment(\.designScale) private var scale
@@ -187,7 +188,7 @@ struct SpacePagerIndicator: View {
                     .accessibilityLabel(peer.name)
                     .accessibilityValue((isActive ? "selected, " : "") + peer.accessibilityValue)
                     .contextMenu {
-                        Button("Remote Settings…", action: onRemoteSettings)
+                        Button("Edit…") { onEditPeer(peer.serverId) }
                     }
                 }
             }

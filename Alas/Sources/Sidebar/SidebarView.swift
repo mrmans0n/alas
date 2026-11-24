@@ -376,7 +376,7 @@ struct SidebarView: View {
                             state.pendingSettingsSection = .spaces
                             onSettings()
                         },
-                        onRemoteSettings: openRemoteSettings,
+                        onEditPeer: openPairedMacSettings(serverId:),
                         onScrollPage: { offset in
                             pageSpace(offset: offset)
                         }
@@ -670,8 +670,8 @@ struct SidebarView: View {
         _ = state.switchToSpace(id: state.spacesManager.activeSpaceId)
     }
 
-    private func openRemoteSettings() {
-        state.pendingSettingsSection = .remote
+    private func openPairedMacSettings(serverId: String) {
+        state.requestPairedMacSettings(serverId: serverId)
         onSettings()
     }
 
@@ -681,7 +681,8 @@ struct SidebarView: View {
     private func peerPage(serverId: String, isActive: Bool) -> some View {
         if let client = state.nativePeerSessions {
             VStack(spacing: 0) {
-                NativePeerSpaceHeaderHost(client: client, serverId: serverId, onRemoteSettings: openRemoteSettings)
+                NativePeerSpaceHeaderHost(client: client, serverId: serverId,
+                                          onEdit: { openPairedMacSettings(serverId: serverId) })
                 SidebarFilterSlotScrollView(
                     isActive: isActive,
                     peerModel: peerSidebarModel,
@@ -702,7 +703,7 @@ struct SidebarView: View {
                                     .first { $0.name == name }
                                     .map { state.sidebarIcon(for: $0) } ?? .default()
                             },
-                            onRemoteSettings: openRemoteSettings,
+                            onEdit: { openPairedMacSettings(serverId: serverId) },
                             worktreeOrdering: state.config.worktrees.defaultOrdering,
                             showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove
                         )
@@ -861,7 +862,7 @@ private struct PeerFilterMatchesObserver: View {
 private struct NativePeerSpaceHeaderHost: View {
     let client: NativePeerSessions
     let serverId: String
-    let onRemoteSettings: () -> Void
+    let onEdit: () -> Void
 
     var body: some View {
         if let peer = client.peerPages.first(where: { $0.serverId == serverId }) {
@@ -869,7 +870,7 @@ private struct NativePeerSpaceHeaderHost: View {
             NativePeerSpaceHeader(
                 peer: peer,
                 worktreeCount: group.map { $0.repos(ordering: .manual).reduce(0) { $0 + $1.worktrees.count } },
-                onRemoteSettings: onRemoteSettings
+                onEdit: onEdit
             )
         }
     }

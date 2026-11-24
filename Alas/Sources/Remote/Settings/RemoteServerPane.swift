@@ -21,6 +21,13 @@ struct RemoteServerPane: View {
     @State private var selectedNearbyId: String?
     @State private var selectedNearbyName = ""
     @State private var nearbyCode = ""
+    /// The sheet open over the pane: one paired Mac's, one device's, or Add Mac.
+    @State private var activeSheet: RemoteSheet?
+    @State private var confirmingForget = false
+    @State private var addMacTab: AddMacTab = .nearby
+    /// What to do once the open sheet has closed: one sheet cannot present
+    /// another, and the pane's alerts don't show over a sheet.
+    @State private var afterSheet: AfterSheet?
     /// Rotates the displayed pairing code well within its 120s TTL so the QR on
     /// screen is never stale. Prior codes stay valid until they expire, so a
     /// device that scanned just before a rotation still pairs.
@@ -229,164 +236,8 @@ struct RemoteServerPane: View {
                     RemoteDeviceSharingSettings(state: state)
                 }
 
-                SettingsGroup(title: "Paired devices") {
-                    if state.remotePairing.devices.isEmpty {
-                        SettingsRow(name: "No devices", desc: "Pair a device to see it here.") {
-                            EmptyView()
-                        }
-                    } else {
-                        let connected = state.remoteConnectedDeviceCounts()
-                        ForEach(state.remotePairing.devices) { device in
-                            let liveCount = connected[device.id] ?? 0
-                            let seen = device.lastSeenAt.map { "Last seen \($0.formatted())" } ?? "Never connected"
-                            let status = liveCount > 0 ? "Connected now (\(liveCount)); \(seen)" : seen
-                            let desc = device.pushRelay != nil ? status + ". Notifications on" : status
-                            let prefix = switch device.kind {
-                            case .alasInstance: "Alas peer. "
-                            case .phone: "iPhone app. "
-                            case .browser: ""
-                            }
-                            SettingsRow(
-                                name: device.name,
-                                icon: device.kind == .alasInstance ? state.peerIcon(serverId: device.peerServerId) : nil,
-                                desc: prefix + desc
-                            ) {
-                                Button {
-                                    state.revokeRemoteDevice(device.id)
-                                } label: {
-                                    Text("Revoke")
-                                        .font(scale.meta.font(weight: .medium))
-                                        .foregroundColor(theme.color("warn"))
-                                        .padding(.horizontal, scale.space[3])
-                                        .frame(height: 28)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: scale.radius.medium)
-                                                .strokeBorder(theme.color("warn").opacity(0.4), lineWidth: 0.5)
-                                        )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            if device.kind == .browser {
-                                SettingsRow(
-                                    name: "Allow terminals",
-                                    desc: "Lets this browser open shells here. Only for a browser you trust."
-                                ) {
-                                    AlasToggle(on: Binding(
-                                        get: { device.allowsTerminals },
-                                        set: { state.remotePairing.setAllowsTerminals($0, deviceId: device.id) }
-                                    ))
-                                }
-                            }
-                        }
-                        SettingsRow(
-                            name: "All devices",
-                            desc: "Revoke every paired browser and close active remote sockets."
-                        ) {
-                            Button {
-                                pairingCode = nil
-                                state.revokeAllRemoteDevices()
-                            } label: {
-                                Text("Revoke All")
-                                    .font(scale.meta.font(weight: .medium))
-                                    .foregroundColor(theme.color("warn"))
-                                    .padding(.horizontal, scale.space[3])
-                                    .frame(height: 28)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: scale.radius.medium)
-                                            .strokeBorder(theme.color("warn").opacity(0.4), lineWidth: 0.5)
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-
-                if state.config.remote.enabled {
-                    SettingsGroup(title: "Peers") {
-                        if state.remotePeers.peers.isEmpty {
-                            SettingsRow(name: "No peers", desc: "Pick a nearby Mac or paste another Mac's pairing link below. Both Macs end up paired with each other.") {
-                                EmptyView()
-                            }
-                        }
-                        ForEach(state.remotePeers.peers) { peer in
-                            SettingsRow(name: peer.name, icon: peer.icon ?? .laptop, desc: hostActivity[peer.id] ?? peerStatus(peer)) {
-                                HStack(spacing: 8) {
-                                    if peer.sshDestination != nil || updatesOverPeer(peer) {
-                                        AlasButton(title: "Update host", style: .subtle) {
-                                            confirmingHostUpdate = peer
-                                        }
-                                    }
-                                    if peer.sshDestination != nil {
-                                        AlasButton(title: "Host log", style: .subtle) {
-                                            readHostLog(peer)
-                                        }
-                                    }
-                                    AlasButton(title: "Forget", style: .subtle) {
-                                        state.remotePeers.forget(peerId: peer.id)
-                                    }
-                                }
-                                .disabled(hostActivity[peer.id] != nil)
-                            }
-                            agentAccessRow(for: peer)
-                        }
-                        if state.config.remote.discoverable {
-                            let nearby = state.remotePeerBrowser.instances
-                            if nearby.isEmpty {
-                                SettingsRow(name: "Nearby", desc: state.remotePeerBrowser.lastError.map { "Can't browse the local network: \($0)" }
-                                            ?? "Looking for other Macs running Alas on this network…") {
-                                    EmptyView()
-                                }
-                            }
-                            ForEach(nearby) { instance in
-                                SettingsRow(name: String(ApprovalWire.displayName(instance.name).prefix(200)), icon: instance.icon ?? .laptop,
-                                            desc: nearbyDescription(instance)) {
-                                    nearbyAction(instance)
-                                }
-                            }
-                        } else {
-                            SettingsRow(name: "Nearby", desc: "Turn on Discoverable on this network above to see other Macs running Alas.") {
-                                EmptyView()
-                            }
-                        }
-                        nearbyApprovalStatus
-                        SettingsRow(name: "Add peer", desc: "Copy the pairing link from the other Mac's Remote settings and paste it here.") {
-                            HStack(spacing: 8) {
-                                AlasField(text: $peerLink, placeholder: "http://…/?code=…&hosts=…")
-                                    .frame(minWidth: 260)
-                                AlasButton(title: isAddingPeer ? "Adding…" : "Add", style: .subtle) {
-                                    addPeer()
-                                }
-                                .disabled(isAddingPeer || peerLink.trimmingCharacters(in: .whitespaces).isEmpty)
-                            }
-                        }
-                        SettingsRow(name: "Set up a host over SSH", desc: "Install alas-host on a Mac this Mac can reach with key-based SSH, start it at login, and pair with it.") {
-                            AlasButton(title: "Set up…", style: .subtle) {
-                                peerError = nil
-                                showingHostSSHSetup = true
-                            }
-                        }
-                        if let peerError {
-                            Text(peerError)
-                                .font(scale.metaFont)
-                                .foregroundColor(theme.color("warn"))
-                                .padding(.horizontal, scale.space[3])
-                                .padding(.bottom, scale.space[2])
-                        }
-                    }
-                    .task(id: state.config.remote.discoverable) {
-                        // Browse only while this section is on screen and discovery is on;
-                        // leaving the pane or turning the toggle off cancels this task.
-                        guard state.config.remote.discoverable else {
-                            state.remotePeerBrowser.stop()
-                            return
-                        }
-                        state.remotePeerBrowser.start()
-                        defer { state.remotePeerBrowser.stop() }
-                        while !Task.isCancelled {
-                            try? await Task.sleep(for: .seconds(60))
-                        }
-                    }
-                }
+                pairedMacsGroup
+                phonesAndBrowsersGroup
             }
             .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
@@ -406,6 +257,8 @@ struct RemoteServerPane: View {
             if pairingCode != nil { pairingCode = state.remotePairing.beginPairing() }
         }
         .onDisappear { state.cancelNearbyApproval() }
+        .onAppear(perform: openPendingMac)
+        .onChange(of: state.pendingPairedMacServerId) { openPendingMac() }
         .sheet(isPresented: $showingHostSSHSetup) {
             HostSSHSetupSheet(
                 peers: state.remotePeers,
@@ -428,6 +281,20 @@ struct RemoteServerPane: View {
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("Updating restarts the host and ends its running sessions.")
+        }
+        .sheet(item: $activeSheet, onDismiss: runAfterSheet) { sheet in
+            switch sheet {
+            case .mac(let id):
+                if let entry = pairedMacEntries.first(where: { $0.id == id }) {
+                    pairedMacSheet(entry)
+                }
+            case .device(let id):
+                if let device = state.remotePairing.devices.first(where: { $0.id == id }) {
+                    deviceSheet(device)
+                }
+            case .addMac:
+                addMacSheet
+            }
         }
     }
 
@@ -627,33 +494,55 @@ struct RemoteServerPane: View {
         pasteboard.setString(url, forType: .string)
     }
 
-    /// What the paired Mac's agents may do here. Acts on the device the peer
-    /// reaches this Mac with, or, for a host that paired here inbound-only
-    /// and has none, on its record. A device that never proved its identity
-    /// cannot be allowed.
-    private func agentAccessRow(for peer: RemotePeer) -> some View {
-        let access = state.remotePeers.agentAccess(of: peer)
-        let desc: String? = if access == nil {
-            "Pair again to allow this"
-        } else if access == .autoRun {
-            "They can run commands here as you, without asking."
-        } else {
-            nil
+    /// What the paired Mac's agents may do here: nil when it can't be allowed,
+    /// for a device that never proved its identity. Acts on the device the
+    /// peer reaches this Mac with, or, for a host that paired here
+    /// inbound-only and has none, on its record.
+    private func agentAccess(of entry: PairedMacEntry) -> RemoteDeviceAgentAccess? {
+        if let peer = entry.peer { return state.remotePeers.agentAccess(of: peer) }
+        guard let device = entry.devices.first(where: PeerDelegationGate.isProven) else { return nil }
+        return device.agentAccess
+    }
+
+    private func setAgentAccess(_ access: RemoteDeviceAgentAccess, of entry: PairedMacEntry) {
+        if let peer = entry.peer {
+            _ = state.remotePeers.setAgentAccess(access, peerId: peer.id)
+            return
         }
-        return SettingsRow(name: "Let agents on this Mac use this machine", desc: desc) {
-            Picker("Agent access for \(peer.name)", selection: Binding(
-                get: { access ?? .off },
-                set: { _ = state.remotePeers.setAgentAccess($0, peerId: peer.id) }
-            )) {
-                Text("Off").tag(RemoteDeviceAgentAccess.off)
-                Text("Ask for approval").tag(RemoteDeviceAgentAccess.ask)
-                Text("Allow auto-run").tag(RemoteDeviceAgentAccess.autoRun)
+        for device in entry.devices where access == .off || PeerDelegationGate.isProven(device) {
+            _ = state.remotePairing.setAgentAccess(access, deviceId: device.id)
+        }
+    }
+
+    private func agentAccessControl(for entry: PairedMacEntry) -> some View {
+        let access = agentAccess(of: entry)
+        return VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack {
+                Text("\(entry.name)'s agents on this Mac")
+                    .font(scale.metaFont)
+                    .foregroundColor(theme.color("fg-dim"))
+                Spacer(minLength: scale.space[3])
+                Picker("Agent access for \(entry.name)", selection: Binding(
+                    get: { access ?? .off },
+                    set: { setAgentAccess($0, of: entry) }
+                )) {
+                    Text("Off").tag(RemoteDeviceAgentAccess.off)
+                    Text("Ask for approval").tag(RemoteDeviceAgentAccess.ask)
+                    Text("Allow auto-run").tag(RemoteDeviceAgentAccess.autoRun)
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(width: 180)
+                .disabled(access == nil)
             }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .settingsDropdownFrame()
-            .disabled(access == nil)
+            if let note = access == nil ? "Pair again to allow this."
+                : access == .autoRun ? "They can run commands here as you, without asking." : nil {
+                Text(note)
+                    .font(scale.caption.font(weight: .regular))
+                    .foregroundColor(theme.color(access == .autoRun ? "warn" : "fg-faint"))
+            }
         }
+        .padding(.vertical, scale.space[1])
     }
 
     /// The release a headless host runs, and whether it is older than this app.
@@ -892,6 +781,417 @@ struct RemoteServerPane: View {
             return match
         }
         return addresses.first(where: \.isRecommended) ?? addresses.first
+    }
+}
+
+private enum AddMacTab: Hashable {
+    case nearby, link, ssh
+}
+
+private enum RemoteSheet: Hashable, Identifiable {
+    case mac(String)
+    case device(String)
+    case addMac
+
+    var id: Self { self }
+}
+
+private enum AfterSheet {
+    case sshSetup
+    case hostLog(RemotePeer)
+    case updateHost(RemotePeer)
+}
+
+// MARK: - Paired Macs, phones and browsers
+
+extension RemoteServerPane {
+    /// Outbound peers only while the server runs: the manager is lazy, and
+    /// nothing else needs it while remote control is off.
+    private var pairedMacEntries: [PairedMacEntry] {
+        PairedMacEntry.entries(
+            peers: state.config.remote.enabled ? state.remotePeers.peers : [],
+            devices: state.remotePairing.devices
+        )
+    }
+
+    @ViewBuilder fileprivate var pairedMacsGroup: some View {
+        let entries = pairedMacEntries
+        if state.config.remote.enabled || !entries.isEmpty {
+            SettingsGroup(title: "Paired Macs") {
+                if entries.isEmpty {
+                    SettingsRow(name: "No Macs yet", desc: "Pair another Mac running Alas to open its worktrees from your sidebar.") {
+                        EmptyView()
+                    }
+                }
+                ForEach(entries) { entry in
+                    RemoteEntryRow(
+                        name: entry.name,
+                        summary: entry.peer.flatMap { hostActivity[$0.id] } ?? summary(of: entry),
+                        chips: chips(of: entry),
+                        onEdit: { activeSheet = .mac(entry.id) }
+                    ) {
+                        PeerIconTile(icon: entry.icon, presenceToken: presence(of: entry).colorToken, side: 30)
+                    }
+                }
+                if state.config.remote.enabled {
+                    SettingsRow(name: "Add a Mac", desc: "Pick one nearby, paste its pairing link, or set one up over SSH.") {
+                        AlasButton(title: "Add Mac…", icon: "plus", style: .normal) {
+                            peerError = nil
+                            addMacTab = state.config.remote.discoverable ? .nearby : .link
+                            activeSheet = .addMac
+                        }
+                    }
+                }
+                if let peerError, activeSheet != .addMac {
+                    errorText(peerError)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder fileprivate var phonesAndBrowsersGroup: some View {
+        let devices = state.remotePairing.devices.filter { $0.kind != .alasInstance }
+        let connected = state.remoteConnectedDeviceCounts()
+        SettingsGroup(title: "Phones and browsers") {
+            if devices.isEmpty {
+                SettingsRow(
+                    name: "None yet",
+                    desc: state.config.remote.enabled
+                        ? "Show the pairing QR above and scan it with a phone, or open its link in a browser."
+                        : "Turn on remote control to pair a phone or a browser."
+                ) {
+                    EmptyView()
+                }
+            }
+            ForEach(devices) { device in
+                let live = connected[device.id] ?? 0
+                RemoteEntryRow(
+                    name: device.name,
+                    summary: summary(of: device, live: live),
+                    chips: device.kind == .browser && device.allowsTerminals ? [RemoteEntryChip(text: "Terminals", isWarning: true)] : [],
+                    onEdit: { activeSheet = .device(device.id) }
+                ) {
+                    SymbolTile(symbol: Self.symbol(for: device), presenceToken: live > 0 ? "add" : nil, side: 30)
+                }
+            }
+            if devices.count > 1 {
+                SettingsRow(name: "All phones and browsers", desc: "Revoke every one and close its connection. Paired Macs keep theirs.") {
+                    AlasButton(title: "Revoke All", style: .subtle, tint: theme.color("warn")) {
+                        pairingCode = nil
+                        for device in devices { state.revokeRemoteDevice(device.id) }
+                    }
+                }
+            }
+        }
+    }
+
+    private static func symbol(for device: RemoteDevice) -> String {
+        switch device.kind {
+        case .phone: "iphone"
+        case .browser: "globe"
+        case .alasInstance: "desktopcomputer"
+        }
+    }
+
+    private func errorText(_ message: String) -> some View {
+        Text(message)
+            .font(scale.metaFont)
+            .foregroundColor(theme.color("warn"))
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.vertical, scale.space[2])
+    }
+
+    // MARK: Summaries
+
+    private func presence(of entry: PairedMacEntry) -> PairedMacPresence {
+        if let peer = entry.peer, !peer.isInboundOnly {
+            return PairedMacPresence(state.remotePeers.states[peer.id], isVerified: peer.isVerified)
+        }
+        let connected = state.remoteConnectedDeviceCounts()
+        return entry.devices.contains { (connected[$0.id] ?? 0) > 0 }
+            ? PairedMacPresence(.online, isVerified: true)
+            : PairedMacPresence(.idle, isVerified: true)
+    }
+
+    /// One line: state, then where and what it runs.
+    private func summary(of entry: PairedMacEntry) -> String {
+        var parts = [presence(of: entry).label]
+        if let peer = entry.peer, !peer.isInboundOnly {
+            if state.remotePeers.states[peer.id] == .online,
+               let host = (peer.lastOrigin ?? peer.origins.first).flatMap({ URL(string: $0)?.host() }) {
+                parts.append(host)
+            }
+            if let version = state.remotePeers.hostVersions[peer.serverId] { parts.append("alas-host \(version)") }
+        } else {
+            parts.append("Reaches this Mac only")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func chips(of entry: PairedMacEntry) -> [RemoteEntryChip] {
+        var chips: [RemoteEntryChip] = []
+        if let peer = entry.peer, hostIsOlder(peer) {
+            chips.append(RemoteEntryChip(text: "Update available", isWarning: true))
+        }
+        switch agentAccess(of: entry) {
+        case .ask: chips.append(RemoteEntryChip(text: "Agents: ask"))
+        case .autoRun: chips.append(RemoteEntryChip(text: "Agents: auto-run", isWarning: true))
+        case .off, nil: break
+        }
+        return chips
+    }
+
+    private func hostIsOlder(_ peer: RemotePeer) -> Bool {
+        guard let version = state.remotePeers.hostVersions[peer.serverId],
+              let host = SemanticVersion(parsing: version) else { return false }
+        return host < BuildIdentity.current().version
+    }
+
+    private func summary(of device: RemoteDevice, live: Int) -> String {
+        var parts = [device.kind == .phone ? "iPhone app" : "Browser"]
+        if live > 0 {
+            parts.append(live == 1 ? "Connected now" : "Connected now (\(live))")
+        } else if let seen = device.lastSeenAt {
+            parts.append("Last seen \(seen.formatted(.relative(presentation: .named)))")
+        } else {
+            parts.append("Never connected")
+        }
+        if device.pushRelay != nil { parts.append("Notifications on") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Which way the pairing goes, in words.
+    private func direction(of entry: PairedMacEntry) -> String {
+        if entry.isPairedBothWays { return "Both ways" }
+        if entry.peer.map({ !$0.isInboundOnly }) == true { return "This Mac reaches it; it can't reach this Mac" }
+        return "It reaches this Mac; this Mac doesn't reach it"
+    }
+
+    // MARK: Sheets
+
+    fileprivate func pairedMacSheet(_ entry: PairedMacEntry) -> some View {
+        let peer = entry.peer.flatMap { $0.isInboundOnly ? nil : $0 }
+        return RemoteEntrySheet(
+            title: entry.name,
+            subtitle: peer.map(peerStatus) ?? presence(of: entry).label,
+            destructiveTitle: "Forget \(entry.name)…",
+            onDestructive: { confirmingForget = true },
+            onDone: { activeSheet = nil }
+        ) {
+            PeerIconTile(icon: entry.icon, presenceToken: presence(of: entry).colorToken, side: 40)
+        } content: {
+            RemoteEntrySheetSection(title: "Connection") {
+                if let peer {
+                    RemoteEntryFact(
+                        label: peer.origins.count > 1 ? "Addresses" : "Address",
+                        value: peer.origins.isEmpty ? "None" : peer.origins.joined(separator: "\n")
+                    )
+                    if let version = state.remotePeers.hostVersions[peer.serverId] {
+                        RemoteEntryFact(label: "Host", value: "alas-host \(version)" + (hostIsOlder(peer) ? ", older than this Mac's Alas" : ""))
+                    }
+                    RemoteEntryFact(label: "Identity", value: peer.isVerified ? "Key verified" : "Unverified. Forget and pair again to secure it.")
+                    RemoteEntryFact(label: "Paired", value: peer.addedAt.formatted(date: .abbreviated, time: .omitted))
+                }
+                RemoteEntryFact(label: "Direction", value: direction(of: entry))
+                if let seen = entry.lastSeenAt {
+                    RemoteEntryFact(label: "Last here", value: seen.formatted(.relative(presentation: .named)))
+                }
+            }
+            RemoteEntrySheetSection(title: "Access") {
+                agentAccessControl(for: entry)
+            }
+            if let peer, peer.sshDestination != nil || updatesOverPeer(peer) {
+                RemoteEntrySheetSection(title: "Host") {
+                    HStack(spacing: scale.space[2]) {
+                        AlasButton(title: "Update Host…", style: .normal) {
+                            afterSheet = .updateHost(peer)
+                            activeSheet = nil
+                        }
+                        if peer.sshDestination != nil {
+                            AlasButton(title: "View Log", style: .subtle) {
+                                afterSheet = .hostLog(peer)
+                                activeSheet = nil
+                            }
+                        }
+                    }
+                    .disabled(hostActivity[peer.id] != nil)
+                    .padding(.top, scale.space[1])
+                }
+            }
+        }
+        .alert("Forget \(entry.name)?", isPresented: $confirmingForget) {
+            Button("Forget", role: .destructive) { forget(entry) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This Mac stops connecting to it, and it can no longer reach this Mac. Pair again to undo.")
+        }
+    }
+
+    private func forget(_ entry: PairedMacEntry) {
+        activeSheet = nil
+        if let peer = entry.peer { state.remotePeers.forget(peerId: peer.id) }
+        for device in entry.devices where state.remotePairing.device(id: device.id) != nil {
+            state.revokeRemoteDevice(device.id)
+        }
+    }
+
+    fileprivate func deviceSheet(_ device: RemoteDevice) -> some View {
+        let live = state.remoteConnectedDeviceCounts()[device.id] ?? 0
+        return RemoteEntrySheet(
+            title: device.name,
+            subtitle: summary(of: device, live: live),
+            destructiveTitle: "Revoke",
+            onDestructive: {
+                activeSheet = nil
+                state.revokeRemoteDevice(device.id)
+            },
+            onDone: { activeSheet = nil }
+        ) {
+            SymbolTile(symbol: Self.symbol(for: device), presenceToken: live > 0 ? "add" : nil, side: 40)
+        } content: {
+            RemoteEntrySheetSection(title: "Details") {
+                RemoteEntryFact(label: "Kind", value: device.kind == .phone ? "Alas for iPhone" : "Web client in a browser")
+                RemoteEntryFact(label: "Paired", value: device.createdAt.formatted(date: .abbreviated, time: .omitted))
+                RemoteEntryFact(label: "Notifications", value: device.pushRelay != nil ? "On" : "Off")
+            }
+            if device.kind == .browser {
+                RemoteEntrySheetSection(title: "Access") {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Allow terminals").font(scale.metaFont)
+                            Text("Lets this browser open shells here. Only for a browser you trust.")
+                                .font(scale.caption.font(weight: .regular))
+                                .foregroundColor(theme.color("fg-faint"))
+                        }
+                        Spacer(minLength: scale.space[3])
+                        AlasToggle(on: Binding(
+                            get: { device.allowsTerminals },
+                            set: { state.remotePairing.setAllowsTerminals($0, deviceId: device.id) }
+                        ))
+                    }
+                    .padding(.vertical, scale.space[1])
+                }
+            }
+        }
+    }
+
+    fileprivate var addMacSheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Add a Mac")
+                .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
+                .padding(.bottom, scale.space[3])
+            AlasSegmentedControl(
+                selection: addMacTab,
+                options: [
+                    AlasSegmentedOption(id: AddMacTab.nearby, label: "Nearby"),
+                    AlasSegmentedOption(id: AddMacTab.link, label: "Pairing link"),
+                    AlasSegmentedOption(id: AddMacTab.ssh, label: "Over SSH"),
+                ],
+                onSelect: { addMacTab = $0 }
+            )
+            .padding(.bottom, scale.space[3])
+            switch addMacTab {
+            case .nearby: nearbyTab
+            case .link: linkTab
+            case .ssh: sshTab
+            }
+            if let peerError {
+                errorText(peerError)
+            }
+            HStack {
+                Spacer(minLength: 0)
+                AlasButton(title: "Done", style: .primary) { activeSheet = nil }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, scale.space[4])
+        }
+        .padding(scale.space[5])
+        .frame(width: 520)
+        .background(theme.color("bg-1"))
+        .onDisappear { state.cancelNearbyApproval() }
+    }
+
+    @ViewBuilder private var nearbyTab: some View {
+        if state.config.remote.discoverable {
+            let nearby = state.remotePeerBrowser.instances
+            VStack(alignment: .leading, spacing: 0) {
+                if nearby.isEmpty {
+                    dimNote(state.remotePeerBrowser.lastError.map { "Can't browse the local network: \($0)" }
+                            ?? "Looking for other Macs running Alas on this network…")
+                }
+                ForEach(nearby) { instance in
+                    SettingsRow(name: String(ApprovalWire.displayName(instance.name).prefix(200)), icon: instance.icon ?? .laptop,
+                                desc: nearbyDescription(instance)) {
+                        nearbyAction(instance)
+                    }
+                }
+                nearbyApprovalStatus
+                dimNote("The other Mac shows a request to accept. It needs Discoverable on too.")
+            }
+            .task {
+                // Browse only while this tab is on screen.
+                state.remotePeerBrowser.start()
+                defer { state.remotePeerBrowser.stop() }
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(60))
+                }
+            }
+        } else {
+            dimNote("Turn on Discoverable to list other Macs running Alas on this network, and to let them find this one.")
+            AlasButton(title: "Turn On Discoverable", style: .normal) {
+                state.config.remote.discoverable = true
+                state.saveConfig()
+                state.syncRemoteDiscovery()
+            }
+            .padding(.top, scale.space[2])
+        }
+    }
+
+    @ViewBuilder private var linkTab: some View {
+        dimNote("On the other Mac, open Remote settings, choose Show pairing QR and copy its link. Paste it here.")
+        HStack(spacing: scale.space[2]) {
+            AlasField(text: $peerLink, placeholder: "http://…/?code=…&hosts=…", onSubmit: addPeer)
+            AlasButton(title: isAddingPeer ? "Adding…" : "Add", style: .normal, action: addPeer)
+                .disabled(isAddingPeer || peerLink.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .padding(.top, scale.space[2])
+    }
+
+    @ViewBuilder private var sshTab: some View {
+        dimNote("Installs alas-host on a Mac this Mac can reach with key-based SSH, starts it at login, and pairs with it.")
+        AlasButton(title: "Set Up…", style: .normal) {
+            peerError = nil
+            afterSheet = .sshSetup
+            activeSheet = nil
+        }
+        .padding(.top, scale.space[2])
+    }
+
+    private func dimNote(_ text: String) -> some View {
+        Text(text)
+            .font(scale.metaFont)
+            .foregroundColor(theme.color("fg-dim"))
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.vertical, scale.space[1])
+    }
+
+    fileprivate func runAfterSheet() {
+        guard let action = afterSheet else { return }
+        afterSheet = nil
+        switch action {
+        case .sshSetup: showingHostSSHSetup = true
+        case .hostLog(let peer): readHostLog(peer)
+        case .updateHost(let peer): confirmingHostUpdate = peer
+        }
+    }
+
+    /// Opens the sheet of the Mac a sidebar page asked for.
+    fileprivate func openPendingMac() {
+        guard let serverId = state.pendingPairedMacServerId else { return }
+        state.pendingPairedMacServerId = nil
+        if let entry = pairedMacEntries.first(where: { $0.serverId == serverId }) {
+            activeSheet = .mac(entry.id)
+        }
     }
 }
 
