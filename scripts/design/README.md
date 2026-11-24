@@ -26,14 +26,12 @@ the demo project, or a landing in progress for its `invoice-export` stack).
 Set `ALAS_CAPTURE_CENTER` to `peer-session`, `peer-permission`, `peer-diff`, `peer-file` or
 `peer-console` (or `ALAS_CAPTURE_DIALOG=peer-new-session`) to capture the native views of a
 paired Mac. The Debug build installs two scripted peers in-process (`DesignCaptureDemoPeer`):
-no network, pairing or keychain. Their sidebar section is collapsed by default.
+no network, pairing or keychain. Each gets its own page in the sidebar pager.
 
-Set `ALAS_CAPTURE_SIDEBAR` to `peers`, `peers-hover` or `peers-rename` to capture the sidebar's
-Peers section expanded. The scripted peers gain an offline third Mac, a failed and an in-flight
-host operation, an archived worktree, an "Other sessions" bucket, an empty project and a
-worktree with more tabs than its row badges; the local projects collapse so the section fits.
-`peers-hover` hovers the section header to show the "+" pair control, and `peers-rename` opens the
-peer worktree rename sheet.
+Set `ALAS_CAPTURE_SIDEBAR` to `peers` or `peers-rename` to capture the Studio's sidebar page.
+The scripted peers gain an offline third Mac, a failed and an in-flight host operation, an
+archived worktree, an "Other sessions" bucket, an empty project and a worktree with more tabs
+than its row badges. `peers-rename` also opens the peer worktree rename sheet.
 
 Set `ALAS_CAPTURE_SIDEBAR` to `live-activity` to capture the demo project's rows with scripted
 live activity (`DesignCaptureLiveActivity`): VM, simulator and emulator glyphs, a stack ship

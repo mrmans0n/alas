@@ -21,7 +21,7 @@ public struct RemotePeerPairer {
         ///
         /// `inboundOnly` means the far side will not pair back; it is only
         /// ever true alongside a proven `publicKey`.
-        case paired(token: String, serverId: String?, name: String?, publicKey: String?, origin: String,
+        case paired(token: String, serverId: String?, name: String?, icon: PeerIcon? = nil, publicKey: String?, origin: String,
                     inboundOnly: Bool = false)
         case expiredCode
         case originRejected
@@ -95,6 +95,7 @@ public struct RemotePeerPairer {
             let token: String
             let serverId: String?
             let name: String?
+            let icon: String?
             let publicKey: String?
             let signature: String?
             let inboundOnly: Bool?
@@ -183,6 +184,7 @@ public struct RemotePeerPairer {
                 // token is dropped unheld.
                 if let scope, reply.scope != scope.rawValue { return .scopeUnsupported }
                 return .paired(token: reply.token, serverId: reply.serverId, name: reply.name,
+                               icon: PeerIcon(wireValue: reply.icon),
                                publicKey: verifiedKey, origin: normalized, inboundOnly: inboundOnly)
             case 401:
                 sawExpiredCode = true
@@ -232,9 +234,9 @@ extension RemotePeerPairer.Outcome: CustomStringConvertible {
     /// string. Redact it at the type, so no caller has to remember.
     public var description: String {
         switch self {
-        case .paired(_, let serverId, let name, let publicKey, let origin, let inboundOnly):
+        case .paired(_, let serverId, let name, let icon, let publicKey, let origin, let inboundOnly):
             return "paired(token: <redacted>, serverId: \(serverId ?? "nil"), name: \(name ?? "nil"), "
-                + "publicKey: \(publicKey ?? "nil"), origin: \(origin), inboundOnly: \(inboundOnly))"
+                + "icon: \(icon?.rawValue ?? "nil"), publicKey: \(publicKey ?? "nil"), origin: \(origin), inboundOnly: \(inboundOnly))"
         case .expiredCode:
             return "expiredCode"
         case .originRejected:

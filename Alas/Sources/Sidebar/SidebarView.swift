@@ -51,17 +51,26 @@ struct SidebarView: View {
                 SidebarAttentionHeader(
                     state: state,
                     onSettings: onSettings,
-                    onAddProject: onAddProject,
-                    onAddFolder: onAddFolder,
+                    // Projects land in a local space, so adding one from a
+                    // peer's page goes back there first.
+                    onAddProject: {
+                        returnToLocalSpace()
+                        onAddProject()
+                    },
+                    onAddFolder: {
+                        returnToLocalSpace()
+                        onAddFolder()
+                    },
                     onHideSidebar: onHideSidebar,
                     showingNewWorkspace: $showingNewWorkspace
                 )
-                SpacePagerContent(spaces: state.spacesManager.spaces, selection: state.spacesManager.activeSpaceId) { spaceID in
+                let activePage = state.activeSidebarPage
+                SpacePagerContent(pages: state.sidebarPages, selection: activePage) { spaceID in
                     WorkspaceSidebarTreeHost(state: state) { treeModel in
                         SidebarFilterSlotScrollView(
-                            isActive: spaceID == state.spacesManager.activeSpaceId,
+                            isActive: activePage == .space(spaceID),
                             peerModel: peerSidebarModel,
-                            scrollTarget: spaceID == state.spacesManager.activeSpaceId ? highlightedWorktreeId : nil,
+                            scrollTarget: activePage == .space(spaceID) ? highlightedWorktreeId : nil,
                             onScroll: { scrollOffsets.setOffset($0, forSpace: spaceID) }
                         ) {
                             // Lazy, and every header and row below is its own
@@ -77,7 +86,7 @@ struct SidebarView: View {
                                     state: state,
                                     model: treeModel,
                                     spaceID: spaceID,
-                                    isInteractive: spaceID == state.spacesManager.activeSpaceId
+                                    isInteractive: activePage == .space(spaceID)
                                 ) { project in
                                     let liveWorktrees = state.projectsManager.visibleWorktrees(includingLinkedTo: project.id)
                                     let landingSession = GGLandingStore.shared.sessions[project.id]
@@ -321,24 +330,6 @@ struct SidebarView: View {
                                         onShowDevice: { wt, id in showDevice(id, in: wt) }
                                     )
                                 }
-                                if let nativePeerSessions = state.nativePeerSessions {
-                                    NativePeerSidebarView(
-                                        client: nativePeerSessions,
-                                        model: peerSidebarModel,
-                                        icon: { name in
-                                            state.projectsManager.projects
-                                                .first { $0.name == name }
-                                                .map { state.sidebarIcon(for: $0) } ?? .default()
-                                        },
-                                        onAddPeer: {
-                                            state.pendingSettingsSection = .remote
-                                            onSettings()
-                                        },
-                                        worktreeOrdering: state.config.worktrees.defaultOrdering,
-                                        showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,
-                                        topSpacing: SidebarFilterRowMetrics.slotSpacing
-                                    )
-                                }
                                 Color.clear
                                     .frame(maxWidth: .infinity, minHeight: 40)
                                     .contentShape(Rectangle())
@@ -356,28 +347,34 @@ struct SidebarView: View {
                             .padding(.bottom, scale.space[5])
                         }
                     }
+                } peer: { serverId in
+                    peerPage(serverId: serverId, isActive: activePage == .peer(serverId: serverId))
                 }
                 .overlay(alignment: .top) {
                     SidebarWorktreeFilterRow(
                         state: state,
                         scrollOffsets: scrollOffsets,
-                        spaceID: state.spacesManager.activeSpaceId,
+                        spaceID: Self.scrollKey(activePage),
                         text: $worktreeFilter,
                         groupByMachine: $groupWorktreesByMachine,
+                        showsGroupByMachine: activePage.peerServerId == nil,
                         focused: $worktreeFilterFocused,
                         onMoveHighlight: moveFilterHighlight(by:),
                         onSubmit: openHighlightedWorktree,
                         onClear: clearWorktreeFilter
                     )
+                    // A peer's page pins its header above the list.
+                    .padding(.top, activePage.peerServerId == nil ? 0 : NativePeerSpaceHeader.height)
                 }
                 .clipped()
-                if state.spacesManager.shouldShowSpaceAffordance {
+                if showsPager {
                     SpacePagerIndicator(
                         spaces: state.spacesManager.spaces,
-                        activeSpaceId: state.spacesManager.activeSpaceId,
+                        peers: state.nativePeerSessions?.peerPages ?? [],
+                        active: activePage,
                         titleVisible: spaceTitleVisible,
-                        onSelectSpace: { spaceId in
-                            if state.switchToSpace(id: spaceId) {
+                        onSelect: { page in
+                            if state.switchToPage(page) {
                                 showTransientSpaceTitle()
                             }
                         },
@@ -385,6 +382,7 @@ struct SidebarView: View {
                             state.pendingSettingsSection = .spaces
                             onSettings()
                         },
+                        onEditPeer: openPairedMacSettings(serverId:),
                         onScrollPage: { offset in
                             pageSpace(offset: offset)
                         }
@@ -395,7 +393,7 @@ struct SidebarView: View {
             }
             .sidebarChromeTheme(textContrast: override.textContrast)
             .background {
-                if state.spacesManager.shouldShowSpaceAffordance {
+                if showsPager {
                     SpacePagerScrollCaptureView { offset in
                         pageSpace(offset: offset)
                     }
@@ -406,12 +404,27 @@ struct SidebarView: View {
             state.refreshGGSidebar()
         }
         .onChange(of: worktreeFilter) { resetFilterHighlight() }
+        // A workspace, like a project, belongs to a local space.
+        .onChange(of: showingNewWorkspace) { _, showing in
+            if showing { returnToLocalSpace() }
+        }
         // Matches change without a query change on a space switch, or when a
         // highlighted worktree is archived, deleted or refreshed away. Only a
         // highlight that is no longer a match moves, back to the first one.
-        .onChange(of: WorktreeSidebarFilter.isActive(worktreeFilter) ? filteredWorktreeIds() : []) { _, ids in
-            guard let id = highlightedWorktreeId, !ids.contains(id) else { return }
-            highlightedWorktreeId = ids.first
+        .onChange(of: WorktreeSidebarFilter.isActive(worktreeFilter) && state.activeSidebarPage.peerServerId == nil
+                  ? filteredWorktreeIds() : []) { _, ids in
+            keepFilterHighlight(in: ids)
+        }
+        // A peer page's matches move with every streamed update, so only this
+        // child reads them, never the whole sidebar.
+        .background {
+            if WorktreeSidebarFilter.isActive(worktreeFilter), let serverId = state.activeSidebarPage.peerServerId,
+               let client = state.nativePeerSessions {
+                PeerFilterMatchesObserver(
+                    client: client, serverId: serverId, filter: worktreeFilter,
+                    ordering: state.config.worktrees.defaultOrdering, onChange: keepFilterHighlight(in:)
+                )
+            }
         }
         .onDisappear {
             hideTitleTask?.cancel()
@@ -578,8 +591,14 @@ struct SidebarView: View {
         WorktreeSidebarFilter.apply(worktreeFilter, to: worktrees, groupByMachine: groupWorktreesByMachine)
     }
 
-    /// Matched worktree ids of the active space, in sidebar display order.
+    /// Matched worktree ids of the page on screen, in sidebar display order.
     private func filteredWorktreeIds() -> [String] {
+        if let serverId = state.activeSidebarPage.peerServerId {
+            guard let client = state.nativePeerSessions else { return [] }
+            return NativePeerSidebarView.filteredWorktreeIds(
+                client, serverId: serverId, filter: worktreeFilter, ordering: state.config.worktrees.defaultOrdering
+            )
+        }
         let space = state.spacesManager.activeSpace
         let members = space?.members ?? space?.projectIds.map(SpaceMemberReference.project) ?? []
         return members.flatMap { member -> [String] in
@@ -590,6 +609,11 @@ struct SidebarView: View {
 
     private func resetFilterHighlight() {
         highlightedWorktreeId = WorktreeSidebarFilter.isActive(worktreeFilter) ? filteredWorktreeIds().first : nil
+    }
+
+    private func keepFilterHighlight(in ids: [String]) {
+        guard let id = highlightedWorktreeId, !ids.contains(id) else { return }
+        highlightedWorktreeId = ids.first
     }
 
     private func moveFilterHighlight(by offset: Int) {
@@ -605,7 +629,11 @@ struct SidebarView: View {
         guard WorktreeSidebarFilter.isActive(worktreeFilter) else { return }
         let ids = filteredWorktreeIds()
         guard let id = highlightedWorktreeId.flatMap({ ids.contains($0) ? $0 : nil }) ?? ids.first else { return }
-        state.selectWorktreeFromSidebar(id: id)
+        if let serverId = state.activeSidebarPage.peerServerId {
+            state.nativePeerSessions?.selectWorktree(NativePeerWorktreeSelection(serverId: serverId, worktreeId: id))
+        } else {
+            state.selectWorktreeFromSidebar(id: id)
+        }
         worktreeFilterFocused = false
     }
 
@@ -624,11 +652,74 @@ struct SidebarView: View {
     }
 
     private func pageSpace(offset: Int) {
-        let spaces = state.spacesManager.spaces
-        guard let current = spaces.firstIndex(where: { $0.id == state.spacesManager.activeSpaceId }),
-              let next = SpacePagerNavigation.destination(current: current, offset: offset, count: spaces.count)
-        else { return }
-        if state.switchToSpace(id: spaces[next].id) { showTransientSpaceTitle() }
+        if state.pageSidebar(offset: offset) { showTransientSpaceTitle() }
+    }
+
+    private var showsPager: Bool {
+        SidebarPages.showsPager(
+            spaceCount: state.spacesManager.spaces.count,
+            peerCount: state.nativePeerSessions?.peerPages.count ?? 0,
+            showSingleSpaceAffordance: state.spacesManager.showSingleSpaceAffordance
+        )
+    }
+
+    /// Scroll offsets are kept per page; a space keeps the key it always had.
+    private static func scrollKey(_ page: SidebarPage) -> String {
+        switch page {
+        case .space(let id): id
+        case .peer: page.id
+        }
+    }
+
+    private func returnToLocalSpace() {
+        guard state.activeSidebarPage.peerServerId != nil else { return }
+        _ = state.switchToSpace(id: state.spacesManager.activeSpaceId)
+    }
+
+    private func openPairedMacSettings(serverId: String) {
+        state.requestPairedMacSettings(serverId: serverId)
+        onSettings()
+    }
+
+    /// A paired Mac's page: its header pinned on top, then its repos in the
+    /// same scroll view, filter slot and insets a space's page uses.
+    @ViewBuilder
+    private func peerPage(serverId: String, isActive: Bool) -> some View {
+        if let client = state.nativePeerSessions {
+            VStack(spacing: 0) {
+                NativePeerSpaceHeaderHost(client: client, serverId: serverId,
+                                          onEdit: { openPairedMacSettings(serverId: serverId) })
+                SidebarFilterSlotScrollView(
+                    isActive: isActive,
+                    peerModel: peerSidebarModel,
+                    scrollTarget: isActive ? highlightedWorktreeId : nil,
+                    onScroll: { scrollOffsets.setOffset($0, forSpace: SidebarPage.peer(serverId: serverId).id) }
+                ) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        Color.clear.frame(height: SidebarFilterRowMetrics.slotHeight)
+                            .padding(.bottom, SidebarFilterRowMetrics.slotSpacing)
+                        NativePeerSidebarView(
+                            client: client,
+                            model: peerSidebarModel,
+                            serverId: serverId,
+                            filter: worktreeFilter,
+                            highlightedWorktreeId: isActive ? highlightedWorktreeId : nil,
+                            icon: { name in
+                                state.projectsManager.projects
+                                    .first { $0.name == name }
+                                    .map { state.sidebarIcon(for: $0) } ?? .default()
+                            },
+                            onEdit: { openPairedMacSettings(serverId: serverId) },
+                            worktreeOrdering: state.config.worktrees.defaultOrdering,
+                            showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove
+                        )
+                    }
+                    .padding(.top, SidebarFilterRowMetrics.restY)
+                    .padding(.horizontal, scale.space[2])
+                    .padding(.bottom, scale.space[5])
+                }
+            }
+        }
     }
 
     nonisolated static func retryCreateParameters(
@@ -718,6 +809,7 @@ private struct SidebarAttentionHeader: View {
             cleanupReminders: cleanupReminders,
             hostUpdates: hostUpdates,
             hostUpdatesInFlight: state.hostUpdatesInFlight,
+            peerIcons: state.peerIconsByServerId,
             attentionLoadError: state.attentionStore.loadError?.localizedDescription,
             attentionWriteError: state.attentionStore.writeError?.localizedDescription,
             attentionNavigationErrors: state.attentionNavigationErrors,
@@ -752,6 +844,40 @@ private struct SidebarAttentionHeader: View {
         // The catalog throttles itself, so a long-running app picks up new releases without fetching on every open.
         .onChange(of: state.isAttentionInboxOpen) { _, isOpen in
             if isOpen { Task { await state.pluginManager?.catalog.refresh() } }
+        }
+    }
+}
+
+/// Reports a peer page's filter matches as streamed updates change them.
+private struct PeerFilterMatchesObserver: View {
+    let client: NativePeerSessions
+    let serverId: String
+    let filter: String
+    let ordering: AppConfig.WorktreeSortMode
+    let onChange: ([String]) -> Void
+
+    var body: some View {
+        Color.clear.onChange(of: NativePeerSidebarView.filteredWorktreeIds(
+            client, serverId: serverId, filter: filter, ordering: ordering
+        )) { _, ids in onChange(ids) }
+    }
+}
+
+/// Reads the peer's worktree count from the streamed snapshot itself, so a
+/// session update redraws this header and not the whole sidebar.
+private struct NativePeerSpaceHeaderHost: View {
+    let client: NativePeerSessions
+    let serverId: String
+    let onEdit: () -> Void
+
+    var body: some View {
+        if let peer = client.peerPages.first(where: { $0.serverId == serverId }) {
+            let group = client.snapshot.groups.first { $0.serverId == serverId }
+            NativePeerSpaceHeader(
+                peer: peer,
+                worktreeCount: group.map { $0.repos(ordering: .manual).reduce(0) { $0 + $1.worktrees.count } },
+                onEdit: onEdit
+            )
         }
     }
 }
@@ -897,6 +1023,8 @@ private struct SidebarWorktreeFilterRow: View {
     let spaceID: String
     @Binding var text: String
     @Binding var groupByMachine: Bool
+    /// False on a peer's page, whose worktrees all live on one machine.
+    let showsGroupByMachine: Bool
     var focused: FocusState<Bool>.Binding
     let onMoveHighlight: (Int) -> Void
     let onSubmit: () -> Void
@@ -933,7 +1061,8 @@ private struct SidebarWorktreeFilterRow: View {
             WorktreeSortMenu(
                 selection: state.config.worktrees.defaultOrdering,
                 onSelect: { state.setDefaultWorktreeOrdering($0) },
-                groupByMachine: $groupByMachine
+                groupByMachine: $groupByMachine,
+                showsGroupByMachine: showsGroupByMachine
             )
         }
         .frame(height: SidebarFilterRowMetrics.slotHeight)

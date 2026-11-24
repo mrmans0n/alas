@@ -1760,7 +1760,7 @@ struct RemotePeerManagerTests {
         #expect(pairing.validate(token: other.token) == other.deviceId)
     }
 
-    @Test func linkEventsUpdateStateNameVersionAndOrigin() async throws {
+    @Test func linkEventsUpdateStateNameIconVersionAndOrigin() async throws {
         let store = InMemoryPeerStore()
         store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765", "http://10.0.0.5:8765"],
                                lastOrigin: nil, token: "t", protocolVersion: nil, localDeviceId: nil, addedAt: Date())])
@@ -1769,13 +1769,44 @@ struct RemotePeerManagerTests {
         manager.connectAll()
         let link = try #require(links.byPeerId["p1"])
         link.emit(.stateChanged(.online))
-        link.emit(.hello(serverId: "srv-a", name: "Mac A", protocolVersion: 1, federationEnabled: true))
+        link.emit(.hello(serverId: "srv-a", name: "Mac A", icon: .cloud, protocolVersion: 1, federationEnabled: true))
         link.emit(.originChanged("http://10.0.0.5:8765"))
         #expect(manager.states["p1"] == .online)
         #expect(manager.peers.first?.name == "Mac A")
         #expect(manager.peers.first?.protocolVersion == 1)
         #expect(manager.peers.first?.lastOrigin == "http://10.0.0.5:8765")
         #expect(store.saved.first?.lastOrigin == "http://10.0.0.5:8765")
+        #expect(store.saved.first?.icon == .cloud)
+        #expect(manager.helloPeers.first?.icon == .cloud)
+        // An older build sends no icon; that does not erase the known one.
+        link.emit(.hello(serverId: "srv-a", name: "Mac A", protocolVersion: 1, federationEnabled: true))
+        #expect(manager.peers.first?.icon == .cloud)
+    }
+
+    @Test func aRebroadcastHelloUpdatesTheNameAndIconOfALiveLink() throws {
+        let store = InMemoryPeerStore()
+        store.save([verifiedPeer()])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links)
+        var availability: [String] = []
+        manager.onFederationEvent = { if case .availabilityChanged(let serverId) = $0 { availability.append(serverId) } }
+        manager.connectAll()
+        let link = try #require(links.byPeerId["p1"])
+        link.emit(.hello(serverId: "srv-a", name: "Mac A", protocolVersion: 1, federationEnabled: true))
+        link.emit(.stateChanged(.online))
+        availability.removeAll()
+
+        // The peer picked a new icon and name while connected: no new socket.
+        link.emit(.message(.hello(protocolVersion: 1, serverId: "srv-a", name: "Studio", icon: .macStudio)))
+        #expect(manager.peers.first?.name == "Studio")
+        #expect(manager.peers.first?.icon == .macStudio)
+        #expect(store.saved.first?.icon == .macStudio)
+        #expect(manager.helloPeers.first?.icon == .macStudio)
+        #expect(availability == ["srv-a"])
+
+        // The same hello again changes nothing and tells nobody.
+        link.emit(.message(.hello(protocolVersion: 1, serverId: "srv-a", name: "Studio", icon: .macStudio)))
+        #expect(availability == ["srv-a"])
     }
 
     // `.hello`/`.originChanged` update `peers` directly on an already

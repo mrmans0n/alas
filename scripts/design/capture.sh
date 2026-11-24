@@ -36,12 +36,11 @@
 # update-progress-<refreshing|installing|installed|pending|failed|start-failed|cancelled>
 # and whats-new show the update sheets and the What's New card over scripted releases
 # (DesignCaptureUpdates); nothing is downloaded, installed or relaunched.
-# ALAS_CAPTURE_SIDEBAR peers, peers-hover or peers-rename installs the scripted peers with extra
+# ALAS_CAPTURE_SIDEBAR peers or peers-rename installs the scripted peers with extra
 # sidebar rows (an offline Mac, failed and in-flight host operations, an archived worktree, an
-# "Other sessions" bucket, an empty project, an overflowing tab row), expands both online Macs,
-# collapses the local projects and selects a peer worktree. peers-hover also hovers the Peers
-# header so the "+" pair control shows; peers-rename opens the peer worktree rename sheet
-# (DesignCaptureSidebar). live-activity scripts the demo rows' VM, device, ship and shepherd
+# "Other sessions" bucket, an empty project, an overflowing tab row), opens the Studio's page in
+# the sidebar pager and selects a peer worktree. peers-rename also opens the peer worktree rename
+# sheet (DesignCaptureSidebar). live-activity scripts the demo rows' VM, device, ship and shepherd
 # activity instead (DesignCaptureLiveActivity).
 # badge-hover holds the selected row's first agent badge hovered, so its real hover card panel opens
 # and is composited like the other popups (DesignCaptureAgentBadges.Hover).
@@ -354,7 +353,7 @@ SWIFT
   esac
 fi
 
-# ALAS_CAPTURE_SIDEBAR expands the peer section of the sidebar the same way.
+# ALAS_CAPTURE_SIDEBAR opens the scripted Studio Mac's sidebar page the same way.
 if [[ -n "${ALAS_CAPTURE_SIDEBAR:-}" ]]; then
   /usr/bin/swift - "$ALAS_CAPTURE_SIDEBAR" <<'SWIFT' 2>/dev/null
 import Foundation

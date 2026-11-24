@@ -37,6 +37,8 @@ final class HostHub {
     private var listedLive: Set<UUID> = []
     /// What each host's hello advertised, for this connection.
     private var capabilities: [UUID: Set<String>] = [:]
+    /// The icons of the Macs each host relays, by their `serverId`, from its hello.
+    private var rosterIcons: [UUID: [String: PeerIcon]] = [:]
 
     @ObservationIgnored private var connections: [UUID: PhoneConnection] = [:]
     /// Forgotten hosts still to be told to stop pushing, and their connections.
@@ -104,10 +106,27 @@ final class HostHub {
 
     var sessionSources: [RemoteSessionCatalog.Source] {
         hosts.map { host in
-            RemoteSessionCatalog.Source(id: host.id, serverId: host.serverId, name: host.name,
+            RemoteSessionCatalog.Source(id: host.id, serverId: host.serverId, name: host.name, icon: host.icon,
+                                        relayedIcons: rosterIcons[host.id] ?? [:],
                                         isLive: freshSessions(of: host.id) != nil,
                                         sessions: sessions(of: host.id))
         }
+    }
+
+    /// Keeps a host's name and icon current with what its hello reports, so a
+    /// rename on the Mac shows here without pairing again, and keeps the icons
+    /// of the Macs it relays.
+    private func adoptIdentity(name: String, icon: PeerIcon?, peers: [RemoteHelloPeer], of id: UUID) {
+        let relayed = Dictionary(peers.compactMap { peer in peer.icon.map { (peer.serverId, $0) } },
+                                 uniquingKeysWith: { first, _ in first })
+        if rosterIcons[id] != relayed { rosterIcons[id] = relayed }
+        guard let index = hosts.firstIndex(where: { $0.id == id }) else { return }
+        var host = hosts[index]
+        if !name.isEmpty { host.name = name }
+        if let icon { host.icon = icon }
+        guard host != hosts[index] else { return }
+        hosts[index] = host
+        store.save(hosts)
     }
 
     func pair(origins: [String], code: String) async throws(RemotePairingError) {
@@ -122,6 +141,7 @@ final class HostHub {
         // instead of adding a second one, so screens holding its id keep it.
         if let serverId = result.serverId, let index = hosts.firstIndex(where: { $0.serverId == serverId }) {
             hosts[index].name = name
+            hosts[index].icon = result.icon ?? hosts[index].icon
             hosts[index].origins = allOrigins
             hosts[index].lastOrigin = result.origin
             // A reply without a key must not drop an existing pin.
@@ -130,7 +150,7 @@ final class HostHub {
             connections[host.id]?.disconnect()
         } else {
             host = PairedHost(id: UUID(), name: name, serverId: result.serverId, origins: allOrigins,
-                              lastOrigin: result.origin, publicKey: result.publicKey, addedAt: .now)
+                              lastOrigin: result.origin, publicKey: result.publicKey, icon: result.icon, addedAt: .now)
             hosts.append(host)
         }
         store.save(hosts)
@@ -203,7 +223,7 @@ final class HostHub {
             ) { [weak self] event in
                 guard let self else { return }
                 switch event {
-                case .hello(_, _, _, _, let capabilities, _):
+                case .hello(_, _, _, _, _, let capabilities, _, _):
                     self.capabilities[id] = Set(capabilities)
                 case .stateChanged(.online):
                     guard self.capabilities[id]?.contains(PushRelayCapability.v1) == true else { return dropPendingUnregister(id) }
@@ -359,10 +379,11 @@ final class HostHub {
             }
             // Do not depend on a SwiftUI render between losing one socket and adopting the next.
             notifyDeviceListeners(.connectionChanged, on: id)
-        case .hello(_, _, _, _, let capabilities, _):
+        case .hello(_, let name, let icon, _, _, let capabilities, _, let peers):
             // Arrives just before `.online`, while `send` is still a no-op;
             // the state change above asks for the list and registers push.
             self.capabilities[id] = Set(capabilities)
+            adoptIdentity(name: name, icon: icon, peers: peers, of: id)
         case .originChanged(let origin):
             guard let index = hosts.firstIndex(where: { $0.id == id }) else { return }
             hosts[index].lastOrigin = origin
@@ -387,8 +408,9 @@ final class HostHub {
                 sessions.removeAll { $0.id == session.id }
                 sessions.append(session)
                 sessionLists[id] = sessions
-            case .hello(_, _, _, _, _, let offeredCapabilities, _):
+            case .hello(_, _, let name, let icon, _, let peers, let offeredCapabilities, _):
                 // A re-broadcast hello on a live socket: the host's state changed.
+                adoptIdentity(name: name, icon: icon, peers: peers, of: id)
                 let hadDevices = supports(PeerDeviceCapability.v1, on: id)
                 capabilities[id] = Set(offeredCapabilities)
                 if hadDevices != supports(PeerDeviceCapability.v1, on: id) {

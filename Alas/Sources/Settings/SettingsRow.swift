@@ -15,6 +15,8 @@ struct SettingsRow<Control: View, Detail: View>: View {
     var desc: String? = nil
     /// Makes the name/description text selectable (diagnostics, URLs, paths).
     var selectable: Bool = false
+    /// A paired Mac's glyph before the name, for rows that stand for one.
+    var icon: PeerIcon? = nil
     /// Extra content under the description, in the name column.
     @ViewBuilder let detail: () -> Detail
     @ViewBuilder let control: () -> Control
@@ -23,9 +25,16 @@ struct SettingsRow<Control: View, Detail: View>: View {
     var body: some View {
         HStack(alignment: .top, spacing: SettingsRowLayout.columnSpacing) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(name).font(scale.emphasisFont)
-                    .textSelection(if: selectable)
+                if let icon {
+                    HStack(spacing: scale.space[1]) {
+                        PeerIconView(icon: icon)
+                        nameText
+                    }
+                    .font(scale.emphasisFont)
                     .foregroundColor(theme.color("fg"))
+                } else {
+                    nameText
+                }
                 if let desc {
                     Text(desc).font(scale.metaFont)
                         .textSelection(if: selectable)
@@ -45,11 +54,17 @@ struct SettingsRow<Control: View, Detail: View>: View {
         .padding(.vertical, scale.space[3])
         .overlay(Divider().opacity(0.5), alignment: .top)
     }
+
+    private var nameText: some View {
+        Text(name).font(scale.emphasisFont)
+            .textSelection(if: selectable)
+            .foregroundColor(theme.color("fg"))
+    }
 }
 
 extension SettingsRow where Detail == EmptyView {
-    init(name: String, desc: String? = nil, selectable: Bool = false, @ViewBuilder control: @escaping () -> Control) {
-        self.init(name: name, desc: desc, selectable: selectable, detail: { EmptyView() }, control: control)
+    init(name: String, icon: PeerIcon? = nil, desc: String? = nil, selectable: Bool = false, @ViewBuilder control: @escaping () -> Control) {
+        self.init(name: name, desc: desc, selectable: selectable, icon: icon, detail: { EmptyView() }, control: control)
     }
 }
 

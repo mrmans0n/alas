@@ -83,51 +83,53 @@ enum SpacePagerNavigation {
 }
 
 enum SpacePagerLayout {
-    static func isActive(spaceID: String, activeSpaceID: String) -> Bool {
-        spaceID == activeSpaceID
-    }
-
-    static func offset(activeSpaceID: String, spaces: [SpaceConfig], pageWidth: CGFloat) -> CGFloat {
-        guard let index = spaces.firstIndex(where: { $0.id == activeSpaceID }) else { return 0 }
+    static func offset(active: SidebarPage, pages: [SidebarPage], pageWidth: CGFloat) -> CGFloat {
+        guard let index = pages.firstIndex(of: active) else { return 0 }
         return -CGFloat(index) * pageWidth
     }
 }
 
 /// Only the page contents move; the header and page controls stay anchored.
-struct SpacePagerContent<Content: View>: View {
-    let spaces: [SpaceConfig]
-    let selection: String
-    @ViewBuilder let content: (String) -> Content
+struct SpacePagerContent<SpaceContent: View, PeerContent: View>: View {
+    let pages: [SidebarPage]
+    let selection: SidebarPage
+    @ViewBuilder let space: (String) -> SpaceContent
+    @ViewBuilder let peer: (String) -> PeerContent
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
             HStack(spacing: 0) {
-                ForEach(spaces) { space in
-                    let isActive = SpacePagerLayout.isActive(spaceID: space.id, activeSpaceID: selection)
-                    content(space.id)
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .allowsHitTesting(isActive)
-                        .accessibilityHidden(!isActive)
+                ForEach(pages) { page in
+                    let isActive = page == selection
+                    Group {
+                        switch page {
+                        case .space(let id): space(id)
+                        case .peer(let serverId): peer(serverId)
+                        }
+                    }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .allowsHitTesting(isActive)
+                    .accessibilityHidden(!isActive)
                 }
             }
-            .offset(x: SpacePagerLayout.offset(
-                activeSpaceID: selection,
-                spaces: spaces,
-                pageWidth: geometry.size.width
-            ))
+            .offset(x: SpacePagerLayout.offset(active: selection, pages: pages, pageWidth: geometry.size.width))
             .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: selection)
         }
         .clipped()
     }
 }
 
+/// The user's spaces as emoji, then a divider and one item per paired Mac.
 struct SpacePagerIndicator: View {
     let spaces: [SpaceConfig]
-    let activeSpaceId: String
+    let peers: [NativePeerPage]
+    let active: SidebarPage
     let titleVisible: Bool
-    let onSelectSpace: (String) -> Void
+    let onSelect: (SidebarPage) -> Void
     let onEditSpaces: () -> Void
+    /// Opens a paired Mac's sheet in Settings › Remote.
+    let onEditPeer: (String) -> Void
     let onScrollPage: (Int) -> Void
     @Environment(\.theme) var theme
     @Environment(\.designScale) private var scale
@@ -136,8 +138,8 @@ struct SpacePagerIndicator: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            if let active = spaces.first(where: { $0.id == activeSpaceId }) {
-                Text(active.name)
+            if let title {
+                Text(title)
                     .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(theme.color("fg-muted"))
                     .lineLimit(1)
@@ -145,30 +147,48 @@ struct SpacePagerIndicator: View {
             }
             HStack(spacing: 10) {
                 ForEach(spaces) { space in
-                    let style = SpacePagerItemStyle.style(isActive: space.id == activeSpaceId)
+                    let isActive = active == .space(space.id)
+                    let style = SpacePagerItemStyle.style(isActive: isActive)
                     Button {
-                        onSelectSpace(space.id)
+                        onSelect(.space(space.id))
                     } label: {
                         SpaceIconLabel(icon: space.emoji, size: 15)
                             .opacity(style.opacity)
                             .saturation(style.isGrayscale ? 0 : 1)
                             .frame(width: 22, height: 22)
-                            .background {
-                                if space.id == activeSpaceId {
-                                    RoundedRectangle(cornerRadius: scale.radius.medium)
-                                        .fill(theme.color("fg-muted").opacity(0.15))
-                                        .matchedGeometryEffect(id: "selection", in: selectionHighlight)
-                                }
-                            }
+                            .background { highlight(isActive) }
                     }
                     .buttonStyle(.plain)
                     .help(space.name)
                     .accessibilityLabel(space.name)
-                    .accessibilityValue(space.id == activeSpaceId ? "selected" : "not selected")
+                    .accessibilityValue(isActive ? "selected" : "not selected")
                     .contextMenu {
                         Button("Edit Space...") {
                             onEditSpaces()
                         }
+                    }
+                }
+                if !peers.isEmpty {
+                    Rectangle()
+                        .fill(theme.color("line"))
+                        .frame(width: 1, height: 14)
+                        .accessibilityHidden(true)
+                }
+                ForEach(peers) { peer in
+                    let isActive = active == .peer(serverId: peer.serverId)
+                    Button {
+                        onSelect(.peer(serverId: peer.serverId))
+                    } label: {
+                        PeerPagerItem(peer: peer, isActive: isActive)
+                            .frame(width: 22, height: 22)
+                            .background { highlight(isActive) }
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(peer.name) · \(peer.state.label)")
+                    .accessibilityLabel(peer.name)
+                    .accessibilityValue((isActive ? "selected, " : "") + peer.accessibilityValue)
+                    .contextMenu {
+                        Button("Edit…") { onEditPeer(peer.serverId) }
                     }
                 }
             }
@@ -176,7 +196,7 @@ struct SpacePagerIndicator: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, scale.space[3])
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: titleVisible)
-        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: activeSpaceId)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: active)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Spaces")
         .accessibilityValue(accessibilityValue)
@@ -189,9 +209,60 @@ struct SpacePagerIndicator: View {
         }
     }
 
+    @ViewBuilder
+    private func highlight(_ isActive: Bool) -> some View {
+        if isActive {
+            RoundedRectangle(cornerRadius: scale.radius.medium)
+                .fill(theme.color("fg-muted").opacity(0.15))
+                .matchedGeometryEffect(id: "selection", in: selectionHighlight)
+        }
+    }
+
+    private var title: String? {
+        switch active {
+        case .space(let id): spaces.first { $0.id == id }?.name
+        case .peer(let serverId): peers.first { $0.serverId == serverId }?.name
+        }
+    }
+
     private var accessibilityValue: String {
-        guard let index = spaces.firstIndex(where: { $0.id == activeSpaceId }) else { return "" }
-        return "\(spaces[index].name), \(index + 1) of \(spaces.count)"
+        let pages = SidebarPages.pages(spaceIds: spaces.map(\.id), peerServerIds: peers.map(\.serverId))
+        guard let index = pages.firstIndex(of: active), let title else { return "" }
+        return "\(title), \(index + 1) of \(pages.count)"
+    }
+}
+
+/// A paired Mac in the pager: its glyph in place of a space's emoji, a
+/// presence dot, and an orange count while its sessions wait on you. A Mac
+/// that is away keeps its slot, faded, so no position or ⌥⌘ number moves.
+private struct PeerPagerItem: View {
+    let peer: NativePeerPage
+    let isActive: Bool
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        PeerIconView(icon: peer.icon, size: 14)
+            .foregroundColor(theme.color(isActive ? "fg" : "fg-muted"))
+            .opacity(peer.state.carriesSessions ? 1 : (isActive ? 0.8 : 0.45))
+            .frame(width: 22, height: 22)
+            .overlay(alignment: .bottomTrailing) {
+                Circle()
+                    .fill(theme.color(peer.state.presenceColorToken))
+                    .frame(width: 6, height: 6)
+                    .offset(x: -1, y: -1)
+            }
+            .overlay(alignment: .topTrailing) {
+                if peer.attentionCount > 0 {
+                    Text("\(peer.attentionCount)")
+                        .font(.system(size: 8.5, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 3)
+                        .frame(minWidth: 12, minHeight: 12)
+                        .background(theme.color("mod"), in: Capsule())
+                        .offset(x: 5, y: -4)
+                }
+            }
     }
 }
 

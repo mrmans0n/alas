@@ -134,7 +134,7 @@ private struct NativePeerTabMarker: View {
         let tint = theme.color(peer.state.presenceColorToken)
         let summary = Self.summary(for: peer)
         HStack(spacing: 5) {
-            Image(systemName: "laptopcomputer")
+            PeerIconView(icon: peer.icon)
                 .font(scale.captionFont)
                 .foregroundColor(theme.color("fg-muted"))
             Text(peer.name)

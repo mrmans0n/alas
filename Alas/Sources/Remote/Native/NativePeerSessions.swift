@@ -263,14 +263,32 @@ final class NativePeerSessions {
         didSet {
             if hasGroups != !snapshot.groups.isEmpty { hasGroups.toggle() }
             if attentionRows != snapshot.attentionRows { attentionRows = snapshot.attentionRows }
+            let pages = snapshot.groups.map(NativePeerPage.init)
+            if peerPages != pages { peerPages = pages }
         }
     }
     /// Whether any peer is listed. Views that only need this read it instead
     /// of `snapshot`, which changes on every streamed session update.
     private(set) var hasGroups = false
+    /// What the sidebar pager draws for each peer, in pairing order. Changes
+    /// only when one of these fields does, unlike `snapshot`.
+    private(set) var peerPages: [NativePeerPage] = []
     /// The peer worktree shown in the center pane. Set with no selected tab
-    /// when the worktree has none open.
-    private(set) var selectedWorktree: NativePeerWorktreeSelection?
+    /// when the worktree has none open. Setting one makes its peer the
+    /// active peer and remembers it as that peer's last worktree.
+    private(set) var selectedWorktree: NativePeerWorktreeSelection? {
+        didSet {
+            guard let selectedWorktree else { return }
+            if activePeerServerId != selectedWorktree.serverId { activePeerServerId = selectedWorktree.serverId }
+            lastWorktrees[selectedWorktree.serverId] = selectedWorktree.worktreeId
+        }
+    }
+    /// The peer whose sidebar page is on screen. It outlives the selection:
+    /// an offline peer's page, or one with no worktrees, still owns the
+    /// center pane. Only `leavePeer()` and the peer being forgotten end it.
+    private(set) var activePeerServerId: String?
+    /// The worktree last selected on each peer during this app run.
+    @ObservationIgnored private var lastWorktrees: [String: String] = [:]
     /// The selected worktree's tabs as of the last snapshot, so a tab the
     /// host closes can be replaced by its neighbour.
     @ObservationIgnored private var selectedWorktreeTabs: [NativePeerTab] = []
@@ -450,6 +468,7 @@ final class NativePeerSessions {
         let openSessionIds = Set(snapshot.groups.flatMap(\.sessions).filter(\.isActive).map(\.id))
         closingSessionIds.formIntersection(openSessionIds)
         reconcileSelectedTab()
+        reconcileActivePeer()
         guard selectedTab == nil else { return }
         if !canReadWorkspace {
             // The host channel is not ready (yet, or any more): read the
@@ -467,9 +486,56 @@ final class NativePeerSessions {
         return consoles?.viewer.map { .console($0.consoleId) }
     }
 
-    /// Whether a peer worktree or tab covers the center pane. The local
-    /// selection stays set underneath but is not what the user sees.
-    var coversCenterPane: Bool { selectedWorktree != nil || selectedTab != nil }
+    /// Whether a peer covers the center pane: one of its worktrees or tabs,
+    /// or its page with nothing selected. The local selection stays set
+    /// underneath but is not what the user sees.
+    var coversCenterPane: Bool { activePeerServerId != nil || selectedWorktree != nil || selectedTab != nil }
+
+    /// The active peer's group, while it is still paired.
+    var activePeer: NativePeerGroup? {
+        activePeerServerId.flatMap { id in snapshot.groups.first { $0.serverId == id } }
+    }
+
+    /// Shows `serverId`'s page: the worktree last selected there during this
+    /// run if the peer still lists it, else its first, else nothing selected.
+    /// A worktree already selected on that peer stays as it is.
+    func openPeer(serverId: String) {
+        if activePeerServerId != serverId { activePeerServerId = serverId }
+        if selectedWorktree?.serverId == serverId { return }
+        if let target = restorableWorktree(on: serverId) {
+            selectWorktree(target)
+        } else {
+            clearSelection()
+        }
+    }
+
+    /// Hands the center pane back to the local selection.
+    func leavePeer() {
+        clearSelection()
+        activePeerServerId = nil
+    }
+
+    private func restorableWorktree(on serverId: String) -> NativePeerWorktreeSelection? {
+        let worktrees = worktrees(on: serverId)
+        let id = lastWorktrees[serverId].flatMap { last in worktrees.first { $0.id == last }?.id } ?? worktrees.first?.id
+        return id.map { NativePeerWorktreeSelection(serverId: serverId, worktreeId: $0) }
+    }
+
+    /// Keeps the active page honest as peers come and go: a forgotten peer
+    /// gives the center pane back, and one that reconnects while its page
+    /// shows nothing picks up its last worktree again. The roster lists a
+    /// disconnected peer too, so only forgetting it removes it.
+    private func reconcileActivePeer() {
+        guard let serverId = activePeerServerId else { return }
+        guard let group = snapshot.groups.first(where: { $0.serverId == serverId }) else {
+            leavePeer()
+            return
+        }
+        guard group.state.carriesSessions, selectedWorktree == nil, selectedTab == nil, pendingSessionId == nil,
+              let last = lastWorktrees[serverId], worktrees(on: serverId).contains(where: { $0.id == last })
+        else { return }
+        selectWorktree(NativePeerWorktreeSelection(serverId: serverId, worktreeId: last))
+    }
 
     private func worktrees(on serverId: String) -> [NativePeerWorktreeGroup] {
         snapshot.groups.first { $0.serverId == serverId }?.repos(ordering: .manual).flatMap(\.worktrees) ?? []
@@ -1076,6 +1142,7 @@ final class NativePeerSessions {
         }
         clearSelection()
         noteSelected(.session(sessionId), serverId: peer.serverId)
+        if activePeerServerId != peer.serverId { activePeerServerId = peer.serverId }
         selectedSessionId = sessionId
         let saved = composerState(for: sessionId).draft.plainText
         draft = restoredDrafts.removeValue(forKey: sessionId).map { Self.appending($0, to: saved) } ?? saved
@@ -1102,6 +1169,7 @@ final class NativePeerSessions {
         }
         clearSelection()
         noteSelected(.console(consoleId), serverId: serverId)
+        if activePeerServerId != serverId { activePeerServerId = serverId }
         consoles?.select(serverId: serverId, consoleId: consoleId)
     }
 

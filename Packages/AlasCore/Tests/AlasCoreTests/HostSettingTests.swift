@@ -8,6 +8,7 @@ struct HostSettingTests {
     @Test(arguments: [
         ("host.reachability", "lan", "lan"),
         ("host.port", "18765", "18765"),
+        ("remote.icon", "cloud", "cloud"),
         ("harness.acpAutoResumeAfterUsageLimit", "off", "false"),
         ("worktrees.baseBranch", "dev", "dev"),
     ])
@@ -20,7 +21,7 @@ struct HostSettingTests {
 
     @Test(arguments: [
         ("host.port", "70000"), ("host.port", "0"), ("harness.acpAutoRunByDefault", "maybe"),
-        ("host.reachability", "wan"), ("agents.nope.enabled", "true"), ("theme", "dark"),
+        ("host.reachability", "wan"), ("remote.icon", "toaster"), ("agents.nope.enabled", "true"), ("theme", "dark"),
     ])
     func rejectsInvalidValues(key: String, value: String) {
         var config = AppConfig.defaults

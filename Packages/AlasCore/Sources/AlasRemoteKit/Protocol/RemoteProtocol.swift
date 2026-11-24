@@ -16,11 +16,25 @@ public struct RemoteHelloPeer: Codable, Equatable, Sendable {
     public let serverId: String
     public let name: String
     public let state: String
+    /// That peer's own icon; nil when it never sent one or sent an id this
+    /// build does not know.
+    public let icon: PeerIcon?
 
-    public init(serverId: String, name: String, state: String) {
+    public init(serverId: String, name: String, state: String, icon: PeerIcon? = nil) {
         self.serverId = serverId
         self.name = name
         self.state = state
+        self.icon = icon
+    }
+
+    private enum CodingKeys: String, CodingKey { case serverId, name, state, icon }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        serverId = try c.decode(String.self, forKey: .serverId)
+        name = try c.decode(String.self, forKey: .name)
+        state = try c.decode(String.self, forKey: .state)
+        icon = PeerIcon(wireValue: try? c.decodeIfPresent(String.self, forKey: .icon))
     }
 }
 
@@ -28,6 +42,8 @@ public struct RemoteHelloPeer: Codable, Equatable, Sendable {
 public struct RemoteServerIdentity: Equatable, Sendable {
     public let serverId: String
     public let name: String
+    /// The icon this Mac's owner picked.
+    public let icon: PeerIcon?
     public let peers: [RemoteHelloPeer]
     /// The `PeerConsoleCapability` values this server serves; empty for one
     /// with no terminal consoles.
@@ -38,12 +54,13 @@ public struct RemoteServerIdentity: Equatable, Sendable {
     public let hostVersion: String?
 
     public init(
-        serverId: String, name: String, peers: [RemoteHelloPeer] = [],
+        serverId: String, name: String, icon: PeerIcon? = nil, peers: [RemoteHelloPeer] = [],
         consoleCapabilities: [String], hostCapabilities: [String],
         hostVersion: String? = nil
     ) {
         self.serverId = serverId
         self.name = name
+        self.icon = icon
         self.peers = peers
         self.consoleCapabilities = consoleCapabilities
         self.hostCapabilities = hostCapabilities
@@ -52,7 +69,7 @@ public struct RemoteServerIdentity: Equatable, Sendable {
 
     /// The same identity naming no other paired Macs.
     public var withoutPeers: RemoteServerIdentity {
-        RemoteServerIdentity(serverId: serverId, name: name, consoleCapabilities: consoleCapabilities,
+        RemoteServerIdentity(serverId: serverId, name: name, icon: icon, consoleCapabilities: consoleCapabilities,
                              hostCapabilities: hostCapabilities, hostVersion: hostVersion)
     }
 }
@@ -974,7 +991,7 @@ public enum RemoteServerMessageOf<ServerHost: Codable & Equatable & Sendable, Cl
     /// First frame after a successful upgrade, before any reply.
     /// `capabilities` lists optional features this Mac serves, such as
     /// `PeerConsoleCapability.v1`; absent on older Macs.
-    case hello(protocolVersion: Int, serverId: String, name: String,
+    case hello(protocolVersion: Int, serverId: String, name: String, icon: PeerIcon? = nil,
                federationEnabled: Bool = false, peers: [RemoteHelloPeer] = [], capabilities: [String] = [],
                hostVersion: String? = nil)
     /// Answer to a `helloAck` that carried a challenge: this Mac's public
@@ -1118,7 +1135,7 @@ extension RemoteServerMessageOf: Codable {
         case items, itemId, text
         case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
         case metadataNote, commitsTruncated, workingTreeTruncated, operation, sha
-        case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers, capabilities, hostVersion, console, device, portForward, host, peerHost
+        case protocolVersion, serverId, name, icon, hubEnabled, federationEnabled, peers, capabilities, hostVersion, console, device, portForward, host, peerHost
         case challenge, publicKey, signature
         case visualId
         case hook
@@ -1137,6 +1154,7 @@ extension RemoteServerMessageOf: Codable {
                 protocolVersion: try c.decode(Int.self, forKey: .protocolVersion),
                 serverId: try c.decode(String.self, forKey: .serverId),
                 name: try c.decode(String.self, forKey: .name),
+                icon: PeerIcon(wireValue: try? c.decodeIfPresent(String.self, forKey: .icon)),
                 federationEnabled: try c.decodeIfPresent(Bool.self, forKey: .federationEnabled) ?? false,
                 peers: try c.decodeIfPresent([RemoteHelloPeer].self, forKey: .peers) ?? [],
                 capabilities: try c.decodeIfPresent([String].self, forKey: .capabilities) ?? [],
@@ -1444,11 +1462,12 @@ extension RemoteServerMessageOf: Codable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .hello(let protocolVersion, let serverId, let name, let federationEnabled, let peers, let capabilities, let hostVersion):
+        case .hello(let protocolVersion, let serverId, let name, let icon, let federationEnabled, let peers, let capabilities, let hostVersion):
             try c.encode("hello", forKey: .type)
             try c.encode(protocolVersion, forKey: .protocolVersion)
             try c.encode(serverId, forKey: .serverId)
             try c.encode(name, forKey: .name)
+            try c.encodeIfPresent(icon, forKey: .icon)
             // Older remote web clients use this wire field to reveal the hub UI.
             try c.encode(true, forKey: .hubEnabled)
             try c.encode(federationEnabled, forKey: .federationEnabled)

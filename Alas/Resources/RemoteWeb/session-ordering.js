@@ -175,6 +175,7 @@ function groupSessionsByServer(sessions) {
     .sort((a, b) => a.serverName.localeCompare(b.serverName, undefined, { sensitivity: "accent" }))
     .map((peer) => ({
       id: "server:" + peer.serverId,
+      serverId: peer.serverId,
       title: peer.serverName,
       isOther: false,
       isPeer: true,

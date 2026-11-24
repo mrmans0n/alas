@@ -1,3 +1,4 @@
+import AlasRemoteKit
 import SwiftUI
 
 /// Everything waiting on the user, answerable in place.
@@ -123,7 +124,11 @@ struct InboxView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.title).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                        Text(entry.hostName).font(.caption).foregroundStyle(.secondary)
+                        HStack(spacing: 4) {
+                            PeerIconView(icon: entry.hostIcon)
+                            Text(entry.hostName)
+                        }
+                        .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
@@ -167,8 +172,10 @@ struct InboxView: View {
                     Image(systemName: Self.symbol(item.kind)).foregroundStyle(.orange)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(item.title).font(.headline).foregroundStyle(.primary).lineLimit(isExpanded ? nil : 2)
-                        Text("\(item.project) · \(item.branch) · \(entry.hostName) · \(item.occurredAt, format: .relative(presentation: .named))")
+                        Text("\(item.project) · \(item.branch) · \(Image(systemName: entry.hostIcon.symbolName)) \(entry.hostName) · \(item.occurredAt, format: .relative(presentation: .named))")
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            // The inline glyph would otherwise be read out by its symbol name.
+                            .accessibilityLabel(Text("\(item.project) · \(item.branch) · \(entry.hostName) · \(item.occurredAt, format: .relative(presentation: .named))"))
                         if let body = item.body, !body.isEmpty {
                             Text(body).font(.caption.monospaced()).foregroundStyle(.secondary)
                                 .lineLimit(isExpanded ? nil : 3)

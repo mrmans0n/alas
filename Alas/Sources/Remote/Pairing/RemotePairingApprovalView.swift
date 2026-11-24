@@ -105,11 +105,14 @@ struct RemotePairingApprovalCard: View {
             let presentation = ApprovalPresentation(entry: entry, now: context.date)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .top, spacing: 8) {
-                    Text(presentation.title)
-                        .font(scale.meta.font(weight: .semibold))
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(alignment: .firstTextBaseline, spacing: scale.space[1]) {
+                        PeerIconView(icon: entry.payload.requester.icon ?? .laptop)
+                        Text(presentation.title)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(scale.meta.font(weight: .semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     if entry.phase == .pending {
                         Button(action: decline) {
                             Image(systemName: "xmark")

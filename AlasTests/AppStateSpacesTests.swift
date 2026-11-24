@@ -78,7 +78,6 @@ struct AppStateSpacesTests {
 
         #expect(state.spacesManager.spaces.count == 1)
         #expect(state.activeSpaceProjects.map(\.id) == ["p1", "p2"])
-        #expect(!state.spacesManager.shouldShowSpaceAffordance)
     }
 
     @Test func activeSpaceProjectsUseSpaceMembershipOrder() {
@@ -479,7 +478,7 @@ struct AppStateSpacesTests {
 
         state.setShowSingleSpaceAffordance(true)
 
-        #expect(state.spacesManager.shouldShowSpaceAffordance)
+        #expect(state.spacesManager.showSingleSpaceAffordance)
         #expect(persistedFile?.showSingleSpaceAffordance == true)
     }
 

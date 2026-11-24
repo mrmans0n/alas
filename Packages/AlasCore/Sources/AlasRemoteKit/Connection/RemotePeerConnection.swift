@@ -40,7 +40,9 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
 
     public enum Event: Sendable {
         case stateChanged(State)
-        case hello(serverId: String, name: String, protocolVersion: Int, federationEnabled: Bool, capabilities: [String] = [], hostVersion: String? = nil)
+        /// `peers` is the sending Mac's own roster, with each peer's icon.
+        case hello(serverId: String, name: String, icon: PeerIcon? = nil, protocolVersion: Int, federationEnabled: Bool,
+                   capabilities: [String] = [], hostVersion: String? = nil, peers: [RemoteHelloPeer] = [])
         case originChanged(String)
         case message(RemoteServerMessageOf<ServerHost, ClientHost>)
     }
@@ -223,7 +225,7 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
                 candidate.cancel(with: .goingAway, reason: nil)
                 return
             }
-            guard case .hello(let version, let serverId, let name, let federationEnabled, _, let capabilities, let hostVersion) = first else {
+            guard case .hello(let version, let serverId, let name, let icon, let federationEnabled, let peers, let capabilities, let hostVersion) = first else {
                 candidate.cancel(with: .protocolError, reason: nil)
                 continue
             }
@@ -306,8 +308,9 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
                 lastOrigin = origin
                 onEvent(.originChanged(origin))
             }
-            onEvent(.hello(serverId: serverId, name: name, protocolVersion: version,
-                           federationEnabled: federationEnabled, capabilities: capabilities, hostVersion: hostVersion))
+            onEvent(.hello(serverId: serverId, name: name, icon: icon, protocolVersion: version,
+                           federationEnabled: federationEnabled, capabilities: capabilities, hostVersion: hostVersion,
+                           peers: peers))
             guard !Task.isCancelled, socket === candidate else { return }
             backoff = config.initialBackoff
             setState(.online)

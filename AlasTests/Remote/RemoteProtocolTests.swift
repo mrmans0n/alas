@@ -71,7 +71,7 @@ struct RemoteProtocolTests {
 
     @Test func helloAdvertisesPeerCapabilitiesAndHostVersion() throws {
         let advertised = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", hostVersion: "0.41.0"))
-        guard case .hello(_, _, _, _, _, let capabilities, let hostVersion) = try roundTrip(advertised) else {
+        guard case .hello(_, _, _, _, _, _, let capabilities, let hostVersion) = try roundTrip(advertised) else {
             Issue.record("expected hello")
             return
         }
@@ -1359,6 +1359,26 @@ struct RemoteProtocolTests {
         let legacy = Data(#"{"type":"hello","protocolVersion":1,"serverId":"s","name":"n"}"#.utf8)
         #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: legacy)
                 == .hello(protocolVersion: 1, serverId: "s", name: "n"))
+    }
+
+    @Test func helloCarriesTheIconBesideTheName() throws {
+        let peers = [RemoteHelloPeer(serverId: "srv-b", name: "Mac B", state: "online", icon: .cloud)]
+        let hello = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", icon: .server, peers: peers))
+        #expect(try roundTrip(hello) == hello)
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(hello)) as? [String: Any])
+        #expect(object["icon"] as? String == "server")
+        #expect((object["peers"] as? [[String: Any]])?.first?["icon"] as? String == "cloud")
+    }
+
+    /// An older Mac sends no icon and a newer one may send an id this build
+    /// lacks; neither may fail the hello.
+    @Test(arguments: ["", #","icon":"toaster""#])
+    func helloWithoutAKnownIconDecodesNoIcon(_ icon: String) throws {
+        let json = #"{"type":"hello","protocolVersion":1,"serverId":"s","name":"n""# + icon
+            + #","peers":[{"serverId":"b","name":"B","state":"online""# + icon + "}]}"
+        let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: Data(json.utf8))
+        #expect(decoded == .hello(protocolVersion: 1, serverId: "s", name: "n",
+                                  peers: [RemoteHelloPeer(serverId: "b", name: "B", state: "online")]))
     }
 
     @Test func sessionSummaryOmitsServerFieldsWhenLocal() throws {

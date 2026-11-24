@@ -79,7 +79,8 @@ struct AgentWorktreeTabView: View {
             ),
             controllableSessionIDs: Set(manager.sessions.keys.filter { manager.isWriter(for: $0) }),
             followUps: followUps,
-            disclosure: disclosure
+            disclosure: disclosure,
+            delegatedFromIcon: { state.delegatedFromIcon(of: $0.sessionID) }
         )
         .onReceive(sessionUpdates) { _ in sessionRevision &+= 1 }
         .task { await manager.refreshRecentNow() }
@@ -107,6 +108,8 @@ struct AgentTabView: View {
     @Binding var followUps: [ACPSession.ID: AgentSidebarFollowUpDraft]
     @Binding var disclosure: AgentSidebarDisclosure
     var disabledReason: (AgentSidebarRow) -> String? = { _ in nil }
+    /// The icon beside a row's "From <Mac>" note.
+    var delegatedFromIcon: (AgentSidebarRow) -> PeerIcon = { _ in .laptop }
 
     @Environment(\.designScale) private var scale
 
@@ -147,7 +150,8 @@ struct AgentTabView: View {
                         }
                     ),
                     showsContextDetails: isUnfolded(\.contextDetails, for: row),
-                    disabledReason: disabledReason(row)
+                    disabledReason: disabledReason(row),
+                    delegatedFromIcon: row.delegatedFromName == nil ? .laptop : delegatedFromIcon(row)
                 )
                 .padding(.leading, isNested ? AgentSidebarDelegationConnector.gutter : 0)
                 .background(alignment: .topLeading) {

@@ -9,6 +9,7 @@ final class AttentionFeed {
     struct Entry: Identifiable, Equatable {
         let hostID: UUID
         let hostName: String
+        let hostIcon: PeerIcon
         let item: RemoteAttentionItem
         /// The item's session, only when the host lists it to the phone: a terminal-hosted
         /// agent's id names nothing the phone can open, and its item expands instead.
@@ -37,7 +38,7 @@ final class AttentionFeed {
         return (items[host.id] ?? []).map { item in
             var route: SessionRoute?
             if let id = item.sessionID, listed.contains(id) { route = SessionRoute(hostID: host.id, sessionId: id) }
-            return Entry(hostID: host.id, hostName: host.name, item: item, route: route)
+            return Entry(hostID: host.id, hostName: host.name, hostIcon: host.icon ?? .laptop, item: item, route: route)
         }
     }
 

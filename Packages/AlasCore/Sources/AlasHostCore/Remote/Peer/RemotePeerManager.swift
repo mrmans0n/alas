@@ -24,15 +24,19 @@ public final class RemotePeerManager {
     public struct LocalIdentity: Equatable, Sendable {
         public let serverId: String
         public let name: String
+        /// Advertised beside `name` when pairing, so the far side's record
+        /// has it before the first `hello`.
+        public let icon: PeerIcon?
         public let origins: [String]
         /// Base64 of this Mac's peer identity public key, advertised so the
         /// far side can pin it. Empty when this build has no key, which
         /// leaves the far side's record unverified rather than wrong.
         public let publicKey: String
 
-        public init(serverId: String, name: String, origins: [String], publicKey: String = "") {
+        public init(serverId: String, name: String, icon: PeerIcon? = nil, origins: [String], publicKey: String = "") {
             self.serverId = serverId
             self.name = name
+            self.icon = icon
             self.origins = origins
             self.publicKey = publicKey
         }
@@ -334,7 +338,7 @@ public final class RemotePeerManager {
     /// same bound on every advertisement it receives.
     private func boundedIdentity() -> LocalIdentity {
         let me = localIdentity()
-        return LocalIdentity(serverId: me.serverId, name: me.name,
+        return LocalIdentity(serverId: me.serverId, name: me.name, icon: me.icon,
                              origins: Array(me.origins.prefix(RemotePairingLink.maxOrigins)),
                              publicKey: me.publicKey)
     }
@@ -359,7 +363,7 @@ public final class RemotePeerManager {
     private func advertisement(counterCode: String?) -> RemotePeerAdvertisement {
         let me = boundedIdentity()
         return RemotePeerAdvertisement(
-            serverId: me.serverId, name: me.name, origins: me.origins, counterCode: counterCode,
+            serverId: me.serverId, name: me.name, icon: me.icon, origins: me.origins, counterCode: counterCode,
             publicKey: me.publicKey.isEmpty ? nil : me.publicKey)
     }
 
@@ -421,7 +425,8 @@ public final class RemotePeerManager {
                                  tokenScope: RemoteDeviceScope? = nil,
                                  shouldPublish: () -> Bool = { true },
                                  redeem: (RemotePeerAdvertisement) async -> RemotePeerPairer.Outcome) async -> AddError? {
-        let me = localPeer.map { LocalIdentity(serverId: $0.serverID, name: $0.name, origins: $0.origins, publicKey: $0.publicKey) }
+        let me = localPeer.map { LocalIdentity(serverId: $0.serverID, name: $0.name, icon: $0.icon, origins: $0.origins,
+                                               publicKey: $0.publicKey) }
             ?? boundedIdentity()
         // With no advertisable address the counter-code is unusable: the far
         // side's pair-back finds nothing to dial, gives up, and revokes the
@@ -446,14 +451,14 @@ public final class RemotePeerManager {
             approvedCounterCodes.insert(counterCode)
             provisionalOwners.insert(counterCode)
         }
-        let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins,
+        let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, icon: me.icon, origins: me.origins,
             counterCode: counterCode, publicKey: me.publicKey.isEmpty ? nil : me.publicKey,
             acceptsInboundOnly: expectedPeer == nil ? true : nil)
         let outcome = await redeem(advertisement)
         if Task.isCancelled { endAttempt(counterCode: counterCode)
         return .cancelled }
         switch outcome {
-        case .paired(let token, let serverId, let name, let publicKey, let origin, let inboundOnly):
+        case .paired(let token, let serverId, let name, let icon, let publicKey, let origin, let inboundOnly):
             if let expectedPeer, serverId != expectedPeer.serverID || publicKey != expectedPeer.publicKey {
                 endAttempt(counterCode: counterCode)
                 return .identityUnproven
@@ -514,7 +519,7 @@ public final class RemotePeerManager {
                 // No device was minted here, so an inbound-only record keeps
                 // the one its peer reaches this Mac with.
                 let previous = durableStateByServerId[serverId]
-                upsert(serverId: serverId, name: name ?? origin, origins: origins,
+                upsert(serverId: serverId, name: name ?? origin, icon: icon, origins: origins,
                        lastOrigin: origin, token: token, publicKey: publicKey,
                        localDeviceId: previous?.isInboundOnly == true ? previous?.localDeviceId : nil,
                        tokenScope: tokenScope)
@@ -540,7 +545,7 @@ public final class RemotePeerManager {
             }?.request.counterCode
             outboundPredecessors[counterCode] = (previousState, previousOwner)
             lastUpsertOwnerByServerId[serverId] = counterCode
-            upsert(serverId: serverId, name: name ?? origin, origins: origins,
+            upsert(serverId: serverId, name: name ?? origin, icon: icon, origins: origins,
                    lastOrigin: origin, token: token, publicKey: publicKey, localDeviceId: nil,
                    tokenScope: tokenScope)
             // `upsert` proves OUR call to A succeeded — nothing more. Our own
@@ -828,9 +833,9 @@ public final class RemotePeerManager {
                 return false
             }
             let me = boundedIdentity()
-            let advertisement = localPeer.map { RemotePeerAdvertisement(serverId: $0.serverID, name: $0.name,
+            let advertisement = localPeer.map { RemotePeerAdvertisement(serverId: $0.serverID, name: $0.name, icon: $0.icon,
                 origins: $0.origins, counterCode: nil, publicKey: $0.publicKey) } ?? advertisement(counterCode: nil)
-            guard case .paired(let token, let repliedServerId, _, let repliedPublicKey, let origin, _) = await pairer.pair(
+            guard case .paired(let token, let repliedServerId, _, let repliedIcon, let repliedPublicKey, let origin, _) = await pairer.pair(
                 origins: request.origins, code: counterCode, deviceName: localPeer?.name ?? me.name, advertisement: advertisement,
                 proof: redeemProof(code: counterCode, advertisement: advertisement))
             else {
@@ -899,7 +904,8 @@ public final class RemotePeerManager {
             // The pair-back proved this key, so the device it pairs with is
             // that peer's, whatever its own redeem carried.
             if let repliedPublicKey { pairing.recordPeerPublicKey(repliedPublicKey, deviceId: request.localDeviceId) }
-            upsert(serverId: request.peerServerId, name: request.peerName, origins: request.origins,
+            upsert(serverId: request.peerServerId, name: request.peerName, icon: request.peerIcon ?? repliedIcon,
+                   origins: request.origins,
                    lastOrigin: origin, token: token, publicKey: repliedPublicKey,
                    localDeviceId: request.localDeviceId)
             // This branch's own upsert always carries a real
@@ -995,7 +1001,8 @@ public final class RemotePeerManager {
         }
         let existing = peers.first { $0.serverId == request.peerServerId }
         lastUpsertOwnerByServerId[request.peerServerId] = request.redeemedCode
-        upsert(serverId: request.peerServerId, name: request.peerName, origins: existing?.origins ?? request.origins,
+        upsert(serverId: request.peerServerId, name: request.peerName, icon: request.peerIcon,
+               origins: existing?.origins ?? request.origins,
                lastOrigin: existing?.lastOrigin, token: existing?.token ?? "", publicKey: nil,
                localDeviceId: request.localDeviceId)
         let recorded = peers.first { $0.serverId == request.peerServerId }
@@ -1362,7 +1369,7 @@ public final class RemotePeerManager {
                 onLinkChanged?(peerId)
                 notifyDeviceListeners(.connectionChanged, serverId: peer.serverId)
             }
-        case .hello(_, let name, let protocolVersion, _, let advertised, let hostVersion):
+        case .hello(_, let name, let icon, let protocolVersion, _, let advertised, let hostVersion, _):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
             guard !isProvisional(peers[index].serverId) else { return }
             capabilities[peers[index].serverId] = Set(advertised)
@@ -1374,18 +1381,10 @@ public final class RemotePeerManager {
             // origin decides who this record is. The connection this manager
             // builds is handed the record's `serverId` and refuses a socket
             // reporting a different one, so in practice the frame's id
-            // already matches; ignoring it here is the backstop. Name and
-            // protocol version are cosmetic and safe to take from the peer.
-            peers[index].name = name
+            // already matches; ignoring it here is the backstop. Name, icon
+            // and protocol version are cosmetic and safe to take from the peer.
             peers[index].protocolVersion = protocolVersion
-            // Keeps `durableStateByServerId` from going stale: a peer only
-            // gets `.hello` events once it's an active, confirmed link, so
-            // this row IS the current durable truth. Without this, a LATER
-            // re-pair attempt that fails would roll back to whatever name
-            // or protocol version this snapshot last had — reverting
-            // cosmetic metadata a working connection has since updated.
-            durableStateByServerId[peers[index].serverId] = peers[index]
-            savePeers()
+            adoptHelloIdentity(name: name, icon: icon, peerId: peerId, force: true)
         case .originChanged(let origin):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
             guard !isProvisional(peers[index].serverId) else { return }
@@ -1411,7 +1410,13 @@ public final class RemotePeerManager {
                 }
                 return
             }
-            if case .hello(_, _, _, _, _, let advertised, _) = message {
+            if case .hello(_, _, let name, let icon, _, _, let advertised, _) = message {
+                // A peer re-sends hello when its name or icon changes, so
+                // adopt them here too, as the first frame's `.hello` does,
+                // and tell the sidebar and this Mac's own clients.
+                if adoptHelloIdentity(name: name, icon: icon, peerId: peerId) {
+                    onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
+                }
                 // Policy can change while this authenticated control socket is up.
                 let capability = PeerDeviceCapability.v1
                 let hadDevices = capabilities[peer.serverId]?.contains(capability) == true
@@ -1482,7 +1487,29 @@ public final class RemotePeerManager {
         return peer
     }
 
-    private func upsert(serverId: String, name: String, origins: [String], lastOrigin: String?,
+    /// Takes the name and icon a confirmed link's hello reports. An older
+    /// build sends no icon; that must not erase the one we know. Saves only
+    /// when something changed, unless `force`, as the first hello of a link
+    /// does after updating other fields. True when the name or icon changed.
+    ///
+    /// Also refreshes `durableStateByServerId`: a peer only gets hellos once
+    /// it's an active, confirmed link, so this row IS the current durable
+    /// truth. Without this, a LATER re-pair attempt that fails would roll
+    /// back to whatever name this snapshot last had.
+    @discardableResult
+    private func adoptHelloIdentity(name: String, icon: PeerIcon?, peerId: String, force: Bool = false) -> Bool {
+        guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return false }
+        let before = peers[index]
+        peers[index].name = name
+        if let icon { peers[index].icon = icon }
+        let changed = peers[index] != before
+        guard force || changed else { return false }
+        durableStateByServerId[peers[index].serverId] = peers[index]
+        savePeers()
+        return changed
+    }
+
+    private func upsert(serverId: String, name: String, icon: PeerIcon?, origins: [String], lastOrigin: String?,
                         token: String, publicKey: String?, localDeviceId: String?,
                         tokenScope: RemoteDeviceScope? = nil) {
         // `localDeviceId` is resolved to exactly what the caller passed —
@@ -1512,6 +1539,7 @@ public final class RemotePeerManager {
                 merged.append(origin)
             }
             peers[index].name = name
+            if let icon { peers[index].icon = icon }
             peers[index].origins = merged
             peers[index].lastOrigin = lastOrigin
             peers[index].token = token
@@ -1527,7 +1555,7 @@ public final class RemotePeerManager {
             peers[index].agentAccess = nil
             peer = peers[index]
         } else {
-            peer = RemotePeer(id: UUID().uuidString, serverId: serverId, name: name, origins: origins,
+            peer = RemotePeer(id: UUID().uuidString, serverId: serverId, name: name, icon: icon, origins: origins,
                               lastOrigin: lastOrigin, token: token, publicKey: publicKey,
                               protocolVersion: nil,
                               localDeviceId: localDeviceId, addedAt: now(), tokenScope: tokenScope)
@@ -1560,7 +1588,7 @@ extension RemotePeerManager: FederatedPeerLinks {
     /// An inbound-only record is left out: this Mac can never reach that peer.
     public var helloPeers: [RemoteHelloPeer] {
         peers.filter { !$0.isInboundOnly }.map { peer in
-            RemoteHelloPeer(serverId: peer.serverId, name: peer.name, state: helloState(for: peer))
+            RemoteHelloPeer(serverId: peer.serverId, name: peer.name, state: helloState(for: peer), icon: peer.icon)
         }
     }
 

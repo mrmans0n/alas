@@ -1,3 +1,4 @@
+import AlasRemoteKit
 import SwiftUI
 
 struct CreatingWorktreeTranscript: View {
@@ -21,9 +22,12 @@ struct CreatingWorktreeTranscript: View {
                         .truncationMode(.middle)
                 }
                 if let machine = model.hostName {
-                    Text(machine)
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.78))
+                    HStack(spacing: 4) {
+                        PeerIconView(icon: model.hostIcon)
+                        Text(machine)
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.78))
                 }
             }
             .multilineTextAlignment(.center)

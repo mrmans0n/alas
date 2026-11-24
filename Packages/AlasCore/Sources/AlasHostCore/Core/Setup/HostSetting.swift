@@ -1,5 +1,6 @@
 import AlasAgentKit
 import AlasModel
+import AlasRemoteKit
 import Foundation
 
 public enum HostSettingSection: String, CaseIterable, Sendable {
@@ -106,6 +107,15 @@ public enum HostSettingCatalog {
                 config.host.port = value
             },
             .text("remote.displayName", .reachability, "Display name", get: { $0.remote.displayName }, set: { $0.remote.displayName = $1 }),
+            HostSetting(
+                "remote.icon", .reachability, "Icon", .choice(PeerIcon.allCases.map(\.rawValue)),
+                read: { $0.remote.resolvedIcon(default: .server).rawValue }
+            ) { raw, config throws(HostSettingError) in
+                guard let icon = PeerIcon(wireValue: raw) else {
+                    throw .invalidValue(key: "remote.icon", expected: PeerIcon.allCases.map(\.rawValue).joined(separator: "|"))
+                }
+                config.remote.icon = icon.rawValue
+            },
         ]
 
         for agent in AgentBuiltins.catalog {

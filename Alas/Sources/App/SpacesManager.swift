@@ -63,10 +63,6 @@ final class SpacesManager {
         space(id: activeSpaceId)
     }
 
-    var shouldShowSpaceAffordance: Bool {
-        spaces.count > 1 || showSingleSpaceAffordance
-    }
-
     func space(id: String) -> SpaceConfig? {
         spaces.first { $0.id == id }
     }

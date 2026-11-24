@@ -11,6 +11,8 @@ struct NativePeerSessionView: View {
     var sendOnEnter = true
     var dictationPreferences = ACPDictationPreferences()
     var onChangeDictationPreferences: (ACPDictationPreferences) -> Void = { _ in }
+    /// Resolves a Mac's icon from the name a host reports it by.
+    var peerIconNamed: (String) -> PeerIcon = { _ in .laptop }
     @StateObject private var composerActions = ACPComposerActions()
     @Environment(\.theme) private var theme
     @Environment(\.openURL) private var openURL
@@ -31,14 +33,18 @@ struct NativePeerSessionView: View {
                             composer: client.composerState(for: transcript.sessionId),
                             typography: typography, contentMaxWidth: contentMaxWidth,
                             sendOnEnter: sendOnEnter, dictationPreferences: dictationPreferences,
-                            onChangeDictationPreferences: onChangeDictationPreferences
+                            onChangeDictationPreferences: onChangeDictationPreferences,
+                            peerIconNamed: peerIconNamed
                         )
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
                 }
                 .id(sessionKey)
             } else {
-                ContentUnavailableView("No peer session selected", systemImage: "desktopcomputer")
+                ContentUnavailableView(
+                    "No peer session selected",
+                    systemImage: (client.selectedPeer?.icon ?? .laptop).symbolName
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -364,14 +370,19 @@ private struct NativePeerUnsupportedElicitation: View {
 /// Which paired Mac delegated the session, in the secondary text style.
 private struct NativePeerFromLabel: View {
     let name: String
+    let icon: PeerIcon
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
 
     var body: some View {
-        Text("From \(name)")
-            .font(scale.metaFont)
-            .foregroundStyle(theme.color("fg-muted"))
-            .lineLimit(1)
+        HStack(spacing: scale.space[1]) {
+            Text("From")
+            PeerIconView(icon: icon)
+            Text(name)
+        }
+        .font(scale.metaFont)
+        .foregroundStyle(theme.color("fg-muted"))
+        .lineLimit(1)
     }
 }
 
@@ -448,6 +459,7 @@ private struct NativePeerComposer: View {
     let sendOnEnter: Bool
     let dictationPreferences: ACPDictationPreferences
     let onChangeDictationPreferences: (ACPDictationPreferences) -> Void
+    let peerIconNamed: (String) -> PeerIcon
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     @State private var composerFocused = false
@@ -894,7 +906,7 @@ private struct NativePeerComposer: View {
                 shortcutHint
             }
             Spacer(minLength: 0)
-            if let name = client.selectedDelegatedFromName { NativePeerFromLabel(name: name) }
+            if let name = client.selectedDelegatedFromName { NativePeerFromLabel(name: name, icon: peerIconNamed(name)) }
             shepherdPill
             if let usage = config?.usage { contextUsageButton(usage) }
             if dictation.state != .unavailable { micButton }
@@ -917,7 +929,7 @@ private struct NativePeerComposer: View {
     private var compactToolbar: some View {
         HStack(spacing: 8) {
             if showsTakeOver { takeOverButton }
-            if let name = client.selectedDelegatedFromName { NativePeerFromLabel(name: name) }
+            if let name = client.selectedDelegatedFromName { NativePeerFromLabel(name: name, icon: peerIconNamed(name)) }
             shepherdPill
             if let usage = config?.usage { contextUsageButton(usage) }
             if dictation.state != .unavailable { micButton }

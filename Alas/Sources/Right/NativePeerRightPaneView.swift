@@ -1299,7 +1299,9 @@ struct NativePeerRightPaneView: View {
                     row.state == .detached && !canOpen
                         ? "\(client.selectedWorktreePeer?.name ?? "This Mac") needs a newer Alas to open past sessions."
                         : nil
-                }
+                },
+                // The host names the delegating Mac; resolve it by name.
+                delegatedFromIcon: { row in row.delegatedFromName.map { state.peerIcon(named: $0) } ?? .laptop }
             )
             .id(client.selectedWorktree)
         }

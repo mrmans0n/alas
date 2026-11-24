@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 
+require("../../../Alas/Resources/RemoteWeb/peer-icons.js");
 require("../../../Alas/Resources/RemoteWeb/hub-registry.js");
 
 const registry = globalThis.RemoteHubRegistry;
@@ -262,6 +263,56 @@ assert.equal(registry.parseManualPairing("", "ABC"), null);
   assert.deepEqual(result.server.origins, ["http://100.64.0.1:8765", "http://10.0.0.1:8765"]);
   assert.equal(result.server.lastOrigin, "http://100.64.0.1:8765");
   assert.equal(doc.activeId, older.id, "active id follows the surviving entry");
+}
+
+// --- icons on hello ------------------------------------------------------------
+
+{
+  const doc = { version: 1, activeId: null, servers: [] };
+  const { server } = registry.upsertPaired(doc, { origins: ["http://10.0.0.1:8765"], token: "t1", now: 1 });
+  registry.applyHello(doc, server.id, { type: "hello", protocolVersion: 1, serverId: "srv-A", name: "Studio", icon: "server" });
+  assert.equal(server.icon, "server");
+  registry.applyHello(doc, server.id, { type: "hello", protocolVersion: 1, serverId: "srv-A", name: "Studio" });
+  assert.equal(server.icon, "server", "a hello without icon keeps the previous icon");
+  registry.applyHello(doc, server.id, { type: "hello", protocolVersion: 1, serverId: "srv-A", name: "Studio", icon: "toaster" });
+  assert.equal(server.icon, "server", "an unknown icon id is ignored");
+  registry.applyHello(doc, server.id, {
+    type: "hello", protocolVersion: 1, serverId: "srv-A", name: "Studio",
+    peers: [
+      { serverId: "b", state: "offline", icon: "cloud" },
+      { serverId: "c", state: "online", icon: "toaster" },
+      { serverId: "d", state: "online" },
+    ],
+  });
+  assert.equal(server.peerIcons.b, "cloud", "peer icons are kept for every state, offline included");
+  assert.deepEqual(server.peerIcons, { b: "cloud" }, "unknown and missing peer icons are dropped");
+}
+
+{
+  const doc = { version: 1, activeId: null, servers: [] };
+  const older = registry.upsertPaired(doc, { origins: ["http://10.0.0.1:8765"], token: "old", now: 1 }).server;
+  registry.applyHello(doc, older.id, { type: "hello", protocolVersion: 1, serverId: "srv-A", name: "Studio", icon: "macStudio" });
+  const newer = registry.upsertPaired(doc, { origins: ["http://100.64.0.1:8765"], token: "new", now: 2 }).server;
+  const result = registry.applyHello(doc, newer.id, {
+    type: "hello", protocolVersion: 1, serverId: "srv-A", name: "Studio", icon: "macPro",
+    peers: [{ serverId: "b", state: "online", icon: "rack" }],
+  });
+  assert.equal(result.server.id, older.id);
+  assert.equal(result.server.icon, "macPro", "twin merge takes the fresh icon");
+  assert.deepEqual(result.server.peerIcons, { b: "rack" }, "twin merge takes the fresh peer icons");
+}
+
+{
+  const icons = globalThis.RemotePeerIcons;
+  assert.equal(icons.PEER_ICON_IDS.length, 16);
+  for (const id of icons.PEER_ICON_IDS) {
+    const svg = icons.peerIconSVG(id);
+    assert.match(svg, /^<svg viewBox="0 0 16 16" fill="none" stroke="currentColor"/);
+    if (id !== "laptop") assert.notEqual(svg, icons.peerIconSVG("laptop"), `${id} draws its own glyph`);
+  }
+  assert.equal(icons.peerIconSVG("toaster"), icons.peerIconSVG("laptop"), "unknown ids draw the laptop");
+  assert.equal(icons.peerIconSVG(undefined), icons.peerIconSVG("laptop"));
+  assert.equal(icons.peerIconSVG("constructor"), icons.peerIconSVG("laptop"), "prototype keys are not ids");
 }
 
 // --- forget / active / lastOrigin -------------------------------------------

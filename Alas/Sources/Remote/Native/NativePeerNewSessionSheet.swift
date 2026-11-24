@@ -28,6 +28,9 @@ struct NativePeerNewSessionSheet: View {
 
     private var request: NativePeerNewSession? { client.newSession }
     private var peerName: String { request?.peerName ?? "peer" }
+    private var peerIcon: PeerIcon {
+        client.peerPages.first { $0.serverId == request?.serverId }?.icon ?? .laptop
+    }
     /// The peer can only create a worktree in a repo it identifies by id.
     private var canCreateWorktrees: Bool { request?.projectId != nil && request?.fixedWorktreeId == nil }
     private var createsWorktree: Bool { mode == .new && canCreateWorktrees }
@@ -54,6 +57,7 @@ struct NativePeerNewSessionSheet: View {
     var body: some View {
         DialogContainer(
             title: "New session on \(peerName)",
+            titleIcon: peerIcon,
             subtitle: request?.repoName,
             content: { fields },
             cancelTitle: "Cancel",

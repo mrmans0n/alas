@@ -81,17 +81,39 @@ struct SpacePagerIndicatorTests {
         #expect(SpacePagerNavigation.destination(current: 0, offset: 1, count: 0) == nil)
     }
 
-    @Test func pagerStripKeepsEverySpaceAtAStablePosition() {
-        let spaces = [space(id: "first"), space(id: "second"), space(id: "third")]
+    @Test func pagerStripKeepsEveryPageAtAStablePosition() {
+        let pages = SidebarPages.pages(spaceIds: ["first", "second"], peerServerIds: ["studio"])
 
-        #expect(SpacePagerLayout.offset(activeSpaceID: "first", spaces: spaces, pageWidth: 240) == 0)
-        #expect(SpacePagerLayout.offset(activeSpaceID: "second", spaces: spaces, pageWidth: 240) == -240)
-        #expect(SpacePagerLayout.offset(activeSpaceID: "third", spaces: spaces, pageWidth: 240) == -480)
+        #expect(SpacePagerLayout.offset(active: .space("first"), pages: pages, pageWidth: 240) == 0)
+        #expect(SpacePagerLayout.offset(active: .space("second"), pages: pages, pageWidth: 240) == -240)
+        #expect(SpacePagerLayout.offset(active: .peer(serverId: "studio"), pages: pages, pageWidth: 240) == -480)
     }
 
-    @Test func pagerStripExposesOnlyTheActiveSpace() {
-        #expect(SpacePagerLayout.isActive(spaceID: "first", activeSpaceID: "first"))
-        #expect(!SpacePagerLayout.isActive(spaceID: "second", activeSpaceID: "first"))
+    @Test func peersFollowTheSpacesInPairingOrder() {
+        let pages = SidebarPages.pages(spaceIds: ["home", "work"], peerServerIds: ["studio", "air"])
+        #expect(pages == [.space("home"), .space("work"), .peer(serverId: "studio"), .peer(serverId: "air")])
+    }
+
+    @Test(arguments: [
+        (String?.none, SidebarPage.space("home")),
+        ("studio", .peer(serverId: "studio")),
+        // Forgotten while its page showed: back to the space, never a blank pager.
+        ("gone", .space("home")),
+    ])
+    func activePageFallsBackToTheActiveSpace(activePeer: String?, expected: SidebarPage) {
+        let pages = SidebarPages.pages(spaceIds: ["home", "work"], peerServerIds: ["studio"])
+        #expect(SidebarPages.active(activeSpaceId: "home", activePeer: activePeer, in: pages) == expected)
+    }
+
+    @Test(arguments: [(0, SidebarPage?.none), (1, .space("home")), (3, .peer(serverId: "studio")), (4, nil)])
+    func numberedShortcutsCountSpacesThenPeers(index: Int, expected: SidebarPage?) {
+        let pages = SidebarPages.pages(spaceIds: ["home", "work"], peerServerIds: ["studio"])
+        #expect(SidebarPages.page(atOneBasedIndex: index, in: pages) == expected)
+    }
+
+    @Test(arguments: [(1, 0, false, false), (1, 1, false, true), (2, 0, false, true), (1, 0, true, true)])
+    func aPairedPeerShowsThePager(spaces: Int, peers: Int, single: Bool, shows: Bool) {
+        #expect(SidebarPages.showsPager(spaceCount: spaces, peerCount: peers, showSingleSpaceAffordance: single) == shows)
     }
 
     @Test func spaceIconRejectsNerdFontPrivateUseGlyphs() {
@@ -100,17 +122,5 @@ struct SpacePagerIndicatorTests {
 
     @Test func spaceIconAcceptsMultiScalarEmoji() {
         #expect(SpaceIcon.sanitized("🙈", fallback: "🏠") == "🙈")
-    }
-
-    private func space(id: String) -> SpaceConfig {
-        SpaceConfig(
-            id: id,
-            name: id,
-            emoji: "🏠",
-            projectIds: [],
-            members: nil,
-            lastSelectedWorktreeId: nil,
-            createdAt: .distantPast
-        )
     }
 }

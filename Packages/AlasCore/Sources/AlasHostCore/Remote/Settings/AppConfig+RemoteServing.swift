@@ -54,4 +54,10 @@ extension AppConfig.Remote {
         if !configured.isEmpty { return configured }
         return Host.current().localizedName ?? RemoteNetwork.machineHostName() ?? "Alas"
     }
+
+    /// Icon advertised beside the name: the configured icon, else `fallback`,
+    /// the default for the kind of host.
+    public func resolvedIcon(default fallback: PeerIcon) -> PeerIcon {
+        PeerIcon(wireValue: icon.trimmingCharacters(in: .whitespacesAndNewlines)) ?? fallback
+    }
 }

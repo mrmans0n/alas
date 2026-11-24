@@ -503,6 +503,16 @@ final class AppState {
     private var startupRecoveryReadyRightPaneID: String?
     private(set) var isRefreshingProjectTopologies = false
     var pendingSettingsSection: SettingsSection?
+    /// The paired Mac whose sheet Settings › Remote opens next, by `serverId`.
+    var pendingPairedMacServerId: String?
+
+    /// Opens Settings › Remote on one paired Mac's sheet. The caller shows
+    /// the Settings window.
+    func requestPairedMacSettings(serverId: String) {
+        pendingPairedMacServerId = serverId
+        pendingSettingsSection = .remote
+    }
+
     @ObservationIgnored
     private var _tabs: TabsManager?
     var tabs: TabsManager {
@@ -999,6 +1009,7 @@ final class AppState {
                 RemotePeerManager.LocalIdentity(
                     serverId: self?.config.remote.serverId ?? "",
                     name: self?.remoteDisplayName ?? "Alas",
+                    icon: self?.remoteIcon,
                     // Loopback is meaningless to another Mac; everything else is
                     // in rank order, best first. Capped to the same bound the
                     // receiving Mac enforces on any advertisement — sending
@@ -1154,10 +1165,14 @@ final class AppState {
     /// the computer name.
     var remoteDisplayName: String { config.remote.resolvedDisplayName }
 
+    /// Icon advertised beside the name: the configured icon, else a laptop.
+    var remoteIcon: PeerIcon { config.remote.resolvedIcon(default: .laptop) }
+
     func remoteServerIdentity() -> RemoteServerIdentity {
         RemoteServerIdentity(
             serverId: config.remote.serverId,
             name: remoteDisplayName,
+            icon: remoteIcon,
             // Only reach for the lazy manager when a server is up, for the
             // same reason `syncRemotePeers` does.
             peers: remoteServer != nil ? remotePeers.helloPeers : [],
@@ -1173,6 +1188,7 @@ final class AppState {
         RemoteBonjourAdvertisement.forSettings(
             config.remote,
             displayName: remoteDisplayName,
+            icon: remoteIcon,
             model: RemoteBonjourService.hardwareModel())
     }
 
@@ -1201,14 +1217,6 @@ final class AppState {
 
     func remoteConnectedDeviceCounts() -> [String: Int] {
         remoteConnectedDeviceCountsSnapshot
-    }
-
-    func revokeAllRemoteDevices() {
-        let ids = remotePairing.devices.map(\.id)
-        remotePairing.revokeAll()
-        for id in ids {
-            remoteServer?.disconnectDevice(id)
-        }
     }
 
     /// The Remote access toggle. Turning it off with unsaved host files asks first; Cancel leaves it on.
@@ -3406,7 +3414,7 @@ final class AppState {
 
     func selectWorkspace(id: UUID) {
         guard workspacesManager.canMutate else { return }
-        nativePeerSessions?.clearSelection()
+        nativePeerSessions?.leavePeer()
         workspaceNavigationState.selectWorkspace(id)
         selectedWorktreeId = nil
     }
@@ -3414,7 +3422,7 @@ final class AppState {
     func selectWorkspaceCheckout(id: UUID) {
         guard workspacesManager.canMutate else { return }
         guard let checkout = workspacesManager.checkout(id: id) else { return }
-        nativePeerSessions?.clearSelection()
+        nativePeerSessions?.leavePeer()
         workspaceNavigationState.selectCheckout(checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
         selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
         if let selectedWorktreeId {
@@ -3425,7 +3433,7 @@ final class AppState {
     func focusWorkspaceCheckoutMember(id: UUID) {
         guard workspacesManager.canMutate else { return }
         guard let checkout = selectedWorkspaceCheckout else { return }
-        nativePeerSessions?.clearSelection()
+        nativePeerSessions?.leavePeer()
         workspaceNavigationState.selectMember(id, in: checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
         selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
         if let selectedWorktreeId {
@@ -3693,7 +3701,7 @@ final class AppState {
     }
 
     func selectWorktree(id: String?, includeRemoteStatus: Bool = true) {
-        nativePeerSessions?.clearSelection()
+        nativePeerSessions?.leavePeer()
         workspaceNavigationState.clearCheckoutSelection()
         guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id
@@ -3849,7 +3857,7 @@ final class AppState {
     }
 
     func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
-        nativePeerSessions?.clearSelection()
+        nativePeerSessions?.leavePeer()
         if let pending = attentionPendingReviewReveal,
            pending.worktreeID != worktreeId || pending.tabID != tabId {
             attentionPendingReviewReveal = nil
@@ -5038,7 +5046,7 @@ final class AppState {
         sharedSessionOwner: SessionOwnerID?,
         tabID: TabID
     ) {
-        nativePeerSessions?.clearSelection()
+        nativePeerSessions?.leavePeer()
         if let sharedSessionOwner,
            tabs.tabs(for: sharedSessionOwner).contains(where: { $0.id == tabID }) {
             tabs.activate(owner: sharedSessionOwner, tabId: tabID)
@@ -5133,14 +5141,46 @@ final class AppState {
     func synchronizeVisibleWorktreeCenterTabIfNeeded(worktreeId: String, activeTabId: TabID?) {
         guard let activeTabId else { return }
         guard tabs.tabs(forWorktree: worktreeId).contains(where: { $0.id == activeTabId }) else { return }
-        nativePeerSessions?.clearSelection()
+        nativePeerSessions?.leavePeer()
         tabs.activate(worktreeId: worktreeId, tabId: activeTabId)
     }
 
+    /// The sidebar pager's pages: the user's spaces, then one per paired Mac.
+    var sidebarPages: [SidebarPage] {
+        SidebarPages.pages(
+            spaceIds: spacesManager.spaces.map(\.id),
+            peerServerIds: nativePeerSessions?.peerPages.map(\.serverId) ?? []
+        )
+    }
+
+    var activeSidebarPage: SidebarPage {
+        SidebarPages.active(
+            activeSpaceId: spacesManager.activeSpaceId,
+            activePeer: nativePeerSessions?.activePeerServerId,
+            in: sidebarPages
+        )
+    }
+
+    @discardableResult
+    func switchToPage(_ page: SidebarPage) -> Bool {
+        switch page {
+        case .space(let id):
+            return switchToSpace(id: id)
+        case .peer(let serverId):
+            guard let client = nativePeerSessions, client.activePeerServerId != serverId else { return false }
+            client.openPeer(serverId: serverId)
+            return true
+        }
+    }
+
+    /// Switches to a space, or back to the active one from a peer's page.
     func switchToSpace(id: String) -> Bool {
+        guard spacesManager.space(id: id) != nil else { return false }
+        let leavingPeer = nativePeerSessions?.activePeerServerId != nil
         let previousSpaceId = spacesManager.activeSpaceId
         spacesManager.switchToSpace(id: id)
-        guard spacesManager.activeSpaceId != previousSpaceId else { return false }
+        guard spacesManager.activeSpaceId != previousSpaceId || leavingPeer else { return false }
+        // Leaves the peer page too, before the space's own selection returns.
         let selection = resolvedSelectionForActiveSpace()
         selectWorktree(id: selection)
         scheduleSpacesSave()
@@ -5159,11 +5199,21 @@ final class AppState {
         return true
     }
 
+    /// ⌥⌘N: the Nth page, counting the user's spaces and then the peers.
     @discardableResult
     func switchToSpace(atOneBasedIndex index: Int) -> Bool {
-        let zeroBasedIndex = index - 1
-        guard spacesManager.spaces.indices.contains(zeroBasedIndex) else { return false }
-        return switchToSpace(id: spacesManager.spaces[zeroBasedIndex].id)
+        guard let page = SidebarPages.page(atOneBasedIndex: index, in: sidebarPages) else { return false }
+        return switchToPage(page)
+    }
+
+    /// One page left or right in the pager, stopping at both ends.
+    @discardableResult
+    func pageSidebar(offset: Int) -> Bool {
+        let pages = sidebarPages
+        guard let current = pages.firstIndex(of: activeSidebarPage),
+              let next = SpacePagerNavigation.destination(current: current, offset: offset, count: pages.count)
+        else { return false }
+        return switchToPage(pages[next])
     }
 
     func addSpace(name: String, emoji: String) {
@@ -10786,7 +10836,7 @@ final class AppState {
         // `selectedWorktreeId` to a hidden id that `RootView.selectedWorktree()`
         // (now visibility-aware) would reject anyway, leaving an empty pane.
         guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
-        nativePeerSessions?.clearSelection()
+        nativePeerSessions?.leavePeer()
         if selectedWorktreeId != worktree.id {
             focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         }

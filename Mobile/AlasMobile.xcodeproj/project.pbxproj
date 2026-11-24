@@ -47,6 +47,7 @@
 		56AB129852CC6503F3A8D52F /* TerminalConsole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01778058ACE3C53D047B6348 /* TerminalConsole.swift */; };
 		58B17D6F2BE10B9E3F575E8D /* ComposerEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8173FF37ED4600303C8C0AA6 /* ComposerEditor.swift */; };
 		5BAE5DB8CB923C7AC98F2884 /* TranscriptRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18514DE5113754F3401217CA /* TranscriptRowView.swift */; };
+		603039A563273080480A0D1A /* PeerIconView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4B68036582E67C62B703618 /* PeerIconView.swift */; };
 		65471C3C6DD5E241F089D1A3 /* ChipAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44901AB1A6DD674216D30C2A /* ChipAttachment.swift */; };
 		6899BE1C0A8A096229644BD6 /* CreatingWorktreeTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2DA16B72DDDC20B5F8B4137 /* CreatingWorktreeTranscript.swift */; };
 		6C866751DA7A18248BB79315 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E2591444903E4ABB996767C9 /* Assets.xcassets */; };
@@ -226,6 +227,7 @@
 		E2591444903E4ABB996767C9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		E2DA16B72DDDC20B5F8B4137 /* CreatingWorktreeTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreatingWorktreeTranscript.swift; sourceTree = "<group>"; };
 		E455928EAF0039A2A2FDB3BA /* CheckoutMemberPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckoutMemberPicker.swift; sourceTree = "<group>"; };
+		E4B68036582E67C62B703618 /* PeerIconView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerIconView.swift; sourceTree = "<group>"; };
 		E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptSession.swift; sourceTree = "<group>"; };
 		E827B4E05449D23196D8F673 /* WorktreeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeRow.swift; sourceTree = "<group>"; };
 		E8A21515D98FB4756AD79B19 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -572,6 +574,7 @@
 				C0E84291A6AA43082A7F684D /* HostStore.swift */,
 				D8C41B3901C2155F0CB451B1 /* PairHostView.swift */,
 				1E6CE88D7E1B2D530E7D0450 /* PeerDevicesView.swift */,
+				E4B68036582E67C62B703618 /* PeerIconView.swift */,
 				C859167B848F3A5C43EEE3D7 /* PeersView.swift */,
 				EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */,
 				FB90BAD33068D0FA5A49EE21 /* SessionListCache.swift */,
@@ -667,7 +670,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1430;
+				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					8D8AB32DF61A9CB4A9556AC1 = {
 						ProvisioningStyle = Automatic;
@@ -797,6 +800,7 @@
 				E42D013137737D7897D0CA96 /* PeerDevicePlayback.swift in Sources */,
 				5522F1EB9EBB197357A9EFB1 /* PeerDeviceSession.swift in Sources */,
 				F916510C7AFCAAE74E1CF017 /* PeerDevicesView.swift in Sources */,
+				603039A563273080480A0D1A /* PeerIconView.swift in Sources */,
 				EFCBF7FA10487119D0321510 /* PeerPortForwarder.swift in Sources */,
 				0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */,
 				914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */,

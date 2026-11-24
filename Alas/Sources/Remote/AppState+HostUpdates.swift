@@ -7,6 +7,7 @@ struct HostUpdateReminder: Identifiable, Equatable {
     let serverId: String
     let name: String
     let hostVersion: String
+    var icon: PeerIcon = .laptop
 
     var id: String { serverId }
 }
@@ -21,6 +22,7 @@ enum HostUpdateReminderPolicy {
         let hostVersion: String?
         /// Online and serving `host.update.v1`.
         let canUpdate: Bool
+        var icon: PeerIcon = .laptop
     }
 
     /// The hosts older than `appVersion` that can update from here. A host
@@ -29,7 +31,7 @@ enum HostUpdateReminderPolicy {
         peers.compactMap { peer in
             guard peer.canUpdate, let version = peer.hostVersion, dismissed[peer.serverId] != version,
                   let parsed = SemanticVersion(parsing: version), parsed < appVersion else { return nil }
-            return HostUpdateReminder(serverId: peer.serverId, name: peer.name, hostVersion: version)
+            return HostUpdateReminder(serverId: peer.serverId, name: peer.name, hostVersion: version, icon: peer.icon)
         }
     }
 
@@ -98,7 +100,8 @@ extension AppState {
                 HostUpdateReminderPolicy.Peer(
                     serverId: peer.serverId, name: peer.name,
                     hostVersion: remotePeers.hostVersions[peer.serverId],
-                    canUpdate: canUpdateHostOverPeer(peerId: peer.id, serverId: peer.serverId)
+                    canUpdate: canUpdateHostOverPeer(peerId: peer.id, serverId: peer.serverId),
+                    icon: peer.icon ?? .laptop
                 )
             },
             appVersion: HostUpdateReminderPolicy.appVersion,

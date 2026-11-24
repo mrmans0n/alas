@@ -519,7 +519,8 @@ struct RootView: View {
                 onChangeDictationPreferences: { [state] preferences in
                     state.config.harness.dictationPreferences = preferences
                     state.saveConfig()
-                }
+                },
+                peerIconNamed: { [state] in state.peerIcon(named: $0) }
             )
             .id(client.selectedSessionId)
         } else if let consoles = client.consoles, let viewer = consoles.viewer {
@@ -543,6 +544,25 @@ struct RootView: View {
             } else {
                 EmptyTabView(subtitle: "This peer can't start sessions right now.", actions: [])
             }
+        } else if let peer = client.activePeer {
+            // A peer's page with nothing open: it is offline, or has no
+            // worktree to restore.
+            EmptyTabView(
+                subtitle: !peer.state.carriesSessions
+                    ? peer.state.unavailableDetail(peerName: peer.name)
+                    : peer.repos(ordering: .manual).isEmpty
+                        ? "\(peer.name) has no projects yet."
+                        : "Pick a worktree on \(peer.name) in the sidebar.",
+                actions: peer.state.carriesSessions ? [] : [EmptyTabAction(
+                    icon: "gear",
+                    title: "Edit \(peer.name)…",
+                    subtitle: "Check how this Mac reaches it",
+                    action: {
+                        state.requestPairedMacSettings(serverId: peer.serverId)
+                        openSettingsWindow()
+                    }
+                )]
+            )
         }
     }
 

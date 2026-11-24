@@ -59,7 +59,8 @@ extension AppState {
         ApprovalPeer(serverID: config.remote.serverId, publicKey: approvalSigner().publicKey,
             name: remoteDisplayName,
             origins: Array(remoteAdvertisedAddresses.filter { $0.kind != .localhost }
-                .map(\.url).prefix(RemotePairingLink.maxOrigins)))
+                .map(\.url).prefix(RemotePairingLink.maxOrigins)),
+            icon: remoteIcon)
     }
 
     func makePairingApprovalCoordinator() -> RemotePairingApprovalCoordinator {

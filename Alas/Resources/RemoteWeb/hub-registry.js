@@ -254,6 +254,17 @@ function applyHello(doc, clientId, hello) {
         .filter((p) => p && p.state === "online" && typeof p.serverId === "string")
         .map((p) => p.serverId)
     : [];
+  // Icons are display-only, so every listed peer contributes regardless of
+  // state. Ids peer-icons.js does not know are dropped here; a missing icon
+  // draws the laptop at display time.
+  const isIcon = globalThis.RemotePeerIcons.isPeerIconId;
+  const icon = isIcon(hello.icon) ? hello.icon : (server.icon || null);
+  const peerIcons = {};
+  if (Array.isArray(hello.peers)) {
+    for (const p of hello.peers) {
+      if (p && typeof p.serverId === "string" && p.serverId && isIcon(p.icon)) peerIcons[p.serverId] = p.icon;
+    }
+  }
   const twin = serverId ? doc.servers.find((s) => s.id !== clientId && s.serverId === serverId) : null;
   if (twin) {
     twin.token = server.token;
@@ -263,6 +274,8 @@ function applyHello(doc, clientId, hello) {
     twin.protocolVersion = protocolVersion;
     twin.federationEnabled = federationEnabled;
     twin.peers = peers;
+    twin.icon = isIcon(hello.icon) ? hello.icon : (twin.icon || icon);
+    twin.peerIcons = peerIcons;
     doc.servers = doc.servers.filter((s) => s.id !== clientId);
     if (doc.activeId === clientId) doc.activeId = twin.id;
     return { server: twin, mergedFromId: clientId };
@@ -272,6 +285,8 @@ function applyHello(doc, clientId, hello) {
   server.protocolVersion = protocolVersion;
   server.federationEnabled = federationEnabled;
   server.peers = peers;
+  server.icon = icon;
+  server.peerIcons = peerIcons;
   return { server, mergedFromId: null };
 }
 
