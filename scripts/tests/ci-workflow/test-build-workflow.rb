@@ -268,6 +268,9 @@ raise "alas-host-linux must build on both Linux architectures" unless linux_runn
   ["aarch64", "ubuntu-26.04-arm"]
 ]
 raise "alas-host-linux must build in the Swift Linux image" unless linux_job["container"].to_s.start_with?("swift:")
+linux_core_tests = linux_job.fetch("steps").find { |step| step["name"] == "Test AlasCore" }
+raise "alas-host-linux must buffer AlasCore test output with the stall watchdog" unless
+  linux_core_tests&.fetch("run", "")&.include?("scripts/run-with-stall-watchdog.sh 600 --buffer-output")
 
 remote_steps = jobs.fetch("remote-web-tests").fetch("steps").map { |step| step["run"] }
 [
