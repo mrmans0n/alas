@@ -1,0 +1,17 @@
+name: Cancel merged PR build
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  cancel:
+    if: github.event.pull_request.merged
+    # Match build.yml's PR ref even though github.ref now names the base branch.
+    concurrency:
+      group: Build-refs/pull/${{ github.event.pull_request.number }}/merge
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Released CI runners for the merged PR."

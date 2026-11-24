@@ -521,7 +521,7 @@ jobs:
         # Discovery must see SSHIntegrationTests enabled, as the shards do.
         env:
           TEST_RUNNER_ALAS_SSH_INTEGRATION: "1"
-        run: python3 scripts/ci_swift_tests.py plan --shard-count 4
+        run: python3 scripts/ci_swift_tests.py plan --shard-count 3
 
       - name: Package compiled Swift test products
         timeout-minutes: 5
@@ -601,7 +601,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3]
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       GIT_TERMINAL_PROMPT: "0"
