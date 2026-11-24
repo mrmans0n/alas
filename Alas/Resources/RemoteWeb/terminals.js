@@ -135,6 +135,7 @@ function createTerminals({ send, el, keepView = () => false, onView = () => {} }
 
   async function showConsole(summary) {
     closeConsole();
+    error = "";
     const current = selection;
     el.listLevel.classList.add("hidden");
     el.viewLevel.classList.remove("hidden");
@@ -145,7 +146,8 @@ function createTerminals({ send, el, keepView = () => false, onView = () => {} }
     try {
       await loadXterm();
     } catch (e) {
-      if (current === selection) el.status.textContent = e.message;
+      // Back to the list, which stays in sight: a desktop has no tab for this view yet.
+      if (current === selection) { error = e.message; showList(true); }
       return;
     }
     if (current !== selection) return;   // navigated elsewhere while xterm loaded

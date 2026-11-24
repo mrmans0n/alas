@@ -109,4 +109,18 @@ async function finishLoadingXterm() {
   await finishLoadingXterm();
   assert.equal(sent.filter(m => m.attach).length, 0);
   console.log("✔ a terminal still loading when the worktree changes is never attached");
+
+  // xterm failing to load reports it in the list, as a desktop shows no tab for the view yet.
+  delete globalThis.Terminal;
+  delete globalThis.FitAddon;
+  desk.setWorktree("w");
+  desk.show();
+  desk.handle({ list: { consoles: [summary("A")] } });
+  el.list.children[0].children[0].click();
+  await new Promise(resolve => setTimeout(resolve));
+  pendingScripts.splice(0).forEach(script => script.onerror());
+  await new Promise(resolve => setTimeout(resolve));
+  assert.match(el.error.textContent, /Couldn't load/);
+  assert.ok(!el.listLevel.classList.contains("hidden"));
+  console.log("✔ a terminal whose xterm fails to load reports it in the list");
 })().catch(error => { console.error("✘", error); process.exit(1); });
