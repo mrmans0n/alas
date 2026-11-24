@@ -2549,8 +2549,22 @@ final class AppState {
     }
 
     func toggleSidebarVisibility() {
-        config.sidebarVisible.toggle()
+        if hidesSidePanes {
+            maximizedTabID = nil
+            config.sidebarVisible = true
+        } else {
+            config.sidebarVisible.toggle()
+        }
         _ = saveConfig()
+    }
+
+    /// The tab that hides both side panes while it is the active one. Not persisted.
+    var maximizedTabID: TabID?
+
+    /// Whether the side panes are hidden for the maximized tab; leaves the saved visibility alone.
+    var hidesSidePanes: Bool {
+        guard let maximizedTabID else { return false }
+        return activeTab?.id == maximizedTabID
     }
 
     /// Tear down tabs, terminals, harness state, and editor buffers for any

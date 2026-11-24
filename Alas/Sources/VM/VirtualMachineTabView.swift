@@ -39,6 +39,8 @@ struct VirtualMachineTabView: View {
     @State private var agentWindowEnds = 0
     /// Bumped by each click on the look-only screen; the hint shows while set.
     @State private var lookOnlyHint: Int?
+    /// Full screen hid the sidebars, so leaving it shows them again.
+    @State private var maximizedForFullScreen = false
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
 
@@ -159,6 +161,11 @@ struct VirtualMachineTabView: View {
         // A pause records the VM as paused only after it stopped.
         .onChange(of: vms.pausing.contains(recordID)) { _, _ in refresh() }
         .task(id: helperCheckTarget) { await checkHelper(helperCheckTarget) }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
+            guard maximizedForFullScreen else { return }
+            maximizedForFullScreen = false
+            if maximized { state.maximizedTabID = nil }
+        }
         .task(id: state.vmLastAgentCall[recordID]?.at) { await redrawWhenAgentWindowEnds() }
         .alert("Customize the base image?", isPresented: $confirmingCustomize) {
             Button("Customize", action: customizeBaseImage)
@@ -379,6 +386,13 @@ struct VirtualMachineTabView: View {
                     }
                 }
             }
+            ToolbarBtn(
+                icon: maximized ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                tooltip: maximized ? "Show sidebars" : "Hide sidebars", metrics: .vmStatusBar
+            ) {
+                state.maximizedTabID = maximized ? nil : tab.id
+            }
+            ToolbarBtn(icon: "display", tooltip: "Full screen", metrics: .vmStatusBar, action: toggleFullScreen)
             ToolbarBtn(icon: "sidebar.right", tooltip: "Back to the Devices rail", metrics: .vmStatusBar) {
                 state.bringDeviceToRail(.vm(guest), tabID: tab.id, worktreeID: worktreeID)
             }
@@ -390,6 +404,18 @@ struct VirtualMachineTabView: View {
                 newSetupScript: VMTabScreen.offersNewSetupScript(
                     cleanPoint: record.cleanPoint, projectScript: state.vmGuestSetupScript(recordID: recordID)))
         }
+    }
+
+    private var maximized: Bool { state.maximizedTabID == tab.id }
+
+    /// Full screen also hides the sidebars; leaving full screen shows them again if it hid them.
+    private func toggleFullScreen() {
+        let entering = !(NSApp.keyWindow?.styleMask.contains(.fullScreen) ?? false)
+        if entering && !maximized {
+            state.maximizedTabID = tab.id
+            maximizedForFullScreen = true
+        }
+        SystemMenuItems.toggleFullScreen()
     }
 
     /// The ⋯ menu of rare actions; nothing when none applies. `deletable`

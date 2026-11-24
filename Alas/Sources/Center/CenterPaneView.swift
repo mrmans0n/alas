@@ -378,10 +378,11 @@ struct CenterPaneView: View {
                     rightPaneStartupSuppressed: rightPaneStartupSuppressed
                 ),
                 onRevealSidebar: {
+                    state.maximizedTabID = nil
                     state.config.sidebarVisible = true
                     state.saveConfig()
                 },
-                sidebarHidden: !state.config.sidebarVisible,
+                sidebarHidden: !state.config.sidebarVisible || state.hidesSidePanes,
                 onMove: { draggedId, destinationId in
                     if let owner = sharedOwnerForTab(draggedId), sharedOwnerForTab(destinationId) == owner {
                         state.tabs.moveTab(owner: owner, fromId: draggedId, toId: destinationId)

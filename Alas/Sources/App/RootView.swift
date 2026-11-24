@@ -248,12 +248,14 @@ struct RootView: View {
                     get: { state.config.rightPaneWidth },
                     set: { state.config.rightPaneWidth = $0 }
                 ),
-                sidebarVisible: state.config.sidebarVisible,
+                sidebarVisible: state.config.sidebarVisible && !state.hidesSidePanes,
                 rightVisible: state.config.rightPaneVisible
                     && rightPaneSelection.showsRightPane
-                    && !state.suppressesRestoredRightPaneAfterAbandonedStartup,
+                    && !state.suppressesRestoredRightPaneAfterAbandonedStartup
+                    && !state.hidesSidePanes,
                 collapsedRailWidth: rightPaneSelection.showsRightPane
                     && !state.suppressesRestoredRightPaneAfterAbandonedStartup
+                    && !state.hidesSidePanes
                     ? Double(RightPaneRail.width)
                     : nil,
                 onWidthsChanged: { state.saveConfig() },
