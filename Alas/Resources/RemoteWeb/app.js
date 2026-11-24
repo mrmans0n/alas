@@ -1608,6 +1608,109 @@ $("panel-resize").addEventListener("pointerdown", event => {
 
 // --- hub settings ------------------------------------------------------------
 
+// Ctrl/Cmd+K: jump to a session or run a command by typing part of its name. Ctrl/Cmd+1–9 opens the
+// sidebar's sessions in order.
+let paletteItems = [];
+let paletteShown = [];
+let paletteIndex = 0;
+
+function paletteCommands() {
+  const items = [];
+  const sessions = [...listedSessions.values()].sort((a, b) =>
+    RemoteSessionOrdering.sessionIsActive(b) - RemoteSessionOrdering.sessionIsActive(a) || sessionRecencyMs(b) - sessionRecencyMs(a));
+  for (const s of sessions) {
+    const hint = [s.worktree && s.worktree.branch, RemoteSessionOrdering.sessionIsActive(s) ? "" : "closed"].filter(Boolean).join(" · ");
+    items.push({ label: sessionTitles.get(s.id) || s.title || "Session", hint, run: () => openSession(s.id) });
+  }
+  const command = (label, run, hint = "") => items.push({ label, hint, run });
+  command("New session", showCreateSheet);
+  if (currentSession) {
+    const tabs = !$("detail-tabs").classList.contains("hidden");
+    for (const [name, label] of [["changes", "Changes"], ["files", "Files"], ["terminal", "Terminal"]]) {
+      if (tabs && !$("tab-" + name).classList.contains("hidden")) command("Show " + label, () => showTab(name));
+    }
+    if (tabs && !$("tab-terminal").classList.contains("hidden")) command("New terminal", () => { showTab("terminal"); $("terminal-new").click(); });
+    command("Rename session", () => showRenameSheet(currentSession));
+  }
+  if (wideLayout.matches) {
+    const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl ";
+    command("Toggle sidebar", () => togglePane("sideCollapsed"), mod + "B");
+    command("Toggle panel", () => togglePane("panelCollapsed"), mod + (mod === "⌘" ? "⌥B" : "Alt B"));
+  }
+  if (!currentSession || wideLayout.matches) command("Settings", showSettings);
+  return items;
+}
+
+function showPalette() {
+  paletteItems = paletteCommands();
+  paletteIndex = 0;
+  $("palette-input").value = "";
+  $("palette").classList.remove("hidden");
+  renderPalette();
+  requestAnimationFrame(() => $("palette-input").focus());
+}
+
+function hidePalette() {
+  $("palette").classList.add("hidden");
+}
+
+function renderPalette() {
+  const words = $("palette-input").value.toLowerCase().split(/\s+/).filter(Boolean);
+  paletteShown = paletteItems.filter(item => words.every(w => `${item.label} ${item.hint}`.toLowerCase().includes(w)));
+  paletteIndex = Math.max(0, Math.min(paletteIndex, paletteShown.length - 1));
+  const list = $("palette-list");
+  list.innerHTML = "";
+  paletteShown.forEach((item, i) => {
+    const row = el("div", "pal-row" + (i === paletteIndex ? " sel" : ""));
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(i === paletteIndex));
+    row.append(el("span", "pal-label", item.label));
+    if (item.hint) row.append(el("span", "pal-hint", item.hint));
+    row.onmousedown = event => { event.preventDefault(); runPaletteItem(item); };
+    list.append(row);
+  });
+  if (!paletteShown.length) list.append(el("p", "pal-empty", "No matches"));
+  if (list.children[paletteIndex]) list.children[paletteIndex].scrollIntoView({ block: "nearest" });
+}
+
+function runPaletteItem(item) {
+  hidePalette();
+  if (item) item.run();
+}
+
+listen("palette-input", "input", () => { paletteIndex = 0; renderPalette(); });
+listen("palette-input", "keydown", event => {
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const n = paletteShown.length;
+    if (n) paletteIndex = (paletteIndex + (event.key === "ArrowDown" ? 1 : n - 1)) % n;
+    renderPalette();
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    runPaletteItem(paletteShown[paletteIndex]);
+  } else if (event.key === "Escape") {
+    event.stopPropagation();   // the document's Escape would close an open diff too
+    hidePalette();
+  }
+});
+$("palette").onclick = event => { if (event.target.id === "palette") hidePalette(); };
+document.addEventListener("keydown", event => {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+  const key = event.key.toLowerCase();
+  const otherSheet = [...document.querySelectorAll(".sheet:not(.hidden)")].some(sheet => sheet.id !== "palette");
+  if (otherSheet || !$("gate").classList.contains("hidden")) return;
+  if (key === "k") {
+    event.preventDefault();
+    if ($("palette").classList.contains("hidden")) showPalette(); else hidePalette();
+  } else if (/^[1-9]$/.test(key)) {
+    const row = document.querySelectorAll("#session-list [data-session-id]")[Number(key) - 1];
+    if (!row) return;
+    event.preventDefault();
+    hidePalette();
+    openSession(row.dataset.sessionId);
+  }
+});
+
 function serverDotClass(link, counts) {
   if (!link) return "off";
   switch (link.state) {
