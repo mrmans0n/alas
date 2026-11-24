@@ -301,6 +301,8 @@ final class AppState {
     @ObservationIgnored var preparingShipSessionIDs: Set<ACPSession.ID> = []
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
+    /// What is unfolded in the Agent pane, by worktree. Kept here for the same reason.
+    var agentSidebarDisclosure: [String: AgentSidebarDisclosure] = [:]
     var attentionStore: AttentionStore { core.attention.store }
     /// Debug: show the first-run screen even when projects exist.
     var isPreviewingFirstRunScreen = false
@@ -12856,7 +12858,8 @@ final class AppState {
                 uniqueKeysWithValues: core.delegatedPeerOrigins.keys.compactMap { id in
                     core.delegatedFromName(of: id).map { (id, $0) }
                 }
-            )
+            ),
+            worktreeRoot: worktree.path.path
         ))
     }
 

@@ -28,6 +28,8 @@ struct AgentSidebarRollupBuilder {
         var delegatedParents: [String: String] = [:]
         /// Session id to the name of the paired Mac that delegated it.
         var delegatedFromNames: [String: String] = [:]
+        /// The worktree's path, so a subagent's directory reads relative to it.
+        var worktreeRoot: String? = nil
     }
 
     static func build(_ input: Input) -> AgentSidebarRollup {
@@ -36,7 +38,9 @@ struct AgentSidebarRollupBuilder {
         let persistedByID = Dictionary(uniqueKeysWithValues: input.persistedACP.map { ($0.id, $0) })
 
         let liveRows = liveSessions.map {
-            liveRow(for: $0, remoteHost: input.remoteHost, persisted: persistedByID[$0.id])
+            liveRow(
+                for: $0, remoteHost: input.remoteHost, persisted: persistedByID[$0.id],
+                worktreeRoot: input.worktreeRoot)
         }
         let persistedRows = input.persistedACP
             .filter { !liveIDs.contains($0.id) }
@@ -167,7 +171,8 @@ struct AgentSidebarRollupBuilder {
     private static func liveRow(
         for session: ACPSession,
         remoteHost: String?,
-        persisted: ACPSessionRow?
+        persisted: ACPSessionRow?,
+        worktreeRoot: String?
     ) -> AgentSidebarRow {
         let resolvedState = state(for: session)
         // A session that disconnects renders in History like any persisted
@@ -193,6 +198,8 @@ struct AgentSidebarRollupBuilder {
             activityAt: activityAt,
             isLive: true
         )
+        row.turnSettings = turnSettings(for: session)
+        row.supportsContextBreakdown = session.supportsContextBreakdown
         // A session in History has ended, and so has everything it spawned.
         if resolvedState != .detached {
             row.subagents = session.orderedSubagents.map { run in
@@ -200,6 +207,12 @@ struct AgentSidebarRollupBuilder {
                     id: run.subagentSessionId,
                     name: run.displayName,
                     task: run.task,
+                    caption: ACPSubagentRowPolicy.observationCaption(
+                        config: ACPSubagentConfigSummary.make(
+                            agentId: session.agentId, configOptions: run.configOptions,
+                            isConfirmed: run.isConfigConfirmed),
+                        cwd: run.cwd, worktreeRoot: worktreeRoot,
+                        directoriesConfirmed: run.areDirectoriesConfirmed),
                     state: run.state,
                     canCancel: ACPSubagentRowPolicy.showsCancel(state: run.state, capabilities: run.capabilities),
                     startedAt: run.startedAt,
@@ -208,6 +221,17 @@ struct AgentSidebarRollupBuilder {
             }
         }
         return row
+    }
+
+    /// Effort, mode, provider and plan, in the order the composer shows them.
+    private static func turnSettings(for session: ACPSession) -> [String] {
+        let chips = session.chipState
+        var settings = [chips.thinking?.currentName, chips.mode?.currentName, session.currentProviderDisplayName]
+            .compactMap { $0 }
+        if let status = session.authStatus, status.kind != .none {
+            settings.append(status.label)
+        }
+        return settings
     }
 
     private static func persistedRow(_ row: ACPSessionRow, remoteHost: String?) -> AgentSidebarRow {

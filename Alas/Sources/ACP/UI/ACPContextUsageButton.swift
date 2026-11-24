@@ -18,11 +18,7 @@ struct ACPContextUsageButton: View {
     var loadBreakdown: (() async -> ACPContextBreakdown?)? = nil
 
     @State private var showDetails = false
-    @State private var breakdown: ACPContextBreakdown?
-    /// The `usage_update` the breakdown was measured at: a newer one means the
-    /// window changed, so the next open fetches again.
-    @State private var breakdownUsage: ACPUsageInfo?
-    @State private var loadingBreakdown = false
+    @State private var loader = ACPContextBreakdownLoader()
     @Environment(\.theme) private var theme
 
     /// `usage_update` (context ring) and `_meta.quota` (per-model
@@ -63,15 +59,12 @@ struct ACPContextUsageButton: View {
             }
             .popover(isPresented: $showDetails, arrowEdge: .top) {
                 details
-                    .task { await refreshBreakdown() }
+                    .task { await loader.refresh(usage: usage, load: loadBreakdown) }
             }
             // A reattach resets the capability and relearns it from the new
             // `initialize`, so a flip means the cached breakdown was measured
             // on another connection, or the adapter no longer serves one.
-            .onChange(of: loadBreakdown == nil) {
-                breakdown = nil
-                breakdownUsage = nil
-            }
+            .onChange(of: loadBreakdown == nil) { loader.reset() }
         }
     }
 
@@ -90,35 +83,24 @@ struct ACPContextUsageButton: View {
                     .foregroundStyle(theme.color("fg-muted"))
                 // A stale breakdown stays up while the new one loads, so the
                 // popover does not shrink back to the spinner and regrow.
-                if let breakdown {
+                if let breakdown = loader.breakdown {
                     ACPContextBreakdownView(breakdown: breakdown)
-                } else if loadingBreakdown {
-                    HStack(spacing: scale.space[2]) {
-                        ProgressView().controlSize(.small)
-                        Text("Measuring context…")
-                            .font(scale.metaFont)
-                            .foregroundStyle(theme.color("fg-muted"))
-                    }
+                } else if loader.isLoading {
+                    ACPContextMeasuringLabel()
                 } else {
                     ProgressView(value: ratio)
                         .tint(theme.color(ContextRingLevel(ratio: ratio).token))
                         .frame(width: 200)
                 }
                 if let cost = usage.cost {
-                    Text(formatCost(cost))
+                    Text(cost.displayText)
                         .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-muted"))
                 }
             }
-            if let lastTurnQuota, lastTurnQuota.hasDisplayableContent {
+            if hasQuotaContent {
                 if usage != nil { Divider() }
-                quotaSection(title: "Last turn", quota: lastTurnQuota)
-            }
-            if let sessionQuotaTotal, sessionQuotaTotal.hasDisplayableContent {
-                // Cumulative for this in-memory session's lifetime, not
-                // necessarily the full persisted session, and *not* reset
-                // by a reconnect — see `ACPSession.sessionQuotaTotal`.
-                quotaSection(title: "Cumulative", quota: sessionQuotaTotal)
+                ACPContextQuotaSections(lastTurn: lastTurnQuota, sessionTotal: sessionQuotaTotal)
             }
         }
         .padding(scale.space[3])
@@ -127,12 +109,88 @@ struct ACPContextUsageButton: View {
         // the breakdown instead of growing the popover. For the same reason the
         // minimum only applies without a breakdown: a `minWidth` frame clamps
         // its child to the proposed width, which would undo the fixed one.
-        .frame(width: breakdown == nil ? nil : ACPContextBreakdownView.width + 28, alignment: .leading)
-        .frame(minWidth: breakdown == nil ? 220 : nil, alignment: .leading)
+        .frame(width: loader.breakdown == nil ? nil : ACPContextBreakdownView.width + 28, alignment: .leading)
+        .frame(minWidth: loader.breakdown == nil ? 220 : nil, alignment: .leading)
+    }
+}
+
+/// Shown while the adapter counts what fills the window.
+struct ACPContextMeasuringLabel: View {
+    @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
+
+    var body: some View {
+        HStack(spacing: scale.space[2]) {
+            ProgressView().controlSize(.small)
+            Text("Measuring context…")
+                .font(scale.metaFont)
+                .foregroundStyle(theme.color("fg-muted"))
+        }
+    }
+}
+
+/// Fetches what fills a session's context window and keeps the last answer,
+/// for whichever view shows it.
+@MainActor @Observable
+final class ACPContextBreakdownLoader {
+    private(set) var breakdown: ACPContextBreakdown?
+    private(set) var isLoading = false
+    /// The `usage_update` the breakdown was measured at: a newer one means the
+    /// window changed, so the next refresh fetches again.
+    @ObservationIgnored private var measuredAt: ACPUsageInfo?
+    /// Callers that arrived while a request was in flight.
+    @ObservationIgnored private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func refresh(usage: ACPUsageInfo?, load: (() async -> ACPContextBreakdown?)?) async {
+        guard let load else { return }
+        // A request in flight answers for the window it started on, so a
+        // caller with newer usage waits for it and then asks again, unless a
+        // later caller replaced it meanwhile.
+        while isLoading {
+            await withCheckedContinuation { waiters.append($0) }
+            if Task.isCancelled { return }
+        }
+        guard breakdown == nil || measuredAt != usage else { return }
+        isLoading = true
+        let fetched = await load()
+        withAnimation(.snappy) {
+            isLoading = false
+            if let fetched, !fetched.categories.isEmpty {
+                breakdown = fetched
+                measuredAt = usage
+            }
+        }
+        let waiting = waiters
+        waiters = []
+        waiting.forEach { $0.resume() }
     }
 
-    @ViewBuilder
-    private func quotaSection(title: String, quota: ACPPromptQuota) -> some View {
+    func reset() {
+        breakdown = nil
+        measuredAt = nil
+    }
+}
+
+/// Token totals per model, for the last turn and for the session so far.
+struct ACPContextQuotaSections: View {
+    let lastTurn: ACPPromptQuota?
+    /// Cumulative for this in-memory session's lifetime, not necessarily the
+    /// full persisted session, and *not* reset by a reconnect — see
+    /// `ACPSession.sessionQuotaTotal`.
+    let sessionTotal: ACPPromptQuota?
+    @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
+
+    var body: some View {
+        if let lastTurn, lastTurn.hasDisplayableContent {
+            section(title: "Last turn", quota: lastTurn)
+        }
+        if let sessionTotal, sessionTotal.hasDisplayableContent {
+            section(title: "Cumulative", quota: sessionTotal)
+        }
+    }
+
+    private func section(title: String, quota: ACPPromptQuota) -> some View {
         VStack(alignment: .leading, spacing: scale.space[1]) {
             Text(title)
                 .font(scale.caption.font(weight: .semibold))
@@ -141,44 +199,35 @@ struct ACPContextUsageButton: View {
                 // Adapter sent only the top-level token_count, no
                 // model_usage breakdown.
                 if let total = quota.tokenCount {
-                    quotaRow(label: "Total", tokens: total.displayTotal)
+                    row(label: "Total", tokens: total.displayTotal)
                 }
             } else {
                 ForEach(quota.modelUsage, id: \.model) { usage in
-                    quotaRow(label: usage.model, tokens: usage.tokenCount.displayTotal)
+                    row(label: usage.model, tokens: usage.tokenCount.displayTotal)
                 }
             }
         }
     }
 
-    private func quotaRow(label: String, tokens: Int) -> some View {
+    private func row(label: String, tokens: Int) -> some View {
         HStack {
             Text(label)
                 .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer(minLength: 12)
             Text(formatContextTokens(tokens))
                 .font(scale.meta.font(design: .monospaced))
                 .foregroundStyle(theme.color("fg-muted"))
         }
     }
+}
 
-    private func refreshBreakdown() async {
-        guard let loadBreakdown, !loadingBreakdown, breakdown == nil || breakdownUsage != usage else { return }
-        let measuredAt = usage
-        loadingBreakdown = true
-        let fetched = await loadBreakdown()
-        withAnimation(.snappy) {
-            loadingBreakdown = false
-            guard let fetched, !fetched.categories.isEmpty else { return }
-            breakdown = fetched
-            breakdownUsage = measuredAt
-        }
-    }
-
-    private func formatCost(_ cost: ACPUsageInfo.Cost) -> String {
-        let symbol = cost.currency == "USD" ? "$" : "\(cost.currency) "
-        return symbol + String(format: "%.3f", cost.amount)
+extension ACPUsageInfo.Cost {
+    var displayText: String {
+        let symbol = currency == "USD" ? "$" : "\(currency) "
+        return symbol + String(format: "%.3f", amount)
     }
 }
 
@@ -187,6 +236,10 @@ struct ACPContextUsageButton: View {
 struct ACPContextBreakdownView: View {
     @Environment(\.designScale) private var scale
     let breakdown: ACPContextBreakdown
+    /// For a narrow column: fills the offered width instead of the popover's
+    /// fixed one, and stacks the legend under the grid when they do not fit
+    /// side by side.
+    var isCompact = false
 
     @Environment(\.theme) private var theme
 
@@ -203,13 +256,26 @@ struct ACPContextBreakdownView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space[2]) {
-            HStack(alignment: .top, spacing: scale.space[3]) {
-                grid
-                legend
+            if isCompact {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: scale.space[3]) {
+                        grid
+                        legend
+                    }
+                    VStack(alignment: .leading, spacing: scale.space[2]) {
+                        grid
+                        legend
+                    }
+                }
+            } else {
+                HStack(alignment: .top, spacing: scale.space[3]) {
+                    grid
+                    legend
+                }
             }
             details
         }
-        .frame(width: Self.width, alignment: .leading)
+        .frame(width: isCompact ? nil : Self.width, alignment: .leading)
     }
 
     // MARK: Grid

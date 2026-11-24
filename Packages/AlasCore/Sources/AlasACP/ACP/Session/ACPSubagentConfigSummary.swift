@@ -30,17 +30,12 @@ public struct ACPSubagentConfigSummary: Equatable, Sendable {
             availableModes: [],
             currentMode: nil,
             configOptions: configOptions)
-        let model = currentName(of: chips.models)
-        let effort = currentName(of: chips.thinking)
+        let model = chips.models?.currentName
+        let effort = chips.thinking?.currentName
         let parameters = chips.parameters.compactMap { chip in
-            currentName(of: chip.spec).map { "\(chip.label): \($0)" }
+            chip.spec.currentName.map { "\(chip.label): \($0)" }
         }
         guard model != nil || effort != nil || !parameters.isEmpty else { return nil }
         return .init(model: model, effort: effort, parameters: parameters, isConfirmed: isConfirmed)
-    }
-
-    private static func currentName(of spec: ChipSpec?) -> String? {
-        guard let spec, let currentId = spec.currentId else { return nil }
-        return spec.options.first { $0.id == currentId }?.name
     }
 }
