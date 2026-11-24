@@ -106,8 +106,10 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             guard representedRowID != oldValue else { return }
             textSelection = nil
             gutterSelection = nil
+            findIndicator?.removeFromSuperlayer()
         }
     }
+    private weak var findIndicator: CALayer?
     var onIntrinsicSizeInvalidated: ((String) -> Void)?
     private(set) var lastMeasuredWidth: CGFloat?
     private(set) var lineHeight: CGFloat = 16
@@ -1924,17 +1926,76 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     }
 }
 
-extension DiffSplitCoreTextRowView: AppKitDiffScrollLineTargetProviding {
+extension DiffSplitCoreTextRowView: AppKitDiffScrollLineTargetProviding, AppKitDiffFindMatchRevealing {
     /// The target line's center, so line jumps land on the line rather than
     /// centering the whole hunk. Same lookup as the text-view panes.
     func scrollTargetCenterY(for target: AppKitDiffScrollLineTarget) -> CGFloat? {
+        guard let (side, row) = row(for: target) else { return nil }
+        if let range = target.findRange {
+            return textRect(side, row: row, from: range.location, to: range.location + 1).midY
+        }
+        return rowCenterY(row)
+    }
+
+    func revealFindMatch(_ target: AppKitDiffScrollLineTarget) -> Bool {
+        guard let range = target.findRange, let (side, row) = row(for: target), let layer else { return false }
+        let code = codeRect(side)
+        if !wraps {
+            let matchRect = textRect(side, row: row, from: range.location, to: NSMaxRange(range))
+            let delta = matchRect.width <= code.width ? matchRect.midX - code.midX : matchRect.minX - code.minX
+            if !code.contains(matchRect), horizontalScroll.scroll(side, byPoints: delta) {
+                invalidateTiles(code)
+                updateScroller(side)
+                lspController?.notifyScrolled()
+            }
+        }
+
+        findIndicator?.removeFromSuperlayer()
+        let indicator = CALayer()
+        indicator.frame = layer.bounds
+        let color = NSColor.systemYellow.withAlphaComponent(0.42).cgColor
+        func mark(_ match: NSRange) {
+            let rect = textRect(side, row: row, from: match.location, to: NSMaxRange(match)).intersection(code)
+            guard !rect.isEmpty else { return }
+            let highlight = CALayer()
+            highlight.frame = convertToLayer(rect)
+            highlight.backgroundColor = color
+            highlight.cornerRadius = 2
+            indicator.addSublayer(highlight)
+        }
+
+        let layout = layout(forWidth: bounds.width)
+        if let parts = (side == .old ? layout.old : layout.new)?[row] {
+            for part in parts {
+                let bounds = CTLineGetStringRange(part)
+                let match = NSIntersectionRange(NSRange(location: bounds.location, length: bounds.length), range)
+                if match.length > 0 { mark(match) }
+            }
+        } else {
+            mark(range)
+        }
+        layer.addSublayer(indicator)
+        findIndicator = indicator
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak indicator] in indicator?.removeFromSuperlayer() }
+        let fade = CAKeyframeAnimation(keyPath: "opacity")
+        fade.values = [1, 1, 0]
+        fade.keyTimes = [0, 0.75, 1]
+        fade.duration = 1.4
+        indicator.opacity = 0
+        indicator.add(fade, forKey: "findMatch")
+        CATransaction.commit()
+        return true
+    }
+
+    private func row(for target: AppKitDiffScrollLineTarget) -> (Side, Int)? {
         let side: Side = isStacked || target.side != .old ? .new : .old
         guard let row = lines(side).metadata.firstIndex(where: { metadata in
             guard let sourceLine = metadata.sourceLine else { return false }
             return target.side.matches(sourceLine.anchor.side)
                 && sourceLine.highlightLineNumber(for: target.side) == target.line
         }) else { return nil }
-        return rowCenterY(row)
+        return (side, row)
     }
 }
 

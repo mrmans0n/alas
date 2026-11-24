@@ -369,6 +369,7 @@ struct AppKitDiffReviewRowPlan {
     /// The row rendering each line, when the file's diff is expanded and the
     /// line is visible.
     var lineTargets = AppKitDiffReviewLineTargets()
+    var searchableFiles: [DiffReviewFindInput.File] = []
 }
 
 /// Which row renders a given file line, resolved when a line scroll asks.
@@ -425,11 +426,13 @@ enum AppKitDiffReviewRowPlanBuilder {
 
     static func build(
         inputs: [AppKitDiffReviewRowInput],
+        collectsFindFiles: Bool = false,
         trailingRows: [AppKitDiffRowSpec] = []
     ) -> AppKitDiffReviewRowPlan {
         build(
             inputs: inputs,
             maxAutomaticallyRenderedRows: DiffReviewRenderBudget.maxRenderedRows,
+            collectsFindFiles: collectsFindFiles,
             trailingRows: trailingRows
         )
     }
@@ -440,6 +443,7 @@ enum AppKitDiffReviewRowPlanBuilder {
     static func build(
         inputs: [AppKitDiffReviewRowInput],
         maxAutomaticallyRenderedRows: Int,
+        collectsFindFiles: Bool = false,
         trailingRows: [AppKitDiffRowSpec] = []
     ) -> AppKitDiffReviewRowPlan {
         var rows: [AppKitDiffRowSpec] = []
@@ -447,6 +451,8 @@ enum AppKitDiffReviewRowPlanBuilder {
         var headerByFileID: [DiffReviewFileID: String] = [:]
         var placeholderByFileID: [DiffReviewFileID: String] = [:]
         var lineTargets = AppKitDiffReviewLineTargets()
+        var searchableFiles: [DiffReviewFindInput.File] = []
+        if collectsFindFiles { searchableFiles.reserveCapacity(inputs.count) }
         let eligibility = DiffReviewRenderEligibility.renderRows(
             ordered: inputs.map(\.file.id),
             renderedRowCounts: inputs.map { $0.file.displayModel.map(DiffReviewRenderBudget.renderedRowCount) },
@@ -493,6 +499,14 @@ enum AppKitDiffReviewRowPlanBuilder {
             let isAggregateDeferred = input.automaticallyRendersDiff && !automaticallyRendersByAggregateBudget && !individuallyDeferred
             let isDeferred = (!input.automaticallyRendersDiff || !automaticallyRendersByAggregateBudget || individuallyDeferred)
                 && !input.state.showFullDiffOverride
+            let context = !isDeferred && input.file.imageProvider == nil ? renderContext(for: input) : nil
+            if collectsFindFiles, input.file.imageProvider == nil, let model = input.file.displayModel {
+                // Deferred files still contribute their base diff, so a match can reveal the file.
+                let groups = input.state.contextSnapshot == nil
+                    ? model.groups
+                    : context?.groups.map(\.displayGroup) ?? model.groups
+                searchableFiles.append(.init(id: fileID, groups: groups))
+            }
             if isDeferred || (input.file.displayModel == nil && input.file.imageProvider == nil) {
                 // A pending file's comments wait for its diff rather than
                 // showing as file accessories and then moving into it.
@@ -530,7 +544,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                     appendDraft(comment, contextRows: nil, input: input, rows: &rows, fallbacks: &fallbackByTargetID)
                 }
                 mapTargetsDirectly(input, into: &fallbackByTargetID)
-            } else if let context = renderContext(for: input) {
+            } else if let context {
                 appendFileAccessories(input, context: context, rows: &rows, fallbacks: &fallbackByTargetID)
                 appendTextRows(context, input: input, into: &rows, fallbacks: &fallbackByTargetID, lineTargets: &lineTargets)
             }
@@ -548,7 +562,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         return AppKitDiffReviewRowPlan(
             corePlan: .init(rows: rows), fallbackByTargetID: fallbackByTargetID,
             headerByFileID: headerByFileID, placeholderByFileID: placeholderByFileID,
-            lineTargets: lineTargets
+            lineTargets: lineTargets, searchableFiles: searchableFiles
         )
     }
 

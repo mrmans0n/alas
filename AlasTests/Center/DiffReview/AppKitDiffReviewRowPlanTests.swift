@@ -892,6 +892,45 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(state.contextExpansion.expandedLineCount(for: key) == 1)
     }
 
+    @Test func reviewFindMatchesFetchedContextAsItIsExpanded() async {
+        let lines = ["needle above", "first change", "needle between", "second change", "needle below"]
+        let snapshot = DiffReviewFileContextSnapshot(old: .available(lines), new: .available(lines))
+        let diff = ParsedDiff(hunks: [2, 4].map { line in
+            .init(header: "@@ -\(line) +\(line) @@", oldStart: line, newStart: line, lines: [
+                .init(kind: .delete, text: "before", oldNumber: line, newNumber: nil),
+                .init(kind: .add, text: lines[line - 1], oldNumber: nil, newNumber: line),
+            ])
+        })
+        let summary = textFile().summary
+        let display = DiffDisplayModelBuilder.build(diff: diff, filePath: summary.path)
+        let file = DiffReviewFileSectionModel(
+            summary: summary, parsedDiff: diff, displayModel: display, placeholderMessage: nil, openFile: nil,
+            contextProvider: DiffReviewContextProvider { snapshot }
+        )
+        let state = AppKitDiffReviewFileState()
+        let input = AppKitDiffReviewRowInput(file: file, state: state, theme: theme)
+        func find() async -> [Int] {
+            let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input], collectsFindFiles: true)
+            let matches = await DiffReviewFindInput(query: "needle", caseSensitive: false, files: plan.searchableFiles).matches()
+            return matches.map(\.line)
+        }
+
+        let before = await find()
+        #expect(before.isEmpty)
+
+        let upper = display.groups[0].id
+        let lower = display.groups[1].id
+        input.loadContextAndExpand(.init(groupID: upper, boundary: .above), mode: .all, edge: nil)
+        await state.contextLoadTask?.value
+        let above = await find()
+        #expect(above == [1])
+
+        input.loadContextAndExpand(.shared(upperGroupID: upper, lowerGroupID: lower), mode: .all, edge: .bottom)
+        input.loadContextAndExpand(.init(groupID: lower, boundary: .below), mode: .all, edge: nil)
+        let expanded = await find()
+        #expect(expanded == [1, 3, 5])
+    }
+
     private var theme: Theme { try! ThemeStore().current }
 
     private func allSubviews(of view: NSView) -> [NSView] {
