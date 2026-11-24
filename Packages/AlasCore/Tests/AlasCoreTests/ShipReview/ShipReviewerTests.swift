@@ -53,6 +53,10 @@ private final class FakeEffects {
     /// Runs inside the reviewer's turn, after its session has started.
     var duringRun: (() -> Void)?
 
+    /// The message id of the findings prompt delivered last, as the turn
+    /// that runs it reports it.
+    var findingsTurn: Set<String> { Set(delivered.suffix(1).compactMap { $0.messageID?.uuidString }) }
+
     var runs: [ShipReviewer.ReviewerRun] = []
     var filings: [ShipReviewer.Filing] = []
     var delivered: [ShepherdPrompt] = []
@@ -202,7 +206,7 @@ struct ShipReviewerTests {
         #expect(fake.pushes.isEmpty)
 
         fake.head = "h2"
-        reviewer.ownerTurnCompleted(sessionID: id.sessionID)
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID, promptMessageIDs: fake.findingsTurn)
         await reviewer.settle()
 
         let findingID = try #require(fake.filings.first?.findingIDs.first)
@@ -226,12 +230,12 @@ struct ShipReviewerTests {
         _ = reviewer.requestPush(id, target: pullRequest, headSHA: "h1")
         await reviewer.settle()
         fake.head = "h2"
-        reviewer.ownerTurnCompleted(sessionID: id.sessionID)
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID, promptMessageIDs: fake.findingsTurn)
         await reviewer.settle()
         #expect(reviewer.record(for: id)?.phase == .awaitingFix(headSHA: "h2"))
 
         // Round two's finding is resolved; the turn ends without a commit.
-        reviewer.ownerTurnCompleted(sessionID: id.sessionID)
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID, promptMessageIDs: fake.findingsTurn)
         await reviewer.settle()
 
         let stop = ShipReviewStop.noProgress(openFindings: 1)
@@ -252,7 +256,7 @@ struct ShipReviewerTests {
         await reviewer.settle()
         #expect(reviewer.record(for: id)?.phase == .awaitingFix(headSHA: "h1"))
         fake.head = "h2"
-        reviewer.ownerTurnCompleted(sessionID: id.sessionID)
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID, promptMessageIDs: fake.findingsTurn)
         await reviewer.settle()
 
         let publish = ShipReviewTarget.pullRequest(PendingPRPush(title: "", body: "", draft: false, base: nil))
@@ -331,7 +335,7 @@ struct ShipReviewerTests {
         _ = reviewer.requestPush(id, target: pullRequest, headSHA: "h1")
         await reviewer.settle()
         fake.headError = GitFailed()
-        reviewer.ownerTurnCompleted(sessionID: id.sessionID)
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID, promptMessageIDs: fake.findingsTurn)
         await reviewer.settle()
 
         let stop = ShipReviewStop.reviewerFailed("couldn't read the branch: git failed")
@@ -522,7 +526,7 @@ struct ShipReviewerTests {
         reviewer.effects?.servesWorktree = { _ in false }
 
         reviewer.start()
-        reviewer.ownerTurnCompleted(sessionID: id.sessionID)
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID, promptMessageIDs: [])
         await reviewer.settle()
 
         #expect(fake.runs.isEmpty)
@@ -541,5 +545,24 @@ struct ShipReviewerTests {
         await reviewer.settle()
 
         #expect(seen == "reviewer-1")
+    }
+
+    /// Findings queued behind a turn the owner was already running: that
+    /// turn's end isn't the fix turn's, so the review keeps waiting for it.
+    @Test func onlyTheTurnThatRanTheFindingsIsJudged() async {
+        let fake = FakeEffects()
+        fake.replies = [oneFinding]
+        let reviewer = makeReviewer(fake)
+        _ = reviewer.requestPush(id, target: pullRequest, headSHA: "h1")
+        await reviewer.settle()
+
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID, promptMessageIDs: ["an-earlier-prompt"])
+        await reviewer.settle()
+        #expect(reviewer.record(for: id)?.phase == .awaitingFix(headSHA: "h1"))
+
+        fake.head = "h2"
+        reviewer.ownerTurnCompleted(sessionID: id.sessionID, promptMessageIDs: fake.findingsTurn)
+        await reviewer.settle()
+        #expect(fake.runs.count == 2)
     }
 }

@@ -402,16 +402,20 @@ public final class ShipReviewer {
         update(id) { $0.reviewer = choice }
     }
 
-    /// The owning session's turn ended. Findings it was sent: a new commit
-    /// starts the next round, none pushes only if every finding was resolved.
-    /// With nothing under review, fix commits ahead of the request's remote
-    /// branch are reviewed and pushed by Alas.
-    public func ownerTurnCompleted(sessionID: String) {
+    /// The owning session's turn ended; `promptMessageIDs` are the delegated
+    /// prompts it ran. Findings it was sent: once the turn that ran them ends,
+    /// a new commit starts the next round, none pushes only if every finding
+    /// was resolved. With nothing under review, fix commits ahead of the
+    /// request's remote branch are reviewed and pushed by Alas.
+    public func ownerTurnCompleted(sessionID: String, promptMessageIDs: Set<String>) {
         for record in records.values
             where record.id.sessionID == sessionID && !deliveringFindings.contains(record.id) && isServedHere(record.id.worktreeID) {
             let id = record.id
             switch record.phase {
             case .awaitingFix:
+                // A turn that was running when the findings were queued ends
+                // before they run; it says nothing about the fix.
+                if let findings = record.findingsMessageID, !promptMessageIDs.contains(findings) { continue }
                 spawn { [weak self] in await self?.ownerTurnEnded(id) }
             case .idle where record.enabled:
                 spawn { [weak self] in await self?.pickUpLocalCommits(id) }
@@ -796,6 +800,15 @@ public final class ShipReviewer {
         guard let effects else {
             deliveringFindings.remove(id)
             return
+        }
+        // Its own message id, so the turn that runs it can be told apart from
+        // one that was already running when it was queued.
+        let messageID = UUID()
+        var prompt = prompt
+        prompt.messageID = messageID
+        if var record = records[id], record.phase == .awaitingFix(headSHA: headSHA) {
+            record.findingsMessageID = messageID.uuidString
+            put(record)
         }
         let delivery = await effects.deliverFindings(id, prompt) { [weak self] in
             guard let self else { return false }

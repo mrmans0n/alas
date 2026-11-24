@@ -133,7 +133,10 @@ extension AlasCoreContext {
         scheduledAgentTurns.deliver(completion)
         reviewShepherd.turnCompleted(sessionID: completion.sessionId)
         stackShepherd.turnCompleted(sessionID: completion.sessionId)
-        shipReviewer.ownerTurnCompleted(sessionID: completion.sessionId)
+        shipReviewer.ownerTurnCompleted(
+            sessionID: completion.sessionId,
+            promptMessageIDs: Set(completion.delegatedSource?.deliveries.map(\.messageId) ?? [])
+        )
         await orchestration.childTurnCompleted(completion)
     }
 

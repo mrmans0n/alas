@@ -13119,7 +13119,10 @@ final class AppState {
                     self?.scheduledAgentTurns.deliver(completion)
                     self?.reviewShepherd.turnCompleted(sessionID: completion.sessionId)
                     self?.stackShepherd.turnCompleted(sessionID: completion.sessionId)
-                    self?.core.shipReviewer.ownerTurnCompleted(sessionID: completion.sessionId)
+                    self?.core.shipReviewer.ownerTurnCompleted(
+                        sessionID: completion.sessionId,
+                        promptMessageIDs: Set(completion.delegatedSource?.deliveries.map(\.messageId) ?? [])
+                    )
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
             },

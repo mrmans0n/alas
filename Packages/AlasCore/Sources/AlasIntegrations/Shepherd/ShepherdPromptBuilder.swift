@@ -23,6 +23,15 @@ public struct ShepherdCheckLog: Equatable, Sendable {
 public struct ShepherdPrompt: Equatable, Sendable {
     public let text: String
     public let card: ACPPromptCard
+    /// The queued prompt's message id, which the turn that runs it reports;
+    /// nil gets a fresh one. Set by senders that wait for that turn.
+    public var messageID: UUID?
+
+    public init(text: String, card: ACPPromptCard, messageID: UUID? = nil) {
+        self.text = text
+        self.card = card
+        self.messageID = messageID
+    }
 }
 
 /// Pure text for the turns the shepherd sends to the owning session.

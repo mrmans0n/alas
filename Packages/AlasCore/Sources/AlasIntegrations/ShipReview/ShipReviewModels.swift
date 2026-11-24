@@ -128,6 +128,11 @@ public struct ShipReviewRecord: Codable, Equatable, Sendable {
     /// A remote head Alas can't review and nobody allowed yet.
     public var unreviewedRemoteHead: String?
     public var reviewerSessionID: String?
+    /// The message id of the findings prompt the owner was last sent. Only
+    /// the end of the turn that ran it says whether the owner fixed them: a
+    /// turn already running when it was queued doesn't. Nil in records saved
+    /// before this was tracked, which take any turn's end.
+    public var findingsMessageID: String?
     public var createdAt: Date
     public var updatedAt: Date
 
