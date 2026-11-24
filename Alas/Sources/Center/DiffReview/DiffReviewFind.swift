@@ -13,6 +13,7 @@ final class DiffReviewFindRequest {
     }
 
     private(set) var invocation: Invocation?
+    fileprivate(set) var isPresented = false
 
     func perform(_ action: EditorFindRequest) {
         invocation = Invocation(action: action, generation: (invocation?.generation ?? 0) + 1)
@@ -30,7 +31,7 @@ struct DiffReviewFindMatch: Equatable, Sendable {
 struct DiffReviewFindInput: Equatable, Sendable {
     struct File: Equatable, Sendable {
         let id: DiffReviewFileID
-        let model: DiffDisplayModel
+        let groups: [DiffDisplayGroup]
     }
 
     let query: String
@@ -72,7 +73,7 @@ struct DiffReviewFindInput: Equatable, Sendable {
         }
 
         for file in files {
-            for group in file.model.groups {
+            for group in file.groups {
                 for row in group.rows {
                     if Task.isCancelled { return [] }
                     append(row, fileID: file.id)
@@ -85,11 +86,10 @@ struct DiffReviewFindInput: Equatable, Sendable {
 
 struct DiffReviewFindBar: View {
     let request: DiffReviewFindRequest
-    let session: DiffReviewLoadedSession
+    let files: [DiffReviewFindInput.File]
     let selectedFileID: DiffReviewFileID?
     let reveal: (DiffReviewFindMatch) -> Void
 
-    @State private var isPresented = false
     @State private var query = ""
     @State private var caseSensitive = false
     @State private var matches: [DiffReviewFindMatch] = []
@@ -100,14 +100,11 @@ struct DiffReviewFindBar: View {
 
     var body: some View {
         Group {
-            if isPresented {
+            if request.isPresented {
                 let input = DiffReviewFindInput(
                     query: query,
                     caseSensitive: caseSensitive,
-                    files: query.isEmpty ? [] : session.files.compactMap { file in
-                        guard file.imageProvider == nil, let model = file.displayModel else { return nil }
-                        return .init(id: file.id, model: model)
-                    }
+                    files: query.isEmpty ? [] : files
                 )
                 EditorFindBarView(
                     findText: $query,
@@ -124,7 +121,7 @@ struct DiffReviewFindBar: View {
         .onChange(of: request.invocation) { _, invocation in
             switch invocation?.action {
             case .showFind:
-                isPresented = true
+                request.isPresented = true
                 focused = true
             case .findNext:
                 navigate(.next)
@@ -164,12 +161,13 @@ struct DiffReviewFindBar: View {
     }
 
     private func navigate(_ direction: EditorFindBarView.FindDirection) {
-        guard isPresented else {
+        guard request.isPresented else {
             startAtLastMatch = direction == .previous
-            isPresented = true
+            request.isPresented = true
             return
         }
-        guard lastSearch?.query == query, lastSearch?.caseSensitive == caseSensitive, let selectedIndex else {
+        guard lastSearch?.query == query, lastSearch?.caseSensitive == caseSensitive,
+              lastSearch?.files == files, let selectedIndex else {
             focused = true
             return
         }
@@ -185,7 +183,7 @@ struct DiffReviewFindBar: View {
     }
 
     private func close() {
-        isPresented = false
+        request.isPresented = false
         focused = false
         matches = []
         selectedIndex = nil

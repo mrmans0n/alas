@@ -121,7 +121,7 @@ struct AppKitDiffReviewScrollerTests {
             diff: diff, filePath: "Sources/Example.swift", collapseContextThreshold: 2, contextEdgeCount: 1
         )
         let collapsed = try #require(display.groups.first?.rows.first { $0.kind == .collapsed })
-        let input = DiffReviewFindInput(query: "match", caseSensitive: false, files: [.init(id: id, model: display)])
+        let input = DiffReviewFindInput(query: "match", caseSensitive: false, files: [.init(id: id, groups: display.groups)])
 
         let matches = await input.matches()
         #expect(matches == [

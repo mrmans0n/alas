@@ -199,12 +199,19 @@ struct AppKitDiffReviewScrollCompletionGate: Equatable {
 
 @MainActor
 struct AppKitDiffReviewScroller: View {
+    struct Find {
+        let request: DiffReviewFindRequest
+        let selectedFileID: DiffReviewFileID?
+        let reveal: (DiffReviewFindMatch) -> Void
+    }
+
     let inputs: [AppKitDiffReviewRowInput]
     let fileCommand: DiffReviewScrollCommand?
     let inlineFeedbackCommand: DiffReviewInlineFeedbackScrollCommand?
     let draftCommentCommand: DiffReviewDraftCommentScrollCommand?
     var lineCommand: DiffReviewLineScrollCommand? = nil
     var findCommand: DiffReviewLineScrollCommand? = nil
+    var find: Find? = nil
     let onNavigationFile: (DiffReviewFileID, Int) -> Void
     let onActiveFileChange: (DiffReviewFileID) -> Void
     /// Called on every user scroll tick.
@@ -219,9 +226,23 @@ struct AppKitDiffReviewScroller: View {
     @State private var pendingCommentReveal: (command: DiffReviewDraftCommentScrollCommand, generation: Int)?
 
     var body: some View {
-        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: inputs, trailingRows: trailingRows)
+        let plan = AppKitDiffReviewRowPlanBuilder.build(
+            inputs: inputs, collectsFindFiles: find?.request.isPresented == true, trailingRows: trailingRows
+        )
+        VStack(spacing: 0) {
+            if let find {
+                DiffReviewFindBar(
+                    request: find.request, files: plan.searchableFiles,
+                    selectedFileID: find.selectedFileID, reveal: find.reveal
+                )
+            }
+            reviewStream(plan)
+        }
+    }
+
+    private func reviewStream(_ plan: AppKitDiffReviewRowPlan) -> some View {
         let corePlan = plan.corePlan.withContentInsets(.init(top: 16, bottom: 16, left: 16, right: 16))
-        AppKitDiffScroller(
+        return AppKitDiffScroller(
             plan: corePlan,
             scrollRequest: scrollRequest,
             onActiveOwnerChange: { rawValue in

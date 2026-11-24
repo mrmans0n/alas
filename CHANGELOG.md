@@ -8,7 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
-- Press Command-F in a review pane to find code across the loaded diffs. Use Command-G and Shift-Command-G to move between matches.
+- Press Command-F in a review pane to find code across the loaded diffs, including expanded context. Use Command-G and Shift-Command-G to move between matches.
 
 ## [0.24.9] - 2026-11-24
 

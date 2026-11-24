@@ -320,10 +320,7 @@ struct DiffReviewSurface: View {
                     onSelectFile: scrollToFile
                 )
             }
-            VStack(spacing: 0) {
-                DiffReviewFindBar(request: findRequest, session: session, selectedFileID: selectedFileID, reveal: revealFindMatch)
-                appKitMainReviewStream(session, trailingRows: inlineSummaryRows(for: summaryPlacement))
-            }
+            appKitMainReviewStream(session, trailingRows: inlineSummaryRows(for: summaryPlacement))
             if shouldShowReviewSummaryRail, summaryPlacement == .rail {
                 ReviewDraftSummaryRail(
                     comments: allDraftComments,
@@ -357,6 +354,7 @@ struct DiffReviewSurface: View {
             draftCommentCommand: draftCommentScrollCommand,
             lineCommand: lineScrollCommand,
             findCommand: findScrollCommand,
+            find: .init(request: findRequest, selectedFileID: selectedFileID, reveal: revealFindMatch),
             onNavigationFile: selectAppKitNavigationFile,
             onActiveFileChange: updateSelectedFileFromAppKitViewport,
             onUserScroll: { scrollSpy.userDidScroll() },
