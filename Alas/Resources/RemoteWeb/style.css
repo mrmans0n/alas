@@ -191,6 +191,7 @@ a:hover { color: var(--accent-hover); }
 .msg { margin: 0; line-height: 1.5; font-size: 15px; overflow-wrap: anywhere; white-space: pre-wrap; text-wrap: pretty; }
 .m-agent { align-self: stretch; color: var(--fg); }
 .m-user { align-self: flex-end; max-width: 84%; padding: 9px 13px; color: var(--fg); background: color-mix(in oklab, var(--accent) 22%, transparent); box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--accent) 40%, transparent); border-radius: 14px 14px 5px 14px; }
+.m-systemNotice.is-repeat { display: none; }
 .m-systemNotice { align-self: center; color: var(--fg-faint); font-size: 12.5px; text-align: center; padding: 4px; }
 
 /* Markdown-rendered prose (agent/user) */
@@ -486,8 +487,9 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 .file-icon.document::before { content: "•"; }
 .file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-badge { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--fg-faint); }
-.file-badge.status-A { color: var(--add); }
-.file-badge.status-D, .file-badge.status-U { color: var(--del); }
+.file-badge.status-A, .change-status.status-A { color: var(--add); }
+.file-badge.status-D, .file-badge.status-U, .change-status.status-D, .change-status.status-U { color: var(--del); }
+.file-badge.status-M, .change-status.status-M, .change-status.status-R { color: var(--mod); }
 
 #diff-rows, #file-view-body { font-family: var(--font-mono); font-size: 12px; letter-spacing: -0.02em; overflow-x: auto; }
 .diff-hunk { padding: 6px 12px; color: var(--fg-muted); background: var(--bg-2); position: sticky; top: 0; }
@@ -577,7 +579,10 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
   :root { --side-w: 280px; --panel-w: 440px;
     --bg: oklch(0.245 0.018 220); --bg-2: oklch(0.22 0.018 220); --bg-3: oklch(0.305 0.022 220); --bg-4: oklch(0.345 0.024 220);
     --bg-bar: oklch(0.22 0.018 220 / 0.94); --term-bg: #172326; }
-  .changes-section-title { margin: 12px 4px 2px; font-size: 11.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg-dim); }
+  .changes-section-title { margin: 12px 4px 2px; font-size: 11.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg-muted); }
+  /* An always-visible bar, so a clipped long line reads as scrollable. */
+  .md pre::-webkit-scrollbar { height: 8px; }
+  .md pre::-webkit-scrollbar-thumb { background: oklch(1 0 0 / 0.16); border-radius: 4px; }
   /* The panel keeps its dragged width only while the chat still gets 420px; below that it gives
      way, down to 300px, and the chat takes what is left. */
   body { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr) clamp(300px, var(--panel-w), calc(100vw - var(--side-w) - 420px)); grid-template-rows: auto auto minmax(0, 1fr) auto;
@@ -616,7 +621,10 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
   .kids { gap: 1px; padding: 0 0 4px; }
   .wt { min-height: 0; padding: 6px 8px; gap: 3px; border-radius: 6px; background: none; box-shadow: none; }
   .wt.tap:hover, .wt-summary:hover, .session-card:hover { background: var(--fill); }
-  .wt.tap:active, .wt.sel, .session-card.sel { background: color-mix(in oklab, var(--accent) 16%, transparent); box-shadow: none; }
+  .wt.tap:active, .wt.sel, .session-card.sel { background: color-mix(in oklab, var(--accent) 16%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+  /* The accent marks selection and the primary action; counts stay neutral. */
+  .tab.is-active .tab-count { color: var(--fg); background: oklch(1 0 0 / 0.14); }
+  .change-directory { color: var(--fg-dim); }
   .wt-summary { min-height: 0; border-radius: 6px; }
   .r1 { font-size: 12.5px; }
   .br { display: flex; font-family: var(--font-ui); font-size: 13px; letter-spacing: 0; }
