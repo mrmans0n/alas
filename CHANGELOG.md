@@ -14,6 +14,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 🐛 Fixes
 
+- Keep Review before push from reporting “Alas is shutting down” after a successful push.
 - Keep the Ship popover compact when reviewer names are long, and line up its switches.
 - Reduce editor scroll stalls by reusing minimap bitmaps and avoiding repeated layout at the end of the file.
 

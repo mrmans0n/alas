@@ -72,7 +72,8 @@ extension AlasCoreContext {
                 await self?.reviewShepherd.effects?.deliverPrompt(id.sessionID, id.worktreeID, prompt, isStillWanted) ?? .failed
             },
             push: { [weak self] id, target, _ in
-                await self?.pushReviewedHead(id, target: target) ?? "Alas is shutting down"
+                guard let self else { return "Alas is shutting down" }
+                return await pushReviewedHead(id, target: target)
             },
             autoFix: { [weak self] id in
                 guard let self else { return false }
