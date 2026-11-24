@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import AlasModel
+import AlasCore
 @testable import AlasIntegrations
 
 private let t0 = Date(timeIntervalSince1970: 1_000)
@@ -267,10 +267,17 @@ struct ShipReviewerTests {
     /// `pr_create` adopting an open request with nothing to push: with the
     /// default lever on, the adopted head is reviewed before it can merge.
     @Test(arguments: [true, false])
-    func adoptedHeadIsReviewedWhenTheDefaultLeverIsOn(leverOn: Bool) async {
+    func adoptedHeadIsReviewedWhenTheDefaultLeverIsOn(leverOn: Bool) async throws {
         let fake = FakeEffects()
         fake.reviewBeforePush = leverOn
-        let reviewer = makeReviewer(fake)
+        let core = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []), store: MemoryStore(),
+            runHistoryStore: nil, attentionStore: .scratch()
+        )
+        let reviewer = core.shipReviewer
+        var effects = fake.effects()
+        effects.push = try #require(reviewer.effects?.push)
+        reviewer.effects = effects
 
         reviewer.seedRecord(id)
         let gate = reviewer.reviewGate(worktreeID: id.worktreeID, sessionID: id.sessionID)
@@ -281,6 +288,7 @@ struct ShipReviewerTests {
             #expect(gate?.passedSHAs.isEmpty == true)
             #expect(fake.runs.count == 1)
             #expect(reviewer.record(for: id)?.passedSHAs == ["h1"])
+            #expect(core.shipReviewer.record(for: id)?.phase == .idle)
         } else {
             #expect(gate == nil)
             #expect(reviewer.record(for: id) == nil)
