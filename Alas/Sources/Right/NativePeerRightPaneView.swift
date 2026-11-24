@@ -1293,6 +1293,8 @@ struct NativePeerRightPaneView: View {
                     ? Set((client.selectedWorktreeGroup?.sessions ?? []).filter(\.isActive).map(\.id))
                     : [],
                 followUps: .constant([:]),
+                // Peer rows carry no context usage or subagents to unfold.
+                disclosure: .constant(.init()),
                 disabledReason: { row in
                     row.state == .detached && !canOpen
                         ? "\(client.selectedWorktreePeer?.name ?? "This Mac") needs a newer Alas to open past sessions."

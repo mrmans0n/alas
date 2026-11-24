@@ -1095,6 +1095,10 @@ public enum RemoteServerMessageOf<ServerHost: Codable & Equatable & Sendable, Cl
     /// The answer to `suggestNextPrompt`: nil when the host has none for the
     /// session as it stands.
     case nextPromptSuggestion(sessionId: String, text: String?)
+    /// Every caption the host holds for the session's turn changes cards, replacing those sent before:
+    /// after the session's transcript, and again whenever one is written. A client that does not know
+    /// the case skips it.
+    case turnCaptions(sessionId: String, captions: [RemoteTurnCaption])
     /// The answer to `HostWorktreeRead.fileHistory`: `truncated` when more commits touched it.
     case fileHistory(sessionId: String, path: String, entries: [HostFileHistoryEntry], truncated: Bool)
     case fileHistoryFailed(sessionId: String, path: String, reason: RemoteFileAccessReason, message: String?)
@@ -1139,6 +1143,7 @@ extension RemoteServerMessageOf: Codable {
         case data
         case terminalId, exitCode, signal, retained
         case subagentId, found, state
+        case captions
     }
 
     public init(from decoder: Decoder) throws {
@@ -1421,6 +1426,9 @@ extension RemoteServerMessageOf: Codable {
         case "nextPromptSuggestion":
             self = .nextPromptSuggestion(sessionId: try c.decode(String.self, forKey: .sessionId),
                                          text: try c.decodeIfPresent(String.self, forKey: .text))
+        case "turnCaptions":
+            self = .turnCaptions(sessionId: try c.decode(String.self, forKey: .sessionId),
+                                 captions: try c.decode([RemoteTurnCaption].self, forKey: .captions))
         case "subagentTranscript":
             self = .subagentTranscript(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -1753,6 +1761,10 @@ extension RemoteServerMessageOf: Codable {
             try c.encode("nextPromptSuggestion", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encodeIfPresent(text, forKey: .text)
+        case .turnCaptions(let s, let captions):
+            try c.encode("turnCaptions", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(captions, forKey: .captions)
         case .subagentTranscript(let s, let subagentId, let found, let state, let messages):
             try c.encode("subagentTranscript", forKey: .type)
             try c.encode(s, forKey: .sessionId)

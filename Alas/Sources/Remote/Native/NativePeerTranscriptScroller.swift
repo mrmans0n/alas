@@ -251,10 +251,15 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                 // A finished turn's file changes follow its answer, as in a local session.
                 if case .message(let row) = renderRow,
                    let changes = turnChanges(answerIndex: row.index, messages: messages, isTurnActive: isTurnActive, host: host) {
+                    let caption = host.transcript.turnCaptions[messages[row.index].index]
                     specs.append(ACPTranscriptRowSpec(
                         id: "__turn_changes__" + row.stableId,
-                        equalityToken: Self.token(changes, host: host),
-                        build: { Self.wrap(host: host) { ACPTurnChangesCard(changes: changes, caption: nil, onOpenDiff: nil) } }
+                        equalityToken: Self.token(TurnChangesTokenInputs(changes: changes, caption: caption), host: host),
+                        build: {
+                            Self.wrap(host: host) {
+                                ACPTurnChangesCard(changes: changes, caption: nil, onOpenDiff: nil, hostCaption: caption)
+                            }
+                        }
                     ))
                 }
             }
@@ -286,6 +291,11 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                 default: return .other
                 }
             }
+        }
+
+        private struct TurnChangesTokenInputs: Equatable {
+            let changes: ACPTurnChanges
+            let caption: String?
         }
 
         private struct MessageTokenInputs: Equatable {

@@ -242,6 +242,9 @@ final class AppKitDiffScrollerReconciler {
                     ?? measuredOffset
                 self.scrollView.setScrollY(settledOffset, animated: false)
                 self.layoutVisibleRows()
+                if lineTarget.findRange != nil, let rowView = self.pool.mountedView(id: targetID) {
+                    self.revealFindMatch(lineTarget, in: rowView)
+                }
                 completion?()
             } else {
                 self.scrollView.setScrollY(measuredOffset, animated: false, completion: completion)
@@ -286,6 +289,14 @@ final class AppKitDiffScrollerReconciler {
             }
         }
         return nil
+    }
+
+    @discardableResult
+    private func revealFindMatch(_ target: AppKitDiffScrollLineTarget, in view: NSView) -> Bool {
+        if let provider = view as? AppKitDiffFindMatchRevealing, provider.revealFindMatch(target) {
+            return true
+        }
+        return view.subviews.contains { revealFindMatch(target, in: $0) }
     }
 
     private func layoutMountedRows() {

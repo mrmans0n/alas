@@ -92,7 +92,7 @@ const view = globalThis.RemoteChangesView;
     unstaged: [{ path: "unstaged.swift", add: 2, del: 0 }],
     commits: [{ shortSha: "abc1234", subject: "Add remote changes", author: "Nacho", add: 8, del: 2 }]
   });
-  assert.deepEqual(sections.map((section) => section.title), ["Branch Changes", "Working Tree", "Staged", "Unstaged", "Commits"]);
+  assert.deepEqual(sections.map((section) => section.title), ["Branch changes", "Working tree", "Staged", "Unstaged", "Commits"]);
   assert.equal(sections[0].files[0].path, "committed.swift");
   assert.equal(sections[2].stage, "staged");
   assert.equal(sections[2].files[0].path, "staged.swift");
@@ -106,7 +106,7 @@ const view = globalThis.RemoteChangesView;
     unstaged: [],
     commits: []
   });
-  assert.deepEqual(sections.map((section) => section.title), ["Branch Changes"]);
+  assert.deepEqual(sections.map((section) => section.title), ["Branch changes"]);
   assert.equal(sections[0].files[0].path, "base-relative.swift");
 }
 

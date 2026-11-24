@@ -248,12 +248,14 @@ struct RootView: View {
                     get: { state.config.rightPaneWidth },
                     set: { state.config.rightPaneWidth = $0 }
                 ),
-                sidebarVisible: state.config.sidebarVisible,
+                sidebarVisible: state.config.sidebarVisible && !state.hidesSidePanes,
                 rightVisible: state.config.rightPaneVisible
                     && rightPaneSelection.showsRightPane
-                    && !state.suppressesRestoredRightPaneAfterAbandonedStartup,
+                    && !state.suppressesRestoredRightPaneAfterAbandonedStartup
+                    && !state.hidesSidePanes,
                 collapsedRailWidth: rightPaneSelection.showsRightPane
                     && !state.suppressesRestoredRightPaneAfterAbandonedStartup
+                    && !state.hidesSidePanes
                     ? Double(RightPaneRail.width)
                     : nil,
                 onWidthsChanged: { state.saveConfig() },
@@ -1311,6 +1313,9 @@ private struct RootBaseHandlers: ViewModifier {
         let aSidebar = content
             .onReceive(NotificationCenter.default.publisher(for: .alasToggleSidebar)) { _ in
                 state.toggleSidebarVisibility()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
+                state.didExitFullScreen()
             }
         let aRightPane = aSidebar
             .onReceive(NotificationCenter.default.publisher(for: .alasToggleRightPane)) { _ in

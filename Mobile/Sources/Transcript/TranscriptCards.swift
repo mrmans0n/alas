@@ -147,6 +147,8 @@ extension EnvironmentValues {
 /// The files a finished turn changed, under its answer, as on the Mac.
 struct TurnChangesCard: View {
     let changes: ACPTurnChanges
+    /// What the turn did, in a line the host's local model wrote.
+    var caption: String? = nil
     @Environment(\.openSessionChanges) private var openSessionChanges
     @State private var showsAll = false
 
@@ -157,6 +159,9 @@ struct TurnChangesCard: View {
         let files = showsAll ? changes.files[...] : changes.files.prefix(Self.collapsedFileCount)
         let hidden = changes.files.count - files.count
         VStack(alignment: .leading, spacing: 8) {
+            if let caption {
+                Text(caption).font(.subheadline.weight(.semibold)).lineLimit(2)
+            }
             HStack(spacing: 8) {
                 Label(changes.files.count == 1 ? "1 file changed" : "\(changes.files.count) files changed",
                       systemImage: "doc.on.doc")

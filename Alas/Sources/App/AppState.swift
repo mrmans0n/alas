@@ -301,6 +301,8 @@ final class AppState {
     @ObservationIgnored var preparingShipSessionIDs: Set<ACPSession.ID> = []
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
+    /// What is unfolded in the Agent pane, by worktree. Kept here for the same reason.
+    var agentSidebarDisclosure: [String: AgentSidebarDisclosure] = [:]
     var attentionStore: AttentionStore { core.attention.store }
     /// Debug: show the first-run screen even when projects exist.
     var isPreviewingFirstRunScreen = false
@@ -2557,8 +2559,31 @@ final class AppState {
     }
 
     func toggleSidebarVisibility() {
-        config.sidebarVisible.toggle()
+        if hidesSidePanes {
+            maximizedTabID = nil
+            config.sidebarVisible = true
+        } else {
+            config.sidebarVisible.toggle()
+        }
         _ = saveConfig()
+    }
+
+    /// The tab that hides both side panes while it is the active one. Not persisted.
+    var maximizedTabID: TabID? {
+        didSet { if maximizedTabID == nil { maximizedForFullScreen = false } }
+    }
+
+    /// Full screen set `maximizedTabID`, so leaving full screen clears it.
+    @ObservationIgnored var maximizedForFullScreen = false
+
+    func didExitFullScreen() {
+        if maximizedForFullScreen { maximizedTabID = nil }
+    }
+
+    /// Whether the side panes are hidden for the maximized tab; leaves the saved visibility alone.
+    var hidesSidePanes: Bool {
+        guard let maximizedTabID else { return false }
+        return activeTab?.id == maximizedTabID
     }
 
     /// Tear down tabs, terminals, harness state, and editor buffers for any
@@ -12883,7 +12908,8 @@ final class AppState {
                 uniqueKeysWithValues: core.delegatedPeerOrigins.keys.compactMap { id in
                     core.delegatedFromName(of: id).map { (id, $0) }
                 }
-            )
+            ),
+            worktreeRoot: worktree.path.path
         ))
     }
 
@@ -15308,6 +15334,9 @@ extension AppState {
     func acpManager(forSession id: String) -> ACPSessionManager? {
         acpManagers.values.first { $0.liveSession(for: id) != nil }
     }
+
+    /// Every loaded session, whoever owns it.
+    var liveACPSessions: [ACPSession] { acpManagers.values.flatMap { $0.sessions.values } }
 
     func answerQuestion(
         for id: String,

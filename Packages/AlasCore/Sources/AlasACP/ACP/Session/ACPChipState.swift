@@ -80,6 +80,12 @@ public struct ChipSpec: Equatable, Sendable {
         self.currentId = currentId
         self.recommendedId = options.contains { $0.id == recommendedId } ? recommendedId : nil
     }
+
+    /// The display name of the selected option.
+    public var currentName: String? {
+        guard let currentId else { return nil }
+        return options.first { $0.id == currentId }?.name
+    }
 }
 
 extension ACPChipState {

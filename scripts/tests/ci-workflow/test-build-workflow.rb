@@ -71,7 +71,7 @@ raise "build-test timeout must cover its sequential steps plus 30 minutes of pre
 workers = jobs.fetch("swift-tests")
 raise "workers must queue only after the builder finishes" unless workers["needs"] == "build-test"
 raise "shard failures must not cancel sibling diagnostics" unless workers.dig("strategy", "fail-fast") == false
-raise "four balanced test workers are required" unless workers.dig("strategy", "matrix", "shard") == [1, 2, 3, 4]
+raise "three balanced test workers are required" unless workers.dig("strategy", "matrix", "shard") == [1, 2, 3]
 builder_steps = swift_job.fetch("steps")
 core_resolve = builder_steps.find { |step| step["name"] == "Resolve AlasCore dependencies" }
 raise "AlasCore dependency resolution must use the bounded acquisition retry helper" unless
@@ -93,8 +93,8 @@ raise "AlasCore failures must retain their complete buffered log" unless
 raise "build-test must exercise the stall watchdog output harness" unless builder_steps.any? do |step|
   step["name"] == "Test stall watchdog harness" && step["run"] == "bash scripts/tests/stall-watchdog/run.sh"
 end
-raise "test plan must assign four shards" unless builder_steps.any? do |step|
-  step["run"] == "python3 scripts/ci_swift_tests.py plan --shard-count 4"
+raise "test plan must assign three shards" unless builder_steps.any? do |step|
+  step["run"] == "python3 scripts/ci_swift_tests.py plan --shard-count 3"
 end
 publish = builder_steps.index { |step| step["name"] == "Upload compiled Swift test products" }
 raise "builder must publish compiled products" unless publish

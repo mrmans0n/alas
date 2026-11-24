@@ -154,7 +154,8 @@ function createTerminals({ send, el, keepView = () => false, onView = () => {} }
     const term = new globalThis.Terminal({
       cols: summary.columns, rows: summary.rows, scrollback: 5000, cursorBlink: true, fontSize: 13,
       fontFamily: getComputedStyle(document.body).getPropertyValue("--font-mono") || "monospace",
-      theme: { background: "#0b0d10" },
+      // Hex, which xterm reads; a wide window sets the page's own background.
+      theme: { background: getComputedStyle(document.body).getPropertyValue("--term-bg").trim() || "#0b0d10" },
     });
     const fit = new globalThis.FitAddon.FitAddon();
     term.loadAddon(fit);

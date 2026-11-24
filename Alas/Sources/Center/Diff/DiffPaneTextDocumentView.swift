@@ -212,7 +212,7 @@ struct DiffPaneSegmentView: NSViewRepresentable {
     }
 }
 
-final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTargetProviding {
+final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTargetProviding, AppKitDiffFindMatchRevealing {
     // Panes are created on first use: a split row never needs the stacked
     // pane and a stacked row never needs the old/new pair. Every pane of a
     // mounted row lays out on each scroll tick, hidden or not.
@@ -245,14 +245,20 @@ final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTarge
     }
 
     func scrollTargetCenterY(for target: AppKitDiffScrollLineTarget) -> CGFloat? {
-        let pane = switch layoutMode {
-        case .split:
-            target.side == .old ? oldPane : newPane
-        case .stacked:
-            stackedPane
-        }
+        let pane = pane(for: target)
         guard let paneCenterY = pane.scrollTargetCenterY(for: target) else { return nil }
         return convert(NSPoint(x: pane.bounds.midX, y: paneCenterY), from: pane).y
+    }
+
+    func revealFindMatch(_ target: AppKitDiffScrollLineTarget) -> Bool {
+        pane(for: target).revealFindMatch(target)
+    }
+
+    private func pane(for target: AppKitDiffScrollLineTarget) -> DiffPaneTextScrollView {
+        switch layoutMode {
+        case .split: target.side == .old ? oldPane : newPane
+        case .stacked: stackedPane
+        }
     }
 
     #if DEBUG
@@ -856,17 +862,42 @@ final class DiffPaneTextScrollView: NSScrollView {
     }
 
     func scrollTargetCenterY(for target: AppKitDiffScrollLineTarget) -> CGFloat? {
-        guard let lineIndex = textView.lineMetadata.firstIndex(where: { metadata in
+        guard let lineIndex = lineIndex(for: target) else { return nil }
+        if let range = findCharacterRange(for: target, lineIndex: lineIndex),
+           let layoutManager = textView.layoutManager, let container = textView.textContainer {
+            let glyphs = layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: range.location, length: 1), actualCharacterRange: nil
+            )
+            let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+                .offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+            return convert(rect, from: textView).midY
+        }
+        let rowRects = textView.diffRowRects()
+        guard rowRects.indices.contains(lineIndex) else { return nil }
+        return convert(NSPoint(x: textView.bounds.midX, y: rowRects[lineIndex].midY), from: textView).y
+    }
+
+    func revealFindMatch(_ target: AppKitDiffScrollLineTarget) -> Bool {
+        guard let index = lineIndex(for: target), let range = findCharacterRange(for: target, lineIndex: index) else {
+            return false
+        }
+        textView.scrollRangeToVisible(range)
+        textView.showFindIndicator(for: range)
+        return true
+    }
+
+    private func findCharacterRange(for target: AppKitDiffScrollLineTarget, lineIndex: Int) -> NSRange? {
+        let lineRange = textView.lineMetadata[lineIndex].range
+        guard let range = target.findRange, NSMaxRange(range) <= lineRange.length else { return nil }
+        return NSRange(location: lineRange.location + range.location, length: range.length)
+    }
+
+    private func lineIndex(for target: AppKitDiffScrollLineTarget) -> Int? {
+        textView.lineMetadata.firstIndex { metadata in
             guard let sourceLine = metadata.sourceLine else { return false }
             return target.side.matches(sourceLine.anchor.side)
                 && sourceLine.highlightLineNumber(for: target.side) == target.line
-        }) else { return nil }
-        let rowRects = textView.diffRowRects()
-        guard rowRects.indices.contains(lineIndex) else { return nil }
-        return convert(
-            NSPoint(x: textView.bounds.midX, y: rowRects[lineIndex].midY),
-            from: textView
-        ).y
+        }
     }
 
     func synchronizeRowHeights(_ rowHeights: [CGFloat]) {

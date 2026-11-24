@@ -71,12 +71,19 @@ enum AppKitDiffScrollAlignment: Equatable {
 struct AppKitDiffScrollLineTarget: Equatable {
     let side: DiffReviewInlineFeedbackSide
     let line: Int
+    var findRange: NSRange? = nil
 }
 
 @MainActor
 protocol AppKitDiffScrollLineTargetProviding {
     /// Returns the target line's vertical center in this view's coordinate space.
     func scrollTargetCenterY(for target: AppKitDiffScrollLineTarget) -> CGFloat?
+}
+
+@MainActor
+protocol AppKitDiffFindMatchRevealing {
+    /// Reveals and marks the match without taking keyboard focus from the find bar.
+    func revealFindMatch(_ target: AppKitDiffScrollLineTarget) -> Bool
 }
 
 struct AppKitDiffScrollRequest: Equatable {
