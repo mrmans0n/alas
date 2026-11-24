@@ -1118,13 +1118,19 @@ function updateChangesTabBadge() {
   badge.classList.toggle("hidden", count === 0);
 }
 
+// The folder quiet, the file's name plain. Its text stays the whole path, which replies match against.
+function setDetailPath(id, path) {
+  const slash = path.lastIndexOf("/") + 1;
+  $(id).replaceChildren(el("span", "detail-dir", path.slice(0, slash)), el("span", "detail-name", path.slice(slash)));
+}
+
 function openDiff(path, stage = null) {
   if (wideLayout.matches) closeDocument();   // one document tab: this diff replaces what it showed
   detailStack.push({ tab: "changes", path, stage });
   $("changes-list").classList.add("hidden");
   $("changes-header").classList.add("hidden");
   $("diff-view").classList.remove("hidden");
-  $("diff-path").textContent = path;
+  setDetailPath("diff-path", path);
   clearDiff();
   send({ type: "fileDiff", sessionId: currentSession, path, stage });
   setCenter("document");
@@ -1219,6 +1225,19 @@ function clearDiff() {
   $("diff-rows").innerHTML = "";
 }
 
+// The diff takes the app's own surface, type and add/delete colours; its theme only colours the code.
+const DIFF_CSS = `:host, pre {
+  --diffs-bg: var(--bg);
+  background-color: var(--bg);
+  --diffs-addition-color: var(--add);
+  --diffs-deletion-color: var(--del);
+  --diffs-font-family: var(--font-mono);
+  --diffs-header-font-family: var(--font-ui);
+  --diffs-font-size: 12px;
+  --diffs-line-height: 19px;
+  --diffs-bg-separator-override: var(--bg-2);
+}`;
+
 async function renderDiff(path, stage, hunks, truncated, metadataNote) {
   if (!isActiveDiff(path, stage)) return;
   clearDiff();
@@ -1235,7 +1254,8 @@ async function renderDiff(path, stage, hunks, truncated, metadataNote) {
     if (current !== diffRender) return;
     const fileDiff = getSingularPatch(RemoteChangesView.unifiedPatch(path, hunks));
     diffView = new FileDiff({
-      theme: "pierre-dark", themeType: "dark", disableFileHeader: true, overflow: "scroll",
+      theme: "pierre-dark", themeType: "dark", disableFileHeader: true, overflow: "scroll", hunkSeparators: "line-info-basic",
+      unsafeCSS: DIFF_CSS,
       diffStyle: container.clientWidth >= 760 ? "split" : "unified",   // side by side only where both sides fit
     });
     const holder = el("div", "diff-rich");
@@ -1312,7 +1332,7 @@ function openFileView(path) {
   detailStack.push({ tab: "files", path });
   $("file-list").classList.add("hidden");
   $("file-view").classList.remove("hidden");
-  $("file-view-path").textContent = path;
+  setDetailPath("file-view-path", path);
   $("file-view-body").textContent = "Loading…";
   send({ type: "readFile", sessionId: currentSession, path });
   setCenter("document");
