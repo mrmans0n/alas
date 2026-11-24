@@ -28,6 +28,7 @@
   --fill-strong: oklch(1 0 0 / 0.09);
   --well: oklch(0 0 0 / 0.26);
   --well-deep: oklch(0 0 0 / 0.3);
+  --term-bg: #0b0d10;
 }
 * { box-sizing: border-box; }
 /* Fixed-height app shell: header + scrolling body + pinned footer, sized to the
@@ -567,7 +568,7 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
   /* The desktop app's Cool Slate surfaces: a darker sidebar, the page, then raised sheets. */
   :root { --side-w: 280px; --panel-w: 440px;
     --bg: oklch(0.245 0.018 220); --bg-2: oklch(0.22 0.018 220); --bg-3: oklch(0.305 0.022 220); --bg-4: oklch(0.345 0.024 220);
-    --bg-bar: oklch(0.22 0.018 220 / 0.94); }
+    --bg-bar: oklch(0.22 0.018 220 / 0.94); --term-bg: #172326; }
   .changes-section-title { margin: 12px 4px 2px; font-size: 11.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg-dim); }
   /* The panel keeps its dragged width only while the chat still gets 420px; below that it gives
      way, down to 300px, and the chat takes what is left. */
@@ -607,9 +608,18 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
   .kids { gap: 1px; padding: 0 0 4px; }
   .wt { min-height: 0; padding: 6px 8px; gap: 3px; border-radius: 6px; background: none; box-shadow: none; }
   .wt.tap:hover, .wt-summary:hover, .session-card:hover { background: var(--fill); }
-  .wt.tap:active, .wt.sel, .session-card.sel { background: var(--fill-strong); box-shadow: inset 2px 0 0 var(--accent); }
+  .wt.tap:active, .wt.sel, .session-card.sel { background: color-mix(in oklab, var(--accent) 16%, transparent); box-shadow: none; }
   .wt-summary { min-height: 0; border-radius: 6px; }
   .r1 { font-size: 12.5px; }
+  .br { display: flex; font-family: var(--font-ui); font-size: 13px; letter-spacing: 0; }
+  .br-prefix { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg-faint); }
+  .br-leaf { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .wt.sel .br-leaf, .wt.tap.sel .br-leaf { font-weight: 600; }
+  /* Quiet chrome: a selected filter and the new-session button are fills, not accent slabs. */
+  .filter-chip.is-active { color: var(--fg); background: var(--fill-strong); }
+  #fab-new-session { color: var(--fg); background: var(--fill); }
+  #fab-new-session:hover { background: var(--fill-strong); }
+  #fab-new-session svg { color: var(--accent); }
   .r2 { font-size: 11px; }
   .session-card-list { gap: 1px; margin: 4px 0 0 10px; }
   .session-card { min-height: 0; padding: 5px 8px; border-radius: 6px; background: none; box-shadow: none; }
@@ -734,6 +744,19 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 #terminal-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #terminal-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
 #terminal-back { border: none; background: none; color: var(--accent); font-size: 22px; line-height: 1; padding: 0 6px; cursor: pointer; }
+@media (min-width: 900px) {
+  /* The terminal list as rows like Changes and Files, not phone cards. */
+  #terminal-list-level { padding: 0; }
+  #terminal-header { padding: 8px 4px; font-size: 12.5px; }
+  #terminal-new, #terminal-control { padding: 4px 10px; border-radius: 6px; font-size: 12px; }
+  #terminal-new { background: var(--fill); color: var(--fg); }
+  #terminal-new:hover:not(:disabled) { background: var(--fill-strong); }
+  .term-row { margin: 1px 0; border-radius: 5px; background: none; box-shadow: none; }
+  .term-row:hover { background: var(--fill); }
+  .term-open { padding: 5px 8px; font-size: 12.5px; }
+  .term-close { padding: 2px 8px; font-size: 16px; color: var(--fg-faint); }
+  .term-close:hover { color: var(--fg); }
+}
 #terminal-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 #terminal-status { padding: 0 16px 6px; }
-#terminal-screen { flex: 1; min-height: 0; overflow: auto; background: #0b0d10; padding: 6px; }
+#terminal-screen { flex: 1; min-height: 0; overflow: auto; background: var(--term-bg); padding: 6px; }

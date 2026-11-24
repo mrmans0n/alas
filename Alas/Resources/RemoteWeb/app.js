@@ -745,7 +745,12 @@ function worktreeRow1(section, worktree, singleSession, expanded) {
   const isPrimary = RemoteRepoFilter.worktreeIsPrimaryBranch(summary.branch);
   const iconWrap = el("span", "ico" + (RemoteRepoFilter.worktreeIsRunning(worktree) ? " run" : ""));
   iconWrap.append(icon(isPrimary ? "home" : "branch"));
-  row.append(iconWrap, el("span", "br", summary.branch));
+  // The shared prefix dim and the leaf plain, as on the Mac; a narrow row gives up the prefix first.
+  const slash = summary.branch.lastIndexOf("/") + 1;
+  const branch = el("span", "br");
+  if (slash > 0 && slash < summary.branch.length) branch.append(el("span", "br-prefix", summary.branch.slice(0, slash)));
+  branch.append(el("span", "br-leaf", summary.branch.slice(slash > 0 && slash < summary.branch.length ? slash : 0)));
+  row.append(iconWrap, branch);
   const runningAgentIds = [...new Set(
     worktree.activeSessions
       .filter(RemoteRepoFilter.sessionIsRunning)
