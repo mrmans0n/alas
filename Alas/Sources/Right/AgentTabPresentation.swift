@@ -850,14 +850,20 @@ struct AgentSidebarContextBlock: View {
             }
         }
         .padding(.top, scale.space[1])
-        // Unfolded, the block outlives many turns, so it measures again when
-        // the window changes, once the updates pause.
-        .task(id: row.contextUsage) {
+        // Unfolded, the block outlives many turns and reattaches, so it
+        // measures again when the window changes, once the updates pause, and
+        // when the adapter's breakdown comes back after a reconnect.
+        .task(id: RefreshTrigger(usage: row.contextUsage, canLoad: loadBreakdown != nil)) {
             if loader.breakdown != nil {
                 try? await Task.sleep(for: .milliseconds(500))
                 if Task.isCancelled { return }
             }
             await loader.refresh(usage: row.contextUsage, load: loadBreakdown)
         }
+    }
+
+    private struct RefreshTrigger: Equatable {
+        let usage: ACPUsageInfo?
+        let canLoad: Bool
     }
 }
