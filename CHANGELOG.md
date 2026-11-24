@@ -16,6 +16,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Give wide Remote Web windows a persistent three-pane desktop layout with collapsible, resizable panes whose state is saved locally ([#2700](https://github.com/mrmans0n/alas/pull/2700)).
 - Save enabled Mac turn captions with their session and reuse them after relaunch while the turn's edit digest still matches ([#2703](https://github.com/mrmans0n/alas/pull/2703)).
 - Open one diff or file and one terminal in tabs beside Chat on wide Remote Web windows while the right panel keeps its lists visible ([#2706](https://github.com/mrmans0n/alas/pull/2706)).
+- Open a searchable Remote Web command palette with Ctrl/Cmd+K, and jump to sidebar sessions with Ctrl/Cmd+1–9 ([#2708](https://github.com/mrmans0n/alas/pull/2708)).
 - Add an optional, off-by-default Review before push gate that reviews local commits before Ship pushes them and routes findings through the review pane and owning session ([#2705](https://github.com/mrmans0n/alas/pull/2705)).
 
 ### 🐛 Fixes
@@ -29,6 +30,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Update the esbuild dependency used to generate committed Remote Web assets to 0.28.2 ([#2701](https://github.com/mrmans0n/alas/pull/2701)).
 - Move pull-request CI to Xcode 27.2 and isolate native caches for cold linker coverage ([#2696](https://github.com/mrmans0n/alas/pull/2696)).
 - Move nightly, macOS release, iOS release, What's New validation, and Homebrew verification jobs to Xcode 27.2 with toolchain-specific caches ([#2707](https://github.com/mrmans0n/alas/pull/2707)).
+- Include licenses and conventional notice files for every package version in the bundled Remote Web diff renderer.
+- Preserve fff target symbols on Xcode 27.2 so Intel release builds link a valid dynamic library.
 
 ## [0.24.8] - 2026-11-23
 

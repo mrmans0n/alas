@@ -117,10 +117,13 @@ fi
 
 (
     cd "${fff_src}"
-    # Stripping host proc macros produces a misaligned LINKEDIT with Xcode 27.2.
+    # Xcode 27.2's strip can produce a misaligned LINKEDIT for the x86_64
+    # target dylib, while stripped host proc macros can break the build earlier.
+    # Keep both artifact classes unstripped; release packaging signs the result.
     MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
         RUSTC="${rustc_bin}" "${cargo_bin}" build \
             --config profile.release.build-override.strip=false \
+            --config profile.release.strip=false \
             --package fff-c \
             --release \
             --target "${cargo_target}" \

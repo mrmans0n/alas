@@ -39,8 +39,8 @@ struct TranscriptRowView: View {
     private var content: some View {
         if case .groupHeader(_, let summary, let expanded, let hiddenCount) = item.kind {
             ToolCallGroupRow(summary: summary, expanded: expanded, hiddenCount: hiddenCount, toggle: toggle, showAll: showAll)
-        } else if case .turnChanges(let changes) = item.kind {
-            TurnChangesCard(changes: changes)
+        } else if case .turnChanges(let changes, let caption) = item.kind {
+            TurnChangesCard(changes: changes, caption: caption)
         } else {
             message
         }

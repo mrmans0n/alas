@@ -585,6 +585,42 @@ struct HostSessionsTests {
         #expect(answers == 2)
     }
 
+    /// A peer following a session gets the turn captions saved with it, then all of them again each
+    /// time one is written. A fresh follow may send the empty list first, before the saved ones load.
+    @Test(.timeLimit(.minutes(5))) func aPeerGetsASessionsSavedTurnCaptionsAndEachNewOne() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.host.sessions.create(.worktree(fixture.ref), agentID: "codex", caller: .app).id
+        let manager = try #require(fixture.core.sessionManagers.values.first { $0.liveSession(for: id) != nil })
+        let live = try #require(manager.liveSession(for: id))
+        try await eventually { (try? await manager.persistence.loadSession(id: id)) != nil }
+        try await manager.persistence.saveTurnCaption(
+            sessionId: id, StoredTurnCaption(answerIndex: 3, filesDigest: "d", caption: "Saved"))
+        let (replies, reply) = AsyncStream<RemoteServerMessage>.makeStream()
+        let gateway = RemoteSessionGateway(host: fixture.host) { reply.yield($0) }
+        defer { gateway.close() }
+
+        await gateway.handle(.subscribe(sessionId: id))
+        var sent: [[RemoteTurnCaption]] = []
+        for await case .turnCaptions(id, let captions) in replies where !captions.isEmpty {
+            sent.append(captions)
+            if sent.count == 2 { break }
+            live.turnCaptions[7] = "Written"
+        }
+        #expect(sent == [
+            [RemoteTurnCaption(index: 3, caption: "Saved")],
+            [RemoteTurnCaption(index: 3, caption: "Saved"), RemoteTurnCaption(index: 7, caption: "Written")],
+        ])
+        // A follow of a session without captions still says so, clearing what a resubscribing
+        // client kept from before captions turned off.
+        let other = try await fixture.host.sessions.create(.worktree(fixture.ref), agentID: "codex", caller: .app).id
+        await gateway.handle(.subscribe(sessionId: other))
+        for await case .turnCaptions(other, let captions) in replies {
+            #expect(captions.isEmpty)
+            break
+        }
+    }
+
     /// An image that only the transcript holds inline reaches the phone with a file it can
     /// fetch, so one too large for the row is not lost.
     @Test(.timeLimit(.minutes(5))) func anInlineToolImageReachesAPeerAsASpilledFile() async throws {

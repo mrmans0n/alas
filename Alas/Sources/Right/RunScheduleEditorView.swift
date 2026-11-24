@@ -421,28 +421,85 @@ struct RunScheduleEditorView: View {
         }
     }
 
-    /// The schedule stores agent and model ids as strings; the shared picker
-    /// works on a `ReviewerChoice`, where nil is the project default.
-    private var agentModelPicker: AgentModelPicker {
-        AgentModelPicker(
-            choice: Binding(
-                get: { draft.agentID.map { .agent(id: $0, modelID: draft.modelID) } },
-                set: { choice in
-                    switch choice {
-                    case let .agent(id, modelID):
-                        draft.agentID = id
-                        draft.modelID = modelID
-                    case nil, .sameAsSession:
-                        draft.agentID = nil
-                        draft.modelID = nil
-                    }
-                }
-            ),
-            allowsSameAsSession: false,
-            inheritLabel: "Project default",
-            agents: state.enabledAgents(forProjectId: draft.projectID),
-            modelCatalog: state.acpModelCatalog
+    /// The new-worktree dialog's agent chip: logo, name and a searchable list,
+    /// led by the project default. A saved agent that is no longer enabled
+    /// stays listed as unavailable, so the chip never names a choice the
+    /// schedule does not hold.
+    private var agentChip: some View {
+        let agents = state.enabledAgents(forProjectId: draft.projectID)
+        var items = [ACPSelectChip.Item(
+            id: Self.defaultItemID,
+            name: "Project default",
+            description: nil,
+            icon: .system("folder")
+        )]
+        items += agents.map { agent in
+            ACPSelectChip.Item(
+                id: agent.id,
+                name: agent.displayName,
+                description: nil,
+                icon: .image(AgentLogoView.menuImage(for: agent, size: 14))
+            )
+        }
+        if let agentID = draft.agentID, !agents.contains(where: { $0.id == agentID }) {
+            items.append(ACPSelectChip.Item(
+                id: agentID,
+                name: "\(agentID) · unavailable",
+                description: nil,
+                icon: .system("sparkles")
+            ))
+        }
+        let selectedID = draft.agentID ?? Self.defaultItemID
+        return ACPSelectChip(
+            label: items.first { $0.id == selectedID }?.name ?? "",
+            placeholder: "Agent",
+            accent: theme.color("fg-muted"),
+            items: items,
+            selectedId: selectedID,
+            searchDescriptions: false,
+            searchIdentifiers: false,
+            fillsWidth: false,
+            onSelect: { item in
+                let agentID = item.id == Self.defaultItemID ? nil : item.id
+                // A model belongs to the agent it was listed for.
+                guard agentID != draft.agentID else { return }
+                draft.agentID = agentID
+                draft.modelID = nil
+            }
         )
+        .accessibilityLabel("Agent")
+    }
+
+    /// Agent and model ids are never empty, so this "use the default" row
+    /// cannot collide with a real one.
+    private static let defaultItemID = ""
+
+    /// The model chip beside the peer new-session sheet's agent chip: the
+    /// models the agent advertised in earlier sessions, led by its default.
+    /// A saved model the catalog no longer lists stays selectable as such.
+    private func modelChip(agentID: String) -> some View {
+        let models = state.acpModelCatalog.models(for: agentID)
+        var items = [ACPSelectChip.Item(id: Self.defaultItemID, name: "Agent default", description: nil)]
+        items += models.map { ACPSelectChip.Item(id: $0.id, name: $0.name, description: nil) }
+        if let modelID = draft.modelID, !models.contains(where: { $0.id == modelID }) {
+            items.append(ACPSelectChip.Item(id: modelID, name: "\(modelID) · not listed", description: nil))
+        }
+        let selectedID = draft.modelID ?? Self.defaultItemID
+        return ACPSelectChip(
+            label: items.first { $0.id == selectedID }?.name ?? "",
+            placeholder: "Model",
+            accent: theme.color("syntax-keyword"),
+            items: items,
+            selectedId: selectedID,
+            searchDescriptions: false,
+            searchIdentifiers: false,
+            fillsWidth: false,
+            onSelect: { item in
+                draft.modelID = item.id == Self.defaultItemID ? nil : item.id
+            }
+        )
+        .disabled(items.count == 1)
+        .accessibilityLabel("Model")
     }
 
     private var agentSurface: RunSchedulePresentation.AgentSurface {
@@ -474,7 +531,7 @@ struct RunScheduleEditorView: View {
             }
             DialogField(label: "Agent") {
                 HStack(spacing: 0) {
-                    agentModelPicker.agentMenu
+                    agentChip
                     Spacer(minLength: 0)
                 }
             }
@@ -482,7 +539,7 @@ struct RunScheduleEditorView: View {
                 DialogField(label: "Model") {
                     VStack(alignment: .leading, spacing: scale.space[1]) {
                         HStack(spacing: 0) {
-                            agentModelPicker.modelMenu
+                            modelChip(agentID: agentID)
                             Spacer(minLength: 0)
                         }
                         if state.acpModelCatalog.models(for: agentID).isEmpty {
