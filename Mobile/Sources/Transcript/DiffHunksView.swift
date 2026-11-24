@@ -73,7 +73,7 @@ struct DiffHunksView: View {
                     .lineLimit(1)
                     .padding(.horizontal, 8).padding(.vertical, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.tertiarySystemFill))
+                    .background(Color(.tertiarySystemFill), in: Rectangle())
                 ScrollView(.horizontal, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
                         // At least as wide as the card, so short lines' tints reach its edge.
@@ -124,7 +124,7 @@ struct DiffHunksView: View {
         .fixedSize()
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint?.opacity(0.15) ?? .clear)
+        .background(tint?.opacity(0.15) ?? .clear, in: Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(spoken)
     }
