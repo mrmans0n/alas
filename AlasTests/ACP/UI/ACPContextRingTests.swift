@@ -111,4 +111,38 @@ struct ACPContextRingTests {
         let view = ACPContextUsageButton(usage: nil, modelName: nil, lastTurnQuota: quota)
         _ = view.body
     }
+
+    @Test("usage that changes during a breakdown request is measured again once it returns")
+    @MainActor
+    func breakdownLoaderRemeasuresUsageThatChangedMidRequest() async {
+        final class Requests {
+            var count = 0
+            var releaseFirst: CheckedContinuation<Void, Never>?
+        }
+        let requests = Requests()
+        let (firstStarted, signalFirstStarted) = AsyncStream.makeStream(of: Void.self)
+        let load: () async -> ACPContextBreakdown? = {
+            requests.count += 1
+            let request = requests.count
+            if request == 1 {
+                await withCheckedContinuation { continuation in
+                    requests.releaseFirst = continuation
+                    signalFirstStarted.yield()
+                }
+            }
+            return ACPContextBreakdown(
+                categories: [.init(name: "Messages", tokens: request, kind: .used)], maxTokens: 100)
+        }
+        let loader = ACPContextBreakdownLoader()
+
+        let first = Task { await loader.refresh(usage: .init(used: 10, size: 100, cost: nil), load: load) }
+        for await _ in firstStarted { break }
+        // Runs once the refresh below is parked behind the first request.
+        Task { requests.releaseFirst?.resume() }
+        await loader.refresh(usage: .init(used: 20, size: 100, cost: nil), load: load)
+        await first.value
+
+        #expect(requests.count == 2)
+        #expect(loader.breakdown?.categories.first?.tokens == 2)
+    }
 }

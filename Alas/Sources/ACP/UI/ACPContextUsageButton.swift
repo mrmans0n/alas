@@ -138,17 +138,31 @@ final class ACPContextBreakdownLoader {
     /// The `usage_update` the breakdown was measured at: a newer one means the
     /// window changed, so the next refresh fetches again.
     @ObservationIgnored private var measuredAt: ACPUsageInfo?
+    /// Callers that arrived while a request was in flight.
+    @ObservationIgnored private var waiters: [CheckedContinuation<Void, Never>] = []
 
     func refresh(usage: ACPUsageInfo?, load: (() async -> ACPContextBreakdown?)?) async {
-        guard let load, !isLoading, breakdown == nil || measuredAt != usage else { return }
+        guard let load else { return }
+        // A request in flight answers for the window it started on, so a
+        // caller with newer usage waits for it and then asks again, unless a
+        // later caller replaced it meanwhile.
+        while isLoading {
+            await withCheckedContinuation { waiters.append($0) }
+            if Task.isCancelled { return }
+        }
+        guard breakdown == nil || measuredAt != usage else { return }
         isLoading = true
         let fetched = await load()
         withAnimation(.snappy) {
             isLoading = false
-            guard let fetched, !fetched.categories.isEmpty else { return }
-            breakdown = fetched
-            measuredAt = usage
+            if let fetched, !fetched.categories.isEmpty {
+                breakdown = fetched
+                measuredAt = usage
+            }
         }
+        let waiting = waiters
+        waiters = []
+        waiting.forEach { $0.resume() }
     }
 
     func reset() {
