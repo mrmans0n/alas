@@ -85,7 +85,7 @@ struct AlasHostExecutableTests {
         func send(_ message: RemoteClientMessage) async throws {
             try await socket.send(.string(String(decoding: try JSONEncoder().encode(message), as: UTF8.self)))
         }
-        guard case .hello(let version, let serverId, _, _, _, let capabilities, _)? = try await receive() else {
+        guard case .hello(let version, let serverId, _, _, _, _, let capabilities, _)? = try await receive() else {
             Issue.record("expected hello")
             return
         }
@@ -280,7 +280,7 @@ struct AlasHostExecutableTests {
             // Stopped before the next start, which needs the data directory.
             host.process.terminate()
             #expect(try await host.exitStatus() == 0)
-            guard case .paired(_, _, _, let publicKey, _, _) = outcome else {
+            guard case .paired(_, _, _, _, let publicKey, _, _) = outcome else {
                 Issue.record("expected the host to pair, got \(outcome)")
                 return nil
             }

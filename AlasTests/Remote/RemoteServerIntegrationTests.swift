@@ -157,7 +157,7 @@ struct RemoteServerIntegrationTests {
 
         server.refreshPeerDevicePolicy()
         let message = try await receiveServerMessage(control)
-        guard case .hello(_, _, _, _, _, let capabilities, _) = message else {
+        guard case .hello(_, _, _, _, _, _, let capabilities, _) = message else {
             Issue.record("Expected a policy hello refresh")
             return
         }
@@ -170,7 +170,7 @@ struct RemoteServerIntegrationTests {
         control.resume()
         do {
             let first = try await receiveServerMessage(control)
-            guard case .hello(_, _, _, _, _, let capabilities, _) = first else { throw DeviceMediaTestError.notAHello }
+            guard case .hello(_, _, _, _, _, _, let capabilities, _) = first else { throw DeviceMediaTestError.notAHello }
             try #require(capabilities.contains(PeerDeviceCapability.v1))
             let attachment = UUID()
             let request = RemoteClientMessage.device(.attach(deviceID: source.deviceID, attachmentID: attachment))

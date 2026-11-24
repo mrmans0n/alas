@@ -101,7 +101,7 @@ private struct PeerRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: "laptopcomputer")
+            PeerIconView(icon: host.icon ?? .laptop)
                 .font(.title2)
                 .foregroundStyle(state == .online ? Color.accentColor : .secondary)
                 .frame(width: 44, height: 44)

@@ -133,6 +133,9 @@ public struct AppConfig: Codable, Equatable, Sendable {
         public var serverId: String = ""
         /// Name advertised in `hello`. Empty means "use the computer name".
         public var displayName: String = ""
+        /// `PeerIcon` wire id advertised beside `displayName`. Empty means the
+        /// default for the kind of host.
+        public var icon: String = ""
         /// Advertise this Mac on the local network with Bonjour and browse for
         /// other Alas instances there.
         public var discoverable: Bool = false
@@ -158,6 +161,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
             allowedOrigins: [String] = [],
             serverId: String = "",
             displayName: String = "",
+            icon: String = "",
             discoverable: Bool = false,
             tailscaleServe: Bool = false,
             tailscaleOnly: Bool = false
@@ -170,6 +174,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
             self.allowedOrigins = allowedOrigins
             self.serverId = serverId
             self.displayName = displayName
+            self.icon = icon
             self.discoverable = discoverable
             self.tailscaleServe = tailscaleServe
             self.tailscaleOnly = tailscaleOnly
@@ -177,7 +182,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
         public enum CodingKeys: String, CodingKey, Sendable {
             case enabled, keepAwake, port, allowedHosts, preferredAdvertisedHost
-            case allowedOrigins, serverId, displayName, discoverable
+            case allowedOrigins, serverId, displayName, icon, discoverable
             case tailscaleServe, tailscaleOnly
         }
 
@@ -191,6 +196,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
             allowedOrigins = (try? c.decode([String].self, forKey: .allowedOrigins)) ?? []
             serverId = (try? c.decode(String.self, forKey: .serverId)) ?? ""
             displayName = (try? c.decode(String.self, forKey: .displayName)) ?? ""
+            icon = (try? c.decode(String.self, forKey: .icon)) ?? ""
             discoverable = (try? c.decode(Bool.self, forKey: .discoverable)) ?? false
             tailscaleServe = (try? c.decode(Bool.self, forKey: .tailscaleServe)) ?? false
             tailscaleOnly = (try? c.decode(Bool.self, forKey: .tailscaleOnly)) ?? false

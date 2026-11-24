@@ -15,12 +15,34 @@ public struct ApprovalPeer: Codable, Equatable, Sendable {
     public let publicKey: String
     public let name: String
     public let origins: [String]
+    /// Cosmetic, so it stays out of the signed transcript: older peers sign
+    /// without it, and a peer can only ever pick one of the closed set.
+    public let icon: PeerIcon?
 
-    public init(serverID: String, publicKey: String, name: String, origins: [String]) {
+    public init(serverID: String, publicKey: String, name: String, origins: [String], icon: PeerIcon? = nil) {
         self.serverID = serverID
         self.publicKey = publicKey
         self.name = name
         self.origins = origins
+        self.icon = icon
+    }
+
+    private enum CodingKeys: String, CodingKey { case serverID, publicKey, name, origins, icon }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        serverID = try c.decode(String.self, forKey: .serverID)
+        publicKey = try c.decode(String.self, forKey: .publicKey)
+        name = try c.decode(String.self, forKey: .name)
+        origins = try c.decode([String].self, forKey: .origins)
+        icon = PeerIcon(wireValue: try? c.decodeIfPresent(String.self, forKey: .icon))
+    }
+
+    /// The signed identity only. An older peer echoes a payload back without
+    /// the icon, and that must still match what this Mac sent.
+    public static func == (lhs: ApprovalPeer, rhs: ApprovalPeer) -> Bool {
+        lhs.serverID == rhs.serverID && lhs.publicKey == rhs.publicKey
+            && lhs.name == rhs.name && lhs.origins == rhs.origins
     }
 }
 

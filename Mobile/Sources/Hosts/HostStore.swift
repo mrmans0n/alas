@@ -1,3 +1,4 @@
+import AlasRemoteKit
 import Foundation
 import Security
 
@@ -11,6 +12,8 @@ struct PairedHost: Codable, Identifiable, Equatable {
     var origins: [String]
     var lastOrigin: String?
     var publicKey: String?
+    /// The icon the Mac chose; nil until it reports one.
+    var icon: PeerIcon?
     let addedAt: Date
 }
 

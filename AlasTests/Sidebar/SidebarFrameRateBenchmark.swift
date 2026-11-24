@@ -5,8 +5,8 @@ import Testing
 
 /// Frame-rate benchmark for the left sidebar under a typical heavy setup: 15
 /// projects (two with seven worktrees, the rest with three, a third with a repo
-/// image icon) and three online peers of the same shape and project names, all
-/// expanded. Opt-in: it opens a real on-screen
+/// image icon) and three online peers of the same shape and project names,
+/// each on its own pager page. Opt-in: it opens a real on-screen
 /// window and only runs with `TEST_RUNNER_ALAS_SIDEBAR_BENCH=1` in the
 /// `xcodebuild` environment.
 ///
@@ -68,21 +68,12 @@ struct SidebarFrameRateBenchmark {
         }
     }
 
-    /// Expanding and collapsing peers, the stutter you see at the tap.
+    /// Paging from the local space through each peer's page and back, the
+    /// slide you see at a pager click.
     @Test(arguments: heights)
-    func togglePeers(height: CGFloat) async throws {
-        try await run("toggle h=\(Int(height))", height: height) { bench in
-            await bench.report("toggle", bench.togglePeers(everyFrames: 45, toggles: 12))
-        }
-    }
-
-    /// Collapsing and expanding the last peer while scrolled to its rows at the
-    /// bottom of a short window, so the list shrinks past the offset.
-    @Test(arguments: [CGFloat(240), 480])
-    func togglePeersAtTheBottom(height: CGFloat) async throws {
-        try await run("toggle-bottom h=\(Int(height))", height: height) { bench in
-            _ = await bench.fling(direction: 1)
-            await bench.report("toggle", bench.toggleLastPeer(everyFrames: 45, toggles: 12))
+    func pageThroughPeers(height: CGFloat) async throws {
+        try await run("page h=\(Int(height))", height: height) { bench in
+            await bench.report("page", bench.pageThroughPeers(everyFrames: 45, pages: 12))
         }
     }
 
@@ -95,15 +86,6 @@ struct SidebarFrameRateBenchmark {
             let start = bench.scrollOffset
             await bench.report("swipes", bench.swipes(count: 6))
             #expect(bench.deepestOffset > start + 500, "wheel events never moved the list")
-        }
-    }
-
-    /// The pointer crossing the peers' section header, which reveals its "+".
-    /// Scrolling peers past a resting pointer does this without a mouse move.
-    @Test(arguments: heights)
-    func hoverPeersHeader(height: CGFloat) async throws {
-        try await run("hover h=\(Int(height))", height: height) { bench in
-            await bench.report("hover", bench.hoverPeersHeader(everyFrames: 6, frames: 360))
         }
     }
 
@@ -210,7 +192,6 @@ private final class SidebarBenchWindow {
         }
         client.refresh()
         state.installNativePeerSessionsForTesting(client)
-        peerModel.expandedPeerIDs = Set(Self.peers.map(\.0))
         #expect(client.snapshot.groups.map(\.sessions.isEmpty) == [false, false, false], "peer sessions never arrived")
         try await eventually("peer host snapshots") {
             Self.peers.allSatisfy { hosts.worktrees[$0.0]?.isEmpty == false }
@@ -349,41 +330,19 @@ private final class SidebarBenchWindow {
         scroller.scrollWheel(with: event)
     }
 
-    func toggleLastPeer(everyFrames: Int, toggles: Int) async -> FrameStats {
+    func pageThroughPeers(everyFrames: Int, pages: Int) async -> FrameStats {
         var ticks = 0
-        var remaining = toggles
-        let last = Self.peers.map(\.1).sorted().last.flatMap { name in Self.peers.first { $0.1 == name }?.0 } ?? ""
-        return await FrameRateBenchmark.drive(on: hosting, envPrefix: "ALAS_SIDEBAR_BENCH", maxFrames: everyFrames * (toggles + 1)) { [self] _ in
+        var remaining = pages
+        return await FrameRateBenchmark.drive(on: hosting, envPrefix: "ALAS_SIDEBAR_BENCH", maxFrames: everyFrames * (pages + 1)) { [self] _ in
             ticks += 1
             if ticks % everyFrames == 0 {
-                let repos = client.snapshot.groups.first { $0.id == last }?.repos(ordering: .lastUpdateDesc) ?? []
-                peerModel.togglePeer(last, repos: repos)
+                // Wraps back to the local space after the last peer.
+                if !state.pageSidebar(offset: 1) {
+                    _ = state.switchToSpace(id: state.spacesManager.activeSpaceId)
+                }
                 remaining -= 1
             }
             return remaining > 0
-        }
-    }
-
-    func togglePeers(everyFrames: Int, toggles: Int) async -> FrameStats {
-        var ticks = 0
-        var remaining = toggles
-        let all = Set(Self.peers.map(\.0))
-        return await FrameRateBenchmark.drive(on: hosting, envPrefix: "ALAS_SIDEBAR_BENCH", maxFrames: everyFrames * (toggles + 1)) { [self] _ in
-            ticks += 1
-            if ticks % everyFrames == 0 {
-                peerModel.expandedPeerIDs = peerModel.expandedPeerIDs.isEmpty ? all : []
-                remaining -= 1
-            }
-            return remaining > 0
-        }
-    }
-
-    func hoverPeersHeader(everyFrames: Int, frames: Int) async -> FrameStats {
-        var ticks = 0
-        return await FrameRateBenchmark.drive(on: hosting, envPrefix: "ALAS_SIDEBAR_BENCH", maxFrames: frames) { [self] _ in
-            ticks += 1
-            if ticks % everyFrames == 0 { peerModel.headerHovering.toggle() }
-            return ticks < frames
         }
     }
 

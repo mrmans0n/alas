@@ -16,15 +16,19 @@ public struct RemoteBonjourTXT: Equatable, Sendable {
     public static let serverIdKey = "id"
     public static let protocolVersionKey = "v"
     public static let modelKey = "model"
+    public static let iconKey = "icon"
 
     public let serverId: String
     public let protocolVersion: Int
     public let model: String?
+    public let icon: PeerIcon?
 
-    public init(serverId: String, protocolVersion: Int = RemoteProtocolVersion.current, model: String?) {
+    public init(serverId: String, protocolVersion: Int = RemoteProtocolVersion.current, model: String?,
+                icon: PeerIcon? = nil) {
         self.serverId = serverId
         self.protocolVersion = protocolVersion
         self.model = model
+        self.icon = icon
     }
 
     #if canImport(Network)
@@ -41,9 +45,14 @@ public struct RemoteBonjourTXT: Equatable, Sendable {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             model = trimmed.isEmpty ? nil : trimmed
         }
+        var icon: PeerIcon?
+        if case .string(let raw)? = txt.getEntry(for: Self.iconKey) {
+            icon = PeerIcon(wireValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
         self.serverId = serverId
         self.protocolVersion = protocolVersion
         self.model = model
+        self.icon = icon
     }
 
     public var nwTXTRecord: NWTXTRecord {
@@ -51,6 +60,7 @@ public struct RemoteBonjourTXT: Equatable, Sendable {
         txt[Self.serverIdKey] = serverId
         txt[Self.protocolVersionKey] = String(protocolVersion)
         if let model { txt[Self.modelKey] = model }
+        if let icon { txt[Self.iconKey] = icon.rawValue }
         return txt
     }
     #endif
@@ -78,12 +88,13 @@ extension RemoteBonjourAdvertisement {
     /// The advertisement for these settings, or nil when this Mac must not be
     /// discoverable. Discovery is gated by the remote server being on AND the
     /// discoverable toggle: turning off either one withdraws the record.
-    public static func forSettings(_ remote: AppConfig.Remote, displayName: String, model: String?) -> RemoteBonjourAdvertisement? {
+    public static func forSettings(_ remote: AppConfig.Remote, displayName: String, icon: PeerIcon,
+                                   model: String?) -> RemoteBonjourAdvertisement? {
         // A loopback-only listener can't be reached by LAN peers.
         guard remote.enabled, remote.discoverable, !remote.listensOnLoopbackOnly else { return nil }
         return RemoteBonjourAdvertisement(
             displayName: displayName,
-            txt: RemoteBonjourTXT(serverId: remote.serverId, model: model))
+            txt: RemoteBonjourTXT(serverId: remote.serverId, model: model, icon: icon))
     }
 }
 

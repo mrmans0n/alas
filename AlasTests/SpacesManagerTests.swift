@@ -17,7 +17,7 @@ struct SpacesManagerTests {
         )
     }
 
-    @Test func migratedDefaultContainsAllProjectsAndHidesAffordance() {
+    @Test func migratedDefaultContainsAllProjects() {
         let projects = [project("p1"), project("p2")]
         let manager = SpacesManager.migrating(projects: projects, now: date)
 
@@ -25,27 +25,6 @@ struct SpacesManagerTests {
         #expect(manager.activeSpace?.name == SpaceConfig.defaultName)
         #expect(manager.activeSpace?.emoji == SpaceConfig.defaultEmoji)
         #expect(manager.activeSpace?.projectIds == ["p1", "p2"])
-        #expect(!manager.shouldShowSpaceAffordance)
-    }
-
-    @Test func singleSpaceStaysHiddenWhenCustomizedByDefault() {
-        let manager = SpacesManager.migrating(projects: [project("p1")], now: date)
-
-        manager.renameSpace(id: manager.activeSpaceId, name: "Work")
-        #expect(!manager.shouldShowSpaceAffordance)
-
-        manager.renameSpace(id: manager.activeSpaceId, name: SpaceConfig.defaultName)
-        manager.setEmoji(spaceId: manager.activeSpaceId, emoji: "💼")
-        #expect(!manager.shouldShowSpaceAffordance)
-    }
-
-    @Test func optInShowsAffordanceForSingleSpace() {
-        let manager = SpacesManager.migrating(projects: [project("p1")], now: date)
-
-        manager.setShowSingleSpaceAffordance(true)
-
-        #expect(manager.shouldShowSpaceAffordance)
-        #expect(manager.file.showSingleSpaceAffordance)
     }
 
     @Test func spacesFileDecodesMissingSingleSpaceAffordanceAsHidden() throws {
@@ -71,15 +50,6 @@ struct SpacesManagerTests {
         let file = try decoder.decode(SpacesFile.self, from: json)
 
         #expect(!file.showSingleSpaceAffordance)
-    }
-
-    @Test func addingSecondSpaceShowsAffordance() {
-        let manager = SpacesManager.migrating(projects: [project("p1")], now: date)
-
-        let newId = manager.addSpace(name: "Personal", emoji: "🏠", now: date.addingTimeInterval(1))
-
-        #expect(manager.spaces.map(\.id).contains(newId))
-        #expect(manager.shouldShowSpaceAffordance)
     }
 
     @Test func projectCanBelongToMultipleSpaces() {

@@ -141,7 +141,8 @@ private struct PaneLeafView: View {
         )
         .overlay(alignment: .top) {
             if let host = state._peerConsoleHost, let peer = host.controllers[leaf.id] {
-                PeerConsoleControlBanner(peerName: peer) { host.reclaim(leaf.id) }
+                // The console host only knows the controller's name.
+                PeerConsoleControlBanner(peerName: peer, peerIcon: state.peerIcon(named: peer)) { host.reclaim(leaf.id) }
             }
         }
         .contentShape(Rectangle())
@@ -374,6 +375,7 @@ private struct TerminalRecoverPlaceholder: View {
 private struct PeerConsoleControlBanner: View {
     @Environment(\.designScale) private var scale
     let peerName: String
+    let peerIcon: PeerIcon
     let onReclaim: () -> Void
     @Environment(\.theme) private var theme
 
@@ -381,10 +383,13 @@ private struct PeerConsoleControlBanner: View {
         HStack(spacing: scale.space[2]) {
             Image(systemName: "dot.radiowaves.left.and.right")
                 .foregroundColor(theme.color("accent"))
-            Text("\(peerName) is controlling this console. Your typing is paused.")
-                .foregroundColor(theme.color("fg"))
-                .lineLimit(1)
-                .truncationMode(.tail)
+            HStack(spacing: scale.space[1]) {
+                PeerIconView(icon: peerIcon)
+                Text("\(peerName) is controlling this console. Your typing is paused.")
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .foregroundColor(theme.color("fg"))
             Spacer(minLength: 0)
             Button("Reclaim", action: onReclaim)
                 .controlSize(.small)

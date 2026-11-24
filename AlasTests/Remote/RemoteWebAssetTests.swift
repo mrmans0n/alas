@@ -1343,6 +1343,21 @@ struct RemoteWebAssetTests {
         #expect(!links.contains("document."))
     }
 
+    @Test func remoteWebLoadsAndPrecachesPeerIconsBeforeTheRegistry() throws {
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+        let icons = try asset("peer-icons.js")
+
+        try expectLoadsBeforeApp("/peer-icons.js", in: html)
+        try expectReferencedAndPrecached("/peer-icons.js", html: html, sw: sw)
+        // applyHello validates icon ids through RemotePeerIcons.
+        let iconsAt = try referencePosition(of: "/peer-icons.js", in: html)
+        let registryAt = try referencePosition(of: "/hub-registry.js", in: html)
+        #expect(iconsAt < registryAt)
+        #expect(icons.contains("globalThis.RemotePeerIcons ="))
+        #expect(!icons.contains("document."))
+    }
+
     @Test func serviceWorkerIgnoresCrossOriginRequests() throws {
         let sw = try asset("sw.js")
         let fetchHandler = try #require(sw.range(of: #"self.addEventListener("fetch""#).map { sw[$0.lowerBound...].prefix(600) })

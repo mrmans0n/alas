@@ -134,9 +134,12 @@ final class DesignCaptureDemoPeer: FederatedPeerLinks {
         return NativePeerSessions(
             federation: provider,
             peers: { [weak self] in
-                let online = (self?.sessionCarryingPeers ?? []).map { RemoteHelloPeer(serverId: $0.serverId, name: $0.name, state: "online") }
+                let online = (self?.sessionCarryingPeers ?? []).map {
+                    RemoteHelloPeer(serverId: $0.serverId, name: $0.name, state: "online",
+                                    icon: $0.serverId == Self.studio.serverId ? .macStudio : .laptop)
+                }
                 return online + (self?.sidebarVariants == true
-                    ? [RemoteHelloPeer(serverId: "demo-mini", name: "Mac mini", state: "offline")] : [])
+                    ? [RemoteHelloPeer(serverId: "demo-mini", name: "Mac mini", state: "offline", icon: .macMini)] : [])
             },
             consoles: consoles,
             hosts: hosts

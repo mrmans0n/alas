@@ -7,6 +7,7 @@ extension RemoteSessionCatalog {
         public struct Row: Identifiable, Equatable, Sendable {
             public let hostID: HostID
             public let hostName: String
+            public let hostIcon: PeerIcon
             public let worktree: RemoteWorktreeEntry
             public var id: String { "\(hostID.sortKey)|\(worktree.id)" }
         }
@@ -70,7 +71,7 @@ extension RemoteSessionCatalog {
                     bucket.title = section.title
                     bucket.titleRecency = recency
                 }
-                bucket.rows += section.worktrees.map { ProjectGroup.Row(hostID: host.id, hostName: host.name, worktree: $0) }
+                bucket.rows += section.worktrees.map { ProjectGroup.Row(hostID: host.id, hostName: host.name, hostIcon: host.icon, worktree: $0) }
                 buckets[id] = bucket
             }
         }

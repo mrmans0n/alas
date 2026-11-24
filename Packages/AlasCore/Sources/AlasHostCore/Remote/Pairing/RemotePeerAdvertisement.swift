@@ -13,6 +13,8 @@ import AlasAgents
 public struct RemotePeerAdvertisement: Codable, Equatable, Sendable {
     public let serverId: String
     public let name: String
+    /// The sender's own icon. Absent from an older peer's advertisement.
+    public let icon: PeerIcon?
     public let origins: [String]
     public let counterCode: String?
     /// The key the sender claims its records should be pinned to. A CLAIM,
@@ -27,14 +29,32 @@ public struct RemotePeerAdvertisement: Codable, Equatable, Sendable {
     /// from an older peer's advertisement, which still needs the pair-back.
     public let acceptsInboundOnly: Bool?
 
-    public init(serverId: String, name: String, origins: [String], counterCode: String?,
+    public init(serverId: String, name: String, icon: PeerIcon? = nil, origins: [String], counterCode: String?,
          publicKey: String? = nil, acceptsInboundOnly: Bool? = nil) {
         self.serverId = serverId
         self.name = name
+        self.icon = icon
         self.origins = origins
         self.counterCode = counterCode
         self.publicKey = publicKey
         self.acceptsInboundOnly = acceptsInboundOnly
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case serverId, name, icon, origins, counterCode, publicKey, acceptsInboundOnly
+    }
+
+    /// An icon is cosmetic: one this build cannot read is dropped rather
+    /// than failing the whole `POST /pair`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        serverId = try c.decode(String.self, forKey: .serverId)
+        name = try c.decode(String.self, forKey: .name)
+        icon = PeerIcon(wireValue: try? c.decodeIfPresent(String.self, forKey: .icon))
+        origins = try c.decode([String].self, forKey: .origins)
+        counterCode = try c.decodeIfPresent(String.self, forKey: .counterCode)
+        publicKey = try c.decodeIfPresent(String.self, forKey: .publicKey)
+        acceptsInboundOnly = try c.decodeIfPresent(Bool.self, forKey: .acceptsInboundOnly)
     }
 
     /// Whether an advertised key could be a real Ed25519 public key at all.
@@ -51,6 +71,7 @@ public struct RemotePeerAdvertisement: Codable, Equatable, Sendable {
 public struct RemotePeerPairingRequest: Equatable, Sendable {
     public let peerServerId: String
     public let peerName: String
+    public let peerIcon: PeerIcon?
     public let origins: [String]
     /// The key the redeeming peer claimed, carried through unverified. The
     /// responder's own pair-back is what turns it into proof.
@@ -69,11 +90,12 @@ public struct RemotePeerPairingRequest: Equatable, Sendable {
     /// request is only recorded. Its `counterCode` is ignored.
     public let inboundOnly: Bool
 
-    public init(peerServerId: String, peerName: String, origins: [String],
+    public init(peerServerId: String, peerName: String, peerIcon: PeerIcon? = nil, origins: [String],
          peerPublicKey: String? = nil, counterCode: String?,
          localDeviceId: String, redeemedCode: String, inboundOnly: Bool = false) {
         self.peerServerId = peerServerId
         self.peerName = peerName
+        self.peerIcon = peerIcon
         self.origins = origins
         self.peerPublicKey = peerPublicKey
         self.counterCode = counterCode

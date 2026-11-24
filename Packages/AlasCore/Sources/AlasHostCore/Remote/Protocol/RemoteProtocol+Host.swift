@@ -8,10 +8,10 @@ public typealias RemoteServerMessage = RemoteServerMessageOf<HostServerMessage, 
 
 extension RemoteServerIdentity {
     public init(
-        serverId: String, name: String, peers: [RemoteHelloPeer] = [],
+        serverId: String, name: String, icon: PeerIcon? = nil, peers: [RemoteHelloPeer] = [],
         consoleCapabilities: [String] = PeerConsoleCapability.appHost, hostVersion: String? = nil
     ) {
-        self.init(serverId: serverId, name: name, peers: peers, consoleCapabilities: consoleCapabilities,
+        self.init(serverId: serverId, name: name, icon: icon, peers: peers, consoleCapabilities: consoleCapabilities,
                   hostCapabilities: HostProtocolCapability.served, hostVersion: hostVersion)
     }
 }
@@ -22,6 +22,7 @@ extension RemoteServerMessage {
             protocolVersion: RemoteProtocolVersion.current,
             serverId: identity.serverId,
             name: identity.name,
+            icon: identity.icon,
             // Older peers refuse to link to a Mac that doesn't advertise this.
             federationEnabled: true,
             peers: identity.peers,

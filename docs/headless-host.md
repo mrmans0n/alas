@@ -159,7 +159,10 @@ alas-host restart
 ```
 
 The settings are `host.reachability`, `host.port`, `remote.displayName`,
-`agents.<id>.enabled` (one per built-in or installed agent),
+`remote.icon` (the glyph paired Macs show for this host: one of `laptop`,
+`desktop`, `macMini`, `macStudio`, `macPro`, `server`, `rack`, `cloud`, `chip`,
+`terminal`, `drive`, `home`, `office`, `globe`, `bolt` or `flask`; `server` when
+unset), `agents.<id>.enabled` (one per built-in or installed agent),
 `harness.acpAutoRunByDefault`, `harness.acpAutoResumeAfterUsageLimit`,
 `harness.acpContinueInterruptedSessions`, `worktrees.rootPath` and
 `worktrees.baseBranch`. Booleans take `true`/`false`, `on`/`off` or `yes`/`no`.

@@ -41,7 +41,7 @@ enum NativePeerState: Equatable {
         }
     }
 
-    /// Theme token for the presence dot drawn beside the peer's laptop.
+    /// Theme token for the presence dot drawn beside the peer's icon.
     var presenceColorToken: String {
         switch self {
         case .online: "add"
@@ -50,11 +50,25 @@ enum NativePeerState: Equatable {
         case .offline, .identityUnproven, .idle, .unavailable: "fg-faint"
         }
     }
+
+    /// Why a peer that does not carry sessions shows none, for its page and
+    /// the center pane behind it.
+    func unavailableDetail(peerName: String) -> String {
+        switch self {
+        case .connecting: "Connecting to \(peerName). Its worktrees show once it answers."
+        case .tokenRevoked: "\(peerName) no longer accepts this Mac. Pair again in Remote settings."
+        case .identityMismatch, .identityUnproven: "\(peerName) could not prove its identity. Pair again in Remote settings."
+        case .incompatible: "\(peerName) runs a version of Alas this Mac can't talk to."
+        case .online, .offline, .idle, .unavailable: "\(peerName) is offline. Its worktrees return when it reconnects."
+        }
+    }
 }
 
 struct NativePeerGroup: Identifiable, Equatable {
     let serverId: String
     let name: String
+    /// The peer's own choice, as its `hello` advertised it.
+    var icon: PeerIcon = .laptop
     let state: NativePeerState
     let sessions: [RemoteSessionSummary]
     var consoles: [PeerConsoleSummary] = []
@@ -74,6 +88,31 @@ struct NativePeerGroup: Identifiable, Equatable {
     }
 }
 
+/// A peer as its pager item and page header draw it: no sessions or
+/// inventory, so it stays equal across streamed session updates.
+struct NativePeerPage: Identifiable, Equatable {
+    let serverId: String
+    let name: String
+    let icon: PeerIcon
+    let state: NativePeerState
+    let attentionCount: Int
+
+    var id: String { serverId }
+
+    init(_ group: NativePeerGroup) {
+        serverId = group.serverId
+        name = group.name
+        icon = group.icon
+        state = group.state
+        attentionCount = group.attentionCount
+    }
+
+    /// What VoiceOver reads after the name: the state, then any waiting sessions.
+    var accessibilityValue: String {
+        attentionCount > 0 ? "\(state.label), \(attentionCount) need attention" : state.label
+    }
+}
+
 struct NativePeerRepoGroup: Identifiable, Equatable {
     /// Rows the peer sent without worktree metadata land here.
     static let unassignedName = "Other sessions"
@@ -88,6 +127,22 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
     /// The peer's project id, or nil for the "Other sessions" bucket.
     var projectId: String? {
         id.hasPrefix("id:") ? String(id.dropFirst(3)) : nil
+    }
+
+    /// The repos the sidebar filter leaves: worktrees whose title, branch or
+    /// name match `query`, and only repos with a match left. An empty query
+    /// keeps everything, as the local filter does.
+    static func filtered(_ repos: [NativePeerRepoGroup], query: String) -> [NativePeerRepoGroup] {
+        guard WorktreeSidebarFilter.isActive(query) else { return repos }
+        let query = query.trimmingCharacters(in: .whitespaces)
+        return repos.compactMap { repo in
+            let matches = repo.worktrees.filter { worktree in
+                [worktree.title, worktree.worktree?.branch, worktree.worktree?.worktreeName]
+                    .compactMap { $0 }
+                    .contains { !$0.isEmpty && FuzzyMatch.score(query: query, target: $0) != nil }
+            }
+            return matches.isEmpty ? nil : NativePeerRepoGroup(id: repo.id, name: repo.name, worktrees: matches)
+        }
     }
 
     /// The project identity to group on. `projectName` is a display label a
@@ -439,7 +494,9 @@ struct NativePeerSidebarSnapshot: Equatable {
 
     var attentionCount: Int { attentionRows.count }
 
-    /// Inventories are keyed by peer `serverId` and shown only online.
+    /// Inventories are keyed by peer `serverId` and shown only online. Groups
+    /// keep the roster's order, which is pairing order, so a new or renamed
+    /// peer never moves another peer's page in the sidebar pager.
     static func build(
         peers: [RemoteHelloPeer],
         rows: [RemoteSessionSummary],
@@ -471,6 +528,7 @@ struct NativePeerSidebarSnapshot: Equatable {
             return NativePeerGroup(
                 serverId: peer.serverId,
                 name: peer.name,
+                icon: peer.icon ?? .laptop,
                 state: state,
                 sessions: sessions,
                 consoles: state.carriesSessions ? consoles[peer.serverId] ?? [] : [],
@@ -478,7 +536,7 @@ struct NativePeerSidebarSnapshot: Equatable {
                 hostWorktrees: state.carriesSessions ? hostWorktrees[peer.serverId] : nil,
                 attentionCount: sessions.count { waitingStatuses.contains($0.status) }
             )
-        }.sorted { ($0.name, $0.serverId) < ($1.name, $1.serverId) }
+        }
         let attentionRows = groups.flatMap(\.sessions).filter { waitingStatuses.contains($0.status) }
         return .init(groups: groups, attentionRows: attentionRows)
     }

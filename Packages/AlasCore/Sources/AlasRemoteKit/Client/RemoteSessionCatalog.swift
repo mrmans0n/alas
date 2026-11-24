@@ -11,13 +11,19 @@ public enum RemoteSessionCatalog {
         public let id: UUID
         public let serverId: String?
         public let name: String
+        public let icon: PeerIcon?
+        /// The icons of the Macs this host relays, by `serverId`, from its hello.
+        public let relayedIcons: [String: PeerIcon]
         public let isLive: Bool
         public let sessions: [RemoteSessionSummary]
 
-        public init(id: UUID, serverId: String?, name: String, isLive: Bool, sessions: [RemoteSessionSummary]) {
+        public init(id: UUID, serverId: String?, name: String, icon: PeerIcon? = nil,
+                    relayedIcons: [String: PeerIcon] = [:], isLive: Bool, sessions: [RemoteSessionSummary]) {
             self.id = id
             self.serverId = serverId
             self.name = name
+            self.icon = icon
+            self.relayedIcons = relayedIcons
             self.isLive = isLive
             self.sessions = sessions
         }
@@ -41,12 +47,15 @@ public enum RemoteSessionCatalog {
         public let id: SessionID
         public let route: Route
         public let hostName: String
+        public let hostIcon: PeerIcon
         public let title: String
     }
 
     public struct Host: Identifiable, Equatable, Sendable {
         public let id: HostID
         public let name: String
+        /// The Mac's own icon, else the one a relaying Mac reports for it.
+        public let icon: PeerIcon
         public let sections: [RemoteRepoSection]
         fileprivate let routes: [String: Route]
 
@@ -59,9 +68,11 @@ public enum RemoteSessionCatalog {
         let ordered = sources.sorted { $0.id.uuidString < $1.id.uuidString }
         let liveOwners = Set(sources.filter(\.isLive).map(\.ownerID))
         var names: [HostID: String] = [:]
+        var icons: [HostID: PeerIcon] = [:]
         var reports: [HostID: [String: Report]] = [:]
         for source in ordered where names[source.ownerID] == nil {
             names[source.ownerID] = source.name
+            icons[source.ownerID] = source.icon
         }
         for source in ordered {
             for session in source.sessions {
@@ -77,11 +88,12 @@ public enum RemoteSessionCatalog {
                 if let current = reports[owner]?[nativeID], !report.isPreferred(to: current) { continue }
                 reports[owner, default: [:]][nativeID] = report
                 if names[owner] == nil { names[owner] = session.serverName ?? "Machine" }
+                if icons[owner] == nil, let serverId, let icon = source.relayedIcons[serverId] { icons[owner] = icon }
             }
         }
         return names.map { owner, name in
             let selected = (reports[owner] ?? [:]).values.sorted { $0.nativeID < $1.nativeID }
-            return Host(id: owner, name: name,
+            return Host(id: owner, name: name, icon: icons[owner] ?? .laptop,
                         sections: RemoteSessionDirectory.sections(selected.map(\.normalized), localHostName: name),
                         routes: Dictionary(uniqueKeysWithValues: selected.map {
                             ($0.nativeID, Route(hostID: $0.source.id, sessionId: $0.session.id))
@@ -99,7 +111,7 @@ public enum RemoteSessionCatalog {
                 guard session.status == "awaitingPermission" || session.status == "awaitingInput",
                       let route = host.route(for: session.id) else { return nil }
                 return AttentionEntry(id: SessionID(owner: host.id, sessionId: session.id),
-                                      route: route, hostName: host.name, title: session.title)
+                                      route: route, hostName: host.name, hostIcon: host.icon, title: session.title)
             }
         }
     }

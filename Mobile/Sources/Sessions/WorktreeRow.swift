@@ -83,6 +83,7 @@ struct WorktreeRow: View {
     let entry: RemoteWorktreeEntry
     /// The machine holding it, named when its list mixes machines.
     var machine: String? = nil
+    var machineIcon: PeerIcon = .laptop
     /// The session shown beside the list (iPad), when this worktree holds it.
     var selectedSessionId: String? = nil
     /// Lists every session, as a search does so the one it matched is in view.
@@ -240,14 +241,18 @@ struct WorktreeRow: View {
 
     @ViewBuilder private var machineCapsule: some View {
         if let machine {
-            Text(machine)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.horizontal, 6).padding(.vertical, 1)
-                .background(.quaternary, in: Capsule())
-                .layoutPriority(-1)
-                .accessibilityLabel("on \(machine)")
+            HStack(spacing: 3) {
+                PeerIconView(icon: machineIcon)
+                Text(machine)
+            }
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(.quaternary, in: Capsule())
+            .layoutPriority(-1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("on \(machine)")
         }
     }
 

@@ -1,15 +1,13 @@
 #if DEBUG
 import Foundation
 
-/// Design-capture targets for the sidebar's Peers section. The scripted peers of
+/// Design-capture targets for the sidebar's peer pages. The scripted peers of
 /// `DesignCaptureDemoPeer` are installed with their sidebar-only rows (an offline
 /// Mac, a failed and an in-flight host operation, an archived worktree, an
-/// "Other sessions" bucket, an empty project, an overflowing tab row), both
-/// online Macs are expanded and the local projects are collapsed so the whole
-/// section fits the window. Debug builds only, and only on a capture profile.
+/// "Other sessions" bucket, an empty project, an overflowing tab row) and the
+/// Studio's page is opened. Debug builds only, and only on a capture profile.
 ///
-/// - peers: the expanded section.
-/// - peers-hover: the same with the section header hovered, so the "+" pair-a-peer control shows.
+/// - peers: the Studio's page, with a worktree selected.
 /// - peers-rename: the same with the peer worktree rename sheet open.
 /// - live-activity: the demo project's rows with scripted VMs, devices, stack
 ///   ships and shepherds (`DesignCaptureLiveActivity`).
@@ -17,7 +15,7 @@ import Foundation
 ///   open in its real panel (`DesignCaptureAgentBadges.Hover`).
 @MainActor
 enum DesignCaptureSidebar {
-    static let targets: Set<String> = ["peers", "peers-hover", "peers-rename", "live-activity", "badge-hover"]
+    static let targets: Set<String> = ["peers", "peers-rename", "live-activity", "badge-hover"]
 
     /// Registered by `SidebarView` when it appears; the model lives in its `@State`.
     static weak var peerModel: NativePeerSidebarModel?
@@ -66,22 +64,15 @@ enum DesignCaptureSidebar {
                     && !((client.hosts?.archivedWorktrees[studio] ?? []).isEmpty)
             }
             guard loaded, let model = peerModel else { return }
-            state.config.collapsedProjectIds = state.projects.map(\.id).sorted()
-            model.expandedPeerIDs = [studio, air]
             if let invoice = repos(studio).flatMap(\.worktrees).first(where: { $0.title == "feat/invoice-export" }) {
                 client.selectWorktree(NativePeerWorktreeSelection(serverId: studio, worktreeId: invoice.id))
+            } else {
+                client.openPeer(serverId: studio)
             }
-            switch target {
-            case "peers-hover":
-                model.headerHovering = true
-                model.plusHovering = true
-            case "peers-rename":
-                if let host = repos(studio).flatMap(\.worktrees).first(where: { $0.title == "fix/retry-backoff-jitter" })?.host {
-                    model.renamingBranch = NativePeerBranchRename(
-                        worktree: host, serverId: studio, peerName: DesignCaptureDemoPeer.studio.name)
-                }
-            default:
-                break
+            if target == "peers-rename",
+               let host = repos(studio).flatMap(\.worktrees).first(where: { $0.title == "fix/retry-backoff-jitter" })?.host {
+                model.renamingBranch = NativePeerBranchRename(
+                    worktree: host, serverId: studio, peerName: DesignCaptureDemoPeer.studio.name)
             }
         }
     }

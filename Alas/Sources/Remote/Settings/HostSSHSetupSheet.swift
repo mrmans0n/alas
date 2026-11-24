@@ -12,7 +12,7 @@ struct HostSSHSetupSheet: View {
         case destination
         case options(HostSSHProbe, HostSSHInstall)
         case running
-        case done(peerName: String, warnings: [String])
+        case done(peerName: String, peerIcon: PeerIcon, warnings: [String])
         /// `back` is where Back returns, with the entered values kept.
         case failed(String, back: Phase)
     }
@@ -90,10 +90,15 @@ struct HostSSHSetupSheet: View {
             ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
                 dimText(index == steps.count - 1 ? step + "…" : step)
             }
-        case .done(let peerName, let warnings):
-            Text("Paired with \(peerName).")
-                .font(scale.metaFont)
-                .padding(.bottom, scale.space[2])
+        case .done(let peerName, let peerIcon, let warnings):
+            HStack(spacing: scale.space[1]) {
+                Text("Paired with")
+                PeerIconView(icon: peerIcon)
+                Text("\(peerName).")
+            }
+            .font(scale.metaFont)
+            .accessibilityElement(children: .combine)
+            .padding(.bottom, scale.space[2])
             ForEach(warnings, id: \.self) { warning in
                 HStack(alignment: .top, spacing: 6) {
                     Icon(name: "alert", size: 12, color: theme.color("warn"))
@@ -214,7 +219,7 @@ struct HostSSHSetupSheet: View {
                 }
                 steps.append("Checking the host")
                 let warnings = await adapterWarnings + setup.check(host: host)
-                phase = .done(peerName: peer?.name ?? setup.destination, warnings: warnings)
+                phase = .done(peerName: peer?.name ?? setup.destination, peerIcon: peer?.icon ?? .laptop, warnings: warnings)
             } catch {
                 phase = .failed(Self.describe(error, destination: setup.destination), back: back)
             }

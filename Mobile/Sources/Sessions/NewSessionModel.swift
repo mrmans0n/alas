@@ -88,6 +88,7 @@ final class NewSessionModel {
     var showsMachine: Bool { !presets.isEmpty || machineOptions.count > 1 || !hostIsOnline }
     var hostIsOnline: Bool { hostID.map { hub.state(of: $0) == .online } ?? false }
     var hostName: String? { hub.hosts.first { $0.id == hostID }?.name }
+    var hostIcon: PeerIcon { hub.hosts.first { $0.id == hostID }?.icon ?? .laptop }
     var isCreating: Bool { phase == .creating }
 
     var error: String? {

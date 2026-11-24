@@ -5,13 +5,16 @@ public struct RemotePairingResult: Equatable, Sendable {
     public let token: String
     public let serverId: String?
     public let name: String?
+    /// The host's own icon; nil from an older host or an unknown id.
+    public let icon: PeerIcon?
     public let publicKey: String?
 
-    public init(origin: String, token: String, serverId: String?, name: String?, publicKey: String?) {
+    public init(origin: String, token: String, serverId: String?, name: String?, icon: PeerIcon? = nil, publicKey: String?) {
         self.origin = origin
         self.token = token
         self.serverId = serverId
         self.name = name
+        self.icon = icon
         self.publicKey = publicKey
     }
 }
@@ -53,6 +56,7 @@ public struct RemotePairingClient: Sendable {
         let token: String
         let serverId: String?
         let name: String?
+        let icon: String?
         let publicKey: String?
         let signature: String?
     }
@@ -98,7 +102,7 @@ public struct RemotePairingClient: Sendable {
                 let proven = Self.provenKey(reply, challenge: challenge)
                 let result = RemotePairingResult(
                     origin: origin, token: reply.token, serverId: reply.serverId,
-                    name: reply.name, publicKey: proven)
+                    name: reply.name, icon: PeerIcon(wireValue: reply.icon), publicKey: proven)
                 if reply.publicKey == nil || proven != nil { return result }
                 if unproven == nil { unproven = result }
             default: continue

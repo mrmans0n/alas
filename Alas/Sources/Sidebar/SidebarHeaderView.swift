@@ -17,6 +17,8 @@ struct SidebarHeaderView: View {
     var cleanupReminders: [WorktreeCleanupReminder] = []
     var hostUpdates: [HostUpdateReminder] = []
     var hostUpdatesInFlight: Set<String> = []
+    /// Each paired Mac's icon by server id, for the inbox's peer cards.
+    var peerIcons: [String: PeerIcon] = [:]
     var attentionLoadError: String? = nil
     var attentionWriteError: String? = nil
     var attentionNavigationErrors: [UUID: String] = [:]
@@ -46,6 +48,7 @@ struct SidebarHeaderView: View {
          cleanupReminders: [WorktreeCleanupReminder] = [],
          hostUpdates: [HostUpdateReminder] = [],
          hostUpdatesInFlight: Set<String> = [],
+         peerIcons: [String: PeerIcon] = [:],
          attentionLoadError: String? = nil,
          attentionWriteError: String? = nil,
          attentionNavigationErrors: [UUID: String] = [:],
@@ -75,6 +78,7 @@ struct SidebarHeaderView: View {
         self.cleanupReminders = cleanupReminders
         self.hostUpdates = hostUpdates
         self.hostUpdatesInFlight = hostUpdatesInFlight
+        self.peerIcons = peerIcons
         self.attentionLoadError = attentionLoadError
         self.attentionWriteError = attentionWriteError
         self.attentionNavigationErrors = attentionNavigationErrors
@@ -135,6 +139,7 @@ struct SidebarHeaderView: View {
                 cleanupReminders: cleanupReminders,
                 hostUpdates: hostUpdates,
                 hostUpdatesInFlight: hostUpdatesInFlight,
+                peerIcons: peerIcons,
                 loadError: attentionLoadError,
                 writeError: attentionWriteError,
                 navigationErrors: attentionNavigationErrors,

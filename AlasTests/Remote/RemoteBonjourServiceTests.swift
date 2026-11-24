@@ -4,15 +4,16 @@ import Network
 @testable import Alas
 
 struct RemoteBonjourServiceTests {
-    @Test func txtRoundTripsIdentityVersionAndModel() {
-        let txt = RemoteBonjourTXT(serverId: "srv-a", protocolVersion: 7, model: "Mac16,6")
+    @Test func txtRoundTripsIdentityVersionModelAndIcon() {
+        let txt = RemoteBonjourTXT(serverId: "srv-a", protocolVersion: 7, model: "Mac16,6", icon: .macStudio)
         #expect(RemoteBonjourTXT(txt: txt.nwTXTRecord) == txt)
     }
 
-    @Test func txtWithoutModelRoundTripsAsNil() {
+    @Test func txtWithoutModelOrIconRoundTripsAsNil() {
         let txt = RemoteBonjourTXT(serverId: "srv-a", model: nil)
         let back = RemoteBonjourTXT(txt: txt.nwTXTRecord)
         #expect(back?.model == nil)
+        #expect(back?.icon == nil)
         #expect(back?.protocolVersion == RemoteProtocolVersion.current)
     }
 
@@ -63,15 +64,16 @@ struct RemoteBonjourServiceTests {
 
     @Test func advertisesOnlyWhenTheServerAndDiscoveryAreBothOn() {
         let advertised = RemoteBonjourAdvertisement.forSettings(
-            remote(enabled: true, discoverable: true), displayName: "Mac A", model: "Mac16,6")
+            remote(enabled: true, discoverable: true), displayName: "Mac A", icon: .server, model: "Mac16,6")
         #expect(advertised?.txt.serverId == "srv-a")
         #expect(advertised?.displayName == "Mac A")
         #expect(advertised?.txt.model == "Mac16,6")
+        #expect(advertised?.txt.icon == .server)
 
         // Either one off withdraws the record.
         #expect(RemoteBonjourAdvertisement.forSettings(
-            remote(enabled: false, discoverable: true), displayName: "Mac A", model: nil) == nil)
+            remote(enabled: false, discoverable: true), displayName: "Mac A", icon: .laptop, model: nil) == nil)
         #expect(RemoteBonjourAdvertisement.forSettings(
-            remote(enabled: true, discoverable: false), displayName: "Mac A", model: nil) == nil)
+            remote(enabled: true, discoverable: false), displayName: "Mac A", icon: .laptop, model: nil) == nil)
     }
 }

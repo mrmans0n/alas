@@ -40,21 +40,37 @@ struct NativePeerSidebarSnapshotTests {
         #expect(snapshot.attentionCount == 2)
     }
 
-    @Test func equalNamesSortByIdentityAndRenameChangesLabelOnly() {
+    @Test func groupsKeepPairingOrderAcrossARenameAndCarryEachPeersIcon() {
         let peers = [
-            RemoteHelloPeer(serverId: "z", name: "Mac", state: "online"),
-            RemoteHelloPeer(serverId: "a", name: "Mac", state: "online")
+            RemoteHelloPeer(serverId: "z", name: "Studio", state: "online", icon: .macStudio),
+            RemoteHelloPeer(serverId: "a", name: "Air", state: "online")
         ]
         let rows = [row("s", peer: "z", status: "idle")]
         let first = NativePeerSidebarSnapshot.build(peers: peers, rows: rows)
         let renamed = NativePeerSidebarSnapshot.build(
-            peers: [RemoteHelloPeer(serverId: "z", name: "Renamed", state: "online"), peers[1]],
+            peers: [RemoteHelloPeer(serverId: "z", name: "Zz top", state: "online", icon: .macStudio), peers[1]],
             rows: rows
         )
 
-        #expect(first.groups.map(\.serverId) == ["a", "z"])
-        #expect(renamed.groups.last?.name == "Renamed")
-        #expect(renamed.groups.last?.sessions.first?.id == "z:s")
+        // A rename never moves a peer's page in the pager.
+        #expect(first.groups.map(\.serverId) == ["z", "a"])
+        #expect(renamed.groups.map(\.serverId) == ["z", "a"])
+        #expect(renamed.groups.first?.sessions.first?.id == "z:s")
+        // A peer that advertises no icon, as an older Alas, draws as a laptop.
+        #expect(first.groups.map(\.icon) == [.macStudio, .laptop])
+    }
+
+    @Test func theFilterKeepsMatchingWorktreesAndDropsReposLeftEmpty() {
+        let repos = NativePeerRepoGroup.build(sessions: [
+            worktreeRow("1", project: "alas", worktreeId: "w1", branch: "nacho/peer-icons", updatedAt: 3),
+            worktreeRow("2", project: "alas", worktreeId: "w2", branch: "main", updatedAt: 2),
+            worktreeRow("3", project: "ttd", worktreeId: "w3", branch: "main", updatedAt: 1),
+        ])
+
+        let filtered = NativePeerRepoGroup.filtered(repos, query: "icons")
+        #expect(filtered.map(\.name) == ["alas"])
+        #expect(filtered.first?.worktrees.map(\.title) == ["nacho/peer-icons"])
+        #expect(NativePeerRepoGroup.filtered(repos, query: "  ") == repos)
     }
 
     @Test func statusLabelsDistinguishRevocationAndUnprovenIdentity() {

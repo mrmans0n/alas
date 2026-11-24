@@ -380,4 +380,16 @@ import Testing
         #expect(entries.count == 2)
         #expect(Set(entries.map(\.id)).count == 2)
     }
+
+    @Test func hostCarriesItsOwnIconElseTheRelayingMacsElseTheLaptop() {
+        let hosts = RemoteSessionCatalog.hosts(from: [
+            RemoteSessionCatalog.Source(id: UUID(), serverId: "server", name: "Server", icon: .server,
+                                        relayedIcons: ["studio": .macStudio], isLive: true,
+                                        sessions: [session("studio:s1", serverId: "studio", serverName: "Studio")]),
+            RemoteSessionCatalog.Source(id: UUID(), serverId: "plain", name: "Plain", isLive: true, sessions: []),
+        ])
+        #expect(hosts.first { $0.name == "Server" }?.icon == .server)
+        #expect(hosts.first { $0.name == "Studio" }?.icon == .macStudio)
+        #expect(hosts.first { $0.name == "Plain" }?.icon == .laptop)
+    }
 }

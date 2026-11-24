@@ -114,10 +114,14 @@ struct ACPToolbar: View {
                 }
             }
             if let name = state.delegatedFromName(of: session.id) {
-                Text("From \(name)")
-                    .font(scale.metaFont)
-                    .foregroundStyle(theme.color("fg-muted"))
-                    .lineLimit(1)
+                HStack(spacing: scale.space[1]) {
+                    Text("From")
+                    PeerIconView(icon: state.delegatedFromIcon(of: session.id))
+                    Text(name)
+                }
+                .font(scale.metaFont)
+                .foregroundStyle(theme.color("fg-muted"))
+                .lineLimit(1)
             }
             ForEach(ACPPeerChildPolicy.menus(for: peerChildren.map {
                 .init(childSessionId: $0.childSessionId, serverId: $0.serverId, macName: $0.macName,
@@ -132,7 +136,9 @@ struct ACPToolbar: View {
                         }
                     }
                 } label: {
-                    Text(menu.title)
+                    // A macOS menu label draws only a title and an image.
+                    Label(menu.title, systemImage: state.peerIcon(serverId: menu.serverId).symbolName)
+                        .labelStyle(.titleAndIcon)
                         .font(scale.metaFont)
                         .lineLimit(1)
                 }

@@ -363,6 +363,7 @@ if let listen = config.hostRemoteListen {
         identity: {
             RemoteServerIdentity(
                 serverId: settings.serverId, name: settings.resolvedDisplayName,
+                icon: settings.resolvedIcon(default: .server),
                 consoleCapabilities: (shells.isAvailable ? PeerConsoleCapability.headlessHost : []) + [PeerPortForwardCapability.v1],
                 // A Mac that paired here inbound-only can serve this host's
                 // agents over its own link, which no app asks of it.
@@ -376,6 +377,7 @@ if let listen = config.hostRemoteListen {
         RemotePeerManager.LocalIdentity(
             serverId: settings.serverId,
             name: settings.resolvedDisplayName,
+            icon: settings.resolvedIcon(default: .server),
             // As the app advertises: loopback means nothing to another
             // Mac, and it refuses more origins than the cap.
             origins: Array(

@@ -12,6 +12,9 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     public let id: String                 // local UUID, stable across renames
     public var serverId: String           // the peer's advertised identity
     public var name: String
+    /// The icon the peer advertised in its last `hello` or at pairing. Nil
+    /// until it sends one.
+    public var icon: PeerIcon?
     public var origins: [String]          // full origins, preferred first
     public var lastOrigin: String?        // the origin that last answered
     public var token: String              // bearer token the peer issued to us
@@ -55,10 +58,11 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     /// that link still dials, is refused and shows as revoked.
     public var isInboundOnly: Bool { token.isEmpty && publicKey == nil }
 
-    public init(id: String, serverId: String, name: String, origins: [String], lastOrigin: String? = nil, token: String, publicKey: String? = nil, protocolVersion: Int? = nil, localDeviceId: String? = nil, addedAt: Date, sshDestination: String? = nil, tokenScope: RemoteDeviceScope? = nil, agentAccess: RemoteDeviceAgentAccess? = nil) {
+    public init(id: String, serverId: String, name: String, icon: PeerIcon? = nil, origins: [String], lastOrigin: String? = nil, token: String, publicKey: String? = nil, protocolVersion: Int? = nil, localDeviceId: String? = nil, addedAt: Date, sshDestination: String? = nil, tokenScope: RemoteDeviceScope? = nil, agentAccess: RemoteDeviceAgentAccess? = nil) {
         self.id = id
         self.serverId = serverId
         self.name = name
+        self.icon = icon
         self.origins = origins
         self.lastOrigin = lastOrigin
         self.token = token
@@ -72,7 +76,7 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, serverId, name, origins, lastOrigin, token, publicKey, protocolVersion, localDeviceId, addedAt
+        case id, serverId, name, icon, origins, lastOrigin, token, publicKey, protocolVersion, localDeviceId, addedAt
         case sshDestination, tokenScope, agentAccess
     }
 
@@ -83,6 +87,8 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
         id = try c.decode(String.self, forKey: .id)
         serverId = try c.decode(String.self, forKey: .serverId)
         name = try c.decode(String.self, forKey: .name)
+        // An id only a newer build knows decodes as `.laptop`.
+        icon = (try? c.decodeIfPresent(PeerIcon.self, forKey: .icon)) ?? nil
         origins = try c.decode([String].self, forKey: .origins)
         lastOrigin = try c.decodeIfPresent(String.self, forKey: .lastOrigin)
         token = try c.decode(String.self, forKey: .token)

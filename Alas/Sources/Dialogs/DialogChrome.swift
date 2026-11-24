@@ -35,6 +35,8 @@ enum DialogContainerLayout {
 
 struct DialogContainer<Content: View, HeaderAccessory: View>: View {
     let title: String
+    /// A paired Mac's glyph before the title, for dialogs about one.
+    let titleIcon: PeerIcon?
     let subtitle: String?
     let width: CGFloat
     @ViewBuilder let headerAccessory: () -> HeaderAccessory
@@ -57,6 +59,7 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
 
     init(
         title: String,
+        titleIcon: PeerIcon? = nil,
         subtitle: String?,
         width: CGFloat = DialogContainerLayout.defaultWidth,
         @ViewBuilder headerAccessory: @escaping () -> HeaderAccessory,
@@ -71,6 +74,7 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
         footerHint: String? = nil
     ) {
         self.title = title
+        self.titleIcon = titleIcon
         self.subtitle = subtitle
         self.width = width
         self.headerAccessory = headerAccessory
@@ -89,8 +93,12 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: scale.space[3]) {
                 VStack(alignment: .leading, spacing: scale.space[1]) {
-                    Text(title).font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
-                        .foregroundColor(theme.color("fg"))
+                    HStack(spacing: scale.space[1]) {
+                        if let titleIcon { PeerIconView(icon: titleIcon) }
+                        Text(title)
+                    }
+                    .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
+                    .foregroundColor(theme.color("fg"))
                     if let subtitle {
                         Text(subtitle).font(scale.metaFont)
                             .foregroundColor(theme.color("fg-dim"))
@@ -156,6 +164,7 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
 extension DialogContainer where HeaderAccessory == EmptyView {
     init(
         title: String,
+        titleIcon: PeerIcon? = nil,
         subtitle: String?,
         width: CGFloat = DialogContainerLayout.defaultWidth,
         @ViewBuilder content: @escaping () -> Content,
@@ -169,6 +178,7 @@ extension DialogContainer where HeaderAccessory == EmptyView {
     ) {
         self.init(
             title: title,
+            titleIcon: titleIcon,
             subtitle: subtitle,
             width: width,
             headerAccessory: { EmptyView() },

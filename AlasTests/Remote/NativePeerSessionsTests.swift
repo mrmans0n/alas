@@ -449,6 +449,96 @@ struct NativePeerSessionsTests {
         #expect(links.sent(to: "B").filter { $0 == .unsubscribe(sessionId: "s1") }.count == 2)
     }
 
+    /// Mac B lists idle worktrees `w1` and `w2`; Mac C lists `w3`.
+    private func clientWithTwoPeers(roster: @escaping @MainActor () -> [RemoteHelloPeer]) -> (FakeLinks, NativePeerSessions) {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        links.online("C", name: "Mac C")
+        let client = NativePeerSessions(federation: FederatedSessionsProvider(links: links), peers: roster)
+        client.start()
+        func history(_ id: String, _ worktree: String) -> RemoteSessionSummary {
+            .init(id: id, title: id, agentId: "claude", status: "idle", canDrive: true,
+                  isActive: false, tabIndex: nil, worktreeId: worktree)
+        }
+        links.receive(.sessionList(sessions: [history("a", "w1"), history("b", "w2")]), from: "B")
+        links.receive(.sessionList(sessions: [history("c", "w3")]), from: "C")
+        return (links, client)
+    }
+
+    private func worktreeIds(on serverId: String, in client: NativePeerSessions) -> [String] {
+        client.snapshot.groups.first { $0.serverId == serverId }?.repos(ordering: .manual).flatMap(\.worktrees).map(\.id) ?? []
+    }
+
+    @Test func openingAPeerPageRestoresItsLastWorktreeElseItsFirst() throws {
+        let (_, client) = clientWithTwoPeers {
+            [.init(serverId: "B", name: "Mac B", state: "online"), .init(serverId: "C", name: "Mac C", state: "online")]
+        }
+        let ids = worktreeIds(on: "B", in: client)
+        try #require(ids.count == 2)
+
+        client.openPeer(serverId: "B")
+        #expect(client.selectedWorktree?.worktreeId == ids[0])
+        client.selectWorktree(NativePeerWorktreeSelection(serverId: "B", worktreeId: ids[1]))
+        client.openPeer(serverId: "C")
+        #expect(client.activePeerServerId == "C")
+        client.openPeer(serverId: "B")
+        #expect(client.selectedWorktree?.worktreeId == ids[1])
+    }
+
+    @Test func aPeerPageOutlivesItsSelectionUntilLeft() throws {
+        let (_, client) = clientWithTwoPeers {
+            [.init(serverId: "B", name: "Mac B", state: "online"), .init(serverId: "C", name: "Mac C", state: "online")]
+        }
+        client.openPeer(serverId: "B")
+        client.clearSelection()
+        #expect(client.activePeerServerId == "B")
+        #expect(client.coversCenterPane)
+
+        // Selecting a worktree elsewhere, as an attention card does, moves the page.
+        let other = try #require(worktreeIds(on: "C", in: client).first)
+        client.selectWorktree(NativePeerWorktreeSelection(serverId: "C", worktreeId: other))
+        #expect(client.activePeerServerId == "C")
+
+        client.leavePeer()
+        #expect(client.activePeerServerId == nil)
+        #expect(!client.coversCenterPane)
+    }
+
+    @Test func forgettingTheActivePeerHandsTheCenterPaneBack() {
+        let roster = Roster([
+            .init(serverId: "B", name: "Mac B", state: "online"), .init(serverId: "C", name: "Mac C", state: "online"),
+        ])
+        let (_, client) = clientWithTwoPeers { roster.peers }
+        client.openPeer(serverId: "B")
+        roster.peers.removeFirst()
+        client.refresh()
+        #expect(client.activePeerServerId == nil)
+        #expect(!client.coversCenterPane)
+    }
+
+    @Test func aPeerThatReturnsWhileItsPageShowsReselectsItsLastWorktree() throws {
+        let roster = Roster([
+            .init(serverId: "B", name: "Mac B", state: "online"), .init(serverId: "C", name: "Mac C", state: "online"),
+        ])
+        let (_, client) = clientWithTwoPeers { roster.peers }
+        let last = try #require(worktreeIds(on: "B", in: client).last)
+        client.selectWorktree(NativePeerWorktreeSelection(serverId: "B", worktreeId: last))
+        client.clearSelection()
+        roster.peers[0] = .init(serverId: "B", name: "Mac B", state: "offline")
+        client.refresh()
+        #expect(client.selectedWorktree == nil)
+
+        roster.peers[0] = .init(serverId: "B", name: "Mac B", state: "online")
+        client.refresh()
+        #expect(client.selectedWorktree == NativePeerWorktreeSelection(serverId: "B", worktreeId: last))
+    }
+
+    /// The hello roster a test changes between refreshes.
+    @MainActor private final class Roster {
+        var peers: [RemoteHelloPeer]
+        init(_ peers: [RemoteHelloPeer]) { self.peers = peers }
+    }
+
     /// Open session `s` is selected; `h` is history in the same worktree.
     private func clientWithHistorySession() throws -> (FakeLinks, NativePeerSessions) {
         let links = FakeLinks()
@@ -1033,7 +1123,8 @@ struct NativePeerSessionsTests {
         let hosts = NativePeerHosts(send: { sent.append($1) }, supports: { _, _ in true })
         let client = NativePeerSessions(
             federation: FederatedSessionsProvider(links: links),
-            peers: { links.sessionCarryingPeers.map { .init(serverId: $0.serverId, name: $0.name, state: "online") } },
+            // As `helloPeers` does: a disconnected peer stays listed, offline.
+            peers: { [.init(serverId: "B", name: "Mac B", state: links.sessionCarryingPeers.isEmpty ? "offline" : "online")] },
             hosts: hosts
         )
         client.start()

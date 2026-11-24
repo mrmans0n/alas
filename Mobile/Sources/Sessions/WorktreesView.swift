@@ -344,6 +344,7 @@ struct WorktreesView: View {
                         let host = hosts[row.hostID]
                         WorktreeRow(entry: row.worktree,
                                     machine: spansMachines ? row.hostName : nil,
+                                    machineIcon: row.hostIcon,
                                     selectedSessionId: host.flatMap { selectedSessionID(in: row.worktree, on: $0) },
                                     showsAllSessions: !query.trimmingCharacters(in: .whitespaces).isEmpty,
                                     caption: { WorktreeRow.delegationCaption($0, in: host) }) { session in
@@ -440,7 +441,7 @@ struct WorktreesView: View {
             }
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "laptopcomputer")
+                PeerIconView(icon: group.host.icon)
                 Text(group.host.name).lineLimit(1)
                 Spacer(minLength: 8)
                 Text("\(group.host.worktreeCount) worktrees")
@@ -478,7 +479,8 @@ struct WorktreesView: View {
                 Picker("Show", selection: $model.selectedHost) {
                     Text("All machines").tag(RemoteSessionCatalog.HostID?.none)
                     ForEach(hosts) { host in
-                        Text(host.name).tag(Optional(host.id))
+                        Label { Text(host.name) } icon: { PeerIconView(icon: host.icon) }
+                            .tag(Optional(host.id))
                     }
                 }
                 .pickerStyle(.inline)

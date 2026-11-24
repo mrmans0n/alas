@@ -164,6 +164,9 @@ public struct RemoteHTTPResponder: Sendable {
             let token: String
             let serverId: String?
             let name: String?
+            /// This Mac's own icon, so the redeemer's record has it before
+            /// the first `hello`. Absent from an older build.
+            var icon: PeerIcon?
             /// The key the peer should pin this Mac to, and a signature over
             /// its own challenge proving this Mac holds the private half.
             /// Both absent when no key is configured, which leaves the
@@ -206,10 +209,10 @@ public struct RemoteHTTPResponder: Sendable {
                     do {
                         let proof = pr.challenge.flatMap { identityProof?($0) }
                         let pairBody = try JSONEncoder().encode(PairReply(token: result.token,
-                            serverId: p.receiver.serverID, name: p.receiver.name,
+                            serverId: p.receiver.serverID, name: p.receiver.name, icon: p.receiver.icon,
                             publicKey: p.receiver.publicKey, signature: proof?.signature))
                         let reply = try approval.coordinator.pairReply(body: pairBody, for: envelope)
-                        callback(RemotePeerPairingRequest(peerServerId: peer.serverId, peerName: peer.name,
+                        callback(RemotePeerPairingRequest(peerServerId: peer.serverId, peerName: peer.name, peerIcon: peer.icon,
                             origins: peer.origins, peerPublicKey: peer.publicKey, counterCode: peer.counterCode,
                             localDeviceId: result.deviceId, redeemedCode: ""), p.requestID, p.receiver)
                         return ApprovalIssuedResponse(body: reply, deviceID: result.deviceId)
@@ -284,7 +287,7 @@ public struct RemoteHTTPResponder: Sendable {
             token = result.token
             grantedScope = requested == nil ? nil : scope
             onPeerPaired?(RemotePeerPairingRequest(
-                peerServerId: peer.serverId, peerName: peer.name, origins: peer.origins,
+                peerServerId: peer.serverId, peerName: peer.name, peerIcon: peer.icon, origins: peer.origins,
                 peerPublicKey: peer.publicKey, counterCode: peer.counterCode,
                 localDeviceId: result.deviceId, redeemedCode: code, inboundOnly: inboundOnly))
         } else {
@@ -296,6 +299,7 @@ public struct RemoteHTTPResponder: Sendable {
             token: token,
             serverId: id?.serverId.isEmpty == false ? id?.serverId : nil,
             name: id.map(\.name),
+            icon: id?.icon,
             publicKey: proof?.publicKey,
             signature: proof?.signature,
             inboundOnly: inboundOnly ? true : nil,

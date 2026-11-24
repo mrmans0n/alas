@@ -20,13 +20,17 @@ public struct RemoteDiscoveredInstance: Identifiable, Equatable, Sendable {
     public let name: String
     public let protocolVersion: Int
     public let model: String?
+    /// The icon its TXT record names; nil from an older build.
+    public let icon: PeerIcon?
     public let endpoints: [NWEndpoint]
 
-    public init(id: String, name: String, protocolVersion: Int, model: String?, endpoints: [NWEndpoint]) {
+    public init(id: String, name: String, protocolVersion: Int, model: String?, icon: PeerIcon? = nil,
+                endpoints: [NWEndpoint]) {
         self.id = id
         self.name = name
         self.protocolVersion = protocolVersion
         self.model = model
+        self.icon = icon
         self.endpoints = endpoints
     }
 }
@@ -159,11 +163,11 @@ public final class RemotePeerBrowser {
                 guard !existing.endpoints.contains(result.endpoint) else { continue }
                 byId[record.serverId] = RemoteDiscoveredInstance(
                     id: existing.id, name: existing.name, protocolVersion: existing.protocolVersion,
-                    model: existing.model, endpoints: existing.endpoints + [result.endpoint])
+                    model: existing.model, icon: existing.icon, endpoints: existing.endpoints + [result.endpoint])
             } else {
                 byId[record.serverId] = RemoteDiscoveredInstance(
                     id: record.serverId, name: result.name, protocolVersion: record.protocolVersion,
-                    model: record.model, endpoints: [result.endpoint])
+                    model: record.model, icon: record.icon, endpoints: [result.endpoint])
             }
         }
         let next = byId.values.sorted {

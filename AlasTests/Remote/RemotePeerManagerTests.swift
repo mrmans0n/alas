@@ -1760,7 +1760,7 @@ struct RemotePeerManagerTests {
         #expect(pairing.validate(token: other.token) == other.deviceId)
     }
 
-    @Test func linkEventsUpdateStateNameVersionAndOrigin() async throws {
+    @Test func linkEventsUpdateStateNameIconVersionAndOrigin() async throws {
         let store = InMemoryPeerStore()
         store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765", "http://10.0.0.5:8765"],
                                lastOrigin: nil, token: "t", protocolVersion: nil, localDeviceId: nil, addedAt: Date())])
@@ -1769,13 +1769,18 @@ struct RemotePeerManagerTests {
         manager.connectAll()
         let link = try #require(links.byPeerId["p1"])
         link.emit(.stateChanged(.online))
-        link.emit(.hello(serverId: "srv-a", name: "Mac A", protocolVersion: 1, federationEnabled: true))
+        link.emit(.hello(serverId: "srv-a", name: "Mac A", icon: .cloud, protocolVersion: 1, federationEnabled: true))
         link.emit(.originChanged("http://10.0.0.5:8765"))
         #expect(manager.states["p1"] == .online)
         #expect(manager.peers.first?.name == "Mac A")
         #expect(manager.peers.first?.protocolVersion == 1)
         #expect(manager.peers.first?.lastOrigin == "http://10.0.0.5:8765")
         #expect(store.saved.first?.lastOrigin == "http://10.0.0.5:8765")
+        #expect(store.saved.first?.icon == .cloud)
+        #expect(manager.helloPeers.first?.icon == .cloud)
+        // An older build sends no icon; that does not erase the known one.
+        link.emit(.hello(serverId: "srv-a", name: "Mac A", protocolVersion: 1, federationEnabled: true))
+        #expect(manager.peers.first?.icon == .cloud)
     }
 
     // `.hello`/`.originChanged` update `peers` directly on an already

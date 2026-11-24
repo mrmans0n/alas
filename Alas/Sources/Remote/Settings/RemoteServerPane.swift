@@ -139,6 +139,22 @@ struct RemoteServerPane: View {
                             )
                         }
                         SettingsRow(
+                            name: "Icon",
+                            desc: "Shown beside this Mac's name on paired devices."
+                        ) {
+                            PeerIconPicker(icon: Binding(
+                                get: { PeerIcon(wireValue: state.config.remote.icon) ?? state.config.remote.resolvedIcon(default: .laptop) },
+                                set: { icon in
+                                    state.config.remote.icon = icon.rawValue
+                                    state.saveConfig()
+                                    // Same path as a rename: clients and the
+                                    // Bonjour record only learn it from these.
+                                    state.remoteServer?.broadcastHello()
+                                    state.syncRemoteDiscovery()
+                                }
+                            ))
+                        }
+                        SettingsRow(
                             name: "Discoverable on this network",
                             desc: "Advertise this Mac with Bonjour and list other Macs running Alas nearby. Allow pairing requests on the receiving Mac."
                         ) {
@@ -232,6 +248,7 @@ struct RemoteServerPane: View {
                             }
                             SettingsRow(
                                 name: device.name,
+                                icon: device.kind == .alasInstance ? state.peerIcon(serverId: device.peerServerId) : nil,
                                 desc: prefix + desc
                             ) {
                                 Button {
@@ -292,7 +309,7 @@ struct RemoteServerPane: View {
                             }
                         }
                         ForEach(state.remotePeers.peers) { peer in
-                            SettingsRow(name: peer.name, desc: hostActivity[peer.id] ?? peerStatus(peer)) {
+                            SettingsRow(name: peer.name, icon: peer.icon ?? .laptop, desc: hostActivity[peer.id] ?? peerStatus(peer)) {
                                 HStack(spacing: 8) {
                                     if peer.sshDestination != nil || updatesOverPeer(peer) {
                                         AlasButton(title: "Update host", style: .subtle) {
@@ -321,7 +338,8 @@ struct RemoteServerPane: View {
                                 }
                             }
                             ForEach(nearby) { instance in
-                                SettingsRow(name: String(ApprovalWire.displayName(instance.name).prefix(200)), desc: nearbyDescription(instance)) {
+                                SettingsRow(name: String(ApprovalWire.displayName(instance.name).prefix(200)), icon: instance.icon ?? .laptop,
+                                            desc: nearbyDescription(instance)) {
                                     nearbyAction(instance)
                                 }
                             }

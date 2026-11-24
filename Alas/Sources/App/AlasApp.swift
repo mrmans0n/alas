@@ -227,47 +227,47 @@ struct AlasApp: App {
                 _ = state.switchToSpace(atOneBasedIndex: 1)
             }
             .keyboardShortcut("1", modifiers: [.command, .option])
-            .disabled(state.spacesManager.spaces.count < 1)
+            .disabled(state.sidebarPages.count < 1)
             Button("Select Space 2") {
                 _ = state.switchToSpace(atOneBasedIndex: 2)
             }
             .keyboardShortcut("2", modifiers: [.command, .option])
-            .disabled(state.spacesManager.spaces.count < 2)
+            .disabled(state.sidebarPages.count < 2)
             Button("Select Space 3") {
                 _ = state.switchToSpace(atOneBasedIndex: 3)
             }
             .keyboardShortcut("3", modifiers: [.command, .option])
-            .disabled(state.spacesManager.spaces.count < 3)
+            .disabled(state.sidebarPages.count < 3)
             Button("Select Space 4") {
                 _ = state.switchToSpace(atOneBasedIndex: 4)
             }
             .keyboardShortcut("4", modifiers: [.command, .option])
-            .disabled(state.spacesManager.spaces.count < 4)
+            .disabled(state.sidebarPages.count < 4)
             Button("Select Space 5") {
                 _ = state.switchToSpace(atOneBasedIndex: 5)
             }
             .keyboardShortcut("5", modifiers: [.command, .option])
-            .disabled(state.spacesManager.spaces.count < 5)
+            .disabled(state.sidebarPages.count < 5)
             Button("Select Space 6") {
                 _ = state.switchToSpace(atOneBasedIndex: 6)
             }
             .keyboardShortcut("6", modifiers: [.command, .option])
-            .disabled(state.spacesManager.spaces.count < 6)
+            .disabled(state.sidebarPages.count < 6)
             Button("Select Space 7") {
                 _ = state.switchToSpace(atOneBasedIndex: 7)
             }
             .keyboardShortcut("7", modifiers: [.command, .option])
-            .disabled(state.spacesManager.spaces.count < 7)
+            .disabled(state.sidebarPages.count < 7)
             Button("Select Space 8") {
                 _ = state.switchToSpace(atOneBasedIndex: 8)
             }
             .keyboardShortcut("8", modifiers: [.command, .option])
-            .disabled(state.spacesManager.spaces.count < 8)
+            .disabled(state.sidebarPages.count < 8)
             Button("Select Space 9") {
                 _ = state.switchToSpace(atOneBasedIndex: 9)
             }
             .keyboardShortcut("9", modifiers: [.command, .option])
-            .disabled(state.spacesManager.spaces.count < 9)
+            .disabled(state.sidebarPages.count < 9)
             Divider()
             Button("Edit Spaces…") {
                 state.pendingSettingsSection = .spaces

@@ -49,7 +49,10 @@ struct NewSessionSheet: View {
             if model.showsMachine {
                 Section {
                     Picker("Machine", selection: Binding(get: { model.hostID }, set: { model.select(host: $0) })) {
-                        ForEach(model.machineOptions) { Text($0.name).tag(Optional($0.id)) }
+                        ForEach(model.machineOptions) { host in
+                            Label { Text(host.name) } icon: { PeerIconView(icon: host.icon ?? .laptop) }
+                                .tag(Optional(host.id))
+                        }
                     }
                 }
             }

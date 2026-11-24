@@ -60,6 +60,7 @@ a:hover { color: var(--accent-hover); }
   #bar { gap: 7px; padding-left: 9px; padding-right: 9px; }
   #status.chip { font-size: 0; gap: 0; padding: 7px; }
   #status.chip::before { width: 8px; height: 8px; }
+  #status.chip .peer-icon { display: none; }   /* dot-only pill at this width */
 }
 
 #bar.is-detail { padding: calc(env(safe-area-inset-top) + 4px) 12px 8px; }
@@ -509,6 +510,12 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 .dot.connecting { background: var(--mod); }
 .dot.warn { background: var(--del); }
 #status.is-server { cursor: pointer; }
+/* A Mac's chosen icon (peer-icons.js); strokes use the surrounding text color. */
+.peer-icon { display: inline-grid; place-items: center; width: 14px; height: 14px; flex: none; }
+.peer-icon svg { width: 14px; height: 14px; display: block; }
+.tile.peer-icon { width: 24px; height: 24px; }
+.server-row .peer-icon { color: var(--fg-dim); }
+.sheet-title .peer-icon { display: inline-grid; vertical-align: -2px; margin-right: 6px; }
 .bt-tab { position: relative; }
 #tab-settings-badge { position: absolute; top: 5px; left: calc(50% + 6px); color: var(--on-accent); background: var(--del); }
 /* #gate is opaque and sits at z-index 20, above the shared .sheet z-index of

@@ -29,7 +29,7 @@ struct RemotePeerStoreTests {
     @Test func peersRoundTripThroughDisk() {
         let url = tempFile()
         let vault = secrets()
-        let peer = RemotePeer(id: "p1", serverId: "srv-b", name: "Studio",
+        let peer = RemotePeer(id: "p1", serverId: "srv-b", name: "Studio", icon: .cloud,
                               origins: ["http://100.64.1.5:8765", "http://192.168.1.20:8765"],
                               lastOrigin: "http://100.64.1.5:8765", token: "tok",
                               publicKey: "pk", protocolVersion: 1,
@@ -40,21 +40,23 @@ struct RemotePeerStoreTests {
     }
 
     /// One unreadable record would cost every peer, so a scope only a newer
-    /// build knows reads as the narrowest instead, and such an agent access
-    /// as none.
+    /// build knows reads as the narrowest instead, such an agent access as
+    /// none, and such an icon as a laptop.
     @Test func valuesOnlyANewerBuildKnowsKeepEveryPeer() throws {
         let url = tempFile()
         let vault = secrets()
-        var scoped = RemotePeer(id: "p1", serverId: "srv-b", name: "Studio", origins: ["http://a:1"], token: "t1",
+        var scoped = RemotePeer(id: "p1", serverId: "srv-b", name: "Studio", icon: .cloud, origins: ["http://a:1"], token: "t1",
                                 addedAt: Date(timeIntervalSince1970: 1), tokenScope: .delegation, agentAccess: .autoRun)
         let other = RemotePeer(id: "p2", serverId: "srv-c", name: "Mini", origins: ["http://b:1"], token: "t2",
                                addedAt: Date(timeIntervalSince1970: 2))
         FilePeerStore(url: url, secrets: vault).save([scoped, other])
         let written = try String(contentsOf: url, encoding: .utf8)
         try written.replacingOccurrences(of: #""delegation""#, with: #""readOnly""#)
-            .replacingOccurrences(of: #""autoRun""#, with: #""everything""#).write(to: url, atomically: true, encoding: .utf8)
+            .replacingOccurrences(of: #""autoRun""#, with: #""everything""#)
+            .replacingOccurrences(of: #""cloud""#, with: #""toaster""#).write(to: url, atomically: true, encoding: .utf8)
 
         scoped.agentAccess = nil
+        scoped.icon = .laptop
         #expect(FilePeerStore(url: url, secrets: vault).load() == [scoped, other])
     }
 
@@ -131,5 +133,6 @@ struct RemotePeerStoreTests {
         #expect(peers.first?.protocolVersion == nil)
         #expect(peers.first?.localDeviceId == nil)
         #expect(peers.first?.publicKey == nil)
+        #expect(peers.first?.icon == nil)
     }
 }

@@ -128,7 +128,7 @@ public final class RemotePairingApprovalClient {
             let pair = try verifiedPair(data, exchange: exchange)
             try Task.checkCancellation()
             return .paired(token: pair.token, serverId: pair.serverId, name: pair.name,
-                           publicKey: current.receiverKey, origin: current.origin)
+                           icon: PeerIcon(wireValue: pair.icon), publicKey: current.receiverKey, origin: current.origin)
         } catch {
             await cancel(session: session)
             switch error as? ApprovalFailure {
@@ -248,12 +248,14 @@ public final class RemotePairingApprovalClient {
         let token: String
         let serverId: String
         let name: String
+        let icon: String?
         let publicKey: String
 
-        public init(token: String, serverId: String, name: String, publicKey: String) {
+        public init(token: String, serverId: String, name: String, icon: String? = nil, publicKey: String) {
             self.token = token
             self.serverId = serverId
             self.name = name
+            self.icon = icon
             self.publicKey = publicKey
         }
     }

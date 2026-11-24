@@ -9,6 +9,7 @@ final class InboxModel {
         let id: RemoteSessionCatalog.SessionID
         let route: SessionRoute
         let hostName: String
+        let hostIcon: PeerIcon
         let title: String
     }
 
@@ -23,7 +24,7 @@ final class InboxModel {
     static func entries(in hub: HostHub) -> [Entry] {
         RemoteSessionCatalog.attentionEntries(from: hub.sessionSources).map { entry in
             Entry(id: entry.id, route: SessionRoute(hostID: entry.route.hostID, sessionId: entry.route.sessionId),
-                  hostName: entry.hostName, title: entry.title)
+                  hostName: entry.hostName, hostIcon: entry.hostIcon, title: entry.title)
         }
     }
 

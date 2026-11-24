@@ -95,7 +95,13 @@ const AGENT_LOGO_PATHS = Object.freeze({
 });
 
 // state ∈ {connecting, ok, bad} drives the chip's dot/border color via [data-state].
-function setStatus(s, state) { const e = $("status"); e.textContent = s; e.dataset.state = state || "connecting"; }
+// The chip stands for the active server, so it carries that Mac's icon.
+function setStatus(s, state) {
+  const e = $("status");
+  const server = activeServer();
+  e.replaceChildren(...(server ? [peerIcon(server.icon)] : []), s);
+  e.dataset.state = state || "connecting";
+}
 function showGate(title, msg, retry) {
   $("gate").classList.remove("connecting");   // default to the plain (alarming/pairing) look
   $("gate-title").textContent = title;
@@ -640,7 +646,11 @@ function renderRepoHeader(section, expanded, forceExpanded) {
   if (forceExpanded) header.classList.add("rh-static");
 
   const chev = icon(expanded ? "chevD" : "chevR", "chev");
-  const tile = el("span", "tile", RemoteRepoFilter.repoInitials(section.title));
+  // A forwarded peer's section draws that Mac's icon, as the gateway reported
+  // it in hello.peers, instead of initials.
+  const tile = section.isPeer
+    ? peerIcon((activeServer()?.peerIcons || {})[section.serverId], "tile")
+    : el("span", "tile", RemoteRepoFilter.repoInitials(section.title));
   tile.style.background = RemoteRepoFilter.repoTileColor(section.title);
   const name = el("span", "rn", section.title);
 
@@ -1751,6 +1761,7 @@ function renderServerList() {
     row.setAttribute("role", "button");
     row.tabIndex = 0;
     row.append(el("span", "dot " + serverDotClass(link, counts)));
+    row.append(peerIcon(server.icon));
     const main = el("div", "server-main");
     main.append(el("div", "server-name", server.name || server.lastOrigin));
     main.append(el("div", "server-origin", serverSubtitle(server, link)));
@@ -1791,7 +1802,7 @@ let addServerBusy = false;
 function showAddServerSheet(targetId) {
   addServerTarget = targetId || null;
   const target = addServerTarget ? hub.servers.find((s) => s.id === addServerTarget) : null;
-  $("add-server-title").textContent = target ? `Re-pair ${target.name || target.lastOrigin}` : "Add server";
+  $("add-server-title").replaceChildren(...(target ? [peerIcon(target.icon), `Re-pair ${target.name || target.lastOrigin}`] : ["Add server"]));
   $("add-server-link").value = "";
   $("add-server-address").value = target ? (target.lastOrigin || "") : "";
   $("add-server-code").value = "";
@@ -1842,7 +1853,7 @@ function showServerActions(id) {
   const server = hub.servers.find((s) => s.id === id);
   if (!server) return;
   serverActionsTarget = id;
-  $("server-actions-title").textContent = server.name || server.lastOrigin;
+  $("server-actions-title").replaceChildren(peerIcon(server.icon), server.name || server.lastOrigin);
   $("server-actions-sheet").classList.remove("hidden");
 }
 
@@ -2712,6 +2723,14 @@ function icon(name, cls) {
   if (cls) span.className = cls;
   if (name === "pips") { span.append(pipsEl()); return span; }
   span.innerHTML = ICON_SVG[name] || "";
+  return span;
+}
+
+// A Mac's chosen icon (RemotePeerIcons ids); unknown or missing draws the laptop.
+// peerIconSVG returns trusted literal markup, never server text.
+function peerIcon(id, cls) {
+  const span = el("span", "peer-icon" + (cls ? " " + cls : ""));
+  span.innerHTML = RemotePeerIcons.peerIconSVG(id);
   return span;
 }
 

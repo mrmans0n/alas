@@ -125,6 +125,8 @@ struct AttentionInboxView: View {
     var cleanupReminders: [WorktreeCleanupReminder] = []
     var hostUpdates: [HostUpdateReminder] = []
     var hostUpdatesInFlight: Set<String> = []
+    /// Each paired Mac's icon by server id; a missing id draws a laptop.
+    var peerIcons: [String: PeerIcon] = [:]
     let loadError: String?
     let writeError: String?
     let navigationErrors: [UUID: String]
@@ -210,7 +212,7 @@ struct AttentionInboxView: View {
                                            onOpenWorktreeCleanup: onOpenWorktreeCleanup,
                                            onDismissWorktreeCleanup: onDismissWorktreeCleanup,
                                            hostUpdatesInFlight: hostUpdatesInFlight, onUpdateHost: onUpdateHost,
-                                           onDismissHostUpdate: onDismissHostUpdate)
+                                           onDismissHostUpdate: onDismissHostUpdate, peerIcons: peerIcons)
                     }
                     .padding(scale.space[4])
                 }
@@ -266,6 +268,7 @@ struct AttentionInboxList: View {
     var hostUpdatesInFlight: Set<String> = []
     var onUpdateHost: (HostUpdateReminder) -> Void = { _ in }
     var onDismissHostUpdate: (HostUpdateReminder) -> Void = { _ in }
+    var peerIcons: [String: PeerIcon] = [:]
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     @State private var confirmingHostUpdate: HostUpdateReminder?
@@ -295,7 +298,7 @@ struct AttentionInboxList: View {
                     .padding(.top, scale.space[3])
                 ForEach(presentation.peerRows, id: \.id) { row in
                     HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "desktopcomputer")
+                        PeerIconView(icon: row.serverId.flatMap { peerIcons[$0] } ?? .laptop)
                             .foregroundStyle(theme.color("warn"))
                         VStack(alignment: .leading, spacing: 4) {
                             Text(row.title).font(scale.emphasis.font)
@@ -349,7 +352,7 @@ struct AttentionInboxList: View {
                 ForEach(presentation.hostUpdates) { update in
                     let updating = hostUpdatesInFlight.contains(update.serverId)
                     HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "server.rack")
+                        PeerIconView(icon: update.icon)
                             .foregroundStyle(theme.color("accent"))
                         VStack(alignment: .leading, spacing: 4) {
                             Text(update.name).font(scale.emphasis.font)

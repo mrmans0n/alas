@@ -11,7 +11,7 @@ struct SpacesPane: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Spaces")
                     .font(SettingsPaneStyle.titleFont)
-                Text("Organize sidebar repositories into focused groups.")
+                Text("Organize sidebar repositories into focused groups. Paired Macs get their own pages after your spaces, managed in Remote.")
                     .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, scale.space[3])

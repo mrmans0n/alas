@@ -392,7 +392,7 @@ public final class RemoteServer {
         var capabilities = current.hostCapabilities.filter { $0 != capability }
         if advertise { capabilities.append(capability) }
         return .hello(RemoteServerIdentity(
-            serverId: current.serverId, name: current.name, peers: current.peers,
+            serverId: current.serverId, name: current.name, icon: current.icon, peers: current.peers,
             consoleCapabilities: consoles,
             hostCapabilities: capabilities, hostVersion: current.hostVersion
         ))

@@ -114,6 +114,8 @@ struct AgentSidebarRowView: View {
     @Binding var draft: String
     /// Set when the row can't be focused; shown as its tooltip.
     var disabledReason: String? = nil
+    /// The delegating Mac's icon, drawn before the "From" note.
+    var delegatedFromIcon: PeerIcon = .laptop
     @State private var isEditing = false
     @State private var isHovering = false
     @Environment(\.theme) private var theme
@@ -283,11 +285,15 @@ struct AgentSidebarRowView: View {
     @ViewBuilder
     private var delegationNote: some View {
         if let name = row.delegatedFromName {
-            Text("From \(name)")
-                .font(scale.caption.font(weight: .regular))
-                .foregroundStyle(theme.color("fg-faint"))
-                .lineLimit(1)
-                .padding(.top, scale.space[0])
+            HStack(spacing: scale.space[1]) {
+                Text("From")
+                PeerIconView(icon: delegatedFromIcon)
+                Text(name)
+            }
+            .font(scale.caption.font(weight: .regular))
+            .foregroundStyle(theme.color("fg-faint"))
+            .lineLimit(1)
+            .padding(.top, scale.space[0])
         }
         if let childSummary {
             HStack(spacing: scale.space[1]) {
