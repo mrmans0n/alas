@@ -117,8 +117,10 @@ fi
 
 (
     cd "${fff_src}"
+    # Stripping host proc macros produces a misaligned LINKEDIT with Xcode 27.2.
     MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
         RUSTC="${rustc_bin}" "${cargo_bin}" build \
+            --config profile.release.build-override.strip=false \
             --package fff-c \
             --release \
             --target "${cargo_target}" \
