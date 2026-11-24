@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// `git diff --no-color base...head` output split per file, with the
 /// new-side line ranges each file's hunks cover.
@@ -76,21 +77,34 @@ public struct CodeReviewDiff: Equatable, Sendable {
         return File(path: path, patch: trimmed.joined(separator: "\n"), newLineRanges: ranges)
     }
 
-    /// nil for `/dev/null`.
+    /// nil for `/dev/null`. Git C-quotes paths with non-ASCII characters,
+    /// quotes or backslashes (`"b/caf\303\251.swift"`); those are decoded
+    /// before the prefix comes off.
     private static func strippedPath(_ raw: Substring, prefix: String) -> String? {
-        let value = raw.hasSuffix("\t") ? raw.dropLast() : raw
+        let value = decodedPath(raw.hasSuffix("\t") ? String(raw.dropLast()) : String(raw))
         guard value != "/dev/null" else { return nil }
-        return value.hasPrefix(prefix) ? String(value.dropFirst(prefix.count)) : String(value)
+        return value.hasPrefix(prefix) ? String(value.dropFirst(prefix.count)) : value
     }
 
     /// `diff --git a/<old> b/<new>` for blocks without `---`/`+++` lines
-    /// (binary files, pure renames, mode changes).
+    /// (binary files, pure renames, mode changes); either path may be quoted.
     private static func headerPath(_ header: Substring) -> String {
-        let rest = header.dropFirst("diff --git ".count)
+        let rest = String(header.dropFirst("diff --git ".count))
+        if rest.hasSuffix("\""), let range = rest.range(of: " \"b/", options: .backwards) {
+            let quoted = String(rest[rest.index(after: range.lowerBound)...])
+            return String(decodedPath(quoted).dropFirst("b/".count))
+        }
         if let range = rest.range(of: " b/", options: .backwards) {
             return String(rest[range.upperBound...])
         }
-        return String(rest)
+        return rest
+    }
+
+    /// The path a C-quoted Git name stands for; anything else as it is.
+    private static func decodedPath(_ raw: String) -> String {
+        var index = raw.startIndex
+        guard raw.hasPrefix("\""), let decoded = GitQuotedPath.decode(in: raw, index: &index) else { return raw }
+        return decoded
     }
 
     /// `@@ -a,b +c,d @@` covers `c...(c + d - 1)`; `d` defaults to 1, and 0

@@ -30,6 +30,26 @@ import AlasModel
         #expect(diff.files[1].newLineRanges == [1...2])
     }
 
+    @Test("quoted Git paths decode to the repository path", arguments: [
+        // A modified file, from its +++ line.
+        #"""
+        diff --git "a/Sources/caf\303\251.swift" "b/Sources/caf\303\251.swift"
+        --- "a/Sources/caf\303\251.swift"
+        +++ "b/Sources/caf\303\251.swift"
+        @@ -1,1 +1,2 @@
+         let a = 1
+        +let b = 2
+        """#,
+        // A binary file has only the header.
+        #"""
+        diff --git "a/Sources/caf\303\251.swift" "b/Sources/caf\303\251.swift"
+        Binary files differ
+        """#,
+    ])
+    func quotedPaths(_ raw: String) {
+        #expect(CodeReviewDiff(rawDiff: raw).files.map(\.path) == ["Sources/café.swift"])
+    }
+
     @Test("the cap keeps whole files in order and lists the rest", arguments: [(Int.max, 2, 0), (1, 0, 2)])
     func diffCap(cap: Int, included: Int, omitted: Int) {
         let split = CodeReviewDiff(rawDiff: Self.twoFileDiff).included(cap: cap)
