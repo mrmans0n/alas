@@ -9,6 +9,9 @@ struct AgentSidebarActions {
     let onDelegate: ((ACPSession.ID) -> Void)?
     /// Parent session id, subagent session id. Nil where the rail cannot cancel.
     var onCancelSubagent: ((ACPSession.ID, String) -> Void)? = nil
+    /// Asks a session's adapter what fills its context window. Nil where the
+    /// rail cannot reach the adapter.
+    var loadContextBreakdown: ((ACPSession.ID) async -> ACPContextBreakdown?)? = nil
 }
 
 enum AgentSidebarFollowUpDelivery: Equatable {
@@ -22,6 +25,12 @@ struct AgentSidebarFollowUpDraft: Equatable {
     var delivery: AgentSidebarFollowUpDelivery?
 }
 
+/// What the user unfolded in the rail, by session.
+struct AgentSidebarDisclosure: Equatable {
+    var contextDetails: Set<ACPSession.ID> = []
+    var doneSubagents: Set<ACPSession.ID> = []
+}
+
 /// Observes the manager and its nested Combine models for this worktree only.
 struct AgentWorktreeTabView: View {
     let state: AppState
@@ -33,6 +42,13 @@ struct AgentWorktreeTabView: View {
         Binding(
             get: { state.agentSidebarFollowUps[worktree.id, default: [:]] },
             set: { state.agentSidebarFollowUps[worktree.id] = $0 }
+        )
+    }
+
+    var disclosure: Binding<AgentSidebarDisclosure> {
+        Binding(
+            get: { state.agentSidebarDisclosure[worktree.id, default: .init()] },
+            set: { state.agentSidebarDisclosure[worktree.id] = $0 }
         )
     }
 
@@ -56,10 +72,14 @@ struct AgentWorktreeTabView: View {
                 onDelegate: nil,
                 onCancelSubagent: { sessionID, subagentSessionId in
                     Task { await manager.cancelSubagent(for: sessionID, subagentSessionId: subagentSessionId) }
+                },
+                loadContextBreakdown: { sessionID in
+                    await manager.runners[sessionID]?.contextBreakdown()
                 }
             ),
             controllableSessionIDs: Set(manager.sessions.keys.filter { manager.isWriter(for: $0) }),
-            followUps: followUps
+            followUps: followUps,
+            disclosure: disclosure
         )
         .onReceive(sessionUpdates) { _ in sessionRevision &+= 1 }
         .task { await manager.refreshRecentNow() }
@@ -85,6 +105,7 @@ struct AgentTabView: View {
     let actions: AgentSidebarActions
     var controllableSessionIDs: Set<ACPSession.ID> = []
     @Binding var followUps: [ACPSession.ID: AgentSidebarFollowUpDraft]
+    @Binding var disclosure: AgentSidebarDisclosure
     var disabledReason: (AgentSidebarRow) -> String? = { _ in nil }
 
     @Environment(\.designScale) private var scale
@@ -125,6 +146,7 @@ struct AgentTabView: View {
                             }
                         }
                     ),
+                    showsContextDetails: isUnfolded(\.contextDetails, for: row),
                     disabledReason: disabledReason(row)
                 )
                 .padding(.leading, isNested ? AgentSidebarDelegationConnector.gutter : 0)
@@ -142,18 +164,34 @@ struct AgentTabView: View {
 
     /// A row's own subagents sit one level under it. Under a nested child that
     /// is a second level, so the child's rail is carried past them to the
-    /// next nested sibling.
+    /// next nested sibling. Finished ones fold into one line after the rest,
+    /// so the ones still working stay next to their parent.
     private func subagentRows(of row: AgentSidebarRow, isNested: Bool, siblingBelow: Bool) -> some View {
-        ForEach(Array(row.subagents.enumerated()), id: \.element.id) { index, subagent in
-            let isLast = index + 1 == row.subagents.count
-            AgentSidebarSubagentRowView(
-                subagent: subagent,
-                onFocus: { actions.onFocus(row.id) },
-                onCancel: cancelAction(row: row, subagent: subagent)
-            )
+        let done = row.subagents.filter(\.isSettled)
+        let showsDone = isUnfolded(\.doneSubagents, for: row)
+        var entries = row.subagents.filter { !$0.isSettled }.map(SubagentEntry.card)
+        if !done.isEmpty {
+            entries.append(.doneGroup(done))
+            if showsDone.wrappedValue { entries += done.map(SubagentEntry.card) }
+        }
+        return ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+            let isLast = index + 1 == entries.count
+            Group {
+                switch entry {
+                case .card(let subagent):
+                    AgentSidebarSubagentRowView(
+                        subagent: subagent,
+                        onFocus: { actions.onFocus(row.id) },
+                        onCancel: cancelAction(row: row, subagent: subagent)
+                    )
+                case .doneGroup(let subagents):
+                    AgentSidebarDoneSubagentsRow(subagents: subagents, isExpanded: showsDone)
+                }
+            }
             .padding(.leading, AgentSidebarDelegationConnector.gutter)
             .background(alignment: .topLeading) {
-                AgentSidebarDelegationConnector(continuesBelow: !isLast || (!isNested && siblingBelow))
+                AgentSidebarDelegationConnector(
+                    continuesBelow: !isLast || (!isNested && siblingBelow), elbowY: entry.elbowY)
             }
             .padding(.leading, isNested ? AgentSidebarDelegationConnector.gutter : 0)
             .background(alignment: .topLeading) {
@@ -162,6 +200,43 @@ struct AgentTabView: View {
                 }
             }
         }
+    }
+
+    private enum SubagentEntry: Identifiable {
+        case card(AgentSidebarSubagent)
+        case doneGroup([AgentSidebarSubagent])
+
+        var id: String {
+            switch self {
+            case .card(let subagent): subagent.id
+            case .doneGroup: "done-group"
+            }
+        }
+
+        /// Where the connector's elbow meets the entry: a card's title line,
+        /// or the middle of the one-line group.
+        var elbowY: CGFloat {
+            switch self {
+            case .card: AgentSidebarDelegationConnector.cardElbowY
+            case .doneGroup: AgentSidebarDoneSubagentsRow.height / 2
+            }
+        }
+    }
+
+    private func isUnfolded(
+        _ sessions: WritableKeyPath<AgentSidebarDisclosure, Set<ACPSession.ID>>, for row: AgentSidebarRow
+    ) -> Binding<Bool> {
+        Binding(
+            get: { row.sessionID.map { disclosure[keyPath: sessions].contains($0) } ?? false },
+            set: { unfolded in
+                guard let sessionID = row.sessionID else { return }
+                if unfolded {
+                    disclosure[keyPath: sessions].insert(sessionID)
+                } else {
+                    disclosure[keyPath: sessions].remove(sessionID)
+                }
+            }
+        )
     }
 
     private func cancelAction(row: AgentSidebarRow, subagent: AgentSidebarSubagent) -> (() -> Void)? {

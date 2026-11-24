@@ -53,6 +53,11 @@ public struct AgentSidebarRow: Identifiable, Equatable, Sendable {
     /// The paired Mac that delegated this session, when one did.
     public var delegatedFromName: String?
     public var subagents: [AgentSidebarSubagent] = []
+    /// What the next turn runs with besides the model, as the composer shows
+    /// it: effort, mode, provider and the signed-in plan.
+    public var turnSettings: [String] = []
+    /// Whether the adapter can say what fills the context window.
+    public var supportsContextBreakdown = false
 
     public static func acp(
         id: ACPSession.ID,

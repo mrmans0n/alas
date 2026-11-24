@@ -35,18 +35,27 @@ public struct AgentSidebarSubagent: Identifiable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let task: String?
+    /// What the child reported about itself: model, effort and directory.
+    public let caption: String?
     public let state: ACPSubagentState
     public let canCancel: Bool
     public let startedAt: Date
     public let finishedAt: Date?
 
-    public init(id: String, name: String, task: String?, state: ACPSubagentState, canCancel: Bool, startedAt: Date, finishedAt: Date?) {
+    public init(id: String, name: String, task: String?, caption: String? = nil, state: ACPSubagentState, canCancel: Bool, startedAt: Date, finishedAt: Date?) {
         self.id = id
         self.name = name
         self.task = task
+        self.caption = caption
         self.state = state
         self.canCancel = canCancel
         self.startedAt = startedAt
         self.finishedAt = finishedAt
+    }
+
+    /// Finished without needing attention, so the sidebar folds it away. A
+    /// failure stays in view so it is not mistaken for a clean finish.
+    public var isSettled: Bool {
+        state.isTerminal && state != .failed
     }
 }

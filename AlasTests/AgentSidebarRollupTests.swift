@@ -294,6 +294,28 @@ struct AgentSidebarRollupTests {
     }
 
     @Test @MainActor
+    func finishedSubagentsFoldAwayWhileWorkingAndFailedOnesStay() {
+        let session = makeLiveSession(id: "parent", worktreeID: "worktree-a")
+        session.agentState = .ready
+        let states: [(id: String, state: ACPSubagentState)] = [
+            ("working", .running), ("blocked", .requiresAction), ("done", .completed),
+            ("failed", .failed), ("cancelled", .cancelled), ("dropped", .disconnected),
+        ]
+        for (id, state) in states {
+            session.apply(.subagentSpawned(.init(subagentSessionId: id, name: id)))
+            session.applySubagentState(.init(subagentSessionId: id, state: state))
+        }
+
+        let rollup = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [], liveACP: [session],
+            terminalTabs: [], harnessActivity: [:], remoteHost: nil
+        ))
+
+        // A failure must not hide behind "Show done" as if it had finished cleanly.
+        #expect(rollup.active[0].subagents.filter(\.isSettled).map(\.id) == ["done", "cancelled", "dropped"])
+    }
+
+    @Test @MainActor
     func terminalRowsAreNeverAnnotatedWithDelegation() {
         let rollup = AgentSidebarRollupBuilder.build(.init(
             worktreeID: "worktree-a", persistedACP: [], liveACP: [],

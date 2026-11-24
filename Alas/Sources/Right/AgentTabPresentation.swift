@@ -72,13 +72,15 @@ struct AgentSidebarSectionHeader: View {
 struct AgentSidebarDelegationConnector: View {
     static let gutter: CGFloat = 18
     private static let stackSpacing: CGFloat = 8
-    private static let elbowY: CGFloat = 20
+    /// Where the elbow meets a card: its title line.
+    static let cardElbowY: CGFloat = 20
     private static let railX: CGFloat = 7
 
     let continuesBelow: Bool
     /// False draws only the rail, carrying an outer connector past cards
     /// nested one level deeper.
     var hasElbow = true
+    var elbowY = Self.cardElbowY
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -87,11 +89,11 @@ struct AgentSidebarDelegationConnector: View {
                 path.move(to: CGPoint(x: Self.railX, y: -Self.stackSpacing))
                 path.addLine(to: CGPoint(
                     x: Self.railX,
-                    y: continuesBelow ? proxy.size.height + Self.stackSpacing : Self.elbowY
+                    y: continuesBelow ? proxy.size.height + Self.stackSpacing : elbowY
                 ))
                 if hasElbow {
-                    path.move(to: CGPoint(x: Self.railX, y: Self.elbowY))
-                    path.addLine(to: CGPoint(x: Self.gutter - 3, y: Self.elbowY))
+                    path.move(to: CGPoint(x: Self.railX, y: elbowY))
+                    path.addLine(to: CGPoint(x: Self.gutter - 3, y: elbowY))
                 }
             }
             .stroke(
@@ -112,21 +114,13 @@ struct AgentSidebarRowView: View {
     let canControl: Bool
     let delivery: AgentSidebarFollowUpDelivery?
     @Binding var draft: String
+    @Binding var showsContextDetails: Bool
     /// Set when the row can't be focused; shown as its tooltip.
     var disabledReason: String? = nil
     @State private var isEditing = false
     @State private var isHovering = false
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
-
-    /// Whether `controls` has anything worth rendering beyond the
-    /// interrupt/etc. buttons already gated by `canControl` — mirrors
-    /// `ACPContextUsageButton.hasContent`'s quota half so a quota-only
-    /// adapter's usage still surfaces on a non-controllable (history) row.
-    private var hasQuotaData: Bool {
-        (row.lastTurnQuota?.hasDisplayableContent == true)
-            || (row.sessionQuotaTotal?.hasDisplayableContent == true)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space[2]) {
@@ -161,7 +155,14 @@ struct AgentSidebarRowView: View {
                 planProgress(plan)
             }
 
-            if row.contextUsage != nil || hasQuotaData || canControl {
+            // Usage and quota are decoded independently, so a quota-only
+            // adapter still gets a block, as does a row the rail cannot control.
+            if row.contextUsage != nil || row.hasQuotaData {
+                AgentSidebarContextBlock(
+                    row: row, isExpanded: $showsContextDetails, loadBreakdown: loadContextBreakdown)
+            }
+
+            if hasControls {
                 controls
             }
 
@@ -377,14 +378,27 @@ struct AgentSidebarRowView: View {
         .background(theme.color("bg-0").opacity(0.42), in: RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
+    private var loadContextBreakdown: (() async -> ACPContextBreakdown?)? {
+        guard row.supportsContextBreakdown, let sessionID = row.sessionID,
+              let load = actions.loadContextBreakdown
+        else { return nil }
+        return { await load(sessionID) }
+    }
+
+    private var canInterrupt: Bool {
+        row.state == .running || row.state == .awaitingInput || row.state == .permissionRequest
+    }
+
+    private var hasControls: Bool {
+        row.sessionID != nil && row.isLiveACP && canControl
+            && (canInterrupt || actions.onFollowUp != nil || actions.onDelegate != nil)
+    }
+
     private var controls: some View {
         HStack(spacing: scale.space[2]) {
-            ACPContextUsageButton(
-                usage: row.contextUsage, modelName: row.model,
-                lastTurnQuota: row.lastTurnQuota, sessionQuotaTotal: row.sessionQuotaTotal)
             Spacer(minLength: 0)
-            if let sessionID = row.sessionID, row.isLiveACP, canControl {
-                if row.state == .running || row.state == .awaitingInput || row.state == .permissionRequest {
+            if let sessionID = row.sessionID {
+                if canInterrupt {
                     Button("Interrupt", systemImage: "stop.fill") {
                         actions.onInterrupt(sessionID)
                     }
@@ -502,6 +516,10 @@ extension AgentSidebarRow {
         guard case .acp(let sessionID) = id else { return nil }
         return sessionID
     }
+
+    var hasQuotaData: Bool {
+        (lastTurnQuota?.hasDisplayableContent == true) || (sessionQuotaTotal?.hasDisplayableContent == true)
+    }
 }
 
 extension AgentSidebarState {
@@ -570,6 +588,12 @@ struct AgentSidebarSubagentRowView: View {
                                 .foregroundStyle(theme.color("fg-muted"))
                                 .lineLimit(2)
                         }
+                        if let caption = subagent.caption {
+                            Text(caption)
+                                .font(scale.caption.font(weight: .regular))
+                                .foregroundStyle(theme.color("fg-muted"))
+                                .lineLimit(2)
+                        }
                         timing
                             .font(scale.caption.font(weight: .regular))
                             .foregroundStyle(theme.color("fg-faint"))
@@ -597,7 +621,8 @@ struct AgentSidebarSubagentRowView: View {
         }
         .padding(scale.space[2])
         .rightPaneCardChrome(accent: stateColor, isHovering: isHovering)
-        .opacity(isDimmed ? 0.6 : 1)
+        // A failure stays at full strength so it is not mistaken for a clean finish.
+        .opacity(subagent.isSettled ? 0.6 : 1)
         .onHover { isHovering = $0 }
         .accessibilityElement(children: .contain)
     }
@@ -626,11 +651,6 @@ struct AgentSidebarSubagentRowView: View {
             .fixedSize()
     }
 
-    /// A failure stays at full strength so it is not mistaken for a clean finish.
-    private var isDimmed: Bool {
-        subagent.state.isTerminal && subagent.state != .failed
-    }
-
     private var stateColor: Color {
         switch subagent.state {
         case .running, .other: theme.color("add")
@@ -643,5 +663,201 @@ struct AgentSidebarSubagentRowView: View {
     private static func duration(from start: Date, to end: Date) -> String {
         Duration.seconds(max(0, end.timeIntervalSince(start).rounded()))
             .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2))
+    }
+}
+
+/// One line standing in for a session's finished subagents.
+struct AgentSidebarDoneSubagentsRow: View {
+    static let height: CGFloat = 28
+
+    let subagents: [AgentSidebarSubagent]
+    @Binding var isExpanded: Bool
+    @State private var isHovering = false
+    @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
+
+    var body: some View {
+        Button {
+            withAnimation(.snappy) { isExpanded.toggle() }
+        } label: {
+            HStack(spacing: scale.space[1]) {
+                Image(systemName: "chevron.right")
+                    .font(scale.glyphFont)
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                Text("\(subagents.count) done")
+                    .font(scale.caption.font(weight: .semibold))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .fixedSize()
+                if !isExpanded {
+                    Text(names)
+                        .font(scale.caption.font(weight: .regular))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: scale.space[1])
+                Text(isExpanded ? "Hide done" : "Show done")
+                    .font(scale.caption.font(weight: .semibold))
+                    .foregroundStyle(theme.color("accent"))
+                    .fixedSize()
+            }
+            .padding(.horizontal, scale.space[2])
+            .frame(height: Self.height)
+            .background(
+                theme.color("bg-1").opacity(isHovering ? 0.66 : 0.4),
+                in: RoundedRectangle(cornerRadius: scale.radius.medium)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: scale.radius.medium)
+                    .strokeBorder(theme.color("line").opacity(0.78), style: StrokeStyle(lineWidth: 0.75, dash: [3, 3]))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "\(isExpanded ? "Hide" : "Show") \(subagents.count) finished \(subagents.count == 1 ? "subagent" : "subagents")")
+    }
+
+    /// Each name once, in spawn order: unnamed subagents all share one.
+    private var names: String {
+        var seen = Set<String>()
+        return subagents.map(\.name).filter { seen.insert($0).inserted }.joined(separator: ", ")
+    }
+}
+
+/// A session's context window on its card: how full it is and what the next
+/// turn runs with, unfolding into what fills it and the token totals.
+struct AgentSidebarContextBlock: View {
+    let row: AgentSidebarRow
+    @Binding var isExpanded: Bool
+    /// Nil where the adapter has no breakdown or the rail cannot ask for one.
+    let loadBreakdown: (() async -> ACPContextBreakdown?)?
+    @State private var loader = ACPContextBreakdownLoader()
+    @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
+
+    /// An adapter that reports only the window's size has nothing to unfold.
+    private var canExpand: Bool {
+        loadBreakdown != nil || row.hasQuotaData
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            if canExpand {
+                Button {
+                    withAnimation(.snappy) { isExpanded.toggle() }
+                } label: {
+                    summary
+                }
+                .buttonStyle(.plain)
+                .help(isExpanded ? "Hide context details" : "Show context details")
+            } else {
+                summary
+            }
+            if !row.turnSettings.isEmpty || row.contextUsage?.cost != nil {
+                settings
+            }
+            if canExpand && isExpanded {
+                details
+            }
+        }
+        .padding(scale.space[2])
+        .background(theme.color("bg-0").opacity(0.42), in: RoundedRectangle(cornerRadius: scale.radius.medium))
+        // A reattach relearns the capability, so a flip means the cached
+        // breakdown was measured on another connection.
+        .onChange(of: loadBreakdown == nil) { loader.reset() }
+    }
+
+    private var summary: some View {
+        HStack(spacing: scale.space[2]) {
+            if let usage = row.contextUsage {
+                let ratio = contextRatio(used: usage.used, size: usage.size)
+                let level = theme.color(ContextRingLevel(ratio: ratio).token)
+                title("Context")
+                ProgressView(value: ratio)
+                    .tint(level)
+                    .frame(minWidth: 24)
+                Text("\(formatContextTokens(usage.used)) / \(formatContextTokens(usage.size))")
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .fixedSize()
+                Text("\(contextPercent(ratio: ratio))%")
+                    .font(scale.caption.font(weight: .semibold, design: .monospaced))
+                    .foregroundStyle(level)
+                    .fixedSize()
+            } else {
+                // A quota-only adapter reports tokens spent, not a window.
+                title("Tokens")
+                Spacer(minLength: 0)
+                if let total = (row.sessionQuotaTotal ?? row.lastTurnQuota)?.tokenCount {
+                    Text(formatContextTokens(total.displayTotal))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
+                        .foregroundStyle(theme.color("fg-muted"))
+                        .fixedSize()
+                }
+            }
+            if canExpand {
+                Image(systemName: "chevron.right")
+                    .font(scale.glyphFont)
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .accessibilityHidden(true)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func title(_ text: String) -> some View {
+        Text(text)
+            .font(scale.caption.font(weight: .semibold))
+            .foregroundStyle(theme.color("fg"))
+            .fixedSize()
+    }
+
+    private var settings: some View {
+        HStack(spacing: scale.space[2]) {
+            Text(row.turnSettings.joined(separator: " · "))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            if let cost = row.contextUsage?.cost {
+                Text(cost.displayText)
+                    .monospacedDigit()
+                    .fixedSize()
+            }
+        }
+        .font(scale.caption.font(weight: .regular))
+        .foregroundStyle(theme.color("fg-muted"))
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
+            // A stale breakdown stays up while the new one loads, so the card
+            // does not shrink back to the spinner and regrow.
+            if let breakdown = loader.breakdown {
+                Divider()
+                ACPContextBreakdownView(breakdown: breakdown, isCompact: true)
+            } else if loader.isLoading {
+                Divider()
+                ACPContextMeasuringLabel()
+            }
+            if row.hasQuotaData {
+                Divider()
+                ACPContextQuotaSections(lastTurn: row.lastTurnQuota, sessionTotal: row.sessionQuotaTotal)
+            }
+        }
+        .padding(.top, scale.space[1])
+        // Unfolded, the block outlives many turns, so it measures again when
+        // the window changes, once the updates pause.
+        .task(id: row.contextUsage) {
+            if loader.breakdown != nil {
+                try? await Task.sleep(for: .milliseconds(500))
+                if Task.isCancelled { return }
+            }
+            await loader.refresh(usage: row.contextUsage, load: loadBreakdown)
+        }
     }
 }
