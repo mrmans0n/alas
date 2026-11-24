@@ -935,7 +935,11 @@ function showTabListLevel() {
 
 function showTab(name, keepDocument = false) {
   activeTab = name;
-  if (!wideLayout.matches && !keepDocument) closeDocument();   // wide: an open diff or file keeps its own tab in the middle
+  if (!wideLayout.matches && !keepDocument) {   // wide: a document keeps its tab in the middle
+    closeDocument();
+    pendingListRefresh = false;   // this switch's own fetch below covers it
+    pendingExpandedPathsRefresh = false;   // ditto
+  }
   for (const [id, tab] of [["tab-chat", "chat"], ["tab-changes", "changes"], ["tab-files", "files"], ["tab-terminal", "terminal"]]) {
     $(id).classList.toggle("is-active", tab === name);
     $(id).setAttribute("aria-selected", String(tab === name));
@@ -957,8 +961,6 @@ function showTab(name, keepDocument = false) {
 // document replaces it, or its tab closes.
 function closeDocument() {
   detailStack = [];
-  pendingListRefresh = false;   // the next list request covers it
-  pendingExpandedPathsRefresh = false;   // ditto
   clearDiff();
   $("diff-view").classList.add("hidden");
   $("file-view").classList.add("hidden");
