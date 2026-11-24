@@ -105,6 +105,10 @@ mkdir -p "$mock_bin"
 cat > "${mock_bin}/sample" <<'SCRIPT'
 #!/usr/bin/env bash
 echo "MOCK-SAMPLE pid=$1"
+echo "Call graph:"
+echo "    BLOCKED-TEST-FRAME"
+echo "Binary Images:"
+awk 'BEGIN { for (i = 0; i < 400; i++) print "MOCK-BINARY-IMAGE" }'
 SCRIPT
 chmod +x "${mock_bin}/sample"
 cat > "$silent_producer" <<SCRIPT
@@ -128,6 +132,12 @@ fi
 grep -q 'No output for 10s' "$stall_output"
 grep -q '^===== ' "$stall_complete_log"
 grep -q '^MOCK-SAMPLE pid=' "$stall_complete_log"
+grep -q 'BLOCKED-TEST-FRAME' "$stall_output"
+grep -q '^MOCK-BINARY-IMAGE$' "$stall_complete_log"
+if grep -q '^MOCK-BINARY-IMAGE$' "$stall_output"; then
+  echo "binary image listings displaced the sampled stacks" >&2
+  exit 1
+fi
 for pid_file in "${tmpdir}/silent-parent.pid" "${tmpdir}/silent-child.pid"; do
   stalled_pid="$(cat "$pid_file")"
   if kill -0 "$stalled_pid" 2>/dev/null; then

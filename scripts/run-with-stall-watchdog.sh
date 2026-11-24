@@ -108,15 +108,30 @@ while kill -0 "$pid" 2>/dev/null; do
   [ "$silent" -ge "$limit" ] || continue
 
   echo "::error::No output for ${limit}s; sampling and stopping the buffered command"
+  if [ "$buffer_output" = true ]; then
+    emit_bounded_excerpt 80 320 65536 131072
+  fi
+  # Keep complete samples in the artifact. Show a bounded stack excerpt per
+  # process so a macOS sample's binary images cannot crowd out the call graph.
   for process in "$pid" $(descendants "$pid"); do
-    echo "===== $(ps -o pid=,command= -p "$process" | cut -c1-200)" >> "$log"
+    echo "===== $(ps -o pid=,command= -p "$process" | cut -c1-200)"
     if command -v sample >/dev/null; then
-      sample "$process" 3 >> "$log" 2>&1
+      sample "$process" 3 2>&1
     elif command -v gdb >/dev/null; then
-      gdb -p "$process" -batch -ex 'thread apply all bt' >> "$log" 2>&1
+      gdb -p "$process" -batch -ex 'thread apply all bt' 2>&1
     fi
-  done
-  emit_bounded_excerpt 80 320 65536 131072
+  done | tee -a "$log" | LC_ALL=C awk '
+    /^===== / { process_bytes = 0; images = 0 }
+    /^[[:space:]]*Binary Images:/ { images = 1 }
+    !images && process_bytes < 16384 && total_bytes < 131072 {
+      limit = 16384 - process_bytes
+      if (131072 - total_bytes < limit) limit = 131072 - total_bytes
+      line = substr($0, 1, limit - 1)
+      print line
+      process_bytes += length(line) + 1
+      total_bytes += length(line) + 1
+    }
+  '
   descendants "$pid" | xargs kill -9 2>/dev/null
   kill -9 "$pid" 2>/dev/null
   exit 124
