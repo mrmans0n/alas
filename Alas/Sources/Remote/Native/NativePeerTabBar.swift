@@ -137,12 +137,13 @@ private struct NativePeerTabMarker: View {
             PeerIconView(icon: peer.icon)
                 .font(scale.captionFont)
                 .foregroundColor(theme.color("fg-muted"))
-            Text(peer.name)
-                .font(scale.meta.font(weight: .medium))
-                .foregroundColor(theme.color("fg-dim"))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 120, alignment: .leading)
+            WidthCap(maxWidth: 120) {
+                Text(peer.name)
+                    .font(scale.meta.font(weight: .medium))
+                    .foregroundColor(theme.color("fg-dim"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             Circle()
                 .fill(tint)
                 .frame(width: 6, height: 6)
@@ -172,5 +173,28 @@ private struct NativePeerTabMarker: View {
         ]
         .compactMap { $0 }
         .joined(separator: " · ")
+    }
+}
+
+/// Sizes its child to its ideal width, but no wider than `maxWidth` or the
+/// space offered. Unlike `.frame(maxWidth:)`, it never grows past the
+/// child's ideal width when more space is offered.
+private struct WidthCap: Layout {
+    let maxWidth: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        return child.sizeThatFits(childProposal(proposal, child))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let child = subviews.first else { return }
+        child.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+    }
+
+    private func childProposal(_ proposal: ProposedViewSize, _ child: LayoutSubview) -> ProposedViewSize {
+        let ideal = child.sizeThatFits(.unspecified).width
+        let width = min(ideal, maxWidth, proposal.width ?? .infinity)
+        return ProposedViewSize(width: width, height: proposal.height)
     }
 }
