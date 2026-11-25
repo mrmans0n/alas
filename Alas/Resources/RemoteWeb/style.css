@@ -242,6 +242,7 @@ a:hover { color: var(--accent-hover); }
 .md hr { border: none; border-top: 0.5px solid var(--line-strong); margin: 10px 0; }
 .md table { border-collapse: collapse; margin: 8px 0; font-size: 13px; display: block; overflow-x: auto; }
 .md th, .md td { border: 0.5px solid var(--line-strong); padding: 5px 9px; }
+.md th { background: oklch(1 0 0 / 0.05); font-weight: 600; text-align: left; }
 
 /* Thinking — pips + label on a left rule; the body is collapsed by default. */
 .m-thought { align-self: stretch; padding-left: 11px; border-left: 2px solid oklch(1 0 0 / 0.12); }

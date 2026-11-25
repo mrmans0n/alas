@@ -86,7 +86,10 @@ function relativeTimeShort(updatedAtMs, nowMs) {
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${hours} hr`;
   const days = Math.round(hours / 24);
-  return `${days} d`;
+  if (days < 14) return `${days} d`;
+  if (days < 60) return `${Math.round(days / 7)} wk`;
+  if (days < 365) return `${Math.round(days / 30)} mo`;
+  return `${Math.round(days / 365)} yr`;
 }
 
 // Returns 5 booleans, left-to-right, `true` where that segment should render

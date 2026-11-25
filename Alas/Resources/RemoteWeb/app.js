@@ -1257,7 +1257,9 @@ const DIFF_CSS = `:host, pre {
   --diffs-font-size: 12px;
   --diffs-line-height: 19px;
   --diffs-bg-separator-override: var(--bg-2);
-}`;
+}
+/* pierre-dark's #737373 comments fade into the add and delete tints. */
+[data-line] span[style*="#737373"] { color: #9a9a9a !important; }`;
 
 async function renderDiff(path, stage, hunks, truncated, metadataNote) {
   if (!isActiveDiff(path, stage)) return;
