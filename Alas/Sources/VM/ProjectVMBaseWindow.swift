@@ -89,7 +89,7 @@ struct ProjectVMBaseWindow: View {
             }
         }
         .frame(minWidth: 640, minHeight: 440)
-        .background(theme.color("bg"))
+        .background(theme.color("bg-1"))
         .navigationTitle(project.map { "\($0.name) · macOS Base" } ?? "Project macOS Base")
         .task(id: projectID) {
             refresh()
