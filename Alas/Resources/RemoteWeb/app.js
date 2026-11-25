@@ -1572,8 +1572,9 @@ function notifyNewAttention(sessions) {
       const serverId = hub.activeId;
       n.onclick = () => {
         window.focus(); n.close();
-        if (serverId === hub.activeId) { openSession(session.id); return; }
-        if (!hub.servers.some(s => s.id === serverId)) return;
+        const action = RemoteHubRegistry.notificationClick(hub, serverId);
+        if (action === "open") { openSession(session.id); return; }
+        if (action === "none") return;
         // The session lives on the host it came from: switch back, then open it once that list lands.
         switchServer(serverId); showRepos();
         notifiedOpen = { serverId, sessionId: session.id };   // after the switch, which clears it

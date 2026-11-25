@@ -334,6 +334,13 @@ function newAttention(seenIds, sessions) {
   return { ids, fresh };
 }
 
+// What clicking a notification from host `serverId` does: open the session
+// here, switch back to that host first, or nothing once that host is gone.
+function notificationClick(doc, serverId) {
+  if (serverId === doc.activeId) return "open";
+  return doc.servers.some(s => s.id === serverId) ? "switch" : "none";
+}
+
 function attentionCounts(sessions) {
   const counts = { attention: 0, running: 0 };
   for (const session of sessions || []) classifySessionCount(session, counts);
@@ -475,6 +482,7 @@ globalThis.RemoteHubRegistry = {
   fallbackActiveId,
   attentionCounts,
   newAttention,
+  notificationClick,
   peerSessionCounts,
   serverBadgeCounts,
   otherAttentionTotal,

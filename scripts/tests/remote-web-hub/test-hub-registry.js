@@ -370,6 +370,12 @@ assert.deepEqual(registry.attentionCounts(undefined), { attention: 0, running: 0
   const answered = registry.newAttention(first.ids, list("streaming"));
   assert.deepEqual(registry.newAttention(answered.ids, list("awaitingPermission")).fresh.map(s => s.id), ["1"], "asking again is new");
 }
+{
+  const doc = { activeId: "b", servers: [{ id: "a" }, { id: "b" }] };
+  assert.equal(registry.notificationClick(doc, "b"), "open");
+  assert.equal(registry.notificationClick(doc, "a"), "switch", "a session from another host opens there, not here");
+  assert.equal(registry.notificationClick(doc, "gone"), "none");
+}
 assert.equal(
   registry.otherAttentionTotal(
     [{ id: "a", counts: { attention: 2, running: 0 } }, { id: "b", counts: { attention: 3, running: 1 } }, { id: "c", counts: { attention: 1, running: 0 } }],
