@@ -75,16 +75,32 @@ struct ProjectVMBaseStore: Sendable {
         return state
     }
 
-    func list() throws -> [Entry] {
-        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+    /// Only a caller holding the registry lock may supply a recovery callback.
+    func list(recoveringUnselected recover: ((URL, UUID?) -> Void)? = nil) throws -> [Entry] {
+        guard try Self.fileType(at: directory) != nil else { return [] }
         return try withLock {
-            try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).compactMap { url in
-                guard url.lastPathComponent.count == 64, let state = try Self.readState(in: url) else { return nil }
-                guard url.lastPathComponent == slot(state.projectID).lastPathComponent else { throw Failure.invalidSelection }
-                return Entry(state: state,
-                             baseURL: state.base.map { Self.baseURL(in: url, id: $0.id) },
-                             draftURL: state.draft.map { Self.draftURL(in: url, id: $0.id) })
+            var entries: [Entry] = []
+            var unreadable: (any Error)?
+            for slot in try Self.subdirectories(in: directory) {
+                let name = slot.lastPathComponent.utf8
+                guard name.count == 64, name.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { continue }
+                do {
+                    let state = try Self.readState(in: slot)
+                    if let state {
+                        guard slot.lastPathComponent == self.slot(state.projectID).lastPathComponent else { throw Failure.invalidSelection }
+                        entries.append(Entry(state: state,
+                            baseURL: state.base.map { Self.baseURL(in: slot, id: $0.id) },
+                            draftURL: state.draft.map { Self.draftURL(in: slot, id: $0.id) }))
+                    }
+                    if let recover { try Self.visitUnselected(in: slot, state: state, recover) }
+                } catch {
+                    // Unreadable selection is not an empty selection. Leave this slot alone.
+                    if recover == nil { throw error }
+                    if unreadable == nil { unreadable = error }
+                }
             }
+            if let unreadable { throw unreadable }
+            return entries
         }
     }
 
@@ -114,11 +130,40 @@ struct ProjectVMBaseStore: Sendable {
     }
 
     private static func readState(in slot: URL) throws -> State? {
-        do {
-            return try JSONDecoder().decode(State.self, from: Data(contentsOf: slot.appendingPathComponent("state.json")))
-        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-            return nil
+        guard let slotType = try fileType(at: slot) else { return nil }
+        guard slotType == S_IFDIR else { throw Failure.invalidSelection }
+        let file = slot.appendingPathComponent("state.json")
+        guard let type = try fileType(at: file) else { return nil }
+        guard type == S_IFREG else { throw Failure.invalidSelection }
+        return try JSONDecoder().decode(State.self, from: Data(contentsOf: file))
+    }
+
+    private static func fileType(at url: URL) throws -> mode_t? {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else {
+            let error = errno
+            if error == ENOENT { return nil }
+            throw POSIXError(POSIXErrorCode(rawValue: error) ?? .EIO)
         }
+        return info.st_mode & S_IFMT
+    }
+
+    private static func subdirectories(in parent: URL) throws -> [URL] {
+        guard try fileType(at: parent) == S_IFDIR else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
+            .filter { try fileType(at: $0) == S_IFDIR }
+    }
+
+    private static func visitUnselected(in slot: URL, state: State?, _ body: (URL, UUID?) -> Void) throws {
+        func visit(_ directory: String, selected: UUID?, drafts: Bool) throws {
+            for url in try subdirectories(in: slot.appendingPathComponent(directory, isDirectory: true)) {
+                let leaf = url.pathExtension == "partial" ? url.deletingPathExtension().lastPathComponent : url.lastPathComponent
+                guard let id = UUID(uuidString: leaf), id != selected else { continue }
+                body(url, drafts ? id : nil)
+            }
+        }
+        try visit("bases", selected: state?.base?.id, drafts: false)
+        try visit("drafts", selected: state?.draft?.id, drafts: true)
     }
 
     private static func baseURL(in slot: URL, id: UUID) -> URL {
@@ -197,7 +242,6 @@ struct ProjectVMBaseStore: Sendable {
                 try? FileManager.default.removeItem(at: url)
                 throw error
             }
-            collectRetiredBases()
             return base
         }
 
@@ -210,26 +254,11 @@ struct ProjectVMBaseStore: Sendable {
             guard state.base?.id == expectedBase else { throw Failure.changed }
             guard state.draft == nil else { throw Failure.hasDraft }
             try commit(State(projectID: state.projectID))
-            collectRetiredBases()
         }
 
-        /// Only the manager may retire these, under the registry lock and with no live owner.
-        func retiredDrafts() -> [(id: UUID, url: URL)] {
-            let directory = slot.appendingPathComponent("drafts", isDirectory: true)
-            let entries = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-            return entries.compactMap { url in
-                guard let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent),
-                      id != state.draft?.id else { return nil }
-                return (id, url)
-            }
-        }
-
-        func collectRetiredBases() {
-            let directory = slot.appendingPathComponent("bases", isDirectory: true)
-            let entries = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-            for url in entries where url.lastPathComponent != state.base?.id.uuidString {
-                try? FileManager.default.removeItem(at: url)
-            }
+        /// The caller holds the registry lock and decides which files are still referenced.
+        func visitUnselected(_ body: (URL, UUID?) -> Void) throws {
+            try ProjectVMBaseStore.visitUnselected(in: slot, state: state, body)
         }
 
         private func baseBundle(_ base: Base) throws -> VMBundle {

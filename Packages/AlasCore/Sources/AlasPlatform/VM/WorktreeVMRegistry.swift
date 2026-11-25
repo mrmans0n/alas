@@ -36,10 +36,12 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
 
     /// Like `update`, with the bundle paths of the records this build cannot decode, which `body`
     /// sees nowhere else: their bundles belong to another (newer) build's VMs.
+    /// Set `quarantining` to false for recovery that must not mistake a corrupt registry for an empty one.
     public func updateSeeingForeignBundles<T>(
+        quarantining: Bool = true,
         _ body: (inout [WorktreeVMRecord], _ foreignBundlePaths: Set<String>) throws -> T
     ) throws -> T {
-        try withLock { records, foreign in try body(&records, Self.bundlePaths(of: foreign)) }
+        try withLock(quarantining: quarantining) { records, foreign in try body(&records, Self.bundlePaths(of: foreign)) }
     }
 
     /// The records and the bundle paths of those this build cannot decode, read without taking
@@ -90,9 +92,22 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
         }
     }
 
-    private func withLock<T>(_ body: (inout [WorktreeVMRecord], inout [Any]) throws -> T) throws -> T {
+    /// Like `withSnapshotLocked`, including paths this build must not reclaim.
+    public func withSnapshotSeeingForeignBundles<T>(
+        _ body: ([WorktreeVMRecord], Set<String>) throws -> T
+    ) throws -> T {
         try withFileLock {
-            var (records, foreign) = try load()
+            var (records, foreign) = try load(quarantining: false)
+            clearDeadOwners(in: &records)
+            return try body(records, Self.bundlePaths(of: foreign))
+        }
+    }
+
+    private func withLock<T>(
+        quarantining: Bool = true, _ body: (inout [WorktreeVMRecord], inout [Any]) throws -> T
+    ) throws -> T {
+        try withFileLock {
+            var (records, foreign) = try load(quarantining: quarantining)
             clearDeadOwners(in: &records)
             let result = try body(&records, &foreign)
             try write(records, foreign: foreign)

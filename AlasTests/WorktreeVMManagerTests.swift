@@ -1340,6 +1340,90 @@ final class WorktreeVMManagerTests {
         #expect(try reopened.projectBaseStatus(projectID: "p1").draft?.setup == .ready)
     }
 
+    @Test func retryingFailedDraftRunsItsScriptAfterTakingASlot() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        let runs = SetupScriptRuns()
+        runs.exitCode = 17
+        manager.makeDraftSetup = { self.makeFirstBootSetup($0, runs: runs) }
+        let draft = try await prepareDraft(manager, script: "captured script")
+        _ = try await manager.startProjectDraft(projectID: "p1", draftID: draft.id)
+        await eventually { !manager.isProjectDraftSettingUp(draft.id) }
+        #expect(try manager.projectBaseStatus(projectID: "p1").draft?.setup == .failed(exitCode: 17))
+        #expect(hypervisor.sendShutdown(VMIdentity.projectDraftRecordID(draft.id), "guest shutdown"))
+
+        try await fillBothSlots(manager)
+        runs.exitCode = 0
+        guard case .needsUserChoice(let candidates) = try await manager.startProjectDraft(
+            projectID: "p1", draftID: draft.id, retrySetup: true
+        ) else {
+            Issue.record("Expected to choose a VM slot before retrying")
+            return
+        }
+        #expect(runs.runs.map { $0.0 } == ["captured script"])
+        let candidate = try #require(candidates.first)
+        _ = try await manager.startProjectDraft(projectID: "p1", draftID: draft.id, retrySetup: true, pausing: candidate)
+        await eventually { !manager.isProjectDraftSettingUp(draft.id) }
+        #expect(runs.runs.map { $0.0 } == ["captured script", "captured script"])
+        #expect(try manager.projectBaseStatus(projectID: "p1").draft?.setup == .ready)
+    }
+
+    @Test func storageScanRecoversUnselectedDraftsWithoutVisitingTheirProjects() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        let store = ProjectVMBaseStore(root: root)
+        _ = try await prepareDraft(manager)
+        guard case .draft = try await manager.prepareProjectDraft(projectID: "still-selected", script: nil) else {
+            Issue.record("Expected to prepare the selected draft")
+            return
+        }
+        let entries = try store.list()
+        let abandoned = try #require(entries.first { $0.state.projectID == "p1" }?.draftURL)
+        let selected = try #require(entries.first { $0.state.projectID == "still-selected" }?.draftURL)
+        let drafts = abandoned.deletingLastPathComponent()
+        let state = drafts.deletingLastPathComponent().appendingPathComponent("state.json")
+        try FileManager.default.removeItem(at: state)
+
+        let partial = drafts.appendingPathComponent(UUID().uuidString).appendingPathExtension("partial")
+        let owned = drafts.appendingPathComponent(UUID().uuidString)
+        let referenced = drafts.appendingPathComponent(UUID().uuidString)
+        let foreign = drafts.appendingPathComponent(UUID().uuidString)
+        let unknown = drafts.appendingPathComponent("not-a-generation")
+        for url in [partial, owned, referenced, foreign, unknown] {
+            try FileManager.default.copyItem(at: abandoned, to: url)
+        }
+        try registry.update { records in
+            records += [
+                .init(id: "owned", goldenBuild: "25A1", bundlePath: owned.path,
+                      createdAt: .now, lastUsedAt: .now, runOwner: elsewhere),
+                .init(id: "referenced", goldenBuild: "25A1", bundlePath: referenced.path, createdAt: .now, lastUsedAt: .now)
+            ]
+        }
+        let registryFile = root.appendingPathComponent("registry.json")
+        var contents = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: registryFile)) as? [[String: Any]])
+        contents.append(["id": "future", "guestOS": "unknown", "bundlePath": foreign.path])
+        try JSONSerialization.data(withJSONObject: contents).write(to: registryFile, options: .atomic)
+
+        let usage = try await manager.diskUse(liveProjectIDs: ["still-selected"])
+        #expect(usage.bundles.contains { $0.kind == .projectDraft && $0.projectID == "still-selected" })
+        #expect(!exists(abandoned))
+        #expect(!exists(partial))
+        #expect([selected, owned, referenced, foreign, unknown].allSatisfy { exists($0) })
+    }
+
+    @Test func unreadableProjectSelectionNeverAuthorizesBundleRecovery() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        _ = try await prepareDraft(manager)
+        let entry = try #require(ProjectVMBaseStore(root: root).list().first)
+        let draft = try #require(entry.draftURL)
+        let state = draft.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("state.json")
+        try Data("unreadable selection".utf8).write(to: state, options: .atomic)
+
+        await #expect(throws: DecodingError.self) { _ = try await manager.diskUse(liveProjectIDs: []) }
+        #expect(exists(VMBundle(url: draft).diskImage))
+    }
+
     @Test func busyOrphanDraftCannotBeRemovedAndBlocksRemovingItsBase() async throws {
         try makeSealedGoldens()
         let manager = makeManager()

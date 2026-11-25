@@ -1987,29 +1987,48 @@ final class WorktreeVMManager {
     }
 
     private func scanProjectBundles(liveProjectIDs: Set<String>?) throws -> [VMBundleSummary] {
-        let projects = try projectBases.list()
-        guard !projects.isEmpty else { return [] }
-        let (records, foreign) = try registry.read()
-        let me = VMRunOwner.current(label: ownerLabel)
-        var summaries: [VMBundleSummary] = []
-        for entry in projects {
-            let project = entry.state.projectID
-            let orphan = liveProjectIDs.map { !$0.contains(project) } ?? false
-            if let base = entry.state.base, let url = entry.baseURL {
-                summaries.append(.init(id: Self.projectBasePrefix + base.id.uuidString, kind: .projectBase,
-                    guest: .macOS, name: project, worktreeID: nil, url: url, runningHere: false, runningElsewhere: nil,
-                    isOrphan: orphan, leftovers: [], projectID: project, projectGeneration: base.id))
+        try registry.withSnapshotSeeingForeignBundles { records, foreign in
+            var referenced = Set(foreign.lazy.map(Self.projectBundlePath))
+            referenced.formUnion(records.lazy.filter { !$0.bundlePath.isEmpty }.map { Self.projectBundlePath($0.bundlePath) })
+            let owned = Set(records.lazy.filter { $0.runOwner != nil }.map(\.id))
+            let projects = try projectBases.list(recoveringUnselected: { [self] url, draftID in
+                let path = Self.projectBundlePath(url.path)
+                if let draftID {
+                    let id = VMIdentity.projectDraftRecordID(draftID)
+                    guard !isBusyHere(id), !owned.contains(id) else { return }
+                }
+                guard !referenced.contains(where: { Self.projectPathsOverlap($0, path) }) else { return }
+                try? FileManager.default.removeItem(at: url)
+            })
+            let me = VMRunOwner.current(label: ownerLabel)
+            var summaries: [VMBundleSummary] = []
+            for entry in projects {
+                let project = entry.state.projectID
+                let orphan = liveProjectIDs.map { !$0.contains(project) } ?? false
+                if let base = entry.state.base, let url = entry.baseURL {
+                    summaries.append(.init(id: Self.projectBasePrefix + base.id.uuidString, kind: .projectBase,
+                        guest: .macOS, name: project, worktreeID: nil, url: url, runningHere: false, runningElsewhere: nil,
+                        isOrphan: orphan, leftovers: [], projectID: project, projectGeneration: base.id))
+                }
+                if let draft = entry.state.draft, let url = entry.draftURL {
+                    let id = VMIdentity.projectDraftRecordID(draft.id)
+                    let owner = records.first { $0.id == id }?.runOwner
+                    let elsewhere = owner.flatMap { me.map($0.isSameProcess(as:)) == true ? nil : $0.label }
+                    summaries.append(.init(id: id, kind: .projectDraft, guest: .macOS, name: project, worktreeID: nil,
+                        url: url, runningHere: isBusyHere(id), runningElsewhere: elsewhere, isOrphan: orphan,
+                        fromOtherBuild: foreign.contains(url.path), leftovers: [], projectID: project, projectGeneration: draft.id))
+                }
             }
-            if let draft = entry.state.draft, let url = entry.draftURL {
-                let id = VMIdentity.projectDraftRecordID(draft.id)
-                let owner = records.first { $0.id == id }?.runOwner
-                let elsewhere = owner.flatMap { me.map($0.isSameProcess(as:)) == true ? nil : $0.label }
-                summaries.append(.init(id: id, kind: .projectDraft, guest: .macOS, name: project, worktreeID: nil,
-                    url: url, runningHere: isBusyHere(id), runningElsewhere: elsewhere, isOrphan: orphan,
-                    fromOtherBuild: foreign.contains(url.path), leftovers: [], projectID: project, projectGeneration: draft.id))
-            }
+            return summaries
         }
-        return summaries
+    }
+
+    private static func projectBundlePath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private static func projectPathsOverlap(_ first: String, _ second: String) -> Bool {
+        first == second || first.hasPrefix(second + "/") || second.hasPrefix(first + "/")
     }
 
     /// Deletes the orphans among `ids` (`VMBundleSummary.id`s) that a fresh scan still finds
@@ -2587,7 +2606,9 @@ extension WorktreeVMManager {
         return result
     }
 
-    func startProjectDraft(projectID: String, draftID: UUID, pausing other: String? = nil) async throws -> VMStartOutcome {
+    func startProjectDraft(
+        projectID: String, draftID: UUID, retrySetup: Bool = false, pausing other: String? = nil
+    ) async throws -> VMStartOutcome {
         let id = VMIdentity.projectDraftRecordID(draftID)
         guard try projectBaseStatus(projectID: projectID).draft?.id == draftID else { throw ProjectVMBaseStore.Failure.changed }
         if let other { try await pauseForSlot(other) }
@@ -2603,7 +2624,7 @@ extension WorktreeVMManager {
                 }
             }
         }
-        if case .running = outcome { _ = try scheduleDraftSetup(projectID: projectID, draftID: draftID, retry: false) }
+        if case .running = outcome { _ = try scheduleDraftSetup(projectID: projectID, draftID: draftID, retry: retrySetup) }
         return outcome
     }
 
@@ -2754,18 +2775,32 @@ extension WorktreeVMManager {
 
     private func collectRetiredProjectDrafts(_ projectID: String) {
         do {
-            try registry.updateSeeingForeignBundles { records, foreign in
+            try registry.updateSeeingForeignBundles(quarantining: false) { records, foreign in
+                let foreignPaths = foreign.map(Self.projectBundlePath)
                 try projectBases.withProject(projectID) { transaction in
-                    transaction.collectRetiredBases()
-                    for retired in transaction.retiredDrafts() {
-                        let id = VMIdentity.projectDraftRecordID(retired.id)
-                        guard !foreign.contains(retired.url.path), !isBusyHere(id),
-                              !records.contains(where: { $0.id == id && $0.runOwner != nil }) else { continue }
-                        try? FileManager.default.removeItem(at: retired.url)
-                        try? FileManager.default.removeItem(at: projectDraftTransferDirectory(retired.id))
-                        records.removeAll { $0.id == id }
-                        cleanlyShutDown.removeValue(forKey: id)
-                        projectDraftSetupErrors[retired.id] = nil
+                    try transaction.visitUnselected { url, draftID in
+                        let path = Self.projectBundlePath(url.path)
+                        let recordID = draftID.map(VMIdentity.projectDraftRecordID)
+                        if let recordID, isBusyHere(recordID) || records.contains(where: { $0.id == recordID && $0.runOwner != nil }) {
+                            return
+                        }
+                        let retiredID = url.pathExtension.isEmpty ? recordID : nil
+                        guard !foreignPaths.contains(where: { Self.projectPathsOverlap($0, path) }),
+                              !records.contains(where: { record in
+                                  guard !record.bundlePath.isEmpty else { return false }
+                                  let reference = Self.projectBundlePath(record.bundlePath)
+                                  return Self.projectPathsOverlap(reference, path)
+                                      && !(record.id == retiredID && record.runOwner == nil && reference == path)
+                              }),
+                              (try? FileManager.default.removeItem(at: url)) != nil
+                        else { return }
+                        guard let draftID, let retiredID,
+                              !records.contains(where: { $0.id == retiredID && Self.projectBundlePath($0.bundlePath) != path })
+                        else { return }
+                        try? FileManager.default.removeItem(at: projectDraftTransferDirectory(draftID))
+                        records.removeAll { $0.id == retiredID }
+                        cleanlyShutDown.removeValue(forKey: retiredID)
+                        projectDraftSetupErrors[draftID] = nil
                     }
                 }
             }

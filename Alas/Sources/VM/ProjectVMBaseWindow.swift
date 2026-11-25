@@ -46,7 +46,10 @@ struct ProjectVMBaseWindow: View {
         }
     }
 
-    private enum BootTarget { case draft(UUID), shared(String) }
+    private enum BootTarget {
+        case draft(UUID, retrySetup: Bool = false)
+        case shared(String)
+    }
     private struct SlotChoice {
         let target: BootTarget
         let candidates: [String]
@@ -163,10 +166,7 @@ struct ProjectVMBaseWindow: View {
             let detail = exitCode.map { "It exited with status \($0)." } ?? "It didn't finish."
             VMCallout(title: "Guest setup failed", message: "\(detail) Retry runs the same script on this disk without undoing its previous changes.") {} actions: {
                 AlasButton(title: "Retry", compact: true) {
-                    perform {
-                        if vms.runningVMs[recordID] == nil { try await boot(.draft(draft.id)) }
-                        if vms.runningVMs[recordID] != nil { try await vms.retryProjectDraftSetup(projectID: projectID, draftID: draft.id) }
-                    }
+                    perform { try await boot(.draft(draft.id, retrySetup: true)) }
                 }.vmDisabled(busy || record.runningElsewhere != nil)
             }
         } else if draft.setup == .pending, vms.projectDraftSetupErrors[draft.id] != nil {
@@ -234,7 +234,8 @@ struct ProjectVMBaseWindow: View {
         startingElsewhere = nil
         let result: VMStartOutcome
         switch target {
-        case .draft(let draft): result = try await vms.startProjectDraft(projectID: projectID, draftID: draft, pausing: candidate)
+        case .draft(let draft, let retrySetup):
+            result = try await vms.startProjectDraft(projectID: projectID, draftID: draft, retrySetup: retrySetup, pausing: candidate)
         case .shared(let build):
             if let candidate {
                 result = .running(try await vms.startVM(worktreeID: WorktreeVMManager.goldenIDPrefix + build, pausing: candidate))
