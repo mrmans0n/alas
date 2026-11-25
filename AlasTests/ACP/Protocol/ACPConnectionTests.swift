@@ -1169,6 +1169,22 @@ struct ACPConnectionTests {
         #expect(params.methodId == "claude-login")
     }
 
+    @Test("session/options previews a workspace and its extra directories without a session")
+    func sessionOptionsRPC() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "session/options") { _ in
+            Data(#"{"configOptions":[{"id":"model","name":"Model","type":"select","category":"model","currentValue":"opus","options":[{"value":"opus","name":"Opus"}]}]}"#.utf8)
+        }
+
+        let preview = try await ACPConnection(client: mock)
+            .sessionOptions(cwd: "/work/project", additionalDirectories: ["/work/shared"])
+
+        let params = try #require(mock.sent.last?.params as? ACPSessionOptionsParams)
+        let wire = try JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? NSDictionary
+        #expect(wire == ["cwd": "/work/project", "additionalDirectories": ["/work/shared"]])
+        #expect(preview.configOptions.map(\.id) == ["model"])
+    }
+
     @Test("setConfigOption sends session/set_config_option with sessionId, configId, value")
     func setConfigOptionRPC() async throws {
         let mock = ACPMockClient()

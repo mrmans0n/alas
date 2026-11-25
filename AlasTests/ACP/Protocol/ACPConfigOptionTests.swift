@@ -402,4 +402,29 @@ struct ACPConfigOptionTests {
 
         #expect(merged.first?.currentValue == .boolean(true))
     }
+
+    @Test("initial entries follow the preview's order and keep a choice it cannot check")
+    func initialEntriesFollowThePreview() throws {
+        let preview = [
+            ACPConfigOption(id: "fast", name: "Fast", type: "boolean", currentValue: .boolean(false)),
+            ACPConfigOption(id: "model", name: "Model", category: "model", currentValue: "opus",
+                            options: [.init(id: "opus", name: "Opus"), .init(id: "sonnet", name: "Sonnet")]),
+            // Previewed for opus, which has no "max" level; sonnet may.
+            ACPConfigOption(id: "effort", name: "Effort", currentValue: "medium",
+                            options: [.init(id: "medium", name: "Medium")]),
+            ACPConfigOption(id: "sandbox", name: "Sandbox", type: "boolean", currentValue: .boolean(true)),
+        ]
+
+        let entries = ACPInitialConfigOption.entries(
+            model: "sonnet",
+            values: ["effort": .string("max"), "fast": .boolean(true), "gone": .string("x"), "sandbox": .string("off")],
+            preview: preview)
+
+        let wire = try JSONSerialization.jsonObject(with: JSONEncoder().encode(entries)) as? [NSDictionary]
+        #expect(wire == [
+            ["configId": "fast", "type": "boolean", "value": true],
+            ["configId": "model", "type": "id", "value": "sonnet"],
+            ["configId": "effort", "type": "id", "value": "max"],
+        ])
+    }
 }

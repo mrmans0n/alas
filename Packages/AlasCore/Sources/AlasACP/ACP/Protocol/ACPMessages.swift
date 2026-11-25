@@ -647,19 +647,23 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public let fork: EmptyObject?
         public let delete: EmptyObject?
         public let close: EmptyObject?
+        /// `session/options`, and initial `configOptions` on the setup requests.
+        public let options: EmptyObject?
 
         public init(
             list: EmptyObject? = nil,
             resume: EmptyObject? = nil,
             fork: EmptyObject? = nil,
             delete: EmptyObject? = nil,
-            close: EmptyObject? = nil
+            close: EmptyObject? = nil,
+            options: EmptyObject? = nil
         ) {
             self.list = list
             self.resume = resume
             self.fork = fork
             self.delete = delete
             self.close = close
+            self.options = options
         }
 
         public var supportsList: Bool { list != nil }
@@ -667,6 +671,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public var supportsFork: Bool { fork != nil }
         public var supportsDelete: Bool { delete != nil }
         public var supportsClose: Bool { close != nil }
+        public var supportsOptions: Bool { options != nil }
     }
     public struct ACPPromptCapabilities: Codable, Equatable, Sendable {
         public let image: Bool
@@ -925,16 +930,19 @@ public struct ACPSessionNewParams: Codable, Equatable, Sendable {
     public let cwd: String
     public let mcpServers: [ACPMCPServer]
     public var meta: ACPSessionMeta? = nil
+    /// Values to start the session with; see `ACPInitialConfigOption`.
+    public var configOptions: [ACPInitialConfigOption]? = nil
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case cwd, mcpServers
+        case cwd, mcpServers, configOptions
         case meta = "_meta"
     }
 
-    public init(cwd: String, mcpServers: [ACPMCPServer], meta: ACPSessionMeta? = nil) {
+    public init(cwd: String, mcpServers: [ACPMCPServer], meta: ACPSessionMeta? = nil, configOptions: [ACPInitialConfigOption] = []) {
         self.cwd = cwd
         self.mcpServers = mcpServers
         self.meta = meta
+        self.configOptions = configOptions.isEmpty ? nil : configOptions
     }
 }
 
@@ -1175,18 +1183,21 @@ public struct ACPSessionLoadParams: Codable, Equatable, Sendable {
     public var meta: ACPSessionMeta? = nil
     /// `session/fork` only: the session cursor to fork at instead of the tip.
     public var cursorId: String? = nil
+    /// Values to apply on top of the restored or forked session's own.
+    public var configOptions: [ACPInitialConfigOption]? = nil
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case cwd, sessionId, mcpServers, cursorId
+        case cwd, sessionId, mcpServers, cursorId, configOptions
         case meta = "_meta"
     }
 
-    public init(cwd: String, sessionId: String, mcpServers: [ACPMCPServer], meta: ACPSessionMeta? = nil, cursorId: String? = nil) {
+    public init(cwd: String, sessionId: String, mcpServers: [ACPMCPServer], meta: ACPSessionMeta? = nil, cursorId: String? = nil, configOptions: [ACPInitialConfigOption] = []) {
         self.cwd = cwd
         self.sessionId = sessionId
         self.mcpServers = mcpServers
         self.meta = meta
         self.cursorId = cursorId
+        self.configOptions = configOptions.isEmpty ? nil : configOptions
     }
 }
 

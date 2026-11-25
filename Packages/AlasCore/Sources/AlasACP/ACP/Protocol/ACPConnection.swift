@@ -448,11 +448,12 @@ public final class ACPConnection: @unchecked Sendable {
     public func newSession(
         cwd: String,
         mcpServers: [ACPMCPServer],
+        configOptions: [ACPInitialConfigOption] = [],
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
         return try await withCodexHooksReview() {
             let req = ACPRequest(method: "session/new",
-                                 params: ACPSessionNewParams(cwd: cwd, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers)),
+                                 params: ACPSessionNewParams(cwd: cwd, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers), configOptions: configOptions),
                                  brokerOperationKey: brokerOperationKey)
             let resp = try await client.send(req)
             let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
@@ -483,6 +484,7 @@ public final class ACPConnection: @unchecked Sendable {
         cwd: String,
         sessionId: String,
         mcpServers: [ACPMCPServer],
+        configOptions: [ACPInitialConfigOption] = [],
         brokerOperationKey: String? = nil,
         loadReplayEndID: String? = nil
     ) async throws -> ACPSessionNewResult {
@@ -493,7 +495,7 @@ public final class ACPConnection: @unchecked Sendable {
                 meta?.loadReplayEnd = .init(id: loadReplayEndID)
             }
             let req = ACPRequest(method: "session/load",
-                                 params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: meta),
+                                 params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: meta, configOptions: configOptions),
                                  brokerOperationKey: brokerOperationKey)
             let resp = try await client.send(req)
             let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
@@ -506,12 +508,13 @@ public final class ACPConnection: @unchecked Sendable {
         cwd: String,
         sessionId: String,
         mcpServers: [ACPMCPServer],
+        configOptions: [ACPInitialConfigOption] = [],
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
         return try await withCodexHooksReview() {
             let req = ACPRequest(
                 method: "session/resume",
-                params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers)),
+                params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers), configOptions: configOptions),
                 brokerOperationKey: brokerOperationKey
             )
             let resp = try await client.send(req)
@@ -589,6 +592,7 @@ public final class ACPConnection: @unchecked Sendable {
         mcpServers: [ACPMCPServer],
         forkPoint: ACPForkPointTarget? = nil,
         cursorId: String? = nil,
+        configOptions: [ACPInitialConfigOption] = [],
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
         return try await withCodexHooksReview() {
@@ -599,7 +603,7 @@ public final class ACPConnection: @unchecked Sendable {
                 method: "session/fork",
                 params: ACPSessionForkParams(
                     cwd: cwd, sessionId: sessionId, mcpServers: mcpServers,
-                    meta: meta == ACPSessionMeta() ? nil : meta, cursorId: cursorId),
+                    meta: meta == ACPSessionMeta() ? nil : meta, cursorId: cursorId, configOptions: configOptions),
                 brokerOperationKey: brokerOperationKey
             )
             let resp = try await client.send(req)
@@ -752,6 +756,21 @@ public final class ACPConnection: @unchecked Sendable {
             response.acknowledgeDurableConsumption()
             return try await listProviders()
                 }
+    }
+
+    /// The options a session would start with in `cwd`, or the ones
+    /// `sessionId` would restore or fork with. Only for an agent that
+    /// advertised `sessionCapabilities.options`; nothing is created.
+    public func sessionOptions(
+        cwd: String,
+        additionalDirectories: [String] = [],
+        sessionId: String? = nil
+    ) async throws -> ACPSessionNewResult {
+        let resp = try await client.send(ACPRequest(
+            method: "session/options",
+            params: ACPSessionOptionsParams(cwd: cwd, additionalDirectories: additionalDirectories, sessionId: sessionId)))
+        defer { resp.acknowledgeDurableConsumption() }
+        return try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
     }
 
     /// Sends a config-option change and returns the agent's refreshed
