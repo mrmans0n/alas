@@ -242,8 +242,18 @@ struct HostSSHSetupTests {
         ]
         for (tool, body) in tools {
             try FileManager.default.createDirectory(at: tool.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try body.write(to: tool, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+            // Installed by a short-lived process, as in the adapter test above: a
+            // descriptor written from this process can leak into a parallel test's
+            // fork, and Linux then refuses to exec the script (ETXTBSY).
+            let source = directory.appendingPathComponent("sources/\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try body.write(to: source, atomically: true, encoding: .utf8)
+            let install = Process()
+            install.executableURL = URL(fileURLWithPath: "/usr/bin/install")
+            install.arguments = ["-m", "755", source.path, tool.path]
+            try install.run()
+            install.waitUntilExit()
+            try #require(install.terminationStatus == 0)
         }
         try FileManager.default.createSymbolicLink(at: host, withDestinationURL: installedHost)
         let resolvedRoot = root.resolvingSymlinksInPath()
