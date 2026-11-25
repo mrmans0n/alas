@@ -685,7 +685,6 @@ public final class StackShepherd {
         // A turn may have ended or the record been rebound while this ran:
         // decide on the current record, and not at all for another owner.
         guard let current = records[id], current.sessionID == owner, !current.isFinished else { return }
-        failureCounts[id] = nil
         let publication = StackShepherdPolicy.publication(
             of: onStack, local: probed.local,
             landed: onStack.map { StackShepherdPolicy.landedEntryIDs(of: current, in: $0) } ?? [],
@@ -707,16 +706,22 @@ public final class StackShepherd {
             reviewGate: effects.reviewGate(current)
         )
         var decision = StackShepherdPolicy.decide(current, observation)
-        // Only a restack about to be requested needs to know whether a merge
-        // is queued, and only a listing with the forge's state tells.
-        if !decision.restack.isEmpty {
-            let forgeStack = try? await effects.loadStackWithForgeState(context.path)
-            guard records[id] == current else { return }
-            if let forgeStack, forgeStack.name == id.stackName, forgeStack.hasQueuedMerge {
+        // Both turns ask the owner to push. Read queue state only when a turn is due.
+        if !decision.fixes.isEmpty || !decision.restack.isEmpty {
+            let forgeStack: GGStack?
+            do {
+                forgeStack = try await effects.loadStackWithForgeState(context.path)
+            } catch {
+                if records[id] == current { noteFailure(id, error.localizedDescription) }
+                return
+            }
+            guard records[id] == current, let forgeStack, forgeStack.name == id.stackName else { return }
+            if forgeStack.hasQueuedMerge {
                 observation.hasQueuedMerge = true
                 decision = StackShepherdPolicy.decide(current, observation)
             }
         }
+        failureCounts[id] = nil
         if decision.isRetired {
             stackShepherdLogger.notice("Retiring stack shepherd record \(id.storageKey, privacy: .private): no entries are left")
             remove(id)
