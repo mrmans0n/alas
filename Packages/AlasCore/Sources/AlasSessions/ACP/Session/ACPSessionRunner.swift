@@ -4105,12 +4105,19 @@ extension ACPSessionRunner {
     /// prompt can take its place. Files the removed turns changed stay as
     /// they are.
     ///
-    /// The session must be idle with an empty queue; the caller stops a
-    /// running turn first. Until the agent has answered, nothing is removed.
+    /// A running turn is stopped first. The queue must be empty and no input
+    /// pending. Until the agent has answered, nothing is removed.
     public func rewind(beforeUserMessage id: UUID) async -> ACPSessionRewindResult {
         guard let cursor = session.cursor(beforeUserMessage: id), cursor.canRewind,
               let remoteSessionId = session.remoteSessionId, !remoteSessionId.isEmpty
         else { return .unavailable }
+        if activePromptID != nil || session.transcript.streamingState != .idle {
+            // The agent refuses to cut under a running turn, so stop it and
+            // wait for its prompt to settle.
+            let running = latestPromptTask
+            guard await userCancel() else { return .notIdle }
+            await running?.value
+        }
         // Holds the queue and confirms the lease, like a native fork: nothing
         // may start a turn between the agent's cut and ours.
         guard await beginNativeForkBarrier() else { return .notIdle }

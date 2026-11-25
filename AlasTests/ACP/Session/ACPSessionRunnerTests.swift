@@ -6060,6 +6060,57 @@ struct ACPSessionRunnerTests {
         #expect(session.setupState == .ready)
     }
 
+    @Test("a rewind removes the message and what follows only once the agent cut", arguments: [
+        (#"{"rewound":true}"#, ACPSessionRewindResult.rewound, 2),
+        (#"{"rewound":false,"reason":"backgroundWork"}"#, .refused(.backgroundWork), 4),
+    ])
+    func rewindTruncatesAfterTheAgentCut(reply: String, expected: ACPSessionRewindResult, rowsLeft: Int) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-rewind-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let edited = UUID()
+        let rows: [ACPMessage] = [
+            .user(id: UUID(), text: "First", attachments: []),
+            .agent(id: UUID(), messageId: "a1", StreamingText("One")),
+            .user(id: edited, text: "Second", attachments: []),
+            .agent(id: UUID(), messageId: "a2", StreamingText("Two")),
+        ]
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.setupState = .ready
+        session.agentState = .ready
+        session.remoteSessionId = "remote"
+        for (index, message) in rows.enumerated() {
+            session.transcript.appendMessage(message)
+            try store.appendMessage(
+                sessionId: "s", id: "msg-s-\(index)", kind: message.kind, seq: Int64(index),
+                payload: try ACPMessageCodec.encode(message), createdAt: Int64(index))
+        }
+        let mock = ACPMockClient()
+        mock.script(method: "_session/rewind") { _ in Data(reply.utf8) }
+        let runner = ACPSessionRunner(
+            session: session, connection: ACPConnection(client: mock), store: store,
+            sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path)
+        runner.start()
+        defer { runner.stop() }
+        mock.emit(.init(sessionId: "s", update: .cursorUpdate(.init(
+            cursorId: "before:second",
+            anchor: .init(entity: .agentMessage("a1"), position: .after),
+            canRewind: true))))
+        #expect(await awaitCondition { session.cursor(beforeUserMessage: edited) != nil })
+
+        #expect(await runner.rewind(beforeUserMessage: edited) == expected)
+
+        let request = try #require(mock.sent.first { $0.method == "_session/rewind" })
+        #expect(request.params as? ACPSessionRewindParams == .init(sessionId: "remote", cursorId: "before:second"))
+        #expect(session.transcript.messages.count == rowsLeft)
+        #expect(try store.loadMessages(sessionId: "s").count == rowsLeft)
+        // The cursor went with its message; a refused rewind keeps it.
+        #expect((session.cursor(beforeUserMessage: edited) == nil) == (expected == .rewound))
+    }
+
     private func makeRunnerWithSession() throws -> (ACPSessionRunner, ACPSession, ACPMockClient) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-auth-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)

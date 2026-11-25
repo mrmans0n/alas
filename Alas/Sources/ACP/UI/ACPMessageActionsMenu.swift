@@ -98,3 +98,48 @@ enum ACPMessageActionsMenu {
         return menu
     }
 }
+
+/// Editing an earlier user message in place: the agent cuts its conversation
+/// back to before the message, the transcript follows, and the message's text
+/// returns to the composer to be changed and sent again.
+@MainActor
+enum ACPMessageEdit {
+    static func confirmAndRewind(manager: ACPSessionManager, session: ACPSession, messageID: UUID, text: String) {
+        let alert = NSAlert()
+        alert.messageText = "Edit this message?"
+        alert.informativeText = "This message and everything after it are removed from the conversation, "
+            + "and its text returns to the composer. Files are not reverted."
+        alert.addButton(withTitle: "Edit")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Task {
+            let result = await manager.rewind(sessionID: session.id, beforeUserMessage: messageID)
+            if case .rewound = result {
+                session.replaceComposerDraft(.init(segments: [.text(text)]))
+            } else {
+                session.lastError = failureMessage(result)
+            }
+        }
+    }
+
+    static func failureMessage(_ result: ACPSessionRewindResult) -> String? {
+        switch result {
+        case .rewound:
+            nil
+        case .refused(.busy), .notIdle:
+            "The message can't be edited while the agent is working or prompts are queued."
+        case .refused(.backgroundWork):
+            "The message can't be edited while a background task or subagent runs."
+        case .refused(.beforeCompaction):
+            "The message is before the last compaction, so the agent can't go back to it. Fork from it instead."
+        case .refused(.clearedContext):
+            "The agent's context was cleared after this message. Fork from it instead."
+        case .refused(.providerRefused), .refused(.persistFailed), .refused(.other):
+            "The agent could not go back to this message. The conversation is unchanged."
+        case .unavailable:
+            "This message can't be edited in place."
+        case .failed(let message):
+            "Editing the message failed: \(message)"
+        }
+    }
+}

@@ -39,6 +39,8 @@ struct ACPMessageList: View {
     let onFork: (ACPForkMessageBoundary, String) -> Void
     var onRestoreCheckpoint: (CheckpointID) -> Void = { _ in }
     var messageMenuItems: () -> [ACPMessageMenuItem] = { [] }
+    /// The "Edit message…" item of a user message, by its row id; nil when it can't be edited in place.
+    var editMessageItem: (UUID) -> ACPMessageMenuItem? = { _ in nil }
     /// Cancels one native subagent by child session id. Nil hides the row's
     /// Cancel action (read-only hosts).
     var onCancelSubagent: ((String) -> Void)?
@@ -85,6 +87,7 @@ struct ACPMessageList: View {
                 onFork: onFork,
                 onRestoreCheckpoint: onRestoreCheckpoint,
                 messageMenuItems: messageMenuItems,
+                editMessageItem: editMessageItem,
                 onCancelSubagent: onCancelSubagent,
                 onOpenSubagentLink: onOpenSubagentLink,
                 rememberedScrollAnchor: rememberedScrollAnchor,
