@@ -83,6 +83,44 @@
 6. Confirm Quit shortcut and window close exit the app.
 7. Remove the package after testing if desired.
 
+## Project macOS base privacy grants
+
+Use an isolated Alas profile and a disposable local Git project on a physical
+Apple silicon Mac. Start with no saved project base. Check the permissions
+of the signed Alas app inside the guest, not the host app or the Alas VM Guest
+helper.
+
+1. Open **Edit Project → Automation → Worktree VMs → Customize macOS base…**.
+   In the setup VM, install a Developer ID-signed, notarized release of Alas.
+   Record the guest's `sw_vers` output, the app version and install path, and the
+   bundle ID, Team ID, and CDHash from `codesign -dv --verbose=4 "$app"`, with
+   `app` set to the installed bundle path.
+2. In the guest's Alas **Settings → Computer Use**, confirm Screen Recording
+   and Accessibility both start ungranted. Approve both in guest System
+   Settings, relaunch the guest app, and confirm both rows say **Granted**.
+   Do not edit the privacy database or change the VM Guest helper's grants.
+3. Click **Save as Project Base** in the host setup window. Wait for **Saved
+   project base**. Create a new linked worktree only after saving, then cold
+   boot its macOS VM. In the isolated profile's `vms/registry.json`, confirm the
+   new VM record references the saved generation (`goldenBuild` is
+   `project-base:<generation>` and `bootGeneration` is `1`).
+4. Launch the signed app already installed in the clone at the same path.
+   Before approving anything or reinstalling the app, record both permission
+   rows in **Settings → Computer Use**. The app checks
+   `CGPreflightScreenCaptureAccess()` and `AXIsProcessTrusted()` for these rows.
+
+**Observed:** On macOS 26.6.2 (`25G83`), both rows said **Granted** in the
+setup draft after manual approval and in the fresh `permission-clone` worktree
+VM on first cold boot, with no new approvals or reinstall. The guest ran the
+Developer ID-signed, notarized Alas 0.24.10 release at `~/Applications/Alas.app`,
+bundle `io.nlopez.alas`, Team ID `57WT3F3FAM`, CDHash
+`329ac0935f16c6cf3ead727a706bfb8bad0000f5`. The registry
+showed `project-base:B42069F0-B7C3-48C0-A696-20BA8D1BDE58` and boot generation
+`1`. No privacy database edits, host permission changes, or VM Guest helper
+permission changes were made. This verified permission status, not actual
+screen capture or Accessibility-driven clicks. It does not establish carryover
+for other macOS versions, rebuilds, signing identities, or apps.
+
 ## Terminal Tabs
 
 1. Select a worktree.
