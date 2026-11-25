@@ -1693,6 +1693,7 @@
 		D8C50433D3268DA1F43DCB72 /* VMGuestPatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A60808C8CBCC1A935CC7E4B /* VMGuestPatcherTests.swift */; };
 		D8DB53E03ADC7C7657814E91 /* DeviceUseTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC54CDAA6F38D754ADDBE424 /* DeviceUseTracker.swift */; };
 		D9384A57C976BD87B1D4783C /* DeviceTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57A09A6E18B1444F8A1AD988 /* DeviceTabView.swift */; };
+		D938E35FDF4470AA822886F2 /* ACPTurnDiffSessionBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0B9B168824C845CF79F30AE /* ACPTurnDiffSessionBuilderTests.swift */; };
 		D95A7FAF0B955642ED9D7521 /* ACPAuthFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 380D04E9EB0D0ED0C24702DA /* ACPAuthFailureTests.swift */; };
 		D98DD9D4BE2AF6E9ABEB2401 /* AlasCoreExports.swift in Sources */ = {isa = PBXBuildFile; fileRef = F82F6946A682F86F58B7120B /* AlasCoreExports.swift */; };
 		D9CFFC79F05087397A884F77 /* GoldenProvisioner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA338659CE24024F81DE97DB /* GoldenProvisioner.swift */; };
@@ -2052,10 +2053,10 @@
 		1A51DA06B445C208E5F643EF /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
-			dstSubfolderSpec = 7;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/XPCServices";
+			dstSubfolderSpec = 16;
 			files = (
-				CF66032F829FB00D791925E8 /* Install Alas VM Guest.command in CopyFiles */,
+				8E7C4F7DFA7D3E2D74767C2B /* AlasSimService.xpc in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2073,10 +2074,10 @@
 		AF4AF5D7242A7B87F7C9E278 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "$(CONTENTS_FOLDER_PATH)/XPCServices";
-			dstSubfolderSpec = 16;
+			dstPath = "alas-vm-guest";
+			dstSubfolderSpec = 7;
 			files = (
-				8E7C4F7DFA7D3E2D74767C2B /* AlasSimService.xpc in CopyFiles */,
+				CF66032F829FB00D791925E8 /* Install Alas VM Guest.command in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3562,6 +3563,7 @@
 		C02B44D8CC0AE48BFA9CD88E /* RemoteProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteProtocolTests.swift; sourceTree = "<group>"; };
 		C0458AFA9BCBC4484B084085 /* AppConfigWorktreeOrderingDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigWorktreeOrderingDecodeTests.swift; sourceTree = "<group>"; };
 		C0856147C5DC7F10944420ED /* RunScriptCompletionMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScriptCompletionMonitorTests.swift; sourceTree = "<group>"; };
+		C0B9B168824C845CF79F30AE /* ACPTurnDiffSessionBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTurnDiffSessionBuilderTests.swift; sourceTree = "<group>"; };
 		C0C3B7D47778AD319D33441B /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		C0CD19EC130ED5EFACD84176 /* AppKitDiffScrollView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitDiffScrollView.swift; sourceTree = "<group>"; };
 		C0D855AA5997770325872563 /* ACPNarrationShimmer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPNarrationShimmer.swift; sourceTree = "<group>"; };
@@ -5932,6 +5934,7 @@
 				E7F09C7E238C3DEB235344FB /* ACPSessionStoreActivityTests.swift */,
 				FADFC82400385AD76A200A2B /* ACPSessionStoreDedupTests.swift */,
 				5027B783605BE1C0189308CC /* ACPTranscriptChangeLogTests.swift */,
+				C0B9B168824C845CF79F30AE /* ACPTurnDiffSessionBuilderTests.swift */,
 				794F0769C6D3D630488AC29E /* RepoMCPTrustBannerPolicyTests.swift */,
 				BC4AA85B89424CE83D52524E /* RepoMCPTrustBannerPresentationTests.swift */,
 				40714295AF636BD35A6157EE /* UpstreamReferenceTestSupport.swift */,
@@ -8975,6 +8978,7 @@
 				F0F6D9795D96C41F97B6B6BA /* ACPTranscriptTilingControllerTests.swift in Sources */,
 				A3F27DE52BAC71EFFA69938A /* ACPTranscriptWindowTests.swift in Sources */,
 				F701A1AF5A85CD8418F5B621 /* ACPTurnCaptionStoreTests.swift in Sources */,
+				D938E35FDF4470AA822886F2 /* ACPTurnDiffSessionBuilderTests.swift in Sources */,
 				AB36E056347848B092911524 /* ACPUpstreamReferenceChipTests.swift in Sources */,
 				175449ED203D1BF2A5920466 /* ACPUpstreamReferenceComposerTests.swift in Sources */,
 				147A21DE7E1EB53B6E7FE0C7 /* ACPUpstreamReferenceStoreTests.swift in Sources */,

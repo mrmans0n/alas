@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Customize a macOS VM base in Project Settings and reuse it for new worktree VMs and Reset from scratch.
 - Stack shepherding waits for queued merges before asking an agent to fix review feedback and push the stack.
+- A turn's changed files fold into one line under its answer with a Review changes button, and its recorded diffs open in the review diff view with your code font.
 
 ## [0.24.10] - 2026-11-24
 
