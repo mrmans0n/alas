@@ -446,7 +446,7 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         case .availableModelsUpdate, .currentModeUpdate, .currentModelUpdate,
              .availableCommandsUpdate, .usageUpdate,
              .sessionInfoUpdate, .compactionUpdate, .compactionSummaryChunk,
-             .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown:
+             .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .cursorUpdate, .unknown:
             // Session-level state of a child session has no UI of its own:
             // the child has no composer, model picker, context ring or
             // notice banner.

@@ -65,6 +65,8 @@ public enum ACPSessionUpdate: Codable, Equatable, Sendable {
     case subagentSpawned(ACPSubagentSpawn)
     case subagentStateUpdate(ACPSubagentStateUpdate)
     case asyncTask(ACPAsyncTaskUpdate)
+    /// `cursor_update`: a position of the session that a fork or a rewind can act at.
+    case cursorUpdate(ACPSessionCursor)
     case unknown(String)
 
     public static func userMessageChunk(_ content: ACPContentBlock) -> ACPSessionUpdate {
@@ -163,6 +165,10 @@ public enum ACPSessionUpdate: Codable, Equatable, Sendable {
             self = .subagentStateUpdate(try ACPSubagentStateUpdate(from: decoder))
         case "async_task_spawned", "async_task_progress", "async_task_state_update":
             self = .asyncTask(try ACPAsyncTaskUpdate(from: decoder))
+        case "cursor_update":
+            // A cursor this client cannot place is no cursor, not a broken stream.
+            self = (try? LSPJSONValue(from: decoder)).flatMap(ACPSessionCursor.init(wire:))
+                .map(ACPSessionUpdate.cursorUpdate) ?? .unknown(kind)
         // `subagent_update` and `session_message(_chunk)` land here on
         // purpose: one of them can stand for several updates, so transports
         // decode `session/update` through `ACPSessionUpdateFrame`, which
@@ -261,7 +267,7 @@ public enum ACPSessionUpdate: Codable, Equatable, Sendable {
         case .availableCommandsUpdate:
             break
         case .toolCall, .toolCallUpdate, .usageUpdate, .compactionUpdate,
-             .compactionSummaryChunk, .notice, .unknown:
+             .compactionSummaryChunk, .notice, .cursorUpdate, .unknown:
             break
         }
     }

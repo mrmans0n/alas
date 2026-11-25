@@ -102,7 +102,8 @@ public struct ACPSessionCapabilities: Codable, Equatable, Sendable {
     public static let booleanConfigOptions = ACPSessionCapabilities(
         configOptions: .init(boolean: .init()),
         compaction: .init(),
-        notices: .init())
+        notices: .init(),
+        cursors: .init())
 
     public let configOptions: ConfigOptions
     /// Experimental ACP context-compaction updates. `{}` advertises support.
@@ -111,19 +112,24 @@ public struct ACPSessionCapabilities: Codable, Equatable, Sendable {
     /// `{}` advertises support. Without it, agents fall back to stuffing
     /// out-of-band events into `agent_message_chunk`, polluting the transcript.
     public let notices: EmptyObject?
+    /// Unstable ACP session cursors (`cursor_update`). `{}` advertises
+    /// support; an ACP v1 agent announces no cursor without it.
+    public let cursors: EmptyObject?
 
     public init(
         configOptions: ConfigOptions = .init(boolean: nil),
         compaction: EmptyObject? = nil,
-        notices: EmptyObject? = nil
+        notices: EmptyObject? = nil,
+        cursors: EmptyObject? = nil
     ) {
         self.configOptions = configOptions
         self.compaction = compaction
         self.notices = notices
+        self.cursors = cursors
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case configOptions, compaction, notices
+        case configOptions, compaction, notices, cursors
     }
 
     public init(from decoder: Decoder) throws {
@@ -132,6 +138,7 @@ public struct ACPSessionCapabilities: Codable, Equatable, Sendable {
             ?? .init(boolean: nil)
         compaction = try? c.decodeIfPresent(EmptyObject.self, forKey: .compaction)
         notices = try? c.decodeIfPresent(EmptyObject.self, forKey: .notices)
+        cursors = try? c.decodeIfPresent(EmptyObject.self, forKey: .cursors)
     }
 
     public struct ConfigOptions: Codable, Equatable, Sendable {
@@ -307,6 +314,9 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
     /// Lets a prompt ask our Claude and Codex adapter forks for the predicted
     /// follow-up prompt of its turn; see `ACPPredictedPrompt`.
     public let promptSuggestions: ACPPresentationContractDeclaration
+    /// Asks our Claude and Codex adapter forks for `_session/rewind` and for
+    /// the `rewind` capability on their session cursors.
+    public let sessionRewind: ACPPresentationContractDeclaration
 
     public init(
         terminalAuth: Bool,
@@ -328,7 +338,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         recommendedConfigValue: ACPPresentationContractDeclaration = .init(),
         commandPresentation: ACPPresentationContractDeclaration = .init(),
         loadReplayEnd: ACPPresentationContractDeclaration = .init(),
-        promptSuggestions: ACPPresentationContractDeclaration = .init()
+        promptSuggestions: ACPPresentationContractDeclaration = .init(),
+        sessionRewind: ACPPresentationContractDeclaration = .init()
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
@@ -350,12 +361,13 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         self.commandPresentation = commandPresentation
         self.loadReplayEnd = loadReplayEnd
         self.promptSuggestions = promptSuggestions
+        self.sessionRewind = sessionRewind
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case contextUsage, settleAtResult, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure
         case agentFileChangeReport, permissionPresentation, questionCustomAnswer, recommendedConfigValue
-        case commandPresentation, loadReplayEnd, promptSuggestions
+        case commandPresentation, loadReplayEnd, promptSuggestions, sessionRewind
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -392,6 +404,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
             ACPPresentationContractDeclaration.self, forKey: .loadReplayEnd)) ?? .init()
         promptSuggestions = (try? c.decodeIfPresent(
             ACPPresentationContractDeclaration.self, forKey: .promptSuggestions)) ?? .init()
+        sessionRewind = (try? c.decodeIfPresent(
+            ACPPresentationContractDeclaration.self, forKey: .sessionRewind)) ?? .init()
     }
 }
 
@@ -493,9 +507,11 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public let loadReplayEnd: ACPPresentationContractDeclaration?
         /// Predicted follow-up prompts on request (our Claude and Codex adapter forks).
         public let promptSuggestions: ACPPresentationContractDeclaration?
+        /// `_session/rewind` at a session cursor (our Claude and Codex adapter forks).
+        public let sessionRewind: ACPPresentationContractDeclaration?
 
         public enum CodingKeys: String, CodingKey, Sendable {
-            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure, agentFileChangeReport, loadReplayEnd, promptSuggestions
+            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure, agentFileChangeReport, loadReplayEnd, promptSuggestions, sessionRewind
             case asyncTasks = "async-tasks"
         }
 
@@ -516,6 +532,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             agentFileChangeReport = try? c.decodeIfPresent(ACPAgentFileChangeReportAdvertisement.self, forKey: .agentFileChangeReport)
             loadReplayEnd = try? c.decodeIfPresent(ACPPresentationContractDeclaration.self, forKey: .loadReplayEnd)
             promptSuggestions = try? c.decodeIfPresent(ACPPresentationContractDeclaration.self, forKey: .promptSuggestions)
+            sessionRewind = try? c.decodeIfPresent(ACPPresentationContractDeclaration.self, forKey: .sessionRewind)
         }
 
         public struct SystemPromptCapability: Codable, Equatable, Sendable {
@@ -1156,17 +1173,20 @@ public struct ACPSessionLoadParams: Codable, Equatable, Sendable {
     public let sessionId: String
     public let mcpServers: [ACPMCPServer]
     public var meta: ACPSessionMeta? = nil
+    /// `session/fork` only: the session cursor to fork at instead of the tip.
+    public var cursorId: String? = nil
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case cwd, sessionId, mcpServers
+        case cwd, sessionId, mcpServers, cursorId
         case meta = "_meta"
     }
 
-    public init(cwd: String, sessionId: String, mcpServers: [ACPMCPServer], meta: ACPSessionMeta? = nil) {
+    public init(cwd: String, sessionId: String, mcpServers: [ACPMCPServer], meta: ACPSessionMeta? = nil, cursorId: String? = nil) {
         self.cwd = cwd
         self.sessionId = sessionId
         self.mcpServers = mcpServers
         self.meta = meta
+        self.cursorId = cursorId
     }
 }
 
