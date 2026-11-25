@@ -64,6 +64,7 @@ private final class RecordingGGMutationExecutor: GGMutationExecuting {
         worktreePath: String,
         clientOperationID: String?,
         supportsSyncJSONL: Bool,
+        syncRebaseIfNeeded: Bool,
         supportsLandJSONL: Bool,
         landStrategy: GGLandMergeStrategy,
         onSyncEvent: (GGSyncEvent) -> Void,
@@ -236,6 +237,7 @@ private final class GGMutationHarness {
     let clientOperationCapability: GGClientOperationCapabilityBox
     let syncJSONLCapability: GGSyncJSONLCapabilityBox
     let landJSONLCapability: GGLandJSONLCapabilityBox
+    var canQueueLand = false
     var publishedLandEvents: [GGLandEvent] = []
     let tokenGenerator: GGClientOperationTokenGenerator
     var stacks: [GGStackSnapshot]
@@ -278,6 +280,7 @@ private final class GGMutationHarness {
             clientOperationIDCapability: { capability.isSupported },
             syncJSONLCapability: { syncCapability.isSupported },
             landJSONLCapability: { landCapability.isSupported },
+            landAutoMergeCapability: { [unowned self] base in canQueueLand && base == "main" },
             clientOperationIDGenerator: { generator.next() },
             mutationGate: mutationGate,
             projectID: projectID,
@@ -485,6 +488,27 @@ struct GGMutationCoordinatorTests {
         try await harness.coordinator.apply(.land(target: "change-1"), confirmedAgainst: nil)
         #expect(harness.service.landJSONLCapabilities == [false])
         #expect(harness.publishedLandEvents.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func queueLandRechecksSupportAfterConfirmation(stillSupported: Bool) async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a", entries: [
+            GGStackEntry(position: 1, sha: "a", title: "One", ggId: "change-1",
+                         prState: .open, approved: true, ciStatus: .success)
+        ])], landJSONL: true)
+        let request = GGMutationRequest.land(target: "change-1", autoMerge: true)
+        harness.canQueueLand = true
+        let prepared = try await harness.coordinator.prepare(request)
+        harness.canQueueLand = stillSupported
+        if stillSupported {
+            try await harness.coordinator.apply(request, confirmedAgainst: prepared.snapshot)
+            #expect(harness.service.requests == [request])
+        } else {
+            await #expect(throws: GGServiceError.self) {
+                try await harness.coordinator.apply(request, confirmedAgainst: prepared.snapshot)
+            }
+            #expect(harness.service.requests.isEmpty)
+        }
     }
 
     @Test func onlyStagedChangeMutationsWaitForStaging() {
@@ -1747,7 +1771,7 @@ struct GGMutationCoordinatorTests {
             supportsClientOperationID: true
         )
         try await land.coordinator.apply(.land(target: "change-1"), confirmedAgainst: nil)
-        #expect(land.service.clientOperationIDs == [nil])
+        #expect(land.service.clientOperationIDs == ["alas:test-1"])
         #expect(land.service.operationListCallCount == 0)
         #expect(land.coordinator.undoCandidate == nil)
     }

@@ -65,6 +65,7 @@ struct GGStackDrawer: View {
             behindBase: rps.behindBase,
             mergeOperation: rps.mergeOp.current,
             effectiveConfig: rps.ggEffectiveConfig,
+            syncRebaseIfNeeded: rps.ggCapabilities().syncRebaseIfNeeded,
             localChanges: rps.ggLocalChangeStatistics,
             undoCandidate: rps.ggUndoCandidate
         ) {

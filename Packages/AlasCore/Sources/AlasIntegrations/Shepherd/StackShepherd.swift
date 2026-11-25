@@ -95,7 +95,8 @@ public final class StackShepherd {
         /// Sync uses.
         /// `onEvent` hears each event the sync streams.
         public var syncStack: @MainActor (
-            _ worktreeID: String, _ plan: StackShipPlan, _ onEvent: @escaping @MainActor (GGSyncEvent) -> Void
+            _ worktreeID: String, _ plan: StackShipPlan, _ expected: GGStackIdentity,
+            _ onEvent: @escaping @MainActor (GGSyncEvent) -> Void
         ) async throws -> Void
         /// `gg rebase` onto the stack's base through the guarded path the
         /// stack drawer's Rebase uses. Drops entries that already landed.
@@ -121,6 +122,7 @@ public final class StackShepherd {
         /// for a headless host): its records are that instance's, so this
         /// one never changes, escalates, archives or removes them.
         public var servesWorktree: @MainActor (_ worktreeID: String) -> Bool
+        public var syncRebaseIfNeeded: @MainActor () -> Bool = { GGAvailability.shared.capabilities.syncRebaseIfNeeded }
         /// Review before push state for the stack; nil when the lever is off.
         public var reviewGate: @MainActor (_ record: StackShepherdRecord) -> ShepherdReviewGate? = { _ in nil }
 
@@ -128,7 +130,8 @@ public final class StackShepherd {
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
             loadStack: @escaping @MainActor (_ path: URL) async throws -> GGStack?,
             syncStack: @escaping @MainActor (
-                _ worktreeID: String, _ plan: StackShipPlan, _ onEvent: @escaping @MainActor (GGSyncEvent) -> Void
+                _ worktreeID: String, _ plan: StackShipPlan, _ expected: GGStackIdentity,
+                _ onEvent: @escaping @MainActor (GGSyncEvent) -> Void
             ) async throws -> Void,
             rebaseStack: @escaping @MainActor (_ worktreeID: String, _ expected: GGStackIdentity) async throws -> Void,
             sessionState: @escaping @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState,

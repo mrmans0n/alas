@@ -48,7 +48,7 @@ struct GGLandingStoreTests {
         case interrupted
     }
 
-    private func seed(projectId: String = "p") -> GGLandingSession.Seed {
+    private func seed(projectId: String = "p", autoMerge: Bool = false) -> GGLandingSession.Seed {
         .init(
             projectId: projectId,
             worktreeId: "w",
@@ -58,7 +58,8 @@ struct GGLandingStoreTests {
             rows: [
                 .init(position: 1, title: "One", ggId: "c-1", prNumber: 41),
                 .init(position: 2, title: "Two", ggId: "c-2", prNumber: 42),
-            ]
+            ],
+            autoMerge: autoMerge
         )
     }
 
@@ -491,7 +492,7 @@ struct GGLandingStoreTests {
 
     @Test func reconcilePreflightSeedWidensConfirmedScopeWithNewlyDiscoveredRows() {
         let store = GGLandingStore()
-        #expect(store.begin(seed()))
+        #expect(store.begin(seed(autoMerge: true)))
         #expect(store.sessions["p"]?.confirmedScope.rows.map(\.ggId) == ["c-1", "c-2"])
 
         // A preflight that discovers a row the confirmed scope hadn't seen
@@ -509,6 +510,7 @@ struct GGLandingStoreTests {
         store.reconcilePreflightSeed(widerSeed, projectId: "p")
         #expect(store.sessions["p"]?.rows.map(\.ggId) == ["c-0", "c-1", "c-2"])
         #expect(store.sessions["p"]?.confirmedScope.rows.map(\.ggId) == ["c-0", "c-1", "c-2"])
+        #expect(store.sessions["p"]?.confirmedScope.autoMerge == true)
     }
 
     @Test func reconcilePreflightSeedDropsUnconfirmedMissingRowsButRetainsCompletedOnes() {

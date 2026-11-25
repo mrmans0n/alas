@@ -498,6 +498,14 @@ Prerequisite: use the paired native-client GG build with `sc --staged-only` and 
 
 ### GG config-aware Sync and Rebase
 
+On a disposable GitLab stack with `gg sync --rebase-if-needed` support:
+
+1. Publish a two-entry stack. Record the upper MR's source SHA. Merge the bottom MR without squashing, then use **Sync stack**. Confirm the upper MR now targets the base, its SHA has not changed, and no new MR opened for the landed entry. Repeat using Stack Ship.
+2. Repeat with the bottom MR squashed or with a conflict against the updated base. Confirm sync rebases the remaining entry or reports the conflict instead of treating it as mergeable.
+3. Choose **Sync and land…**. Check the MR numbers in the confirmation. Cancel and verify nothing was queued. Repeat and confirm; check the queue on GitLab. A queued MR is not yet merged.
+
+With an older `gg` that lacks the sync flag, check the existing behavior:
+
 1. Put the stack behind its base branch, set effective `sync_auto_rebase` to `true` and `sync_behind_threshold` to a positive value no greater than the current behind count, refresh, and confirm `Sync stack` remains primary with `Includes rebase onto <base>` (the rebase detail only appears once the behind count meets the threshold).
 2. Run Sync and confirm GG applies its effective sync policy, including the rebase, without Alas adding force or policy overrides.
 3. Set effective `sync_auto_rebase` to `false` and `sync_behind_threshold` to a value of at least `2`, no greater than the current behind count, then refresh.

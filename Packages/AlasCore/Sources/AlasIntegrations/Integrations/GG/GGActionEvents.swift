@@ -3,6 +3,40 @@ import AlasFoundation
 import AlasModel
 import AlasPlatform
 
+/// The ordered entries gg actually published, after any pre-sync rebase,
+/// lint, or GG-ID assignment. The SHAs are gg's abbreviated commit IDs.
+public struct GGSyncPublication: Equatable, Sendable {
+    public let stack: String
+    public let base: String
+    public let members: [GGStackMemberIdentity]
+    public let skippedClosedPositions: Set<Int>
+
+    fileprivate init?(summary: [String: Any], entries: [[String: Any]]) {
+        guard let stack = summary["stack"] as? String, let base = summary["base"] as? String,
+              !entries.isEmpty else { return nil }
+        var members: [GGStackMemberIdentity] = []
+        members.reserveCapacity(entries.count)
+        var skipped = Set<Int>()
+        for (index, entry) in entries.enumerated() {
+            guard let position = entry["position"] as? Int, position == index + 1,
+                  let id = entry["gg_id"] as? String, !id.isEmpty,
+                  let sha = entry["sha"] as? String, !sha.isEmpty, sha.allSatisfy(\.isHexDigit),
+                  let number = entry["pr_number"] as? Int, number > 0,
+                  let action = entry["action"] as? String else { return nil }
+            switch action {
+            case "created", "updated", "recreated", "up_to_date": break
+            case "skipped_closed": skipped.insert(position)
+            default: return nil
+            }
+            members.append(.init(id: id, sha: sha, position: position, number: number))
+        }
+        self.stack = stack
+        self.base = base
+        self.members = members
+        self.skippedClosedPositions = skipped
+    }
+}
+
 /// A streamed event from `gg sync --jsonl`. Lines normally contain one event,
 /// while terminal summary envelopes can expand to entry errors followed by
 /// `.summary`. Unknown/blank/malformed lines are skipped (tolerant, like the
@@ -20,6 +54,7 @@ public enum GGSyncEvent: Equatable, Sendable {
     case prCreated(position: Int, prNumber: Int, prURL: String?, draft: Bool)
     case prUpdated(position: Int, prNumber: Int, action: String)
     case prSkippedClosed(position: Int, prNumber: Int)
+    case publication(GGSyncPublication)
     case summary
     case error(position: Int?, operation: String?, message: String)
 
@@ -97,6 +132,9 @@ public enum GGSyncEvent: Equatable, Sendable {
             return [.prSkippedClosed(position: pos, prNumber: number)]
         case "summary":
             var events: [GGSyncEvent] = []
+            if let error = message(from: eventObject["error"]) ?? message(from: object["error"]) {
+                events.append(.error(position: nil, operation: nil, message: error))
+            }
             if let entries = eventObject["entries"] as? [[String: Any]] {
                 for entry in entries {
                     if let error = message(from: entry["error"]) {
@@ -106,6 +144,10 @@ public enum GGSyncEvent: Equatable, Sendable {
                             message: error
                         ))
                     }
+                }
+                if events.isEmpty, object["status"] as? String != "error",
+                   let publication = GGSyncPublication(summary: eventObject, entries: entries) {
+                    events.append(.publication(publication))
                 }
             }
             events.append(.summary)

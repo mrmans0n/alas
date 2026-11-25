@@ -56,8 +56,7 @@ public struct StackShipResultWire: Codable, Equatable, Sendable {
     /// Bottom-up; left local by the user's choice in the Ship popover.
     public var heldBack: [HeldBackEntry]
     public var uncommittedChanges: Bool
-    /// The stack was rebased onto its base before the sync, dropping entries
-    /// that had already landed.
+    /// Publishing reconciled entries that had already landed, with or without a rebase.
     public var restacked: Bool
     public var shepherd: Shepherd
 
@@ -146,7 +145,7 @@ public struct StackShipProgress: Equatable, Sendable {
         case .entryStarted(let position, _), .pushStarted(let position):
             self.phase = .pushing
             self.position = position
-        case .lintEntryDone, .pushDone, .prCreated, .prUpdated, .prSkippedClosed, .summary, .error:
+        case .lintEntryDone, .pushDone, .prCreated, .prUpdated, .prSkippedClosed, .publication, .summary, .error:
             break
         }
     }
@@ -242,7 +241,7 @@ public struct StackStatusWire: Encodable, Equatable, Sendable {
         public var maxFixAttempts: Int
         public var readyToLand: Bool
         /// An entry landed while the local stack still holds its commit:
-        /// `stack_ship` rebases it away and publishes the rest.
+        /// `stack_ship` drops it and publishes the rest.
         public var restackNeeded: Bool
         public var rulesSource: String
 
