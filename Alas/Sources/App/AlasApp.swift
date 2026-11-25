@@ -112,6 +112,7 @@ struct AlasApp: App {
             if let projectID {
                 ProjectVMBaseWindow(state: state, projectID: projectID)
                     .environment(\.designScale, .resolved(for: state.config.density))
+                    .environment(\.theme, state.themeStore.current)
             }
         }
         .defaultSize(width: 900, height: 660)
