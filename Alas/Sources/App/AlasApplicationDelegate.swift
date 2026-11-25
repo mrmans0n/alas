@@ -18,7 +18,8 @@ final class AlasApplicationDelegate: NSObject, NSApplicationDelegate {
     private var terminationInProgress = false
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard !terminationInProgress, let flush = AlasTerminationCoordinator.shared.flush else {
+        guard !terminationInProgress else { return .terminateLater }
+        guard let flush = AlasTerminationCoordinator.shared.flush else {
             AlasTerminationCoordinator.shared.finish?()
             return .terminateNow
         }

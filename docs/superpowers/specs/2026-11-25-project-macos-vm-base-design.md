@@ -18,6 +18,8 @@ Customize opens a dedicated setup VM window for the project. If the window is al
 
 The draft has its own VM identity and consumes a slot from the same limit as other VMs. Reuse the guest display, slot admission, and cross-process VM ownership; do not boot the same draft in two processes. Closing the window or relaunching Alas leaves the draft available to reopen. Give it a draft-specific transfer folder, but no worktree mount or worktree tool routing. Warn that anything copied onto the guest disk, including credentials, can reach every future clone. The host transfer folder itself is not part of the base.
 
+Releasing a draft's slot or quitting Alas shuts the guest down rather than suspending it. If Alas cannot confirm shutdown, it leaves the slot occupied or cancels quit instead of forcing the guest off.
+
 For a draft created from the shared base, capture the effective guest setup script from saved Project Settings and any repo script default at creation. Persist the selected script locally for interrupted setup and retries; record its hash in provenance and never publish the script payload as base metadata. If a script was captured, wait for the guest helper and use the existing bounded script execution. The captured script must succeed before the draft can be saved. A failure keeps the draft and any previous base. Show the failure and offer **Retry** with the captured script on the same disk, or **Discard draft**. Warn that retry does not undo changes from the failed run. A stop or interruption is not success, and reopening cannot silently clear a recorded failure. An edit to the script settings does not rewrite an existing draft; rebuilding from shared captures the new settings.
 
 ## Save, discard, rebuild, and remove
