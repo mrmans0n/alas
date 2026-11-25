@@ -97,7 +97,11 @@ struct ProjectVMBaseWindow: View {
         }
         .onChange(of: vms.projectBaseRevision) { refresh() }
         .onChange(of: scenePhase) {
-            if scenePhase == .active { refresh(); installer.reloadFromDisk(); continueIfSharedBaseReady() }
+            if scenePhase == .active {
+                refresh()
+                installer.reloadFromDisk()
+                continueIfSharedBaseReady()
+            }
         }
         .onChange(of: installer.phase) { continueIfSharedBaseReady() }
         .alert(confirm?.title ?? "", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
@@ -196,7 +200,10 @@ struct ProjectVMBaseWindow: View {
                 Text("The shared macOS base is needed to create this draft.").font(scale.metaFont)
                 Spacer()
                 if VMSetupSteps.position(of: installer.phase) != nil {
-                    AlasButton(title: "Cancel Setup", style: .subtle, compact: true) { installer.cancelSetup(); sharedIntent = nil }
+                    AlasButton(title: "Cancel Setup", style: .subtle, compact: true) {
+                        installer.cancelSetup()
+                        sharedIntent = nil
+                    }
                 } else {
                     AlasButton(title: "Back", style: .subtle, compact: true) { sharedIntent = nil }
                 }
@@ -277,7 +284,10 @@ struct ProjectVMBaseWindow: View {
 
     private func refresh() {
         do { selection = try vms.projectBaseStatus(projectID: projectID) }
-        catch { selection = nil; errorMessage = error.localizedDescription }
+        catch {
+            selection = nil
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func perform(_ action: @escaping @MainActor () async throws -> Void) {
@@ -295,7 +305,11 @@ struct ProjectVMBaseWindow: View {
     }
 
     private func actionLabel(_ action: Confirmation) -> String {
-        switch action { case .discard: "Discard Draft"; case .rebuild: "Rebuild"; case .remove: "Remove Base" }
+        switch action {
+        case .discard: "Discard Draft"
+        case .rebuild: "Rebuild"
+        case .remove: "Remove Base"
+        }
     }
 
     private func execute(_ action: Confirmation) {

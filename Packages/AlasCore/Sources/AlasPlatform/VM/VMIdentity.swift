@@ -23,7 +23,6 @@ public enum VMIdentity {
         return UUID(uuidString: String(recordID.dropFirst(projectDraftPrefix.count)))
     }
 
-
     public static func recordID(worktree: String, guest: VMGuestOS) -> String {
         switch guest {
         case .macOS: worktree

@@ -192,7 +192,6 @@ extension AppState {
         return try result.get()
     }
 
-
     // MARK: - New worktrees
 
     /// Creates the macOS VM of a worktree just created in a project that gives its new worktrees
