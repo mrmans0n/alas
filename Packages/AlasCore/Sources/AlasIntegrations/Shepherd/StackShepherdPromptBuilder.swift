@@ -112,7 +112,7 @@ public enum StackShepherdPromptBuilder {
             \(fence)
             \(result)
             \(fence)
-            Fix what it says, then call stack_ship again.
+            Retry stack_ship only after the blocker clears. Do not cancel a queued merge to make the push succeed.
             """
             : """
             \(header)\(stack)

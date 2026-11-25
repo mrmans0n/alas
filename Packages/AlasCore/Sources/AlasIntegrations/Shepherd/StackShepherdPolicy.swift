@@ -37,9 +37,8 @@ public struct StackShepherdObservation: Sendable {
     /// uncommitted edits. Nil while the worktree is on another stack: the
     /// record keeps what it last saw.
     public let hasUnpublishedEntries: Bool?
-    /// An open entry of the stack has a merge queued on the forge. A restack
-    /// pushes every branch, which would cancel it, so the owner is not asked
-    /// for one until the merge settles.
+    /// Fix and restack turns both end in a push, which would cancel an open
+    /// entry's queued merge. Keep polling until the queue clears.
     public var hasQueuedMerge: Bool
     public let rules: ShepherdRules
     public let now: Date
@@ -251,10 +250,8 @@ public enum StackShepherdPolicy {
     public static func decide(_ record: StackShepherdRecord, _ observation: StackShepherdObservation) -> StackShepherdDecision {
         var decision = StackShepherdDecision(record: record)
         guard !record.isFinished else { return decision }
-        // A fix turn the session can't act on (another stack checked out, a
-        // paused rebase) waits like one the session is too busy for.
-        let session: ShepherdSessionState = observation.session == .idle && (!observation.canDispatch || record.pendingBindDelivery != nil)
-            ? .busy : observation.session
+        let canDispatch = observation.canDispatch && !observation.hasQueuedMerge && record.pendingBindDelivery == nil
+        let session: ShepherdSessionState = observation.session == .idle && !canDispatch ? .busy : observation.session
         var entries: [StackShepherdEntry] = []
         for var entry in record.entries {
             // Removed from the stack: gg no longer lists it. A merged entry
@@ -333,7 +330,7 @@ public enum StackShepherdPolicy {
         }
         if let landed = next.landedEntryIDs {
             let deliveryPending = open.contains { ($0.shepherd.deliveryRetryAt ?? .distantPast) > observation.now }
-            if next.autoFix, session == .idle, !deliveryPending, !next.phase.isResumable, !observation.hasQueuedMerge,
+            if next.autoFix, session == .idle, !deliveryPending, !next.phase.isResumable,
                next.restackRequestedFor != landed {
                 next.restackRequestedFor = landed
                 decision.restack = next.entries.filter { landed.contains($0.entryID) }

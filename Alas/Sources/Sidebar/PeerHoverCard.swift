@@ -21,6 +21,8 @@ struct PeerHoverCardModel {
     let state: NativePeerState
     let subtitle: String?
     let connection: PeerConnectionKind?
+    /// The latest ping round trip; nil until the first ping comes back.
+    let roundTrip: Duration?
     /// Nil while the Mac is not online.
     let counts: Counts?
     let rowsTitle: String
@@ -30,8 +32,15 @@ struct PeerHoverCardModel {
     let shortcut: Int?
 
     var chipText: String {
-        guard state.carriesSessions, let connection else { return state.label }
-        return "\(state.label) · \(connection.label)"
+        guard state.carriesSessions else { return state.label }
+        return [state.label, connection?.label, roundTrip.map(Self.latencyLabel)]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
+
+    private static func latencyLabel(_ roundTrip: Duration) -> String {
+        let ms = roundTrip / .milliseconds(1)
+        return ms < 1 ? "<1 ms" : "\(Int(ms.rounded())) ms"
     }
 }
 
@@ -84,6 +93,7 @@ extension AppState {
             state: page.state,
             subtitle: hostVersion.map { "alas-host \($0)" } ?? origin.flatMap { URL(string: $0)?.host },
             connection: PeerConnectionKind.of(origin: origin),
+            roundTrip: remoteServer == nil ? nil : remotePeers.roundTrips[serverId],
             counts: counts,
             rowsTitle: rowsTitle,
             rows: rows,

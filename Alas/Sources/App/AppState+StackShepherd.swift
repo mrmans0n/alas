@@ -45,7 +45,9 @@ extension AppState {
                     worktreeID, sessionID: sessionID, isStillWanted: isStillWanted
                 ) ?? .declined
             },
-            loadStackWithForgeState: { path in try await GGService().currentStack(worktreePath: path.path) },
+            loadStackWithForgeState: { path in
+                try await GGService().currentStackSnapshot(worktreePath: path.path, requireRemoteRefresh: true).stack
+            },
             reviewGate: { [weak self] in self?.core.stackReviewGate(for: $0) }
         )
     }
