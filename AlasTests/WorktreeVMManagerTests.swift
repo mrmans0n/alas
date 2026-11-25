@@ -1229,6 +1229,20 @@ final class WorktreeVMManagerTests {
         #expect(manager.cleanPoint(recordID: id) != nil)
     }
 
+    @Test func releasingADraftSlotShutsDownTheGuestInsteadOfSavingMemory() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        let draft = try await prepareDraft(manager)
+        let id = VMIdentity.projectDraftRecordID(draft.id)
+        _ = try await manager.startProjectDraft(projectID: "p1", draftID: draft.id)
+
+        let stopped = await manager.pauseVM(recordID: id)
+
+        #expect(stopped == .stopped)
+        #expect(hypervisor.shutdownCommands.count == 1)
+        #expect(manager.projectDraftRecordStatus(draftID: draft.id).pausedAt == nil)
+    }
+
     @Test func projectDraftIsNotAWorktreeAndPublishesOnlyAfterCleanShutdown() async throws {
         try makeSealedGoldens()
         try FileManager.default.createDirectory(at: helperDirectory, withIntermediateDirectories: true)

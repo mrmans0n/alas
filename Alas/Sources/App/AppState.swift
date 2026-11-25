@@ -2252,7 +2252,15 @@ final class AppState {
         vmManager.now = { [weak self] in self?.vmNow() ?? Date() }
         vmIdleSweeper.start(interval: vmIdleSweepInterval)
         AlasTerminationCoordinator.shared.confirm = { [weak self] in
-            await self?.confirmDiscardingUnsavedHostFiles(reason: "Quitting discards edits not saved to the host.") ?? true
+            guard let self else { return true }
+            guard await confirmDiscardingUnsavedHostFiles(reason: "Quitting discards edits not saved to the host.") else { return false }
+            do {
+                try await vmManager.prepareProjectDraftsForQuit()
+                return true
+            } catch {
+                showFileActionError(title: "Couldn't Quit Alas", message: error.localizedDescription)
+                return false
+            }
         }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await self?.shutdownLocalTextFeatures()

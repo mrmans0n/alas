@@ -216,11 +216,11 @@ struct ProjectVMBaseWindow: View {
 
     private func slotCard(_ choice: SlotChoice) -> some View {
         VMEmptyStateCard(icon: "desktopcomputer", title: "Both macOS VM slots are in use",
-                         subtitle: choice.candidates.isEmpty ? "Free a slot in the Alas window that owns a VM, then try again." : "Pause a VM to start this one.") {
+                         subtitle: choice.candidates.isEmpty ? "Free a slot in the Alas window that owns a VM, then try again." : "Free a slot to start this VM.") {
             EmptyView()
         } actions: {
             ForEach(choice.candidates, id: \.self) { candidate in
-                AlasButton(title: "Pause \(state.vmDisplayName(forRecordID: candidate))") {
+                AlasButton(title: VMSlotCard.releaseTitle(recordID: candidate, name: state.vmDisplayName(forRecordID: candidate))) {
                     perform { try await boot(choice.target, pausing: candidate) }
                 }
             }

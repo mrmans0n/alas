@@ -683,12 +683,12 @@ struct VirtualMachineTabView: View {
         } else {
             VMEmptyStateCard(
                 icon: "rectangle.on.rectangle", title: "Both VM slots are busy",
-                subtitle: "macOS runs two VMs at a time. Pause one to start this VM."
+                subtitle: "macOS runs two VMs at a time. Free a slot to start this VM."
             ) {
                 EmptyView()
             } actions: {
                 ForEach(choice.candidates, id: \.self) { candidate in
-                    AlasButton(title: "Pause \(state.vmDisplayName(forRecordID: candidate))") {
+                    AlasButton(title: VMSlotCard.releaseTitle(recordID: candidate, name: state.vmDisplayName(forRecordID: candidate))) {
                         start(choice.target, pausing: candidate)
                     }
                 }

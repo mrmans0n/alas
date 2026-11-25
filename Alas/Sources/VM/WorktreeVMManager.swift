@@ -250,7 +250,15 @@ final class WorktreeVMManager {
         self.start = start
         disableSSHOffline = { bundle in try await Self.disableSSHOnDisk(bundle, root: root) }
         sendGuestShutdown = { [weak self] id, command in
-            guard let client = self?.existingGuestClient(for: id) else { return false }
+            guard let self else { return false }
+            let client: VMGuestClient?
+            if VMIdentity.projectDraftID(recordID: id) != nil {
+                client = guestClient(recordID: id)
+                if let client { _ = try? await client.hello() }
+            } else {
+                client = existingGuestClient(for: id)
+            }
+            guard let client else { return false }
             return await client.request(command)
         }
     }
@@ -842,6 +850,28 @@ final class WorktreeVMManager {
         return nil
     }
 
+    /// A draft must not depend on restoring volatile state after the app quits.
+    /// Fail the quit before any other teardown if its guest will not shut down.
+    func prepareProjectDraftsForQuit() async throws {
+        isQuitting = true
+        do {
+            for id in starting where VMIdentity.projectDraftID(recordID: id) != nil {
+                throw VMError(message: "A project setup VM is still starting. Wait and try quitting again.")
+            }
+            for id in Array(runningVMs.keys) where VMIdentity.projectDraftID(recordID: id) != nil {
+                guard !diskOperations.contains(id) else {
+                    throw VMError(message: "A project setup VM is saving or changing its disk. Wait and try quitting again.")
+                }
+                guard await pauseVM(recordID: id) == .stopped else {
+                    throw VMError(message: "A project setup VM didn't shut down. Shut it down in macOS, then quit Alas.")
+                }
+            }
+        } catch {
+            isQuitting = false
+            throw error
+        }
+    }
+
     /// Stops every VM this process runs. Called on quit so registry owners clear. macOS VMs
     /// that can save their state pause instead, all at once, within `quitPauseBound`; one still
     /// saving then is stopped as the others are. No VM starts afterwards, a disk operation's
@@ -854,7 +884,13 @@ final class WorktreeVMManager {
         let pauses = pausable.map { id in Task { await self.pauseVM(recordID: id) } }
         await withTaskGroup(of: Void.self) { group in
             for id in ids where !pausable.contains(id) {
-                group.addTask { await self.stopRecorded(id) }
+                group.addTask {
+                    if VMIdentity.projectDraftID(recordID: id) != nil {
+                        _ = await self.pauseVM(recordID: id)
+                    } else {
+                        await self.stopRecorded(id)
+                    }
+                }
             }
             group.addTask { await self.waitForQuitPauses(pauses, ids: pausable) }
         }
@@ -899,7 +935,7 @@ final class WorktreeVMManager {
     /// configuration supports it. A golden never does: sealing it needs a clean shutdown.
     private func canSaveState(_ id: String) -> Bool {
         VMIdentity.parse(recordID: id).guest == .macOS && !id.hasPrefix(Self.goldenIDPrefix)
-            && supportsSaveRestore(recordID: id)
+            && VMIdentity.projectDraftID(recordID: id) == nil && supportsSaveRestore(recordID: id)
     }
 
     /// Pauses the worktree's VM to free its slot: saves its machine state and stops it, so the
@@ -927,6 +963,12 @@ final class WorktreeVMManager {
 
     private func pauseNow(_ id: String) async -> VMPauseOutcome {
         guard let vm = runningVMs[id] else { return .notRunning }
+        // Suspending requires a forced power-off. If restoration fails, a cold boot
+        // can lose disk writes the guest had not flushed yet. Keep drafts on disk.
+        if VMIdentity.projectDraftID(recordID: id) != nil {
+            let stopped = await shutDownProjectDraft(id, vm: vm)
+            return stopped && cleanlyShutDown[id] != nil ? .stopped : .notRunning
+        }
         guard canSaveState(id) else { return await stopInsteadOfPausing(id) }
         let bundle = bundle(forID: id)
         let state = Self.savedStateURL(of: bundle)
