@@ -723,6 +723,7 @@
 		586FFC3F48E8E777ADD11DD4 /* ACPComposerDropRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458CE5FB9F4C19BE30643F39 /* ACPComposerDropRouter.swift */; };
 		588A1EB3D20EB2419A5A03B4 /* ACPStdioQuestionDispatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2015944331CE56AEEF534910 /* ACPStdioQuestionDispatchTests.swift */; };
 		58A727DC32574648F18A8B7E /* ACPSessionSummaryControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F46BB1AD2465E4DF056BD0E /* ACPSessionSummaryControl.swift */; };
+		58D3157E328B84EB74AB2465 /* PeerHoverCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97F294F8537AD5E8B0ACED23 /* PeerHoverCard.swift */; };
 		58ED3DFB6576F9B3C473D16C /* ACPNewChatEmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7294C0B27241ADEB9A95347A /* ACPNewChatEmptyStateView.swift */; };
 		5936DF2636F0B74BEAB33A57 /* DraftAmendPrefillTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB02326DBD7A82431A33C50F /* DraftAmendPrefillTests.swift */; };
 		595006B141A5C6357DB9772C /* CodeEditorMinimap.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5335592CD850B86A8562093 /* CodeEditorMinimap.swift */; };
@@ -2047,27 +2048,6 @@
 		1A51DA06B445C208E5F643EF /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "$(CONTENTS_FOLDER_PATH)/XPCServices";
-			dstSubfolderSpec = 16;
-			files = (
-				8E7C4F7DFA7D3E2D74767C2B /* AlasSimService.xpc in CopyFiles */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		2712E12EE8A4AD5B52367A67 /* Embed Dependencies */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
-			dstSubfolderSpec = 7;
-			files = (
-				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
-			);
-			name = "Embed Dependencies";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		AF4AF5D7242A7B87F7C9E278 /* CopyFiles */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
 			dstPath = "alas-vm-guest";
 			dstSubfolderSpec = 7;
 			files = (
@@ -2075,13 +2055,34 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		DF16EBE2557E441D41DDC075 /* Embed Dependencies */ = {
+		2712E12EE8A4AD5B52367A67 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "alas-host";
 			dstSubfolderSpec = 7;
 			files = (
 				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
+			);
+			name = "Embed Dependencies";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AF4AF5D7242A7B87F7C9E278 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/XPCServices";
+			dstSubfolderSpec = 16;
+			files = (
+				8E7C4F7DFA7D3E2D74767C2B /* AlasSimService.xpc in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DF16EBE2557E441D41DDC075 /* Embed Dependencies */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "alas-vm-guest";
+			dstSubfolderSpec = 7;
+			files = (
+				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -3254,6 +3255,7 @@
 		97D73156DBE6DB95469D4D80 /* ACPMarkdownInlineTextViewMeasurementCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMarkdownInlineTextViewMeasurementCacheTests.swift; sourceTree = "<group>"; };
 		97DA8F50DDCDAA15CCEA2004 /* session-update-config-options.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-config-options.json"; sourceTree = "<group>"; };
 		97DEBCFA106423E38276E9C2 /* WorktreeSortMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeSortMenu.swift; sourceTree = "<group>"; };
+		97F294F8537AD5E8B0ACED23 /* PeerHoverCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerHoverCard.swift; sourceTree = "<group>"; };
 		97FBCF0F61C80FD8020B1ADD /* MasonSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MasonSnapshotTests.swift; sourceTree = "<group>"; };
 		980EB61D44EC5B955F122A66 /* MergeCodeTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeCodeTextView.swift; sourceTree = "<group>"; };
 		98303857AFDAAD4074500742 /* ACPBackgroundTaskList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPBackgroundTaskList.swift; sourceTree = "<group>"; };
@@ -5885,6 +5887,7 @@
 				32C9E0E9E23D1ADD7DA1188A /* AgentBadgePopoverModel.swift */,
 				0544FCFB9BC3E26FDB57CC96 /* HarnessPill.swift */,
 				8A36635B4171D0C82FA7F79D /* NativePeerSidebarView.swift */,
+				97F294F8537AD5E8B0ACED23 /* PeerHoverCard.swift */,
 				56C7878101DA7532B9850D13 /* ProjectIconView.swift */,
 				563B664D082A9523260AA2EF /* RepoDot.swift */,
 				768D12909DD5233659AC4E03 /* RepoGroupView.swift */,
@@ -8473,6 +8476,7 @@
 				F535A911B5481A8D94CF8169 /* PeerConsoleViewer.swift in Sources */,
 				433FDB92D620396DD1F7EE6D /* PeerDevicePlayback.swift in Sources */,
 				BB8060920061EE09DEFB17D9 /* PeerDeviceSession.swift in Sources */,
+				58D3157E328B84EB74AB2465 /* PeerHoverCard.swift in Sources */,
 				28E20C5902CF4632E11FA7E7 /* PeerIconView.swift in Sources */,
 				449C7E4A63455D01633B791A /* PendingDiscard.swift in Sources */,
 				E3C34254BA474878AEC6683D /* PendingReviewTray.swift in Sources */,

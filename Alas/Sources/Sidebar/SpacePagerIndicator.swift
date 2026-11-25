@@ -130,6 +130,7 @@ struct SpacePagerIndicator: View {
     let onEditSpaces: () -> Void
     /// Opens a paired Mac's sheet in Settings › Remote.
     let onEditPeer: (String) -> Void
+    let peerCard: @MainActor (String) -> PeerHoverCardModel?
     let onScrollPage: (Int) -> Void
     @Environment(\.theme) var theme
     @Environment(\.designScale) private var scale
@@ -184,7 +185,7 @@ struct SpacePagerIndicator: View {
                             .background { highlight(isActive) }
                     }
                     .buttonStyle(.plain)
-                    .help("\(peer.name) · \(peer.state.label)")
+                    .hoverCard { peerCard(peer.serverId).map(PeerHoverCard.init) }
                     .accessibilityLabel(peer.name)
                     .accessibilityValue((isActive ? "selected, " : "") + peer.accessibilityValue)
                     .contextMenu {
