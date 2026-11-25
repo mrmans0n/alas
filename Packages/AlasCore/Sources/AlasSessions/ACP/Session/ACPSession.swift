@@ -833,6 +833,61 @@ public final class ACPSession: ChangeTracking, Identifiable {
         cursors.isEmpty ? nil : cursors.cursor(beforeUserRow: id, in: cursorRows())
     }
 
+    /// Removes the user message `id` and every row after it: the agent
+    /// rewound its conversation to the cursor before that message. Returns the
+    /// transcript index of the first removed row, counted from the start of
+    /// the stored transcript, or nil when the message is not held.
+    @discardableResult
+    public func truncateTranscript(fromUserMessage id: UUID) -> Int? {
+        guard let index = transcript.messages.firstIndex(where: {
+            if case .user(id, _, _, _, _, _) = $0 { true } else { false }
+        }), let globalIndex = transcript.globalIndex(forLocalIndex: index) else { return nil }
+        flushPendingReplayCandidates()
+        cursors.removeCursors(atOrAfterRow: index, in: cursorRows())
+        let removed = transcript.messages[index...]
+        let kept = Array(transcript.messages[..<index])
+        let createdAts = kept.indices.compactMap { transcript.createdAt(forMessageAt: $0) }
+        transcript.completedOutputBoundaryMessageIds.removeAll()
+        replaceTranscriptMessages(
+            kept,
+            createdAts: createdAts.count == kept.count ? createdAts : nil,
+            messageIndexOffset: transcript.messageIndexOffset)
+
+        // What the session keeps beside the removed rows.
+        var removedToolCalls: Set<String> = []
+        var removedSubagents: Set<String> = []
+        for message in removed {
+            switch message {
+            case .toolCall(let call):
+                removedToolCalls.insert(call.toolCallId)
+                if let child = ACPSubagentRowDescriptor(toolCall: call)?.subagentSessionId {
+                    removedSubagents.insert(child)
+                }
+            case .visualAid(let visual):
+                visualAidForms[visual.id] = nil
+                visualAidSendStatuses[visual.id] = nil
+            case .user(let row, _, _, _, _, _):
+                // Keyed by queue item; the value is its recorded user row.
+                normalQueuedTurnUserMessageIDs = normalQueuedTurnUserMessageIDs.filter { $0.value != row }
+            default:
+                break
+            }
+        }
+        if !removedSubagents.isEmpty {
+            subagents = subagents.filter { !removedSubagents.contains($0.key) }
+            subagentOrder.removeAll(where: removedSubagents.contains)
+        }
+        if backgroundTasks.contains(where: { removedToolCalls.contains($0.id) }) {
+            backgroundTasks.removeAll { removedToolCalls.contains($0.id) }
+        }
+        let keptRows = Set(kept.compactMap { if case .plan(let row, _) = $0 { row } else { nil } })
+        checklistRowIds = checklistRowIds.filter { keptRows.contains($0.value) }
+        if turnCaptions.keys.contains(where: { $0 >= globalIndex }) {
+            turnCaptions = turnCaptions.filter { $0.key < globalIndex }
+        }
+        return globalIndex
+    }
+
     private func cursorRows() -> [ACPSessionCursorRow] {
         // A message that a steer split continues in a later row under an
         // `alas-steering:` id. The agent knows both rows by the one id, and

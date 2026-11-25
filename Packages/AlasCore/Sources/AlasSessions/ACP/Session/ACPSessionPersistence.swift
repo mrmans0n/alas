@@ -861,6 +861,21 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         return try store.db.transaction(operation)
     }
 
+    /// See `ACPSessionStore.truncateMessages`. Fenced like a row write: a
+    /// process that lost the lease must not delete the new writer's rows.
+    @discardableResult
+    public func truncateMessages(
+        sessionId: String,
+        fromSeq seq: Int64,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let operation = { try store.truncateMessages(sessionId: sessionId, fromSeq: seq) }
+        if let fence { return try store.withLeaseFence(fence, operation) != nil }
+        try store.db.transaction(operation)
+        return true
+    }
+
     /// Child-session transcript rows. Fenced exactly like parent rows so a
     /// process that lost the lease can't keep writing a child's output.
     public func persistSubagentMessages(
