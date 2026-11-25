@@ -376,6 +376,7 @@ function resetServerScopedState() {
   composerGeneration++;
   renderSessions([]);
   showRepos();
+  notifiedOpen = null;
 }
 
 function switchServer(id) {
@@ -411,6 +412,7 @@ function handle(msg) {
       gatewayCounts = RemoteHubRegistry.peerSessionCounts(msg.sessions, (activeServer() || {}).peers);
       renderSessions(msg.sessions);
       notifyNewAttention(msg.sessions);
+      openNotifiedSession();
       worktreeCreation.markRecoveryListLoaded("sessions");
       refreshHubViews();
       break;
@@ -1551,6 +1553,7 @@ function showRepos() {
 const NOTIFY_OFF_KEY = "alas.notify.off";
 const canNotify = "Notification" in window && window.isSecureContext;
 let attentionSeen = { serverId: null, ids: null };
+let notifiedOpen = null;   // { serverId, sessionId } clicked while another host was active
 
 function notificationsOn() {
   return canNotify && Notification.permission === "granted" && localStorage.getItem(NOTIFY_OFF_KEY) !== "1";
@@ -1566,9 +1569,24 @@ function notifyNewAttention(sessions) {
     const body = session.status === "awaitingPermission" ? "Needs your permission" : "Is waiting for your answer";
     try {
       const n = new Notification(session.title || "Session", { body, tag: session.id, icon: "icon-192.png" });
-      n.onclick = () => { window.focus(); openSession(session.id); n.close(); };
+      const serverId = hub.activeId;
+      n.onclick = () => {
+        window.focus(); n.close();
+        if (serverId === hub.activeId) { openSession(session.id); return; }
+        if (!hub.servers.some(s => s.id === serverId)) return;
+        // The session lives on the host it came from: switch back, then open it once that list lands.
+        switchServer(serverId); showRepos();
+        notifiedOpen = { serverId, sessionId: session.id };   // after the switch, which clears it
+      };
     } catch (_) { /* Chrome on Android only notifies through a service worker. */ }
   }
+}
+
+function openNotifiedSession() {
+  if (!notifiedOpen || notifiedOpen.serverId !== hub.activeId || !listedSessions.has(notifiedOpen.sessionId)) return;
+  const id = notifiedOpen.sessionId;
+  notifiedOpen = null;
+  openSession(id);
 }
 
 function renderNotifySetting() {
