@@ -51,6 +51,17 @@ public struct ACPSessionCursors: Codable, Equatable, Sendable {
         return entries.last { userRowIndex(of: $0, in: rows) == index }?.cursor
     }
 
+    /// The user row a cursor lies before by its anchor alone, for binding it
+    /// when it arrives. A live cursor is announced as its prompt starts, so
+    /// the row found then is the prompt's; a steer sent before the turn's
+    /// first output would otherwise look like the newer prompt.
+    public func userRow(anchoredBy cursor: ACPSessionCursor, in rows: [ACPSessionCursorRow]) -> UUID? {
+        guard let index = userRowIndex(of: .init(cursor: cursor, userRow: nil), in: rows),
+              case .user(let id, _) = rows[index]
+        else { return nil }
+        return id
+    }
+
     /// Drops the cursors at and after row `index`: a rewind removed their
     /// messages. Cursors that match no row stay.
     public mutating func removeCursors(atOrAfterRow index: Int, in rows: [ACPSessionCursorRow]) {

@@ -846,15 +846,18 @@ public final class ACPSession: ChangeTracking, Identifiable {
     }
 
     private func recordCursor(_ cursor: ACPSessionCursor, userRow: UUID? = nil) {
+        var cursor = cursor
         // A compaction is a tool call row here.
-        guard case .compaction(let id) = cursor.anchor.entity else {
-            return cursors.record(cursor, userRow: userRow)
+        if case .compaction(let id) = cursor.anchor.entity {
+            cursor = .init(
+                cursorId: cursor.cursorId,
+                anchor: .init(entity: .toolCall(Self.contextCompactionToolCallId(id)), position: cursor.anchor.position),
+                canFork: cursor.canFork,
+                canRewind: cursor.canRewind)
         }
-        cursors.record(.init(
-            cursorId: cursor.cursorId,
-            anchor: .init(entity: .toolCall(Self.contextCompactionToolCallId(id)), position: cursor.anchor.position),
-            canFork: cursor.canFork,
-            canRewind: cursor.canRewind), userRow: userRow)
+        // Bound to the row it is for now: a later steer adds a user row
+        // after the same anchor. Unbound when the row is not here yet.
+        cursors.record(cursor, userRow: userRow ?? cursors.userRow(anchoredBy: cursor, in: cursorRows()))
     }
 
     /// `canForkMessage(at:)` for many rows at once: the transcript state it

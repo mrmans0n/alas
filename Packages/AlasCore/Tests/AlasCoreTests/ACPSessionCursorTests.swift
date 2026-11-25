@@ -85,6 +85,19 @@ struct ACPSessionCursorTests {
         #expect(cursors.cursor(beforeUserRow: u1, in: rows) == nil)
     }
 
+    @Test func cursorBoundOnArrivalStaysOnItsPromptWhenASteerPrecedesTheFirstOutput() {
+        let steer = UUID()
+        var rows: [ACPSessionCursorRow] = [
+            .user(id: u1, messageId: nil), .entity(.agentMessage("a1")), .user(id: u2, messageId: nil),
+        ]
+        var cursors = ACPSessionCursors()
+        let live = cursor("c2", .after, .agentMessage("a1"))
+        cursors.record(live, userRow: cursors.userRow(anchoredBy: live, in: rows))
+        rows += [.user(id: steer, messageId: nil), .entity(.agentMessage("a2"))]
+        #expect(cursors.cursor(beforeUserRow: u2, in: rows)?.cursorId == "c2")
+        #expect(cursors.cursor(beforeUserRow: steer, in: rows) == nil)
+    }
+
     @Test func newerCursorWithTheSameAnchorReplacesTheOneOfATurnThatReportedNothing() {
         let rows: [ACPSessionCursorRow] = [
             .user(id: u1, messageId: nil), .entity(.agentMessage("a1")),
