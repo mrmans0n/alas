@@ -141,4 +141,27 @@ struct ACPSessionCursorTests {
         cursors.removeCursors(atOrAfterRow: 4, in: rows)
         #expect(cursors.entries.map(\.cursor.cursorId) == ["before:m2", "elsewhere"])
     }
+
+    @MainActor
+    @Test func cursorAfterAMessageThatASteerSplitLiesBeforeTheNextPrompt() {
+        let session = ACPSession(id: "s", agentId: "fixture", worktreeId: "w", title: "t")
+        let continuation = "alas-steering:\(UUID().uuidString)"
+        let steer = UUID(), next = UUID()
+        let rows: [ACPMessage] = [
+            .user(id: UUID(), text: "First", attachments: []),
+            .agent(id: UUID(), messageId: "a1", StreamingText("Part one", metadata: AnyCodable([
+                "_alas/steeringContinuationMessageId": AnyCodable(continuation),
+            ]))),
+            .user(id: steer, text: "Steer", attachments: []),
+            .agent(id: UUID(), messageId: continuation, StreamingText("Part two")),
+            .user(id: next, text: "Second", attachments: []),
+        ]
+        for row in rows { session.transcript.appendMessage(row) }
+
+        session.apply(.cursorUpdate(.init(
+            cursorId: "c", anchor: .init(entity: .agentMessage("a1"), position: .after))))
+
+        #expect(session.cursor(beforeUserMessage: next)?.cursorId == "c")
+        #expect(session.cursor(beforeUserMessage: steer) == nil)
+    }
 }

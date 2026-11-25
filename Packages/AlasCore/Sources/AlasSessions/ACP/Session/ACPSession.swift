@@ -834,11 +834,23 @@ public final class ACPSession: ChangeTracking, Identifiable {
     }
 
     private func cursorRows() -> [ACPSessionCursorRow] {
-        transcript.messages.map { message in
+        // A message that a steer split continues in a later row under an
+        // `alas-steering:` id. The agent knows both rows by the one id, and
+        // anchors a cursor after the message as a whole.
+        var providerIds: [String: String] = [:]
+        func providerId(_ messageId: String, _ text: StreamingText) -> String {
+            let id = providerIds[messageId] ?? messageId
+            if let metadata = text.metadata?.value as? [String: AnyCodable],
+               let next = metadata[Self.steeringContinuationMetadataKey]?.value as? String {
+                providerIds[next] = id
+            }
+            return id
+        }
+        return transcript.messages.map { message in
             switch message {
             case .user(let id, let messageId, _, _, _, _): .user(id: id, messageId: messageId)
-            case .agent(_, let messageId?, _): .entity(.agentMessage(messageId))
-            case .thought(_, let messageId?, _): .entity(.agentThought(messageId))
+            case .agent(_, let messageId?, let text): .entity(.agentMessage(providerId(messageId, text)))
+            case .thought(_, let messageId?, let text): .entity(.agentThought(providerId(messageId, text)))
             case .toolCall(let call): .entity(.toolCall(call.toolCallId))
             default: .other
             }
