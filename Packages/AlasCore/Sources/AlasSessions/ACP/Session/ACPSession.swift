@@ -655,6 +655,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// relative to its chronological neighbours instead of always at the
     /// tail. See `applySuppressedReplaySideEffects`/`registerSubagent`.
     private var suppressedReplayInsertionCursor = 0
+    /// The user row the suppressed replay last matched, and the agent's id for
+    /// the message it replayed there. Its cursor follows it.
+    private var suppressedReplayUserRow: (messageId: String, row: UUID)?
+
+    /// The positions the agent announced for a fork or a rewind.
+    public private(set) var cursors = ACPSessionCursors()
 
     /// Runtime-only marker for a forced queue item parked behind the current
     /// `.sending` head. If that head fails, it moves behind this item so the
@@ -819,6 +825,51 @@ public final class ACPSession: ChangeTracking, Identifiable {
 
     public func canForkMessage(at index: Int) -> Bool {
         forkEligibility()(index)
+    }
+
+    /// The agent's cursor before the user message `id`: where a fork or a
+    /// rewind that edits the message acts. Nil when it announced none.
+    public func cursor(beforeUserMessage id: UUID) -> ACPSessionCursor? {
+        cursors.isEmpty ? nil : cursors.cursor(beforeUserRow: id, in: cursorRows())
+    }
+
+    private func cursorRows() -> [ACPSessionCursorRow] {
+        // A message that a steer split continues in a later row under an
+        // `alas-steering:` id. The agent knows both rows by the one id, and
+        // anchors a cursor after the message as a whole.
+        var providerIds: [String: String] = [:]
+        func providerId(_ messageId: String, _ text: StreamingText) -> String {
+            let id = providerIds[messageId] ?? messageId
+            if let metadata = text.metadata?.value as? [String: AnyCodable],
+               let next = metadata[Self.steeringContinuationMetadataKey]?.value as? String {
+                providerIds[next] = id
+            }
+            return id
+        }
+        return transcript.messages.map { message in
+            switch message {
+            case .user(let id, let messageId, _, _, _, _): .user(id: id, messageId: messageId)
+            case .agent(_, let messageId?, let text): .entity(.agentMessage(providerId(messageId, text)))
+            case .thought(_, let messageId?, let text): .entity(.agentThought(providerId(messageId, text)))
+            case .toolCall(let call): .entity(.toolCall(call.toolCallId))
+            default: .other
+            }
+        }
+    }
+
+    private func recordCursor(_ cursor: ACPSessionCursor, userRow: UUID? = nil) {
+        var cursor = cursor
+        // A compaction is a tool call row here.
+        if case .compaction(let id) = cursor.anchor.entity {
+            cursor = .init(
+                cursorId: cursor.cursorId,
+                anchor: .init(entity: .toolCall(Self.contextCompactionToolCallId(id)), position: cursor.anchor.position),
+                canFork: cursor.canFork,
+                canRewind: cursor.canRewind)
+        }
+        // Bound to the row it is for now: a later steer adds a user row
+        // after the same anchor. Unbound when the row is not here yet.
+        cursors.record(cursor, userRow: userRow ?? cursors.userRow(anchoredBy: cursor, in: cursorRows()))
     }
 
     /// `canForkMessage(at:)` for many rows at once: the transcript state it
@@ -1490,6 +1541,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
             return applySubagentState(update, at: timestamp)
         case .asyncTask(let update):
             return applyBackgroundTask(update, ownerSessionId: remoteSessionId ?? id)
+        case .cursorUpdate(let cursor):
+            recordCursor(cursor)
+            return []
         case .unknown:
             return []
         }
@@ -1982,6 +2036,20 @@ public final class ACPSession: ChangeTracking, Identifiable {
             matchedIndex = chunk.messageId
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
                 ?? replayedUserTurnMatch(chunk.content, atOrAfter: suppressedReplayInsertionCursor)
+            if let messageId = chunk.messageId, let matchedIndex,
+               case .user(let row, _, _, _, _, _) = transcript.messages[matchedIndex] {
+                suppressedReplayUserRow = (messageId, row)
+            }
+        case .cursorUpdate(let cursor):
+            // The stored row may never have learned the agent's id for its
+            // message, so the cursor takes the row its message matched.
+            if let matched = suppressedReplayUserRow,
+               cursor.anchor == .init(entity: .userMessage(matched.messageId), position: .before) {
+                recordCursor(cursor, userRow: matched.row)
+            } else {
+                recordCursor(cursor)
+            }
+            return []
         case .plan:
             dirty = []
             matchedIndex = firstPlanMatch(atOrAfter: suppressedReplayInsertionCursor)
@@ -2040,6 +2108,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     public func beginSuppressedReplaySideEffects() {
         replayCreatedMetadataTerminalIds.removeAll()
         suppressedReplayInsertionCursor = 0
+        suppressedReplayUserRow = nil
         replayedContinuationEcho = nil
         for run in subagents.values {
             run.beginReplayReconciliation()
@@ -2052,6 +2121,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     public func endSuppressedReplaySideEffects() {
         replayCreatedMetadataTerminalIds.removeAll()
         suppressedReplayInsertionCursor = 0
+        suppressedReplayUserRow = nil
         replayedContinuationEcho = nil
         for run in subagents.values { run.endReplayReconciliation() }
     }

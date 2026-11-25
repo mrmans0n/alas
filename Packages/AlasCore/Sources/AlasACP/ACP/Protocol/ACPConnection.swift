@@ -82,6 +82,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
     public let supportsLoadReplayEnd: Bool
     /// A prompt can ask the adapter for its turn's predicted follow-up prompt.
     public let supportsPredictedPrompt: Bool
+    /// The adapter serves `_session/rewind` (`_meta.sessionRewind`).
+    public let supportsSessionRewind: Bool
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     public let agentInfo: ACPImplementationInfo?
 
@@ -108,7 +110,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         sessionFailure: ACPSessionFailureCapability? = nil,
         agentFileChangeReport: ACPAgentFileChangeReportCapability? = nil,
         supportsLoadReplayEnd: Bool = false,
-        supportsPredictedPrompt: Bool = false
+        supportsPredictedPrompt: Bool = false,
+        supportsSessionRewind: Bool = false
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -133,6 +136,7 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         self.agentFileChangeReport = agentFileChangeReport
         self.supportsLoadReplayEnd = supportsLoadReplayEnd
         self.supportsPredictedPrompt = supportsPredictedPrompt
+        self.supportsSessionRewind = supportsSessionRewind
     }
 }
 
@@ -435,7 +439,9 @@ public final class ACPConnection: @unchecked Sendable {
             supportsLoadReplayEnd: negotiatedProtocolVersion == .v1
                 && (result.meta?.loadReplayEnd?.version ?? 0) >= 1,
             supportsPredictedPrompt: negotiatedProtocolVersion == .v1
-                && (result.meta?.promptSuggestions?.version ?? 0) >= 1
+                && (result.meta?.promptSuggestions?.version ?? 0) >= 1,
+            supportsSessionRewind: negotiatedProtocolVersion == .v1
+                && (result.meta?.sessionRewind?.version ?? 0) >= 1
         )
     }
 
@@ -582,14 +588,18 @@ public final class ACPConnection: @unchecked Sendable {
         sessionId: String,
         mcpServers: [ACPMCPServer],
         forkPoint: ACPForkPointTarget? = nil,
+        cursorId: String? = nil,
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
         return try await withCodexHooksReview() {
             var meta = requestMeta(mcpServers: mcpServers) ?? ACPSessionMeta()
-            meta.forkPoint = forkPoint
+            // The adapters reject a cursor together with a fork point.
+            meta.forkPoint = cursorId == nil ? forkPoint : nil
             let req = ACPRequest(
                 method: "session/fork",
-                params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: meta == ACPSessionMeta() ? nil : meta),
+                params: ACPSessionForkParams(
+                    cwd: cwd, sessionId: sessionId, mcpServers: mcpServers,
+                    meta: meta == ACPSessionMeta() ? nil : meta, cursorId: cursorId),
                 brokerOperationKey: brokerOperationKey
             )
             let resp = try await client.send(req)
@@ -603,6 +613,16 @@ public final class ACPConnection: @unchecked Sendable {
             }
             return result
         }
+    }
+
+    /// Cuts the session back to `cursorId`, a cursor it announced with the
+    /// `rewind` capability. A refusal leaves the conversation as it was.
+    public func rewindSession(sessionId: String, cursorId: String) async throws -> ACPSessionRewindOutcome {
+        let response = try await client.send(ACPRequest(
+            method: "_session/rewind",
+            params: ACPSessionRewindParams(sessionId: sessionId, cursorId: cursorId)))
+        defer { response.acknowledgeDurableConsumption() }
+        return try JSONDecoder().decode(ACPSessionRewindOutcome.self, from: response.body)
     }
 
     public func closeSession(sessionId: String) async throws {
