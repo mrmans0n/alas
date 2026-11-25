@@ -55,6 +55,9 @@ import Testing
         #expect(records.map(\.id) == ["A"])
         #expect(records.first?.runOwner == nil)
         #expect(foreign == ["/vms/L"])
+        let locked = try reader.withSnapshotLocked { $0 }
+        #expect(locked.map(\.id) == ["A"])
+        #expect(locked.first?.runOwner == nil)
         #expect(try Data(contentsOf: url) == before)
         let modified = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
         #expect(modified == past)
