@@ -76,7 +76,7 @@ enum DesignCaptureLeftovers {
     private static let peerCards: [PeerHoverCardModel] = [
         PeerHoverCardModel(
             name: "Studio Mac", icon: .macStudio, state: .online, subtitle: "studio.tail1234.ts.net",
-            connection: .tailscale, counts: .init(waiting: 2, working: 3, terminals: 1, worktrees: 6),
+            connection: .tailscale, roundTrip: .milliseconds(38), counts: .init(waiting: 2, working: 3, terminals: 1, worktrees: 6),
             rowsTitle: "Waiting on you",
             rows: [
                 .init(title: "Fix login redirect", branch: "web/auth-fix", isWaiting: true),
@@ -87,7 +87,7 @@ enum DesignCaptureLeftovers {
         ),
         PeerHoverCardModel(
             name: "Mac mini", icon: .macMini, state: .online, subtitle: "alas-host 0.24.9",
-            connection: .lan, counts: .init(waiting: 0, working: 1, terminals: 0, worktrees: 3),
+            connection: .lan, roundTrip: .microseconds(2400), counts: .init(waiting: 0, working: 1, terminals: 0, worktrees: 3),
             rowsTitle: "Working",
             rows: [.init(title: "Benchmark tree-sitter pack", branch: "perf/ts", isWaiting: false)],
             facts: [("Agents", "Off"), ("Identity", "Verified key"), ("Update", "Available"), ("Paired", "Oct 12, 2026")],
@@ -95,7 +95,7 @@ enum DesignCaptureLeftovers {
         ),
         PeerHoverCardModel(
             name: "MacBook Air", icon: .laptop, state: .tokenRevoked, subtitle: "air.local",
-            connection: .lan, counts: nil, rowsTitle: "", rows: [],
+            connection: .lan, roundTrip: nil, counts: nil, rowsTitle: "", rows: [],
             facts: [("Agents", "Off"), ("Identity", "Verified key"), ("Last here", "2 hours ago"), ("Paired", "Nov 3, 2026")],
             shortcut: 5
         ),

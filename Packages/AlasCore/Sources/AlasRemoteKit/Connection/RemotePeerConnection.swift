@@ -44,6 +44,9 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
         case hello(serverId: String, name: String, icon: PeerIcon? = nil, protocolVersion: Int, federationEnabled: Bool,
                    capabilities: [String] = [], hostVersion: String? = nil, peers: [RemoteHelloPeer] = [])
         case originChanged(String)
+        /// How long the latest WebSocket ping took to come back. Only sent
+        /// when `Config.pingInterval` is set.
+        case roundTrip(Duration)
         case message(RemoteServerMessageOf<ServerHost, ClientHost>)
     }
 
@@ -52,12 +55,17 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
         public var initialBackoff: TimeInterval = 1.5
         public var maxBackoff: TimeInterval = 30
         public var localProtocolVersion: Int = RemoteProtocolVersion.current
+        /// Seconds between WebSocket pings while online, timed into
+        /// `.roundTrip`. Nil sends none.
+        public var pingInterval: TimeInterval?
 
-        public init(handshakeTimeout: TimeInterval = 4, initialBackoff: TimeInterval = 1.5, maxBackoff: TimeInterval = 30, localProtocolVersion: Int = RemoteProtocolVersion.current) {
+        public init(handshakeTimeout: TimeInterval = 4, initialBackoff: TimeInterval = 1.5, maxBackoff: TimeInterval = 30, localProtocolVersion: Int = RemoteProtocolVersion.current,
+                    pingInterval: TimeInterval? = nil) {
             self.handshakeTimeout = handshakeTimeout
             self.initialBackoff = initialBackoff
             self.maxBackoff = maxBackoff
             self.localProtocolVersion = localProtocolVersion
+            self.pingInterval = pingInterval
         }
     }
 
@@ -314,7 +322,11 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
             guard !Task.isCancelled, socket === candidate else { return }
             backoff = config.initialBackoff
             setState(.online)
+            let pinger = config.pingInterval.map { interval in
+                Task { [weak self] in await self?.ping(every: interval, on: candidate) }
+            }
             await pump(candidate)
+            pinger?.cancel()
             // A runner cancelled by disconnect() can reach here long after a
             // newer runner adopted a socket of its own, so close only the one
             // this attempt owns — never whatever happens to be current.
@@ -373,6 +385,23 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
     /// a peer that answers a challenge with an endless stream of other frames
     /// cannot hold the handshake open indefinitely.
     private var maxFramesBeforeProof: Int { 4 }
+
+    /// WebSocket control pings rather than the `ping` message: every host
+    /// build answers them, and there is no request id to match.
+    private func ping(every interval: TimeInterval, on socket: URLSessionWebSocketTask) async {
+        while !Task.isCancelled, self.socket === socket {
+            let sentAt = ContinuousClock.now
+            socket.sendPing { [weak self] error in
+                guard error == nil else { return }
+                let roundTrip = ContinuousClock.now - sentAt
+                Task { @MainActor in
+                    guard let self, self.socket === socket else { return }
+                    self.onEvent(.roundTrip(roundTrip))
+                }
+            }
+            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+        }
+    }
 
     private func pump(_ socket: URLSessionWebSocketTask) async {
         while !Task.isCancelled {

@@ -19,8 +19,8 @@ advertises, so there is no way to make two Macs look different on this one.
 
 - Clicking inside the card. It is read-only (approach A); acting stays on the
   pager item (click opens the page) and its context menu (Edit…).
-- Latency and macOS version: nothing measures or sends them today; adding
-  them needs protocol changes. Revisit only if missed.
+- macOS version: nothing sends it today; adding it needs protocol changes.
+  Revisit only if missed.
 
 ## Approaches (card)
 
@@ -41,7 +41,11 @@ footer).
   when the peer reports a host version, otherwise its last address.
 - **Chip:** presence dot + state label; when online, the connection kind
   derived from the last address: `*.ts.net` or `100.64.0.0/10` → "Tailscale",
-  `.local` or a private IPv4/IPv6 → "LAN", otherwise the host name.
+  `.local` or a private IPv4/IPv6 → "LAN", otherwise the host name; then the
+  latest round trip ("23 ms"). The peer link sends a WebSocket ping every
+  10 s while online and times its pong. Not #2744's `ping` message: that one
+  exists because browsers cannot send control pings, and older hosts ignore
+  it, while every host answers control pings.
 - **Online (A/B):** four counts (waiting, working, terminals, worktrees), then
   up to three rows: "Waiting on you" when any wait, else "Working". Row =
   status dot, session title, branch.
