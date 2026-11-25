@@ -12,8 +12,7 @@ struct ProjectVMBaseWindow: View {
     @Environment(\.designScale) private var scale
     @Environment(\.theme) private var theme
     @Environment(\.scenePhase) private var scenePhase
-    @State private var display = VZVirtualMachineView()
-    @State private var sharedDisplay = VZVirtualMachineView()
+    @StateObject private var displays = Displays()
     @State private var selection: ProjectVMBaseStore.State?
     @State private var sharedIntent: WorktreeVMManager.ProjectDraftMode?
     @State private var confirm: Confirmation?
@@ -22,12 +21,13 @@ struct ProjectVMBaseWindow: View {
     @State private var startingElsewhere: String?
     @State private var errorMessage: String?
 
-    private enum Confirmation: Identifiable {
-        case discard(UUID), rebuild(UUID), remove(UUID)
+    @MainActor private final class Displays: ObservableObject {
+        lazy var draft = VZVirtualMachineView()
+        lazy var shared = VZVirtualMachineView()
+    }
 
-        var id: UUID {
-            switch self { case .discard(let id), .rebuild(let id), .remove(let id): id }
-        }
+    private enum Confirmation {
+        case discard(UUID), rebuild(UUID), remove(UUID)
 
         var title: String {
             switch self {
@@ -173,7 +173,7 @@ struct ProjectVMBaseWindow: View {
             }.vmDisabled(busy || record.runningElsewhere != nil)
         }
         if let vm = vms.runningVMs[recordID] {
-            VMDisplaySurface(view: display, virtualMachine: vm.vm, onUserInput: { state.noteVMUserInput(recordID: recordID) })
+            VMDisplaySurface(view: displays.draft, virtualMachine: vm.vm, onUserInput: { state.noteVMUserInput(recordID: recordID) })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             let elsewhere = record.runningElsewhere ?? startingElsewhere
@@ -200,7 +200,7 @@ struct ProjectVMBaseWindow: View {
                 }
             }
             .padding(scale.space[3])
-            SharedMacOSSetupView(installer: installer, vms: vms, build: awaitingBuild, display: sharedDisplay, finishing: busy,
+            SharedMacOSSetupView(installer: installer, vms: vms, build: awaitingBuild, display: { displays.shared }, finishing: busy,
                 start: { build in perform { try await boot(.shared(build)) } },
                 finish: { build in perform {
                     try await SharedMacOSSetupView.finish(build: build, vms: vms, installer: installer)

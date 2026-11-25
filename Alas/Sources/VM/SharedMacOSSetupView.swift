@@ -6,7 +6,7 @@ struct SharedMacOSSetupView: View {
     @ObservedObject var installer: GoldenImageInstaller
     let vms: WorktreeVMManager
     let build: String?
-    let display: VZVirtualMachineView
+    let display: () -> VZVirtualMachineView
     let finishing: Bool
     let start: (String) -> Void
     let finish: (String) -> Void
@@ -51,7 +51,7 @@ struct SharedMacOSSetupView: View {
                 .vmDisabled(finishing)
         }
         if let golden = vms.runningGolden() {
-            VMDisplaySurface(view: display, virtualMachine: golden.vm)
+            VMDisplaySurface(view: display(), virtualMachine: golden.vm)
         } else if vms.isStarting(WorktreeVMManager.goldenIDPrefix + build) || finishing {
             Spinner().frame(width: 16, height: 16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

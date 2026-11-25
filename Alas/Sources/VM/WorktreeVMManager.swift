@@ -585,7 +585,7 @@ final class WorktreeVMManager {
             matchingTemplate(worktreeID: id, guest: .macOS, goldenBuild: build, goldenSealedMarker: golden.sealedMarker)
                 .flatMap { template in
                     cloneFromTemplate(id, template: template, to: destination) {
-                        let identity = Self.newMacIdentity()
+                        let identity = try Self.newMacIdentity()
                         return try VMBundle.cloneForWorktree(
                             golden: golden, to: destination,
                             newMachineIdentifier: identity.machineIdentifier, newMACAddress: identity.macAddress,
@@ -595,7 +595,7 @@ final class WorktreeVMManager {
                 }
         })) != nil { return build }
 
-        let identity = Self.newMacIdentity()
+        let identity = try Self.newMacIdentity()
         do {
             let bundle = try VMBundle.cloneForWorktree(
                 golden: golden, to: destination,
@@ -608,8 +608,8 @@ final class WorktreeVMManager {
         return build
     }
 
-    private static func newMacIdentity() -> VMBundle.CloneIdentity {
-        .init(machineIdentifier: newMachineIdentifier(), macAddress: VZMACAddress.randomLocallyAdministered().string)
+    private static func newMacIdentity() throws -> VMBundle.CloneIdentity {
+        try .init(machineIdentifier: newMachineIdentifier(), macAddress: VZMACAddress.randomLocallyAdministered().string)
     }
 
     /// Clones the newest sealed Linux golden for `worktreeID`, like `createVM`
@@ -2540,7 +2540,7 @@ extension WorktreeVMManager {
         let id = VMIdentity.projectDraftRecordID(draftID)
         guard try projectBaseStatus(projectID: projectID).draft?.id == draftID else { throw ProjectVMBaseStore.Failure.changed }
         if let other { try await pauseForSlot(other) }
-        let outcome = try await startRecorded(id: id) { records in
+        let outcome = try await startRecorded(id: id) { [self] records in
             try projectBases.withProject(projectID) { transaction in
                 let bundle = try transaction.selectedDraftBundle(id: draftID)
                 guard let draft = transaction.state.draft else { throw ProjectVMBaseStore.Failure.changed }

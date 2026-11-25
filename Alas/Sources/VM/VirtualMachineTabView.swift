@@ -665,7 +665,7 @@ struct VirtualMachineTabView: View {
     private func goldenSetupView(build: String) -> some View { sharedSetup(build: build) }
 
     private func sharedSetup(build: String?) -> some View {
-        SharedMacOSSetupView(installer: installer, vms: vms, build: build, display: state.tabs.vmView(tabID: tab.id),
+        SharedMacOSSetupView(installer: installer, vms: vms, build: build, display: { state.tabs.vmView(tabID: tab.id) },
                             finishing: finishingSetup, start: { start(.golden(build: $0)) }, finish: finishGoldenSetup)
     }
 
