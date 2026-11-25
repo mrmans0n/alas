@@ -218,6 +218,8 @@ public struct DiffReviewFileSectionModel: Identifiable {
     public var stagedMutationActions: DiffReviewStagedMutationActions? = nil
     /// True while the file is listed but its diff is still loading.
     public var isPending: Bool = false
+    /// Shown under the file header above a rendered diff, for changes the hunks leave out.
+    public var notice: String? = nil
 
     public init(summary: DiffReviewFileSummary, parsedDiff: ParsedDiff?, displayModel: DiffDisplayModel?, placeholderMessage: String?, openFile: (() -> Void)?, contextProvider: DiffReviewContextProvider?, imageProvider: DiffReviewImageProvider? = nil, stagedMutationActions: DiffReviewStagedMutationActions? = nil, isPending: Bool = false) {
         self.summary = summary
@@ -370,6 +372,7 @@ extension DiffReviewFileSectionModel {
         summary == other.summary
             && displayModel == other.displayModel
             && placeholderMessage == other.placeholderMessage
+            && notice == other.notice
             && isPending == other.isPending
             && (openFile == nil) == (other.openFile == nil)
             && contextProvider?.id == other.contextProvider?.id

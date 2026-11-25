@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The files a finished turn changed. The header opens all recorded edits;
-/// each file row opens only the edits to that file.
+/// The files a finished turn changed, as one line in the voice of the activity rows: the
+/// chevron lists the files, "Review changes" opens every recorded edit, and each listed file
+/// opens only its own.
 struct ACPTurnChangesCard: View {
     /// Where the card's caption comes from, and what it is written from.
     struct Caption {
@@ -19,78 +20,113 @@ struct ACPTurnChangesCard: View {
     @Environment(\.theme) private var theme
     @Environment(\.acpMarkdownProseMaxWidth) private var proseMaxWidth
     @Environment(\.designScale) private var scale
-    @State private var showsAll = false
-
-    /// More files than this fold behind a "Show more" line.
-    static let collapsedFileCount = 5
-
-    private var visibleFiles: ArraySlice<ACPTurnChanges.File> {
-        showsAll ? changes.files[...] : changes.files.prefix(Self.collapsedFileCount)
-    }
+    @State private var expanded = false
+    @State private var hoveredPath: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            ForEach(visibleFiles, id: \.path) { file in
-                if let onOpenDiff {
-                    Button { onOpenDiff(file.path) } label: { fileRow(file) }
-                        .buttonStyle(.plain)
-                        .help("Open this file's recorded diff")
-                } else {
-                    fileRow(file)
+            summary
+            if expanded {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(changes.files, id: \.path, content: fileRow)
                 }
-            }
-            let hidden = changes.files.count - visibleFiles.count
-            if hidden > 0 {
-                Button("Show \(hidden) more") { showsAll = true }
-                    .buttonStyle(.plain)
-                    .font(scale.meta.font(weight: .medium))
-                    .foregroundStyle(theme.color("accent"))
-                    .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[1])
+                .padding(.bottom, scale.space[2])
             }
         }
-        .padding(.bottom, scale.space[1])
-        .background(theme.color("bg-2").opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
         .frame(maxWidth: proseMaxWidth, alignment: .leading)
     }
 
-    private func fileRow(_ file: ACPTurnChanges.File) -> some View {
+    private var summary: some View {
         HStack(spacing: scale.space[2]) {
-            Text(file.path)
-                .font(scale.meta.font(weight: .regular, design: .monospaced))
-                .foregroundStyle(theme.color("fg"))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: scale.space[2])
-            counts(added: file.added, removed: file.removed)
-            if onOpenDiff != nil {
-                Image(systemName: "arrow.up.right")
-                    .font(scale.glyphFont)
-                    .foregroundStyle(theme.color("fg-faint"))
+            Button {
+                withAnimation(.easeOut(duration: 0.12)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: scale.space[2]) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(scale.glyphFont)
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .frame(width: Self.chevronWidth)
+                    ZStack {
+                        RoundedRectangle(cornerRadius: scale.radius.small)
+                            .fill(theme.color("accent").opacity(0.18))
+                        Image(systemName: "doc.on.doc")
+                            .font(scale.caption.font(weight: .regular))
+                            .foregroundStyle(theme.color("accent"))
+                    }
+                    .frame(width: Self.tileSize, height: Self.tileSize)
                     .accessibilityHidden(true)
+                    Text(changes.files.count == 1 ? "Changed 1 file" : "Changed \(changes.files.count) files")
+                        .font(scale.meta.font(weight: .semibold))
+                        .foregroundStyle(theme.color("fg"))
+                        .fixedSize()
+                    ACPTurnChangesCounts(added: changes.added, removed: changes.removed)
+                        .fixedSize()
+                    captionSuffix
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .help(expanded ? "Hide the changed files" : "Show the changed files")
+
+            if let onOpenDiff {
+                Button("Review changes") { onOpenDiff(nil) }
+                    .buttonStyle(ReviewChangesButtonStyle(theme: theme))
+                    .fixedSize()
+                    .padding(.trailing, scale.space[2])
+                    .help("Open all recorded diffs for this turn")
             }
         }
-        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[1])
-        .contentShape(Rectangle())
     }
 
     @ViewBuilder
-    private var header: some View {
+    private var captionSuffix: some View {
         if let caption {
-            CaptionedHeader(caption: caption, store: caption.store, changes: changes, onOpenDiff: onOpenDiff)
+            StoredCaption(caption: caption, store: caption.store)
         } else {
-            VStack(alignment: .leading, spacing: 0) {
-                if let hostCaption { CaptionedHeader.captionLine(hostCaption) }
-                CaptionedHeader.countsLine(changes: changes, onOpenDiff: onOpenDiff)
-            }
-            .animation(.easeOut(duration: 0.15), value: hostCaption)
+            CaptionSuffix(text: hostCaption)
         }
     }
 
-    private func counts(added: Int, removed: Int) -> some View {
-        ACPTurnChangesCounts(added: added, removed: removed)
+    private func fileRow(_ file: ACPTurnChanges.File) -> some View {
+        let row = HStack(spacing: scale.space[2]) {
+            FileChip(path: file.path, lines: nil, iconSystemName: nil)
+            ACPTurnChangesCounts(added: file.added, removed: file.removed)
+                .fixedSize()
+            Spacer(minLength: scale.space[2])
+            if onOpenDiff != nil {
+                Text("Open diff")
+                    .font(scale.meta.font(weight: .medium))
+                    .foregroundStyle(theme.color("accent"))
+                    .opacity(hoveredPath == file.path ? 1 : 0)
+                    .accessibilityHidden(true)
+            }
+        }
+        // Lines the chips up under the summary's label, past the chevron and the tile.
+        .padding(.leading, scale.space[3] + Self.chevronWidth + Self.tileSize + scale.space[2] * 2)
+        .padding(.trailing, scale.space[3]).padding(.vertical, scale.space[1])
+        .contentShape(Rectangle())
+
+        return Group {
+            if let onOpenDiff {
+                Button { onOpenDiff(file.path) } label: { row }
+                    .buttonStyle(.plain)
+                    .background(hoveredPath == file.path ? theme.color("bg-2").opacity(0.6) : .clear)
+                    .onHover { hoveredPath = $0 ? file.path : (hoveredPath == file.path ? nil : hoveredPath) }
+                    .help("Open this file's recorded diff")
+                    .accessibilityLabel("Open the recorded diff of \(file.path)")
+            } else {
+                row
+            }
+        }
     }
+
+    private static let chevronWidth: CGFloat = 12
+    private static let tileSize: CGFloat = 18
 }
 
 private struct ACPTurnChangesCounts: View {
@@ -104,87 +140,55 @@ private struct ACPTurnChangesCounts: View {
             Text("+\(added)").foregroundStyle(theme.color("add"))
             Text("-\(removed)").foregroundStyle(theme.color("del"))
         }
-        .font(scale.caption.font(weight: .regular, design: .monospaced))
+        .font(scale.meta.font(weight: .regular, design: .monospaced))
     }
 }
 
-/// The card's first line: "N files changed" with the totals, under the turn's caption once written.
-private struct CaptionedHeader: View {
+/// The caption this Mac writes for the turn, requested when the card first shows.
+private struct StoredCaption: View {
     let caption: ACPTurnChangesCard.Caption
     @ObservedObject var store: ACPTurnCaptionStore
-    let changes: ACPTurnChanges
-    let onOpenDiff: ((String?) -> Void)?
+
+    var body: some View {
+        CaptionSuffix(text: store.captions[caption.key])
+            .onAppear { store.request(key: caption.key, input: caption.input) }
+    }
+}
+
+/// "· caption" after the counts, cut to the line it has left.
+private struct CaptionSuffix: View {
+    let text: String?
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let text = store.captions[caption.key] { Self.captionLine(text) }
-            Self.countsLine(changes: changes, onOpenDiff: onOpenDiff)
-        }
-        .animation(.easeOut(duration: 0.15), value: store.captions[caption.key])
-        .onAppear { store.request(key: caption.key, input: caption.input) }
-    }
-
-    @ViewBuilder
-    static func countsLine(changes: ACPTurnChanges, onOpenDiff: ((String?) -> Void)?) -> some View {
-        if let onOpenDiff {
-            Button { onOpenDiff(nil) } label: {
-                CountsLine(changes: changes, opensDiff: true)
-                    .contentShape(Rectangle())
+        ZStack(alignment: .leading) {
+            if let text {
+                Text("· \(text)")
+                    .font(scale.metaFont)
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(text)
+                    .transition(.opacity)
             }
-            .buttonStyle(.plain)
-            .help("Open all recorded diffs for this turn")
-        } else {
-            CountsLine(changes: changes, opensDiff: false)
         }
+        .animation(.easeOut(duration: 0.15), value: text)
     }
+}
 
-    static func captionLine(_ text: String) -> some View {
-        CaptionLine(text: text)
-    }
+private struct ReviewChangesButtonStyle: ButtonStyle {
+    let theme: Theme
+    @Environment(\.designScale) private var scale
 
-    private struct CaptionLine: View {
-        let text: String
-        @Environment(\.theme) private var theme
-        @Environment(\.designScale) private var scale
-
-        var body: some View {
-            Text(text)
-                .font(scale.meta.font(weight: .semibold))
-                .foregroundStyle(theme.color("fg"))
-                .lineLimit(2)
-                .padding(.horizontal, scale.space[3]).padding(.top, scale.space[2])
-                .transition(.opacity)
-        }
-    }
-
-    private struct CountsLine: View {
-        let changes: ACPTurnChanges
-        let opensDiff: Bool
-        @Environment(\.theme) private var theme
-        @Environment(\.designScale) private var scale
-
-        var body: some View {
-            HStack(spacing: scale.space[2]) {
-                Image(systemName: "doc.on.doc")
-                    .font(scale.caption.font(weight: .regular))
-                    .accessibilityHidden(true)
-                    .foregroundStyle(theme.color("accent"))
-                Text(changes.files.count == 1 ? "1 file changed" : "\(changes.files.count) files changed")
-                    .font(scale.caption.font(weight: .semibold))
-                    .foregroundStyle(theme.color("fg"))
-                ACPTurnChangesCounts(added: changes.added, removed: changes.removed)
-                Spacer(minLength: 0)
-                if opensDiff {
-                    Image(systemName: "arrow.up.right")
-                        .font(scale.glyphFont)
-                        .foregroundStyle(theme.color("fg-faint"))
-                        .accessibilityHidden(true)
-                }
-            }
-            .padding(.horizontal, scale.space[3]).padding(.top, scale.space[2]).padding(.bottom, scale.space[1])
-        }
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(scale.meta.font(weight: .semibold))
+            .padding(.horizontal, scale.space[3])
+            .frame(height: 24)
+            .background(theme.color("accent").opacity(configuration.isPressed ? 0.78 : 0.95))
+            .foregroundStyle(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 }
 

@@ -10,6 +10,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stack Ship and Sync stack preserve downstream commit SHAs when a parent lands unchanged and the next MR can merge without a rebase. This requires a `gg` build with `sync --rebase-if-needed`.
 - On GitLab, choose **Sync and land…** in Changes to publish, then confirm which MRs to queue. Ordinary Sync never requests a merge.
 - Stack shepherding waits for queued merges before asking an agent to fix review feedback and push the stack.
+- A turn's changed files fold into one line under its answer with a Review changes button, and its recorded diffs open in the review diff view with your code font.
 
 ## [0.24.10] - 2026-11-24
 
