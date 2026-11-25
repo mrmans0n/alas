@@ -34,25 +34,36 @@ struct VMFirstBootSetup {
     /// run that outlived its VM must not touch the one started after it.
     var isCurrent: () -> Bool = { true }
 
-    /// A nil or blank `script`, or one that already succeeded in this VM, goes straight to the
-    /// clean point.
-    func run(recordID: String, script: String?, scriptSucceeded: Bool = false) async -> Outcome {
-        guard await waitForHelper(recordID), isCurrent() else { return .interrupted }
-        let vm = VMIdentity.parse(recordID: recordID)
-        let hash = VMCleanPoint.scriptHash(script)
-        if hash != nil, !scriptSucceeded, let script {
-            let exitCode: Int32?
-            do {
-                let result = try await runScript(recordID, script, Self.scriptTimeoutSeconds)
-                exitCode = result.timedOut ? nil : result.exitCode
-            } catch {
-                // A stop or a take over cut the run short: the script didn't fail.
-                if error is TakenOver || manager.running(vm.worktree, guest: vm.guest) == nil { return .interrupted }
-                exitCode = nil
-            }
-            guard isCurrent() else { return .interrupted }
-            guard exitCode == 0 else { return .scriptFailed(exitCode: exitCode) }
+    enum ScriptOutcome {
+        case succeeded, failed(Int32?), helperUnavailable, interrupted
+    }
+
+    func executeScript(recordID: String, script: String?) async -> ScriptOutcome {
+        let helperReady = await waitForHelper(recordID)
+        guard !Task.isCancelled, isCurrent() else { return .interrupted }
+        guard helperReady else { return .helperUnavailable }
+        guard let script else { return .succeeded }
+        let exitCode: Int32?
+        do {
+            let result = try await runScript(recordID, script, Self.scriptTimeoutSeconds)
+            exitCode = result.timedOut ? nil : result.exitCode
+        } catch {
+            if error is TakenOver || manager.runningVMs[recordID] == nil { return .interrupted }
+            exitCode = nil
         }
+        guard !Task.isCancelled, isCurrent() else { return .interrupted }
+        return exitCode == 0 ? .succeeded : .failed(exitCode)
+    }
+
+    /// A nil or blank script, or one that already succeeded, goes straight to the clean point.
+    func run(recordID: String, script: String?, scriptSucceeded: Bool = false) async -> Outcome {
+        let hash = VMCleanPoint.scriptHash(script)
+        switch await executeScript(recordID: recordID, script: hash != nil && !scriptSucceeded ? script : nil) {
+        case .succeeded: break
+        case .failed(let exitCode): return .scriptFailed(exitCode: exitCode)
+        case .helperUnavailable, .interrupted: return .interrupted
+        }
+        let vm = VMIdentity.parse(recordID: recordID)
         do {
             try await manager.takeCleanPoint(
                 worktreeID: vm.worktree, guest: vm.guest, setupScriptHash: hash, publishTemplate: hash != nil)

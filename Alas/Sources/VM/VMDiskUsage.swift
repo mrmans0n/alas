@@ -40,7 +40,7 @@ struct VMDiskUse: Sendable {
 
 /// A base image or worktree VM bundle, as Settings › Worktree VMs lists it.
 struct VMBundleSummary: Identifiable, Equatable, Sendable {
-    enum Kind: Sendable { case golden, worktree }
+    enum Kind: Sendable { case golden, worktree, projectBase, projectDraft }
 
     /// `golden:<build>` or `golden-linux:<serial>` for base images, `worktrees/<folder>` for VMs.
     let id: String
@@ -65,6 +65,8 @@ struct VMBundleSummary: Identifiable, Equatable, Sendable {
     let leftovers: [URL]
     /// For a base image, how many VMs were cloned from it; it can't be deleted while any exist.
     var clones = 0
+    var projectID: String?
+    var projectGeneration: UUID?
     /// Disk the bundle uses, leftovers excluded; filled in off the main actor.
     var allocatedBytes: Int64 = 0
     var leftoverBytes: Int64 = 0

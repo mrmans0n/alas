@@ -26,7 +26,7 @@ extension AppState {
     /// hand), the worktree VM whose tab shows the base image being customized, or a VM running
     /// its project's first-boot setup script.
     func vmInSetupFlow(recordID: String) -> Bool {
-        if recordID.hasPrefix(WorktreeVMManager.goldenIDPrefix) || vmSetupScriptsRunning.contains(recordID) {
+        if recordID.hasPrefix(WorktreeVMManager.goldenIDPrefix) || vmManager.isSetupRunning(recordID: recordID) {
             return true
         }
         let vm = VMIdentity.parse(recordID: recordID)
@@ -40,6 +40,7 @@ extension AppState {
     /// A VM started here. A new VM's first boot runs the project's guest setup script, then takes
     /// its clean point. An auto-started VM gets it too.
     func vmStarted(recordID: String) {
+        guard VMIdentity.projectDraftID(recordID: recordID) == nil else { return }
         // The VM started again after all: a failed restart is no longer news.
         if case .notRestarted = vmCleanPointIssues[recordID] { vmCleanPointIssues[recordID] = nil }
         guard WorktreeVMManager.runsFirstBootSetup(
@@ -160,7 +161,7 @@ extension AppState {
     private func makeVMFirstBootSetup() -> VMFirstBootSetup {
         VMFirstBootSetup(
             manager: vmManager,
-            waitForHelper: { [weak self] recordID in await self?.waitForVMHelper(recordID: recordID) ?? false },
+            waitForHelper: { [vmManager] in await vmManager.waitForSetupHelper(recordID: $0) },
             runScript: { [weak self] recordID, script, timeout in
                 guard let self else { throw VMGuestClient.Failure.stopped }
                 return try await runVMSetupScript(script, recordID: recordID, timeoutSeconds: timeout)
@@ -191,23 +192,12 @@ extension AppState {
         return try result.get()
     }
 
-    /// Waits for a freshly booted guest's helper, which starts only after its user logs in.
-    private func waitForVMHelper(recordID: String) async -> Bool {
-        let vm = VMIdentity.parse(recordID: recordID)
-        return await GuestSetupSteps.waitUntil(
-            timeout: .seconds(600), interval: .seconds(5),
-            sleep: { try? await Task.sleep(for: $0) }, now: { .now }
-        ) { [weak self] in
-            guard let self, let client = vmManager.guestClient(for: vm.worktree, guest: vm.guest) else { return true }
-            return (try? await client.hello()) != nil
-        } && vmManager.running(vm.worktree, guest: vm.guest) != nil
-    }
 
     // MARK: - New worktrees
 
     /// Creates the macOS VM of a worktree just created in a project that gives its new worktrees
     /// one, without booting it; its first boot runs the setup script and takes the clean point.
-    /// Never fails the worktree: without a golden image the VM waits for the VM tab or an agent.
+    /// Never fails the worktree: without a clone source the VM waits for the VM tab or an agent.
     func createVMForNewWorktree(_ worktree: Worktree, projectId: String) {
         guard let project = projects.first(where: { $0.id == projectId }) else { return }
         #if arch(arm64)
@@ -217,7 +207,7 @@ extension AppState {
         #endif
         guard WorktreeVMManager.shouldCreateVM(
             requested: effectiveVMForNewWorktrees(for: project), isAppleSilicon: isAppleSilicon,
-            goldenAvailable: vmManager.availableGolden() != nil,
+            goldenAvailable: (try? vmManager.macOSSource(worktreeID: worktree.id)) != .unavailable,
             isRemote: project.host != nil || RemotePath.isReserved(worktree.id)
         ) else { return }
         do {

@@ -166,12 +166,11 @@ extension AppState {
             && !RemotePath.isReserved(worktree.id) && webPreviewRemoteHost(for: worktree) == nil
     }
 
-    /// Opens the worktree's VM tab for `guest`, creating the VM first when
-    /// that guest's golden image is ready. Without one the tab offers to set it up.
+    /// Opens the worktree's VM tab and creates its VM when a clone source is ready.
     func openVirtualMachine(in worktree: Worktree, guest: VMGuestOS = .macOS) {
         guard canOpenVirtualMachine(in: worktree) else { return }
         let goldenReady = switch guest {
-        case .macOS: vmManager.availableGolden() != nil
+        case .macOS: (try? vmManager.macOSSource(worktreeID: worktree.id)) != .unavailable
         case .linux: LinuxGoldenInstaller.availableGolden(root: vmManager.root) != nil
         }
         if goldenReady {

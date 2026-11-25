@@ -108,6 +108,15 @@ struct AlasApp: App {
         .windowResizability(.contentSize)
         .defaultSize(width: 880, height: 580)
 
+        WindowGroup("Project macOS Base", id: ProjectVMBaseWindow.sceneID, for: String.self) { $projectID in
+            if let projectID {
+                ProjectVMBaseWindow(state: state, projectID: projectID)
+                    .environment(\.designScale, .resolved(for: state.config.density))
+            }
+        }
+        .defaultSize(width: 900, height: 660)
+        .commandsRemoved()
+
         Window("Commit Prompt", id: "commit-prompt-editor") {
             CommitPromptEditorWindow(state: state)
                 .environment(\.designScale, .resolved(for: state.config.density))

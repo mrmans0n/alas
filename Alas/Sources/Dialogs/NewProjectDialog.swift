@@ -53,6 +53,7 @@ private struct ProjectDialog: View {
     @Binding var presented: Bool
     let mode: ProjectDialogMode
     @Environment(\.theme) var theme
+    @Environment(\.openWindow) private var openWindow
 
     @State private var path: String = ""
     @State private var selectedTab: ProjectSettingsTab = .general
@@ -1050,19 +1051,32 @@ private struct ProjectDialog: View {
                         .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                 }
+                if WorktreeVMManager.isSupported, case .edit(let original) = mode {
+                    let project = state.projects.first { $0.id == original.id } ?? original
+                    let selection = projectBaseSelection(project.id)
+                    ProjectVMBaseStatusText(state: state, project: project, selection: selection)
+                    AlasButton(title: "Customize macOS base…", compact: true) {
+                        openWindow(id: ProjectVMBaseWindow.sceneID, value: project.id)
+                    }
+                }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Guest setup script · runs once per project, and new VMs start from its result")
+                    Text("Guest setup script")
                         .font(scale.meta.font(weight: .medium))
                         .foregroundColor(theme.color("fg"))
                     ProjectStartupScriptEditor(text: $vmGuestSetupScript, minHeight: 60)
                         .accessibilityLabel("Guest setup script")
-                    Text("Runs in zsh on macOS and bash on Linux. Keep it safe to run more than once, and don't depend on a particular worktree's files: later VMs reuse its result. Reset from scratch runs it again."
+                    Text("Runs in zsh on macOS and bash on Linux. Keep it safe to run more than once, and don't depend on worktree files. Reset from scratch reruns it unless a saved macOS project base is in use."
                         + (vmRepoDefaults.guestSetupScript == nil ? "" : " Starts from the repo's .alas/vm-setup.sh; edits here apply only to you, and clearing it uses the repo's again."))
                         .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                 }
             }
         }
+    }
+
+    private func projectBaseSelection(_ projectID: String) -> ProjectVMBaseStore.State? {
+        _ = state.vmManager.projectBaseRevision
+        return try? state.vmManager.projectBaseStatus(projectID: projectID)
     }
 
     /// Per-project PR shepherd rules. Shown only when editing a git project:

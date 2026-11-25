@@ -11,6 +11,7 @@ struct WorktreeVMsSection: View {
     @Environment(\.theme) var theme
     @State private var bundles: [VMBundleSummary] = []
     @State private var orphans: [VMBundleSummary] = []
+    @State private var projectOrphans: [VMBundleSummary] = []
     @State private var installerBytes: Int64 = 0
     @State private var loaded = false
     /// Why the VM registry couldn't be read; the lists are hidden meanwhile.
@@ -18,6 +19,7 @@ struct WorktreeVMsSection: View {
     @State private var errorMessage: String?
     @State private var confirmingGolden: VMBundleSummary?
     @State private var confirmingVM: VMBundleSummary?
+    @State private var confirmingProjectBundle: VMBundleSummary?
     @State private var confirmingCleanUp = false
     @State private var confirmingRemoveInstallers = false
 
@@ -44,12 +46,15 @@ struct WorktreeVMsSection: View {
                     .padding(.vertical, scale.space[3])
             } else if !loaded {
                 Spinner().frame(width: 16, height: 16).padding(.vertical, scale.space[3])
-            } else if bundles.isEmpty && !showsCleanUp {
+            } else if bundles.isEmpty && projectOrphans.isEmpty && !showsCleanUp {
                 Text("No base images or VMs yet.")
                     .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
                     .padding(.vertical, scale.space[3])
             }
             ForEach(bundles) { bundle in
+                bundleRow(bundle)
+            }
+            ForEach(projectOrphans) { bundle in
                 bundleRow(bundle)
             }
             if showsCleanUp { cleanUpRow }
@@ -59,7 +64,7 @@ struct WorktreeVMsSection: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, scale.space[3])
         }
-        .task { await refresh() }
+        .task(id: vms.projectBaseRevision) { await refresh() }
         .alert("Delete this base image?", isPresented: present($confirmingGolden), presenting: confirmingGolden) { golden in
             Button("Delete", role: .destructive) { deleteGolden(golden) }
             Button("Cancel", role: .cancel) {}
@@ -71,6 +76,15 @@ struct WorktreeVMsSection: View {
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("Its disk and everything inside it are removed.")
+        }
+        .alert(confirmingProjectBundle?.kind == .projectDraft ? "Discard this draft?" : "Remove this project base?",
+               isPresented: present($confirmingProjectBundle), presenting: confirmingProjectBundle) { bundle in
+            Button(bundle.kind == .projectDraft ? "Discard Draft" : "Remove Base", role: .destructive) { deleteProject(bundle) }
+            Button("Cancel", role: .cancel) {}
+        } message: { bundle in
+            Text(bundle.kind == .projectDraft
+                 ? "This deletes the draft without changing the saved base."
+                 : "Future macOS worktree VMs use the default again. Existing VMs are unchanged.")
         }
         .alert("Clean up orphaned VMs?", isPresented: $confirmingCleanUp) {
             Button("Clean up", role: .destructive, action: cleanUp)
@@ -91,9 +105,15 @@ struct WorktreeVMsSection: View {
     @ViewBuilder
     private func bundleRow(_ bundle: VMBundleSummary) -> some View {
         let elsewhere = bundle.runningElsewhere != nil
-        let note = elsewhere ? " (running in another Alas)" : bundle.fromOtherBuild ? " (another Alas version's)" : ""
+        let note = bundle.runningElsewhere.map { " (running in \($0))" }
+            ?? (bundle.fromOtherBuild ? " (another Alas version's)" : "")
         diskRow(title: title(of: bundle) + note, bytes: bundle.allocatedBytes) {
-            AlasButton(title: "Delete", compact: true) { askToDelete(bundle) }
+            let label = switch bundle.kind {
+            case .projectDraft: "Discard…"
+            case .projectBase: "Remove…"
+            default: "Delete"
+            }
+            AlasButton(title: label, compact: true) { askToDelete(bundle) }
                 .vmDisabled(elsewhere || bundle.fromOtherBuild || bundle.runningHere
                     || (bundle.kind == .golden && installBusy(bundle.guest)))
         }
@@ -155,6 +175,10 @@ struct WorktreeVMsSection: View {
         case (.worktree, _):
             let name = bundle.worktreeID.flatMap { state.projectAndWorktree(withWorktreeId: $0)?.worktree.name }
             return "\(name ?? bundle.name) · \(bundle.guest == .linux ? "Linux" : "macOS")"
+        case (.projectBase, _), (.projectDraft, _):
+            let owner = state.projects.first { $0.id == bundle.projectID }?.name ?? bundle.name
+            let kind = bundle.kind == .projectDraft ? "macOS base draft" : "macOS project base"
+            return "\(bundle.isOrphan ? "Orphaned " : "")\(kind) · \(owner)"
         }
     }
 
@@ -198,10 +222,13 @@ struct WorktreeVMsSection: View {
     private func refresh() async {
         async let installers = vms.installerBytes()
         do {
-            let use = try await vms.diskUse()
-            (bundles, orphans, loadError) = (use.bundles, use.orphans, nil)
+            let use = try await vms.diskUse(liveProjectIDs: try? state.liveProjectIDsForVMStorage())
+            bundles = use.bundles
+            orphans = use.orphans.filter { $0.projectID == nil }
+            projectOrphans = use.orphans.filter { $0.projectID != nil }
+            loadError = nil
         } catch {
-            (bundles, orphans, loadError) = ([], [], error.localizedDescription)
+            (bundles, orphans, projectOrphans, loadError) = ([], [], [], error.localizedDescription)
         }
         installerBytes = await installers
         loaded = true
@@ -216,6 +243,8 @@ struct WorktreeVMsSection: View {
             confirmingGolden = bundle
         case .worktree:
             confirmingVM = bundle
+        case .projectBase, .projectDraft:
+            confirmingProjectBundle = bundle
         }
     }
 
@@ -235,6 +264,25 @@ struct WorktreeVMsSection: View {
         Task {
             if let reason = await vms.deleteVM(worktreeID: worktreeID, guest: vm.guest) {
                 errorMessage = "Couldn't delete the VM: \(Self.sentence(reason))"
+            }
+            await refresh()
+        }
+    }
+
+    private func deleteProject(_ bundle: VMBundleSummary) {
+        guard let project = bundle.projectID, let generation = bundle.projectGeneration else { return }
+        let stillOrphaned: (() throws -> Bool)? = bundle.isOrphan
+            ? { try state.liveProjectIDsForVMStorage()?.contains(project) == false }
+            : nil
+        Task {
+            do {
+                if bundle.kind == .projectDraft {
+                    try await vms.discardProjectDraft(projectID: project, draftID: generation, stillOrphaned: stillOrphaned)
+                } else {
+                    try vms.removeProjectBase(projectID: project, baseID: generation, stillOrphaned: stillOrphaned)
+                }
+            } catch {
+                errorMessage = error.localizedDescription
             }
             await refresh()
         }
