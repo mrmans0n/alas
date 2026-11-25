@@ -16,11 +16,13 @@ import SwiftUI
 /// - repo-hook-approval: the repository startup hook approval sheet over a demo hook; no hook runs.
 /// - computer-use-badge: the badge in the agent toolbar, in its "Using the VM" state.
 /// - space-pager: the sidebar's space pager, with two demo spaces added to the profile.
+/// - pager-peer-cards: the pager's paired-Mac hover card, online with sessions waiting,
+///   online and quiet, and with its token revoked.
 @MainActor
 enum DesignCaptureLeftovers {
     static let targets: Set<String> = [
         "run-report", "web-preview", "run-script-help", "new-run-script", "repo-hook-approval",
-        "computer-use-badge", "space-pager",
+        "computer-use-badge", "space-pager", "pager-peer-cards",
     ]
 
     static func open(_ target: String, state: AppState) {
@@ -58,11 +60,46 @@ enum DesignCaptureLeftovers {
             case "space-pager":
                 _ = state.spacesManager.addSpace(name: "Side projects", emoji: "🧪")
                 _ = state.spacesManager.addSpace(name: "Open source", emoji: "🌱")
+            case "pager-peer-cards":
+                DesignCaptureWorkspace.present(
+                    HStack(alignment: .top, spacing: 24) { ForEach(peerCards.indices, id: \.self) { PeerHoverCard(model: peerCards[$0]) } }
+                        .padding(24)
+                        .environment(\.theme, theme).environment(\.designScale, scale))
             default:
                 break
             }
         }
     }
+
+    // MARK: - pager-peer-cards
+
+    private static let peerCards: [PeerHoverCardModel] = [
+        PeerHoverCardModel(
+            name: "Studio Mac", icon: .macStudio, state: .online, subtitle: "studio.tail1234.ts.net",
+            connection: .tailscale, counts: .init(waiting: 2, working: 3, terminals: 1, worktrees: 6),
+            rowsTitle: "Waiting on you",
+            rows: [
+                .init(title: "Fix login redirect", branch: "web/auth-fix", isWaiting: true),
+                .init(title: "Approve: rm -rf build/", branch: "ios/ci", isWaiting: true),
+            ],
+            facts: [("Agents", "Ask for approval"), ("Identity", "Verified key"), ("Paired", "Nov 3, 2026")],
+            shortcut: 3
+        ),
+        PeerHoverCardModel(
+            name: "Mac mini", icon: .macMini, state: .online, subtitle: "alas-host 0.24.9",
+            connection: .lan, counts: .init(waiting: 0, working: 1, terminals: 0, worktrees: 3),
+            rowsTitle: "Working",
+            rows: [.init(title: "Benchmark tree-sitter pack", branch: "perf/ts", isWaiting: false)],
+            facts: [("Agents", "Off"), ("Identity", "Verified key"), ("Update", "Available"), ("Paired", "Oct 12, 2026")],
+            shortcut: 4
+        ),
+        PeerHoverCardModel(
+            name: "MacBook Air", icon: .laptop, state: .tokenRevoked, subtitle: "air.local",
+            connection: .lan, counts: nil, rowsTitle: "", rows: [],
+            facts: [("Agents", "Off"), ("Identity", "Verified key"), ("Last here", "2 hours ago"), ("Paired", "Nov 3, 2026")],
+            shortcut: 5
+        ),
+    ]
 
     // MARK: - run-report
 

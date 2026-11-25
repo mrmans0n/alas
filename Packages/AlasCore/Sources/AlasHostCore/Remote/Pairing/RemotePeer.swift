@@ -15,6 +15,9 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     /// The icon the peer advertised in its last `hello` or at pairing. Nil
     /// until it sends one.
     public var icon: PeerIcon?
+    /// The icon this Mac's user picked for the peer. Wins over `icon` and is
+    /// never touched by what the peer advertises.
+    public var iconOverride: PeerIcon?
     public var origins: [String]          // full origins, preferred first
     public var lastOrigin: String?        // the origin that last answered
     public var token: String              // bearer token the peer issued to us
@@ -50,6 +53,9 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     /// real session data over it. Re-pairing is what upgrades it.
     public var isVerified: Bool { publicKey?.isEmpty == false }
 
+    /// The icon to show for the peer on this Mac.
+    public var displayIcon: PeerIcon? { iconOverride ?? icon }
+
     /// Whether the peer paired with this server and this server never paired
     /// back, so it has a device here and this side holds no token for it. Kept
     /// so it can be listed and forgotten; no path dials it, and it is offered
@@ -76,7 +82,7 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, serverId, name, icon, origins, lastOrigin, token, publicKey, protocolVersion, localDeviceId, addedAt
+        case id, serverId, name, icon, iconOverride, origins, lastOrigin, token, publicKey, protocolVersion, localDeviceId, addedAt
         case sshDestination, tokenScope, agentAccess
     }
 
@@ -89,6 +95,8 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
         name = try c.decode(String.self, forKey: .name)
         // An id only a newer build knows decodes as `.laptop`.
         icon = (try? c.decodeIfPresent(PeerIcon.self, forKey: .icon)) ?? nil
+        // An override only a newer build knows falls back to `icon`.
+        iconOverride = PeerIcon(wireValue: try? c.decodeIfPresent(String.self, forKey: .iconOverride))
         origins = try c.decode([String].self, forKey: .origins)
         lastOrigin = try c.decodeIfPresent(String.self, forKey: .lastOrigin)
         token = try c.decode(String.self, forKey: .token)

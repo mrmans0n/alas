@@ -151,20 +151,26 @@ extension View {
     /// when hover ends, the list scrolls, the view goes away, or on any click,
     /// key press or scroll, and it never takes key focus.
     func agentBadgePopover(_ make: @escaping @MainActor () -> AgentBadgePopoverModel?) -> some View {
-        modifier(AgentBadgePopoverModifier(make: make, isPinned: false))
+        hoverCard({ make().map { AgentBadgePopover(model: $0) } }, isPinned: false)
     }
 
     /// As `agentBadgePopover(_:)`, but `isPinned` holds the card open as if
     /// hovered, even while the app is inactive. Only design captures pin it.
     func agentBadgePopover(_ make: @escaping @MainActor () -> AgentBadgePopoverModel?, isPinned: Bool) -> some View {
-        modifier(AgentBadgePopoverModifier(make: make, isPinned: isPinned))
+        hoverCard({ make().map { AgentBadgePopover(model: $0) } }, isPinned: isPinned)
+    }
+
+    /// Shows the card `make` returns beside this view, with the same delay,
+    /// panel and closing rules as `agentBadgePopover(_:)`.
+    func hoverCard<Card: View>(_ make: @escaping @MainActor () -> Card?, isPinned: Bool = false) -> some View {
+        modifier(HoverCardModifier(make: make, isPinned: isPinned))
     }
 }
 
-private struct AgentBadgePopoverModifier: ViewModifier {
-    static let openDelay: Duration = .milliseconds(350)
+private struct HoverCardModifier<Card: View>: ViewModifier {
+    static var openDelay: Duration { .milliseconds(350) }
 
-    let make: @MainActor () -> AgentBadgePopoverModel?
+    let make: @MainActor () -> Card?
     let isPinned: Bool
 
     @State private var isHovering = false
@@ -192,9 +198,9 @@ private struct AgentBadgePopoverModifier: ViewModifier {
                 }
                 if presenter == nil { presenter = AgentBadgePopoverPresenter() }
                 try? await Task.sleep(for: Self.openDelay)
-                guard !Task.isCancelled, let presenter, let model = make() else { return }
+                guard !Task.isCancelled, let presenter, let card = make() else { return }
                 presenter.show(
-                    AgentBadgePopover(model: model)
+                    card
                         .environment(\.theme, theme)
                         .environment(\.designScale, scale),
                     isPinned: isPinned

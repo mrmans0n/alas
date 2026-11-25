@@ -101,7 +101,7 @@ extension AppState {
                     serverId: peer.serverId, name: peer.name,
                     hostVersion: remotePeers.hostVersions[peer.serverId],
                     canUpdate: canUpdateHostOverPeer(peerId: peer.id, serverId: peer.serverId),
-                    icon: peer.icon ?? .laptop
+                    icon: peer.displayIcon ?? .laptop
                 )
             },
             appVersion: HostUpdateReminderPolicy.appVersion,

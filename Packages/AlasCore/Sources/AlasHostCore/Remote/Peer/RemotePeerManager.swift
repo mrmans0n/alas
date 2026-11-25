@@ -1029,6 +1029,16 @@ public final class RemotePeerManager {
         savePeers()
     }
 
+    /// Sets the icon this Mac shows for `peerId`, or clears it back to the
+    /// one the peer advertises, and tells the sidebar and this Mac's clients.
+    public func setIconOverride(_ icon: PeerIcon?, peerId: String) {
+        guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
+        peers[index].iconOverride = icon
+        durableStateByServerId[peers[index].serverId] = peers[index]
+        savePeers()
+        onFederationEvent?(.availabilityChanged(serverId: peers[index].serverId))
+    }
+
     /// The peers as `alas-host peers list` shows them.
     public var summaries: [HostPeerSummary] {
         peers.map { peer in
@@ -1588,7 +1598,7 @@ extension RemotePeerManager: FederatedPeerLinks {
     /// An inbound-only record is left out: this Mac can never reach that peer.
     public var helloPeers: [RemoteHelloPeer] {
         peers.filter { !$0.isInboundOnly }.map { peer in
-            RemoteHelloPeer(serverId: peer.serverId, name: peer.name, state: helloState(for: peer), icon: peer.icon)
+            RemoteHelloPeer(serverId: peer.serverId, name: peer.name, state: helloState(for: peer), icon: peer.displayIcon)
         }
     }
 

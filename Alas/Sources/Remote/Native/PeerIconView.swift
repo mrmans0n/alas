@@ -88,8 +88,6 @@ struct PeerIconPicker: View {
     @Environment(\.theme) private var theme
     @State private var open = false
 
-    private static let columns = Array(repeating: GridItem(.fixed(44), spacing: 6), count: 4) // design-literal: icon grid cell
-
     var body: some View {
         Button(action: { open.toggle() }) {
             HStack(spacing: 6) {
@@ -119,20 +117,44 @@ struct PeerIconPicker: View {
         .accessibilityLabel("Icon")
         .accessibilityValue(icon.label)
         .popover(isPresented: $open, arrowEdge: .bottom) {
+            PeerIconGrid(selection: icon) { picked in
+                icon = picked
+                open = false
+            }
+        }
+    }
+}
+
+/// Every `PeerIcon` in a grid, for a picker's popover. `resetTitle` adds a
+/// button under the grid that calls `onReset`.
+struct PeerIconGrid: View {
+    let selection: PeerIcon
+    var resetTitle: String? = nil
+    let onPick: (PeerIcon) -> Void
+    var onReset: () -> Void = {}
+    @Environment(\.designScale) private var scale
+    @Environment(\.theme) private var theme
+
+    private static let columns = Array(repeating: GridItem(.fixed(44), spacing: 6), count: 4) // design-literal: icon grid cell
+
+    var body: some View {
+        VStack(spacing: scale.space[2]) {
             LazyVGrid(columns: Self.columns, spacing: 6) {
                 ForEach(PeerIcon.allCases) { option in
                     cell(option)
                 }
             }
-            .padding(scale.space[2])
+            if let resetTitle {
+                AlasButton(title: resetTitle, style: .subtle, action: onReset)
+            }
         }
+        .padding(scale.space[2])
     }
 
     private func cell(_ option: PeerIcon) -> some View {
-        let selected = option == icon
+        let selected = option == selection
         return Button {
-            icon = option
-            open = false
+            onPick(option)
         } label: {
             PeerIconView(icon: option, size: 18)
                 .foregroundColor(theme.color(selected ? "accent" : "fg"))
@@ -147,5 +169,41 @@ struct PeerIconPicker: View {
         .help(option.label)
         .accessibilityLabel(option.label)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// A paired Mac's tile that opens `PeerIconGrid` to pick the icon this Mac
+/// shows for it. `onPick(nil)` goes back to the icon the peer advertises.
+struct PeerIconTileButton: View {
+    let icon: PeerIcon
+    let presenceToken: String
+    let side: CGFloat
+    let peerName: String
+    let isOverridden: Bool
+    let onPick: (PeerIcon?) -> Void
+    @State private var open = false
+
+    var body: some View {
+        Button { open.toggle() } label: {
+            PeerIconTile(icon: icon, presenceToken: presenceToken, side: side)
+        }
+        .buttonStyle(.plain)
+        .help("Change the icon this Mac shows for \(peerName)")
+        .accessibilityLabel("Icon")
+        .accessibilityValue(icon.label)
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            PeerIconGrid(
+                selection: icon,
+                resetTitle: isOverridden ? "Use \(peerName)'s own" : nil,
+                onPick: { picked in
+                    onPick(picked)
+                    open = false
+                },
+                onReset: {
+                    onPick(nil)
+                    open = false
+                }
+            )
+        }
     }
 }

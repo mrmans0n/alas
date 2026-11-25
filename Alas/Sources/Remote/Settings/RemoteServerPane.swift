@@ -979,7 +979,15 @@ extension RemoteServerPane {
             onDestructive: { confirmingForget = true },
             onDone: { activeSheet = nil }
         ) {
-            PeerIconTile(icon: entry.icon, presenceToken: presence(of: entry).colorToken, side: 40)
+            if let peer {
+                PeerIconTileButton(
+                    icon: entry.icon, presenceToken: presence(of: entry).colorToken, side: 40,
+                    peerName: entry.name, isOverridden: peer.iconOverride != nil,
+                    onPick: { state.remotePeers.setIconOverride($0, peerId: peer.id) }
+                )
+            } else {
+                PeerIconTile(icon: entry.icon, presenceToken: presence(of: entry).colorToken, side: 40)
+            }
         } content: {
             RemoteEntrySheetSection(title: "Connection") {
                 if let peer {
