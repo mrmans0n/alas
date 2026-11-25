@@ -122,6 +122,8 @@ struct ACPMarkdownText: View {
             }
             .frame(maxWidth: proseMaxWidth ?? .infinity, alignment: .leading)
         case .quote(let text):
+            // No trailing `Spacer`: the stack's spacing before it narrowed the text past the width
+            // `ACPTranscriptMarkdownLayout` breaks it to, so a finished message could rewrap.
             HStack(alignment: .top, spacing: 10) {
                 Rectangle()
                     .fill(theme.color("accent").opacity(0.55))
@@ -135,7 +137,6 @@ struct ACPMarkdownText: View {
                 )
                     .lineSpacing(lineSpacing)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer(minLength: 0)
             }
             .frame(maxWidth: proseMaxWidth ?? .infinity, alignment: .leading)
         case .alert(let kind, let text):
@@ -144,9 +145,17 @@ struct ACPMarkdownText: View {
                     .fill(theme.color(kind.colorToken))
                     .frame(width: 2)
                 VStack(alignment: .leading, spacing: scale.space[1]) {
-                    Label(kind.title, systemImage: kind.symbol)
-                        .font(.system(size: typography.paragraphSize, weight: .semibold))
-                        .foregroundStyle(theme.color(kind.colorToken))
+                    // The icon and line height `ACPTranscriptMarkdownLayout` draws natively, so a finished
+                    // message keeps its shape.
+                    HStack(spacing: ACPTranscriptMarkdownLayout.alertIconSpacing) {
+                        Image(nsImage: ACPTranscriptMarkdownLayout.alertIcon(
+                            kind, color: theme.nsColor(kind.colorToken), typography: typography
+                        ))
+                        Text(kind.title)
+                            .font(Font(ACPTranscriptMarkdownLayout.alertTitleFont(typography)))
+                            .foregroundStyle(theme.color(kind.colorToken))
+                    }
+                    .frame(height: ACPTranscriptMarkdownLayout.alertTitleHeight(typography))
                     if !text.isEmpty {
                         ACPMarkdownInlineText(
                             source: text,
@@ -159,7 +168,6 @@ struct ACPMarkdownText: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                Spacer(minLength: 0)
             }
             .accessibilityElement(children: .combine)
             .frame(maxWidth: proseMaxWidth ?? .infinity, alignment: .leading)

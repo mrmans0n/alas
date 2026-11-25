@@ -83,6 +83,12 @@ struct ACPTranscriptMarkdownLayout {
         let color: NSColor
     }
 
+    /// A symbol drawn beside text, such as an alert's: its image, tinted, and its rect.
+    struct Icon {
+        let image: NSImage
+        let rect: CGRect
+    }
+
     struct Background {
         let rect: CGRect
         let color: NSColor
@@ -101,6 +107,8 @@ struct ACPTranscriptMarkdownLayout {
     static let quoteBarWidth: CGFloat = 2
     static let quoteBarGap: CGFloat = 10
     static let quoteBarAlpha: CGFloat = 0.55
+    /// Between an alert's icon and its title, here and in `ACPMarkdownText`.
+    static let alertIconSpacing: CGFloat = 6
     static let codeBackgroundAlpha: CGFloat = 0.6
     static let codeBodyHorizontalPadding: CGFloat = 12
     static let codeBodyVerticalPadding: CGFloat = 8
@@ -132,6 +140,7 @@ struct ACPTranscriptMarkdownLayout {
     let height: CGFloat
     let lines: [Line]
     let backgrounds: [Background]
+    let icons: [Icon]
     /// The selectable text of each block, in order: rendered inline markdown
     /// (no backticks or asterisks) and code bodies.
     let texts: [String]
@@ -146,7 +155,7 @@ struct ACPTranscriptMarkdownLayout {
     /// The tallest line, so a vertical lookup can search on line tops alone.
     let maxLineHeight: CGFloat
 
-    /// Whether every block can be drawn here. Images, Mermaid diagrams, visuals, charts, alerts,
+    /// Whether every block can be drawn here. Images, Mermaid diagrams, visuals, charts,
     /// `<details>` sections and task lists need views of their own, and so do tables of more than
     /// `maxNativeTableColumns` columns. So does prose with an inline image:
     /// the SwiftUI renderer turns it into a text attachment that `CTLineDraw`
@@ -155,12 +164,12 @@ struct ACPTranscriptMarkdownLayout {
     static func supports(_ blocks: [ACPMarkdownParser.Block]) -> Bool {
         blocks.allSatisfy { block in
             switch block {
-            case .image, .mermaid, .visual, .chart, .taskList, .alert, .details: false
+            case .image, .mermaid, .visual, .chart, .taskList, .details: false
             case .streamingCode(let language, _): !VisualFence.isVisual(language: language)
             case .table(let header, let rows):
                 max(header.count, rows.map(\.count).max() ?? 0) <= maxNativeTableColumns
                     && !(header + rows.flatMap { $0 }).contains { $0.contains("![") }
-            case .heading(_, let text), .paragraph(let text), .quote(let text): !text.contains("![")
+            case .heading(_, let text), .paragraph(let text), .quote(let text), .alert(_, let text): !text.contains("![")
             case .code: true
             }
         }
@@ -179,7 +188,7 @@ struct ACPTranscriptMarkdownLayout {
             builder.add(block)
         }
         return ACPTranscriptMarkdownLayout(
-            width: max(1, width), wideWidth: wideWidth, height: builder.y, lines: builder.lines, backgrounds: builder.backgrounds,
+            width: max(1, width), wideWidth: wideWidth, height: builder.y, lines: builder.lines, backgrounds: builder.backgrounds, icons: builder.icons,
             texts: builder.texts, attributedTexts: builder.attributedTexts, codeBlocks: builder.codeBlocks,
             copyButtonStyle: builder.copyButtonStyle, tables: builder.tables, blockSeparators: builder.blockSeparators,
             maxLineHeight: builder.lines.map(\.height).max() ?? 0
@@ -341,6 +350,25 @@ struct ACPTranscriptMarkdownLayout {
         font.ascender.rounded() + ceil(-font.descender) + ceil(font.leading)
     }
 
+    /// An alert's title, as `ACPMarkdownText` sets it.
+    static func alertTitleFont(_ typography: ACPChatTypography) -> NSFont {
+        .systemFont(ofSize: typography.paragraphSize, weight: .semibold)
+    }
+
+    /// An alert's symbol in `color`, as both renderers draw it.
+    static func alertIcon(_ kind: ACPMarkdownParser.AlertKind, color: NSColor, typography: ACPChatTypography) -> NSImage {
+        let configuration = NSImage.SymbolConfiguration(pointSize: typography.paragraphSize, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        return NSImage(systemSymbolName: kind.symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration) ?? NSImage()
+    }
+
+    /// How tall an alert's icon and title line is in both renderers: the title's line, which the
+    /// SwiftUI row pins so the symbol's own height, which differs from `NSImage`'s, can't change it.
+    static func alertTitleHeight(_ typography: ACPChatTypography) -> CGFloat {
+        swiftUILineHeight(of: alertTitleFont(typography))
+    }
+
     /// Inside the Copy button's padding, here and in `CodeBlockView`, which pins
     /// it: the height of SwiftUI's symbol image changes with the point size in
     /// ways `NSImage` does not report, and half-point chat sizes hit that.
@@ -491,6 +519,7 @@ struct ACPTranscriptMarkdownLayout {
         var y: CGFloat = 0
         var lines: [Line] = []
         var backgrounds: [Background] = []
+        var icons: [Icon] = []
         var texts: [String] = []
         var attributedTexts: [NSAttributedString] = []
         var codeBlocks: [CodeBlock] = []
@@ -547,13 +576,15 @@ struct ACPTranscriptMarkdownLayout {
                     color: theme.nsColor("accent").withAlphaComponent(ACPTranscriptMarkdownLayout.quoteBarAlpha),
                     cornerRadius: 0 // design-literal: a quote bar is a plain rule
                 ))
+            case .alert(let kind, let text):
+                addAlert(kind: kind, text: text)
             case .code(let language, let body):
                 addCode(language: language, body: body, highlighted: true)
             case .streamingCode(let language, let body):
                 addCode(language: language, body: body, highlighted: false)
             case .table(let header, let rows):
                 addTable(header: header, rows: rows)
-            case .taskList, .image, .mermaid, .visual, .chart, .alert, .details:
+            case .taskList, .image, .mermaid, .visual, .chart, .details:
                 break
             }
         }
@@ -631,6 +662,33 @@ struct ACPTranscriptMarkdownLayout {
                 ))
             }
             return result
+        }
+
+        /// As `ACPMarkdownText`'s alert: a bar in the kind's color beside its icon and title, then the body.
+        private mutating func addAlert(kind: ACPMarkdownParser.AlertKind, text: String) {
+            typealias L = ACPTranscriptMarkdownLayout
+            let top = y
+            let x = L.quoteBarWidth + L.quoteBarGap
+            let color = theme.nsColor(kind.colorToken)
+            let font = L.alertTitleFont(typography)
+            let titleHeight = L.alertTitleHeight(typography)
+            let icon = L.alertIcon(kind, color: color, typography: typography)
+            icons.append(Icon(image: icon, rect: CGRect(
+                x: x, y: top + (titleHeight - icon.size.height) / 2, width: icon.size.width, height: icon.size.height
+            )))
+            let titleX = x + icon.size.width + L.alertIconSpacing
+            addBlockText(
+                NSAttributedString(string: kind.title, attributes: [.font: font, .foregroundColor: color]),
+                x: titleX, width: max(1, width - titleX), lineHeight: titleHeight
+            )
+            if !text.isEmpty {
+                y += scale.space[1]
+                addSpacedBlockText(inline(text, role: .body), x: x, width: max(1, width - x), lineSpacing: scale.transcriptLineSpacing)
+            }
+            backgrounds.append(Background(
+                rect: CGRect(x: 0, y: top, width: L.quoteBarWidth, height: y - top), color: color,
+                cornerRadius: 0 // design-literal: an alert bar is a plain rule, as a quote's
+            ))
         }
 
         private mutating func addCode(language: String?, body: String, highlighted: Bool) {
