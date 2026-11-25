@@ -72,6 +72,34 @@ the latest release when a paired Mac asks it to. On Linux it has no VMs,
 computer use, simulators, dictation, plugins or Apple's on-device model; agents,
 consoles, run scripts, schedules, reviews and shepherds work as on a Mac.
 
+### On a Linux desktop
+
+The host serves the web client, so a Linux desktop uses Alas in the browser,
+installed as an app. After the install above, serve it to this machine only
+and pair the browser:
+
+```bash
+alas-host config set host.reachability loopback --restart
+alas-host pair
+```
+
+Open the link `pair` prints in Chrome or Chromium. To give it its own window,
+dock icon and keyboard shortcuts, choose **Install Alas** from the install icon
+in the address bar (or ⋮ › Cast, save and share › Install page as app). The
+installed app opens even while the host is down and reconnects once it is
+back.
+
+The browser gets no terminals until you allow it:
+
+```bash
+alas-host browsers list
+alas-host browsers terminals <id|name> on
+```
+
+To use the same host from a Mac or phone as well, choose `lan` or `tailscale`
+instead of `loopback`; the browser on this machine keeps working, since
+loopback is always served.
+
 ### Set up from another Mac
 
 Alas can do all of the above, plus [Configure](#configure),
@@ -248,7 +276,7 @@ It prints the code on the first line of stdout and a pairing link on the
 second. The code is valid for two minutes (stderr says until when); enter it in
 the Alas phone app or the web client. Devices you paired with the app on this
 profile stay paired. When every address the host serves is loopback, stderr
-also notes that only this Mac or a tunnel reaches it.
+also notes that only this machine or a tunnel reaches it.
 
 ### Terminals in a browser
 

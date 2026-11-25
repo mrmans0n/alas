@@ -128,7 +128,7 @@ enum HostCommands {
                 case .builtin(let agentID): "  (built in: agents.\(agentID).enabled)"
                 case .installed: "  (installed)"
                 case .updateAvailable(let version): "  (installed \(version); install updates it)"
-                case .unsupported: "  (no build for this Mac)"
+                case .unsupported: "  (no build for this machine)"
                 case .notInstalled: ""
                 }
                 print("\(agent.id)  \(agent.name)  \(agent.version)\(note)")
@@ -151,7 +151,7 @@ enum HostCommands {
             case .builtin(let agentID):
                 throw HostCommandError("\(agent.name) ships with Alas; turn it on or off with agents.\(agentID).enabled.")
             case .unsupported:
-                throw HostCommandError("\(agent.name) has no build for this Mac.")
+                throw HostCommandError("\(agent.name) has no build for this machine.")
             case .installed:
                 print("\(agent.name) \(agent.version) is already installed.")
                 return
