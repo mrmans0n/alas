@@ -1,4 +1,4 @@
-const CACHE_NAME = "alas-remote-shell-v122";
+const CACHE_NAME = "alas-remote-shell-v123";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
@@ -20,7 +20,7 @@ const SHELL_ASSETS = [
   "/xterm.min.js?v=1",
   "/xterm-addon-fit.min.js?v=1",
   "/xterm.css?v=1",
-  "/app.js?v=130",
+  "/app.js?v=131",
   "/marked.min.js?v=28",
   "/purify.min.js?v=28",
   "/manifest.webmanifest",

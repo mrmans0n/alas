@@ -198,6 +198,11 @@ function receivePong(requestId) {
   const label = document.querySelector("#server-list .server-row.is-active .server-latency");
   if (label) label.textContent = `${latency.ms} ms`;
 }
+function restartLatency() {
+  latency.ms = null;
+  $("status").title = "";
+  sendPing();
+}
 setInterval(sendPing, 10000);
 document.addEventListener("visibilitychange", sendPing);
 
@@ -238,9 +243,7 @@ function onActiveOpen() {
   setStatus(connectedLabel(), "ok");
   hideGate();
   send({ type: "listSessions" });
-  latency.ms = null;
-  $("status").title = "";
-  sendPing();
+  restartLatency();
   applyActiveCapabilities();
   terminals.reconnected();
   resubscribe();   // re-sync images and transcript after reconnect
