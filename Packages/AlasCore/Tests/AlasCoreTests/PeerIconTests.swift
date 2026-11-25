@@ -19,4 +19,18 @@ struct PeerIconTests {
     func anUnknownWireValueIsNoIcon(_ value: String?) {
         #expect(PeerIcon(wireValue: value) == nil)
     }
+
+    /// An override this build doesn't know falls back to the peer's own icon
+    /// rather than failing the whole peer store.
+    @Test(arguments: [
+        (nil, nil), ("\"macStudio\"", PeerIcon.macStudio), ("\"toaster\"", nil),
+    ] as [(String?, PeerIcon?)])
+    func aRecordDecodesItsIconOverride(_ override: String?, _ expected: PeerIcon?) throws {
+        let extra = override.map { #","iconOverride":\#($0)"# } ?? ""
+        let json = #"{"id":"p","serverId":"s","name":"m1max","icon":"server","origins":[],"token":"t","addedAt":0\#(extra)}"#
+        let peer = try JSONDecoder().decode(RemotePeer.self, from: Data(json.utf8))
+        #expect(peer.name == "m1max")
+        #expect(peer.iconOverride == expected)
+        #expect(peer.displayIcon == expected ?? .server)
+    }
 }
