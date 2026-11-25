@@ -510,6 +510,8 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 .server-main { flex: 1; min-width: 0; }
 .server-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .server-origin { color: var(--fg-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-latency { flex: none; color: var(--fg-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.server-latency:empty { display: none; }
 .server-menu { flex: 0 0 auto; }
 .dot.off { background: oklch(1 0 0 / 0.18); }
 .dot.connecting { background: var(--mod); }

@@ -17,7 +17,7 @@ import AlasAgents
 extension RemoteClientMessage {
     public var sessionId: String? {
         switch self {
-        case .helloAck, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
+        case .helloAck, .ping, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
              .createWorktreeSession, .createSession, .console, .device, .portForward, .host, .peerHost, .pushRegistration:
             return nil
         case .subscribe(let id), .unsubscribe(let id), .takeOver(let id), .stop(let id), .queueClear(let id),
@@ -38,7 +38,7 @@ extension RemoteClientMessage {
 
     public func replacingSessionId(_ new: String) -> RemoteClientMessage {
         switch self {
-        case .helloAck, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
+        case .helloAck, .ping, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
              .createWorktreeSession, .createSession, .console, .device, .portForward, .host, .peerHost, .pushRegistration:
             return self
         case .subscribe: return .subscribe(sessionId: new)
@@ -104,7 +104,7 @@ extension RemoteClientMessage {
 extension RemoteServerMessage {
     public var sessionId: String? {
         switch self {
-        case .hello, .identityProof, .console, .device, .portForward, .host, .peerHost, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
+        case .hello, .pong, .identityProof, .console, .device, .portForward, .host, .peerHost, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
              .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .worktreeSessionNeedsRepoHookApproval,
              .sessionCreated, .createSessionFailed:
             return nil
@@ -137,7 +137,7 @@ extension RemoteServerMessage {
 
     public func replacingSessionId(_ new: String) -> RemoteServerMessage {
         switch self {
-        case .hello, .identityProof, .console, .device, .portForward, .host, .peerHost, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
+        case .hello, .pong, .identityProof, .console, .device, .portForward, .host, .peerHost, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
              .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .worktreeSessionNeedsRepoHookApproval,
              .sessionCreated, .createSessionFailed:
             return self

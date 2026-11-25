@@ -179,6 +179,33 @@ function retryConnection() {
 
 function activeServer() { return hub.servers.find((s) => s.id === hub.activeId) || null; }
 
+// Round trip to the active host, timed by a ping every 10 s while the page is
+// visible. Hosts without `pong` never answer, so it stays null and nothing shows.
+const latency = { ms: null, requestId: "", sentAt: 0 };
+function sendPing() {
+  const link = links.activeLink();
+  if (document.hidden || !link || link.state !== "online") return;
+  latency.requestId = Math.random().toString(36).slice(2, 10);
+  latency.sentAt = performance.now();
+  send({ type: "ping", requestId: latency.requestId });
+}
+function receivePong(requestId) {
+  if (requestId !== latency.requestId) return;
+  latency.ms = Math.round(performance.now() - latency.sentAt);
+  latency.requestId = "";
+  $("status").title = `${latency.ms} ms to the host`;
+  // In place: rebuilding the list every 10 s would drop keyboard focus.
+  const label = document.querySelector("#server-list .server-row.is-active .server-latency");
+  if (label) label.textContent = `${latency.ms} ms`;
+}
+function restartLatency() {
+  latency.ms = null;
+  $("status").title = "";
+  sendPing();
+}
+setInterval(sendPing, 10000);
+document.addEventListener("visibilitychange", sendPing);
+
 function connectedLabel() {
   const server = activeServer();
   return server ? (server.name || server.lastOrigin) : "Connected";
@@ -216,6 +243,7 @@ function onActiveOpen() {
   setStatus(connectedLabel(), "ok");
   hideGate();
   send({ type: "listSessions" });
+  restartLatency();
   applyActiveCapabilities();
   terminals.reconnected();
   resubscribe();   // re-sync images and transcript after reconnect
@@ -386,6 +414,7 @@ function handle(msg) {
     case "transcriptDelta": applyDelta(msg); break;
     case "transcriptPage": applyPage(msg); break;
     case "stopPending": if (msg.sessionId === currentSession) markStopping(true); break;
+    case "pong": receivePong(msg.requestId); break;
     case "queueState": applyQueueState(msg); break;
     case "turnCaptions": applyTurnCaptions(msg); break;
     case "queueEditRestored": applyQueueEditRestored(msg); break;
@@ -1799,6 +1828,10 @@ function renderServerList() {
     main.append(el("div", "server-name", server.name || server.lastOrigin));
     main.append(el("div", "server-origin", serverSubtitle(server, link)));
     row.append(main);
+    if (server.id === hub.activeId) {
+      const online = link && link.state === "online" && latency.ms !== null;
+      row.append(el("span", "server-latency", online ? `${latency.ms} ms` : ""));
+    }
     if (counts.attention > 0) row.append(el("span", "tab-count", String(counts.attention)));
     const menu = el("button", "iconbtn server-menu", "⋯");
     menu.type = "button";

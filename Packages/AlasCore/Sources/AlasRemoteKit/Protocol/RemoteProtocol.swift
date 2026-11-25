@@ -357,6 +357,8 @@ public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, Se
     case listSessions
     case listWorktrees
     case listAgents
+    /// Answered at once with `pong` carrying the same id; clients time it for latency.
+    case ping(requestId: String)
     case listProjects
     case listBranches(projectId: String)
     case createWorktreeSession(
@@ -476,6 +478,7 @@ extension RemoteClientMessageOf: Codable {
         case "listSessions": self = .listSessions
         case "listWorktrees": self = .listWorktrees
         case "listAgents": self = .listAgents
+        case "ping": self = .ping(requestId: try c.decode(String.self, forKey: .requestId))
         case "listProjects": self = .listProjects
         case "listBranches":
             self = .listBranches(projectId: try c.decode(String.self, forKey: .projectId))
@@ -690,6 +693,9 @@ extension RemoteClientMessageOf: Codable {
             try c.encode("listWorktrees", forKey: .type)
         case .listAgents:
             try c.encode("listAgents", forKey: .type)
+        case .ping(let requestId):
+            try c.encode("ping", forKey: .type)
+            try c.encode(requestId, forKey: .requestId)
         case .listProjects:
             try c.encode("listProjects", forKey: .type)
         case .listBranches(let projectId):
@@ -1020,6 +1026,8 @@ public enum RemoteServerMessageOf<ServerHost: Codable & Equatable & Sendable, Cl
         epoch: Int, revision: Int, hasCancellableBackgroundWork: Bool = false)
     case transcriptPage(sessionId: String, epoch: Int, firstIndex: Int, messages: [RemoteWireMessage])
     case stopPending(sessionId: String)
+    /// Answer to a client's `ping`. Hosts before it ignore `ping`.
+    case pong(requestId: String)
     case permissionRequest(sessionId: String, payload: RemotePermissionPayload)
     case permissionResolved(sessionId: String, requestId: Int)
     case questionRequest(sessionId: String, payload: RemoteQuestionPayload)
@@ -1231,6 +1239,8 @@ extension RemoteServerMessageOf: Codable {
                 messages: try c.decode([RemoteWireMessage].self, forKey: .messages))
         case "stopPending":
             self = .stopPending(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "pong":
+            self = .pong(requestId: try c.decode(String.self, forKey: .requestId))
         case "permissionRequest":
             self = .permissionRequest(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -1557,6 +1567,9 @@ extension RemoteServerMessageOf: Codable {
             try c.encode(epoch, forKey: .epoch)
             try c.encode(firstIndex, forKey: .firstIndex)
             try c.encode(m, forKey: .messages)
+        case .pong(let requestId):
+            try c.encode("pong", forKey: .type)
+            try c.encode(requestId, forKey: .requestId)
         case .stopPending(let id):
             try c.encode("stopPending", forKey: .type)
             try c.encode(id, forKey: .sessionId)
