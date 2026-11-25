@@ -162,6 +162,26 @@ struct RemotePairingServiceTests {
         #expect(changed == [browserID])
     }
 
+    /// Pairing a browser again with the hash of the token it holds replaces
+    /// its record and keeps its terminals; another browser's record is left alone.
+    @Test func aBrowserPairingAgainReplacesItsRecord() throws {
+        let svc = make()
+        let hash = { (token: String) in SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined() }
+        let first = try svc.redeem(code: svc.beginPairing(), deviceName: "Chrome on Linux")
+        let other = try svc.redeem(code: svc.beginPairing(), deviceName: "Safari on macOS")
+        let phone = try svc.redeem(code: svc.beginPairing(), deviceName: "Phone", kind: .phone)
+        #expect(svc.setAllowsTerminals(true, deviceId: try #require(svc.validate(token: first))))
+
+        let second = try svc.redeem(code: svc.beginPairing(), deviceName: "Chrome on Linux",
+                                    replacing: [hash(first), hash(phone), hash("not a token")])
+
+        #expect(svc.validate(token: first) == nil)
+        #expect(svc.validate(token: other) != nil)
+        #expect(svc.validate(token: phone) != nil)
+        #expect(svc.device(id: try #require(svc.validate(token: second)))?.allowsTerminals == true)
+        #expect(svc.devices.count == 3)
+    }
+
     @Test func cancellingApprovedCounterCodeRevokesItsAlreadyRedeemedGrant() throws {
         let store = InMemoryDeviceStore()
         let service = RemotePairingService(store: store)

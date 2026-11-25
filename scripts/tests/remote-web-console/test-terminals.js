@@ -123,4 +123,28 @@ async function finishLoadingXterm() {
   assert.match(el.error.textContent, /Couldn't load/);
   assert.ok(!el.listLevel.classList.contains("hidden"));
   console.log("✔ a terminal whose xterm fails to load reports it in the list");
+
+  // A terminal this browser opens is its own: it takes control once attached. One picked from the list stays a viewer.
+  await finishLoadingXterm();
+  const mine = globalThis.RemoteTerminals.createTerminals({ send: m => sent.push(m.console), el });
+  mine.setCapabilities([globalThis.RemoteTerminals.TERMINAL_CAPABILITY, "peerConsoleOpen.v1"]);
+  mine.setWorktree("w");
+  mine.show();
+  mine.handle({ list: { consoles: [summary("A")] } });
+  const attachAndCount = async () => {
+    for (let i = 0; i < 5; i += 1) await new Promise(resolve => setTimeout(resolve));
+    const attach = sent.filter(m => m.attach).at(-1).attach;
+    mine.handle({ attached: { attachmentId: attach.attachmentId, rows: 24, columns: 80, control: { owner: "host", generation: 1, change: "current" } } });
+    return sent.filter(m => m.takeControl && m.takeControl.attachmentId === attach.attachmentId).length;
+  };
+  sent.length = 0;
+  el.list.children[0].children[0].click();
+  assert.equal(await attachAndCount(), 0);
+  sent.length = 0;
+  el.openButton.click();
+  const requestId = sent.find(m => m.open).open.requestId;
+  mine.handle({ list: { consoles: [summary("A"), summary("N")] } });
+  mine.handle({ opened: { requestId, consoleId: "N" } });
+  assert.equal(await attachAndCount(), 1);
+  console.log("✔ a terminal this browser opens takes control once attached");
 })().catch(error => { console.error("✘", error); process.exit(1); });

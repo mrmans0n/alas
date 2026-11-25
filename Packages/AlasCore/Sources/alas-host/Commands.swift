@@ -116,6 +116,10 @@ enum HostCommands {
             let browser = try HostBrowserSummary.resolve(arguments[1], in: try await listBrowsers())
             try await setBrowserTerminals(browser.id, allowed)
             print("\(browser.id)  \(browser.name)  terminals: \(allowed ? "on" : "off")")
+        case ("browsers", "remove", 2):
+            let browser = try HostBrowserSummary.resolve(arguments[1], in: try await listBrowsers())
+            try await forgetBrowser(browser.id)
+            print("\(browser.id)  \(browser.name)")
         case ("registry", "search", 1), ("registry", "search", 2):
             let query = arguments.count == 2 ? arguments[1] : ""
             let installed = readConfig().agents.registry
@@ -329,6 +333,14 @@ enum HostCommands {
     static func setBrowserTerminals(_ id: String, _ allowed: Bool) async throws {
         try await perform(.setBrowserTerminals(deviceID: id, allowed: allowed)) { $0 == .done ? () : nil } inProcess: { _ in
             guard RemotePairingService(store: FileDeviceStore()).setAllowsTerminals(allowed, deviceId: id) else {
+                throw HostError.notFound(what: "browser \(id)")
+            }
+        }
+    }
+
+    static func forgetBrowser(_ id: String) async throws {
+        try await perform(.forgetBrowser(deviceID: id)) { $0 == .done ? () : nil } inProcess: { _ in
+            guard RemotePairingService(store: FileDeviceStore()).forgetBrowser(deviceId: id) else {
                 throw HostError.notFound(what: "browser \(id)")
             }
         }

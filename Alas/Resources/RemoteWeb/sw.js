@@ -1,4 +1,4 @@
-const CACHE_NAME = "alas-remote-shell-v124";
+const CACHE_NAME = "alas-remote-shell-v125";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
@@ -9,18 +9,18 @@ const SHELL_ASSETS = [
   "/changes-view.js?v=11",
   "/file-browser.js?v=3",
   "/peer-icons.js?v=1",
-  "/hub-registry.js?v=5",
-  "/hub-links.js?v=2",
+  "/hub-registry.js?v=6",
+  "/hub-links.js?v=3",
   "/visual-aid.js?v=8",
   "/transcript-markdown.js?v=2",
   "/turn-changes.js?v=1",
   "/peer-console.js?v=1",
-  "/terminals.js?v=8",
+  "/terminals.js?v=9",
   // terminals.js loads these on first use; cached so a cached shell can still open a reachable host's terminals.
   "/xterm.min.js?v=1",
   "/xterm-addon-fit.min.js?v=1",
   "/xterm.css?v=1",
-  "/app.js?v=132",
+  "/app.js?v=133",
   "/marked.min.js?v=28",
   "/purify.min.js?v=28",
   "/manifest.webmanifest",

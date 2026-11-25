@@ -17,7 +17,7 @@ usage: alas-host [--wait-for-lock]
        alas-host install-agent | uninstall-agent
        alas-host config list | get [<key>] | set <key> <value> [--restart]
        alas-host peers list | add <pairing-link> | remove <id|name|serverId>
-       alas-host browsers list | terminals <id|name> on|off
+       alas-host browsers list | terminals <id|name> on|off | remove <id|name>
        alas-host project list | add <path> [--name <name>] | remove <id|path>
        alas-host registry search [<query>] | install <id> | uninstall <id>
        alas-host restart

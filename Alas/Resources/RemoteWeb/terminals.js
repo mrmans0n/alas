@@ -106,6 +106,11 @@ function createTerminals({ send, el, keepView = () => false, onView = () => {} }
   function renderView() {
     if (!view) return;
     const a = view.attachment;
+    // A console this browser just opened is its own: type into it straight away.
+    if (view.claim && a.phase === "live") {
+      view.claim = false;
+      if (!a.isControlling) a.takeControl();
+    }
     el.title.textContent = view.title;
     el.control.classList.toggle("hidden", a.phase !== "live");
     el.control.textContent = a.isControlling ? "Release" : "Take control";
@@ -133,7 +138,7 @@ function createTerminals({ send, el, keepView = () => false, onView = () => {} }
     a.viewResized(view.term.rows, view.term.cols);
   }
 
-  async function showConsole(summary) {
+  async function showConsole(summary, claim = false) {
     closeConsole();
     error = "";
     const current = selection;
@@ -170,7 +175,7 @@ function createTerminals({ send, el, keepView = () => false, onView = () => {} }
     term.onBinary(data => attachment.viewWrote(Uint8Array.from(data, c => c.charCodeAt(0) & 0xff)));
     const observer = new ResizeObserver(() => fitView());
     observer.observe(el.screen);
-    view = { attachment, term, fit, observer, title: summary.title };
+    view = { attachment, term, fit, observer, title: summary.title, claim };
     attachment.attach();
     renderView();
     onView(summary.title);
@@ -254,7 +259,7 @@ function createTerminals({ send, el, keepView = () => false, onView = () => {} }
         opening = null;
         // The host lists the new console before it answers.
         const summary = (consoles || []).find(c => c.consoleId === body.consoleId);
-        if (summary && shown) showConsole(summary); else renderList();
+        if (summary && shown) showConsole(summary, true); else renderList();
       } else if ((kind === "openFailed" || kind === "openNeedsRepoHookApproval") && body.requestId === opening) {
         opening = null;
         error = body.message || "This worktree's session-open hook needs approval on its machine.";
