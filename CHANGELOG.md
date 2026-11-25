@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Customize a macOS VM base in Project Settings and reuse it for new worktree VMs and Reset from scratch.
+
 ## [0.24.10] - 2026-11-24
 
 ### ✨ Features

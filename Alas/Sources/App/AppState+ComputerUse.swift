@@ -122,7 +122,17 @@ extension AppState {
     func performComputerUse(
         _ command: ComputerUseCommand, sessionID: String, worktreeID: String?, autoStarted: Bool = false
     ) async -> AlasCLIResponse {
-        switch vmRoute(worktreeID: worktreeID, requested: command.vm) {
+        var route = vmRoute(worktreeID: worktreeID, requested: command.vm)
+        if !autoStarted, let worktreeID, route.permitsProjectBaseCreation(vmRun: false) {
+            do {
+                if try ensureProjectBaseGuest(worktreeID: worktreeID, sessionID: sessionID) {
+                    route = vmRoute(worktreeID: worktreeID, requested: command.vm)
+                }
+            } catch {
+                return .error("computer_vm_create_failed: \(error.localizedDescription)")
+            }
+        }
+        switch route {
         case .desktop:
             return await computerUse.perform(command, sessionID: sessionID)
         case .ambiguous:
@@ -251,12 +261,21 @@ extension AppState {
     /// The route a VM tool call takes: a running VM of the named guest answers without touching
     /// the registry, otherwise one lockless registry read.
     private func vmRoute(worktreeID: String?, requested: VMGuestOS?) -> VMComputerUseRoute {
-        VMComputerUseRoute.resolve(
+        if let worktreeID, VMIdentity.projectDraftID(recordID: worktreeID) != nil {
+            return .vmMissing(guest: requested ?? .macOS)
+        }
+        return VMComputerUseRoute.resolve(
             worktreeID: worktreeID,
             kinds: worktreeID.flatMap { vmManager.vmKinds(forWorktree: $0) },
             requested: requested,
             runningHere: { [vmManager] guest in worktreeID.map { vmManager.running($0, guest: guest) != nil } ?? false }
         )
+    }
+
+    private func ensureProjectBaseGuest(worktreeID: String, sessionID: String) throws -> Bool {
+        guard WorktreeVMManager.isSupported, !vmStoppedSessions.contains(sessionID),
+              !computerUse.isStopped(sessionID: sessionID) else { return false }
+        return try vmManager.createFromProjectBaseIfPresent(worktreeID: worktreeID)
     }
 
     /// `vm_run`: runs a shell command in the guest of the session's worktree VM. A session the
@@ -266,7 +285,17 @@ extension AppState {
         autoStarted: Bool = false
     ) async -> AlasCLIResponse {
         guard WorktreeVMManager.isSupported else { return .error(VMComputerUseRoute.vmUnsupportedMessage) }
-        switch vmRoute(worktreeID: worktreeID, requested: vm) {
+        var route = vmRoute(worktreeID: worktreeID, requested: vm)
+        if !autoStarted, let worktreeID, route.permitsProjectBaseCreation(vmRun: true) {
+            do {
+                if try ensureProjectBaseGuest(worktreeID: worktreeID, sessionID: sessionID) {
+                    route = vmRoute(worktreeID: worktreeID, requested: vm ?? .macOS)
+                }
+            } catch {
+                return .error("computer_vm_create_failed: \(error.localizedDescription)")
+            }
+        }
+        switch route {
         case .desktop:
             return .error(VMComputerUseRoute.vmMissingMessage)
         case .vmMissing(let guest):
@@ -398,6 +427,10 @@ extension AppState {
     /// How the user knows VM `recordID`: its worktree's title.
     func vmDisplayName(forRecordID id: String) -> String {
         if id.hasPrefix(WorktreeVMManager.goldenIDPrefix) { return "macOS setup VM" }
+        if let draft = VMIdentity.projectDraftID(recordID: id) {
+            let projectID = vmManager.projectIDForDraft(draft)
+            return projects.first { $0.id == projectID }.map { "\($0.name) setup VM" } ?? "Project base setup VM"
+        }
         let worktreeID = VMIdentity.parse(recordID: id).worktree
         return projectAndWorktree(withWorktreeId: worktreeID)?.worktree.title
             ?? URL(fileURLWithPath: worktreeID).lastPathComponent

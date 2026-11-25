@@ -162,10 +162,10 @@ final class WorktreeVMManagerTests {
 
     private var linuxHelperDirectory: URL { root.appendingPathComponent("linux-helper", isDirectory: true) }
 
-    private func makeManager() -> WorktreeVMManager {
+    private func makeManager(registry override: WorktreeVMRegistry? = nil) -> WorktreeVMManager {
         let hypervisor = hypervisor
         let manager = WorktreeVMManager(
-            registry: registry, root: root, helperDirectory: helperDirectory,
+            registry: override ?? registry, root: root, helperDirectory: helperDirectory,
             linuxHelperDirectory: linuxHelperDirectory
         ) { worktreeID, _, _, state in
             try await hypervisor.boot(worktreeID, restoringFrom: state)
@@ -1167,6 +1167,311 @@ final class WorktreeVMManagerTests {
         #expect(manager.running("/repo/a", guest: guest) == nil)
     }
 
+    @Test func projectBaseCreatesAndResetsWithoutASharedImageOrScript() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        let golden = try #require(manager.availableGolden())
+        try seedProjectBase(from: golden)
+        try FileManager.default.removeItem(at: golden.url)
+        manager.projectVMOwner = { _ in ("p1", nil) }
+        let id = "/repo/project-base"
+        #expect(try manager.createFromProjectBaseIfPresent(worktreeID: id))
+        let initial = VMBundle(url: URL(fileURLWithPath: try record(id).bundlePath))
+        let transfer = manager.transferDirectory(forWorktree: id)
+        try FileManager.default.createDirectory(at: transfer, withIntermediateDirectories: true)
+        try Data("dirty".utf8).write(to: initial.diskImage)
+        try await manager.resetFromScratch(worktreeID: id)
+        let replacement = VMBundle(url: URL(fileURLWithPath: try record(id).bundlePath))
+        #expect(try contents(replacement.diskImage) == "project")
+        #expect(manager.cleanPoint(recordID: id) != nil)
+        #expect(!manager.isFirstBootPending(recordID: id))
+        #expect(manager.transferDirectory(forWorktree: id) != transfer)
+        #expect(!FileManager.default.fileExists(atPath: initial.url.path))
+    }
+
+    @Test func unreadableProjectBaseCannotReplaceWorktreeDiskWithSharedDefault() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        let id = "/repo/project-base"
+        try manager.createVM(worktreeID: id)
+        let old = try record(id)
+        try seedProjectBase(from: try #require(manager.availableGolden()))
+        manager.projectVMOwner = { _ in ("p1", nil) }
+        let saved = try #require(ProjectVMBaseStore(root: root).list().first?.baseURL)
+        try FileManager.default.removeItem(at: VMBundle(url: saved).hardwareModel)
+        await #expect(throws: (any Error).self) { try await manager.resetFromScratch(worktreeID: id) }
+        #expect(try record(id) == old)
+        #expect(try contents(VMBundle(url: URL(fileURLWithPath: old.bundlePath)).diskImage) == "x")
+    }
+
+    @Test func failedRegistryWriteLeavesTheOldVMAndTransferInPlace() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        let id = "/repo/project-base"
+        try seedProjectBase(from: try #require(manager.availableGolden()))
+        manager.projectVMOwner = { _ in ("p1", nil) }
+        try manager.createVM(worktreeID: id)
+        let old = try record(id)
+        let disk = VMBundle(url: URL(fileURLWithPath: old.bundlePath)).diskImage
+        try Data("dirty".utf8).write(to: disk)
+        let transfer = manager.transferDirectory(forWorktree: id)
+        try FileManager.default.createDirectory(at: transfer, withIntermediateDirectories: true)
+        let file = transfer.appendingPathComponent("report")
+        try Data("report".utf8).write(to: file)
+
+        let failing = makeManager(registry: WorktreeVMRegistry(
+            fileURL: root.appendingPathComponent("registry.json"), writeData: { _, _ in throw HypervisorFailure() }))
+        failing.projectVMOwner = manager.projectVMOwner
+        await #expect(throws: HypervisorFailure.self) { try await failing.resetFromScratch(worktreeID: id) }
+        #expect(try record(id) == old)
+        #expect(try contents(disk) == "dirty")
+        #expect(try contents(file) == "report")
+        #expect(manager.cleanPoint(recordID: id) != nil)
+    }
+
+    @Test func projectDraftWaitsForTheSharedImageToBeUsableEvenWhenSealed() async throws {
+        let manager = makeManager()
+        let installer = GoldenImageInstaller(root: root)
+        guard case .needsSharedBase = try await manager.prepareProjectDraft(projectID: "p1", script: nil) else {
+            Issue.record("Prepared a draft before the shared image existed")
+            return
+        }
+
+        try makeSealedGoldens()
+        let golden = try #require(manager.availableGolden())
+        let build = golden.url.lastPathComponent
+        let id = WorktreeVMManager.goldenIDPrefix + build
+        try registry.update { records in
+            records.append(.init(id: id, goldenBuild: build, bundlePath: golden.url.path,
+                                 createdAt: .now, lastUsedAt: .now, runOwner: elsewhere))
+        }
+        installer.reloadFromDisk()
+        #expect(installer.phase == .sealed(build: build))
+        #expect(!manager.isProjectDraftSharedBaseReady())
+
+        try registry.update { records in records.removeAll { $0.id == id } }
+        #expect(manager.isProjectDraftSharedBaseReady())
+        let draft = try await prepareDraft(manager)
+        #expect(draft.provenance.sharedBuild == build)
+    }
+
+    @Test func releasingADraftSlotShutsDownTheGuestInsteadOfSavingMemory() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        let draft = try await prepareDraft(manager)
+        let id = VMIdentity.projectDraftRecordID(draft.id)
+        _ = try await manager.startProjectDraft(projectID: "p1", draftID: draft.id)
+
+        let stopped = await manager.pauseVM(recordID: id)
+
+        #expect(stopped == .stopped)
+        #expect(hypervisor.shutdownCommands.count == 1)
+        #expect(manager.projectDraftRecordStatus(draftID: draft.id).pausedAt == nil)
+    }
+
+    @Test func projectDraftIsNotAWorktreeAndPublishesOnlyAfterCleanShutdown() async throws {
+        try makeSealedGoldens()
+        try FileManager.default.createDirectory(at: helperDirectory, withIntermediateDirectories: true)
+        let manager = makeManager()
+        manager.worktreePath = { _ in self.root }
+        let draft = try await prepareDraft(manager)
+        let id = VMIdentity.projectDraftRecordID(draft.id)
+        #expect(try manager.shares(forRecord: id).map(\.name) == ["helper", "transfer"])
+        #expect(manager.vmKinds(forWorktree: id) == [])
+        await #expect(throws: WorktreeVMManager.VMError.self) { _ = try await manager.startVM(worktreeID: id) }
+        _ = try await manager.startProjectDraft(projectID: "p1", draftID: draft.id)
+        await manager.forceStop(id: id)
+        await #expect(throws: WorktreeVMManager.VMError.self) {
+            _ = try await manager.saveProjectBase(projectID: "p1", draftID: draft.id)
+        }
+        #expect(try manager.projectBaseStatus(projectID: "p1").draft?.id == draft.id)
+        _ = try await manager.startProjectDraft(projectID: "p1", draftID: draft.id)
+        let base = try await manager.saveProjectBase(projectID: "p1", draftID: draft.id)
+        let selection = try manager.projectBaseStatus(projectID: "p1")
+        #expect(selection.base == base)
+        #expect(selection.draft == nil)
+        #expect(hypervisor.shutdownCommands.count == 1)
+        await #expect(throws: ProjectVMBaseStore.Failure.self) {
+            _ = try await manager.startProjectDraft(projectID: "p1", draftID: draft.id)
+        }
+    }
+
+    @Test func aLaterDraftBootInvalidatesTheObservedCleanShutdown() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        try seedProjectBase(from: try #require(manager.availableGolden()))
+        let originalBase = try #require(manager.projectBaseStatus(projectID: "p1").base)
+        let draft = try await prepareDraft(manager)
+        let id = VMIdentity.projectDraftRecordID(draft.id)
+        _ = try await manager.startProjectDraft(projectID: "p1", draftID: draft.id)
+        #expect(hypervisor.sendShutdown(id, "guest shutdown"))
+        try registry.update { records in
+            let index = try #require(records.firstIndex { $0.id == id })
+            records[index].bootGeneration = (records[index].bootGeneration ?? 0) + 1
+        }
+        await #expect(throws: WorktreeVMManager.VMError.self) {
+            _ = try await manager.saveProjectBase(projectID: "p1", draftID: draft.id)
+        }
+        let selection = try manager.projectBaseStatus(projectID: "p1")
+        #expect(selection.base == originalBase)
+        #expect(selection.draft?.id == draft.id)
+    }
+
+    @Test func failedDraftOnlyRetriesItsCapturedScript() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        let runs = SetupScriptRuns()
+        runs.exitCode = 17
+        manager.makeDraftSetup = { self.makeFirstBootSetup($0, runs: runs) }
+        let draft = try await prepareDraft(manager, script: "old script")
+        _ = try await manager.startProjectDraft(projectID: "p1", draftID: draft.id)
+        await eventually { !manager.isProjectDraftSettingUp(draft.id) }
+        #expect(try manager.projectBaseStatus(projectID: "p1").draft?.setup == .failed(exitCode: 17))
+        #expect(hypervisor.sendShutdown(VMIdentity.projectDraftRecordID(draft.id), "guest shutdown"))
+
+        let reopened = makeManager()
+        runs.exitCode = 0
+        reopened.makeDraftSetup = { self.makeFirstBootSetup($0, runs: runs) }
+        #expect(try await prepareDraft(reopened, script: "new script").id == draft.id)
+        _ = try await reopened.startProjectDraft(projectID: "p1", draftID: draft.id)
+        #expect(!reopened.isProjectDraftSettingUp(draft.id))
+        try await reopened.retryProjectDraftSetup(projectID: "p1", draftID: draft.id)
+        #expect(runs.runs.map { $0.0 } == ["old script", "old script"])
+        #expect(try reopened.projectBaseStatus(projectID: "p1").draft?.setup == .ready)
+    }
+
+    @Test func retryingFailedDraftRunsItsScriptAfterTakingASlot() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        let runs = SetupScriptRuns()
+        runs.exitCode = 17
+        manager.makeDraftSetup = { self.makeFirstBootSetup($0, runs: runs) }
+        let draft = try await prepareDraft(manager, script: "captured script")
+        _ = try await manager.startProjectDraft(projectID: "p1", draftID: draft.id)
+        await eventually { !manager.isProjectDraftSettingUp(draft.id) }
+        #expect(try manager.projectBaseStatus(projectID: "p1").draft?.setup == .failed(exitCode: 17))
+        #expect(hypervisor.sendShutdown(VMIdentity.projectDraftRecordID(draft.id), "guest shutdown"))
+
+        try await fillBothSlots(manager)
+        runs.exitCode = 0
+        guard case .needsUserChoice(let candidates) = try await manager.startProjectDraft(
+            projectID: "p1", draftID: draft.id, retrySetup: true
+        ) else {
+            Issue.record("Expected to choose a VM slot before retrying")
+            return
+        }
+        #expect(runs.runs.map { $0.0 } == ["captured script"])
+        let candidate = try #require(candidates.first)
+        _ = try await manager.startProjectDraft(projectID: "p1", draftID: draft.id, retrySetup: true, pausing: candidate)
+        await eventually { !manager.isProjectDraftSettingUp(draft.id) }
+        #expect(runs.runs.map { $0.0 } == ["captured script", "captured script"])
+        #expect(try manager.projectBaseStatus(projectID: "p1").draft?.setup == .ready)
+    }
+
+    @Test func storageScanRecoversUnselectedDraftsWithoutVisitingTheirProjects() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        let store = ProjectVMBaseStore(root: root)
+        _ = try await prepareDraft(manager)
+        guard case .draft = try await manager.prepareProjectDraft(projectID: "still-selected", script: nil) else {
+            Issue.record("Expected to prepare the selected draft")
+            return
+        }
+        let entries = try store.list()
+        let abandoned = try #require(entries.first { $0.state.projectID == "p1" }?.draftURL)
+        let selected = try #require(entries.first { $0.state.projectID == "still-selected" }?.draftURL)
+        let drafts = abandoned.deletingLastPathComponent()
+        let state = drafts.deletingLastPathComponent().appendingPathComponent("state.json")
+        try FileManager.default.removeItem(at: state)
+
+        let partial = drafts.appendingPathComponent(UUID().uuidString).appendingPathExtension("partial")
+        let owned = drafts.appendingPathComponent(UUID().uuidString)
+        let referenced = drafts.appendingPathComponent(UUID().uuidString)
+        let foreign = drafts.appendingPathComponent(UUID().uuidString)
+        let unknown = drafts.appendingPathComponent("not-a-generation")
+        for url in [partial, owned, referenced, foreign, unknown] {
+            try FileManager.default.copyItem(at: abandoned, to: url)
+        }
+        try registry.update { records in
+            records += [
+                .init(id: "owned", goldenBuild: "25A1", bundlePath: owned.path,
+                      createdAt: .now, lastUsedAt: .now, runOwner: elsewhere),
+                .init(id: "referenced", goldenBuild: "25A1", bundlePath: referenced.path, createdAt: .now, lastUsedAt: .now)
+            ]
+        }
+        let registryFile = root.appendingPathComponent("registry.json")
+        var contents = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: registryFile)) as? [[String: Any]])
+        contents.append(["id": "future", "guestOS": "unknown", "bundlePath": foreign.path])
+        try JSONSerialization.data(withJSONObject: contents).write(to: registryFile, options: .atomic)
+
+        let usage = try await manager.diskUse(liveProjectIDs: ["still-selected"])
+        #expect(usage.bundles.contains { $0.kind == .projectDraft && $0.projectID == "still-selected" })
+        #expect(!exists(abandoned))
+        #expect(!exists(partial))
+        #expect([selected, owned, referenced, foreign, unknown].allSatisfy { exists($0) })
+    }
+
+    @Test func unreadableProjectSelectionNeverAuthorizesBundleRecovery() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        _ = try await prepareDraft(manager)
+        let entry = try #require(ProjectVMBaseStore(root: root).list().first)
+        let draft = try #require(entry.draftURL)
+        let state = draft.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("state.json")
+        try Data("unreadable selection".utf8).write(to: state, options: .atomic)
+
+        await #expect(throws: DecodingError.self) { _ = try await manager.diskUse(liveProjectIDs: []) }
+        #expect(exists(VMBundle(url: draft).diskImage))
+    }
+
+    @Test func busyOrphanDraftCannotBeRemovedAndBlocksRemovingItsBase() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        try seedProjectBase(from: try #require(manager.availableGolden()))
+        let draft = try await prepareDraft(manager)
+        let base = try #require(manager.projectBaseStatus(projectID: "p1").base)
+        let onDisk = try #require(ProjectVMBaseStore(root: root).list().first?.draftURL)
+        let id = VMIdentity.projectDraftRecordID(draft.id)
+        try registry.update { records in
+            records.append(.init(id: id, goldenBuild: id, bundlePath: onDisk.path, createdAt: .now, lastUsedAt: .now,
+                                 runOwner: elsewhere))
+        }
+        let rows = try await manager.diskUse(liveProjectIDs: []).orphans
+        #expect(rows.first { $0.projectGeneration == draft.id }?.runningElsewhere == elsewhere.label)
+        await #expect(throws: WorktreeVMManager.VMError.self) {
+            try await manager.discardProjectDraft(projectID: "p1", draftID: draft.id, stillOrphaned: { true })
+        }
+        #expect(throws: ProjectVMBaseStore.Failure.hasDraft) { try manager.removeProjectBase(projectID: "p1", baseID: base.id) }
+        try registry.update { records in records.removeAll { $0.id == id } }
+        await #expect(throws: ProjectVMBaseStore.Failure.changed) {
+            try await manager.discardProjectDraft(projectID: "p1", draftID: draft.id, stillOrphaned: { false })
+        }
+        try await manager.discardProjectDraft(projectID: "p1", draftID: draft.id, stillOrphaned: { true })
+        #expect(try manager.projectBaseStatus(projectID: "p1").base == base)
+        try manager.removeProjectBase(projectID: "p1", baseID: base.id, stillOrphaned: { true })
+        #expect(try manager.projectBaseStatus(projectID: "p1").base == nil)
+    }
+
+    private func prepareDraft(_ manager: WorktreeVMManager, script: String? = nil) async throws -> ProjectVMBaseStore.Draft {
+        let preparation = try await manager.prepareProjectDraft(projectID: "p1", script: script)
+        return try #require({
+            if case .draft(let draft) = preparation { return draft }
+            return nil
+        }() as ProjectVMBaseStore.Draft?)
+    }
+
+    private func seedProjectBase(from golden: VMBundle) throws {
+        let store = ProjectVMBaseStore(root: root)
+        try store.withProject("p1") { transaction in
+            let draft = try transaction.replaceDraft(
+                expected: nil,
+                source: .shared(bundle: golden, provenance: .init(sharedBuild: "25A1", sharedSealedAt: .now, scriptHash: nil), script: nil),
+                identity: .init(machineIdentifier: Data([1]), macAddress: "02:00:00:00:00:01"))
+            try Data("project".utf8).write(to: transaction.selectedDraftBundle(id: draft.id).diskImage)
+            _ = try transaction.publish(expectedDraft: draft.id, savedAt: .now)
+        }
+    }
+
     /// The setup steps over a manager, whose script run answers `exitCode`.
     @MainActor
     private final class SetupScriptRuns {
@@ -1226,7 +1531,7 @@ final class WorktreeVMManagerTests {
     private func publishTemplate(
         _ manager: WorktreeVMManager, worktree: String = "/repo/a", guest: VMGuestOS = .macOS, project: String = "p1"
     ) async throws -> VMFirstBootSetup.Outcome {
-        manager.templateOwner = { _ in (project, VMCleanPoint.scriptHash(Self.setupScript)!) }
+        manager.projectVMOwner = { _ in (project, VMCleanPoint.scriptHash(Self.setupScript)) }
         try manager.createVM(worktreeID: worktree, guest: guest)
         _ = try await manager.startVM(worktreeID: worktree, guest: guest)
         return await makeFirstBootSetup(manager, runs: SetupScriptRuns())
@@ -1292,7 +1597,7 @@ final class WorktreeVMManagerTests {
     func noTemplateFromAVMOfAnOlderGolden(_ change: GoldenChange) async throws {
         try makeSealedGoldens()
         let manager = makeManager()
-        manager.templateOwner = { _ in ("p1", VMCleanPoint.scriptHash(Self.setupScript)!) }
+        manager.projectVMOwner = { _ in ("p1", VMCleanPoint.scriptHash(Self.setupScript)) }
         try manager.createVM(worktreeID: "/repo/a")
         let golden = root.appendingPathComponent("golden/25A1")
         switch change {
@@ -1318,7 +1623,7 @@ final class WorktreeVMManagerTests {
         let manager = makeManager()
         try await publishTemplate(manager)
         try FileManager.default.removeItem(at: templateSlot())
-        manager.templateOwner = { _ in ("p1", VMCleanPoint.scriptHash("brew install fd")!) }
+        manager.projectVMOwner = { _ in ("p1", VMCleanPoint.scriptHash("brew install fd")) }
 
         let outcome = await makeFirstBootSetup(manager, runs: SetupScriptRuns())
             .run(recordID: "/repo/a", script: "brew install fd")
@@ -1355,12 +1660,17 @@ final class WorktreeVMManagerTests {
         try await publishTemplate(manager, worktree: "/repo/b", project: "p2")
         let stray = WorktreeVMManager.templatesDirectory(root: root).appendingPathComponent("x.partial")
         try FileManager.default.createDirectory(at: stray, withIntermediateDirectories: true)
+        try seedProjectBase(from: try #require(manager.availableGolden()))
+        let draft = try await prepareDraft(manager)
 
         WorktreeVMManager.pruneTemplates(liveProjectIDs: ["p1"], root: root)
 
         #expect(FileManager.default.fileExists(atPath: templateSlot("p1").path))
         #expect(!FileManager.default.fileExists(atPath: templateSlot("p2").path))
         #expect(!FileManager.default.fileExists(atPath: stray.path))
+        let project = try manager.projectBaseStatus(projectID: "p1")
+        #expect(project.draft?.id == draft.id)
+        #expect(project.base != nil)
     }
 
     enum StaleTemplate: CaseIterable { case scriptChanged, goldenResealed, otherProject, diskMissing }
@@ -1376,13 +1686,13 @@ final class WorktreeVMManagerTests {
         try Data("setup".utf8).write(to: slot.appendingPathComponent("disk.img"))
         switch stale {
         case .scriptChanged:
-            manager.templateOwner = { _ in ("p1", "other") }
+            manager.projectVMOwner = { _ in ("p1", "other") }
         case .goldenResealed:
             let marker = VMBundle(url: root.appendingPathComponent("golden/25A1")).sealedMarker
             try FileManager.default.setAttributes(
                 [.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: marker.path)
         case .otherProject:
-            manager.templateOwner = { _ in ("p2", VMCleanPoint.scriptHash(Self.setupScript)!) }
+            manager.projectVMOwner = { _ in ("p2", VMCleanPoint.scriptHash(Self.setupScript)) }
         case .diskMissing:
             try FileManager.default.removeItem(at: slot.appendingPathComponent("disk.img"))
         }

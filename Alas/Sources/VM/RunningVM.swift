@@ -159,8 +159,12 @@ final class RunningVM {
     /// Stops the VM immediately, without asking the guest.
     func forceStop() async throws {
         guard machine.state != .stopped, machine.state != .error else { return }
-        try await machine.stop()
+        // A delegate may report the stop before the async hypervisor call returns.
         wasForcedOff = true
+        do { try await machine.stop() } catch {
+            if machine.state != .stopped && machine.state != .error { wasForcedOff = false }
+            throw error
+        }
         guestStopped(nil)
     }
 

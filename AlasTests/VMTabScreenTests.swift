@@ -15,6 +15,8 @@ struct VMTabScreenTests {
         var hasVM = false
         var customizingHere = false
         var goldenAvailable = false
+        var projectBaseAvailable = false
+        var fromProjectBase = false
         var phase: GoldenImageInstaller.Phase = .idle
         var linuxPhase: LinuxGoldenInstaller.Phase = .idle
         var helper: VMTabScreen.HelperUpdate = .none
@@ -50,6 +52,15 @@ struct VMTabScreenTests {
         Case(name: "no VM, install failed", phase: .failed("offline"), expected: .setup),
         Case(name: "no VM, no golden", expected: .setup),
         Case(name: "no VM, sealed golden", goldenAvailable: true, phase: .sealed(build: "25A1"), expected: .createVM),
+        Case(name: "project base without any shared image", projectBaseAvailable: true, expected: .createVM),
+        Case(name: "project base while another tab customizes the shared image", projectBaseAvailable: true,
+             phase: .awaitingSetup(build: "25A1"), expected: .createVM),
+        Case(name: "project base while shared image installs", projectBaseAvailable: true,
+             phase: .installing(0.4), expected: .createVM),
+        Case(name: "explicit shared customization wins in its own tab", customizingHere: true, projectBaseAvailable: true,
+             phase: .awaitingSetup(build: "25A1"), expected: .goldenSetup(build: "25A1", updateHelper: false)),
+        Case(name: "stopped project clone works during unrelated customization", hasVM: true, fromProjectBase: true,
+             phase: .awaitingSetup(build: "25A1"), expected: .stopped),
         Case(name: "running VM with a missing or outdated helper offers an update", runningHere: true, hasVM: true,
              helper: .available, expected: .running(updateHelper: true)),
         Case(name: "an update in progress wins over the VM restarting under it", startingHere: true, hasVM: true,
@@ -101,6 +112,8 @@ struct VMTabScreenTests {
             hasVM: c.hasVM,
             customizingHere: c.customizingHere,
             goldenAvailable: c.goldenAvailable,
+            projectBaseAvailable: c.projectBaseAvailable,
+            fromProjectBase: c.fromProjectBase,
             installerPhase: c.phase,
             linuxInstallerPhase: c.linuxPhase,
             helper: c.helper,

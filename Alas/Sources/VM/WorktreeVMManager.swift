@@ -54,6 +54,7 @@ final class WorktreeVMManager {
         var pausedAt: Date?
         /// The clean point Reset to clean goes back to; nil until one is taken.
         var cleanPoint: VMCleanPoint?
+        var fromProjectBase = false
     }
 
     /// Boots VM `worktreeID`, or restores it from `restoringFrom` and resumes it. A restore that
@@ -120,6 +121,7 @@ final class WorktreeVMManager {
 
     @ObservationIgnored private let registry: WorktreeVMRegistry
     @ObservationIgnored let root: URL
+    @ObservationIgnored private let projectBases: ProjectVMBaseStore
     @ObservationIgnored private let start: StartVM
     @ObservationIgnored private let ownerLabel: String
     /// True for worktrees that live on a remote host; their VM would have to
@@ -138,9 +140,8 @@ final class WorktreeVMManager {
     /// Whether VM `id` runs its project's first-boot setup. Such a VM is never offered to pause for
     /// a slot, and quitting stops it instead of pausing it, so its setup runs again on the next start.
     @ObservationIgnored var isRunningSetup: (String) -> Bool = { _ in false }
-    /// The project of worktree `worktreeID` and its guest setup script's hash; nil when the
-    /// worktree has no project or the project no script. A project's VMs share a template.
-    @ObservationIgnored var templateOwner: (_ worktreeID: String) -> (projectID: String, setupScriptHash: String)? = { _ in nil }
+    /// The local Git project of this worktree, including when it has no setup script.
+    @ObservationIgnored var projectVMOwner: (String) -> (projectID: String, setupScriptHash: String?)? = { _ in nil }
     /// Set once quitting began: no VM starts after `stopAll`.
     @ObservationIgnored private(set) var isQuitting = false
     /// Called with a VM's registry id once it started running here, booted or restored.
@@ -177,6 +178,27 @@ final class WorktreeVMManager {
     /// at that generation: any later boot, in any process, or a relaunch
     /// voids the evidence that its disk is consistent.
     @ObservationIgnored private var cleanlyShutDown: [String: Int] = [:]
+    /// Retain the registry owner between the stop callback and the project state commit.
+    @ObservationIgnored private var publishingDrafts: Set<String> = []
+    private(set) var projectBaseRevision = 0
+    private(set) var projectDraftSetupErrors: [UUID: String] = [:]
+    private var projectDraftRuns: [UUID: DraftSetupRun] = [:]
+    private struct DraftSetupRun {
+        let token: UUID
+        let task: Task<Void, Never>
+    }
+
+    @ObservationIgnored var makeDraftSetup: (@MainActor (WorktreeVMManager) -> VMFirstBootSetup)?
+
+    private func draftSetup() -> VMFirstBootSetup {
+        if let makeDraftSetup { return makeDraftSetup(self) }
+        return VMFirstBootSetup(
+            manager: self, waitForHelper: { [self] in await waitForSetupHelper(recordID: $0) },
+            runScript: { [self] id, script, timeout in
+                guard let client = guestClient(recordID: id) else { throw VMGuestClient.Failure.stopped }
+                return try await client.run(script, timeoutSeconds: timeout)
+            })
+    }
 
     /// Goldens whose disk this process has attached on the host for the
     /// unattended setup. Their registry record names this process as owner,
@@ -221,13 +243,22 @@ final class WorktreeVMManager {
     ) {
         self.registry = registry
         self.root = root
+        self.projectBases = ProjectVMBaseStore(root: root)
         self.ownerLabel = ownerLabel
         self.helperDirectory = helperDirectory
         self.linuxHelperDirectory = linuxHelperDirectory
         self.start = start
         disableSSHOffline = { bundle in try await Self.disableSSHOnDisk(bundle, root: root) }
         sendGuestShutdown = { [weak self] id, command in
-            guard let client = self?.existingGuestClient(for: id) else { return false }
+            guard let self else { return false }
+            let client: VMGuestClient?
+            if VMIdentity.projectDraftID(recordID: id) != nil {
+                client = guestClient(recordID: id)
+                if let client { _ = try? await client.hello() }
+            } else {
+                client = existingGuestClient(for: id)
+            }
+            guard let client else { return false }
             return await client.request(command)
         }
     }
@@ -313,8 +344,16 @@ final class WorktreeVMManager {
     /// `<root>/transfer/<name>-<hash>[-linux]/`, named like the worktree's VM
     /// bundle: the one folder the guest can write back to the host.
     func transferDirectory(forWorktree worktreeID: String, guest: VMGuestOS = .macOS) -> URL {
-        root.appendingPathComponent("transfer", isDirectory: true)
-            .appendingPathComponent(Self.directoryName(forWorktree: worktreeID, guest: guest), isDirectory: true)
+        let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+        let recordedPath = (try? registry.read())?.records.first { $0.id == id }?.bundlePath
+        return transferDirectory(forWorktree: worktreeID, guest: guest, bundlePath: recordedPath)
+    }
+
+    private func transferDirectory(forWorktree worktreeID: String, guest: VMGuestOS, bundlePath: String?) -> URL {
+        let canonical = Self.directoryName(forWorktree: worktreeID, guest: guest)
+        let leaf = bundlePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? canonical
+        return root.appendingPathComponent("transfer", isDirectory: true)
+            .appendingPathComponent(leaf.hasPrefix(canonical + ".reset-") ? leaf : canonical, isDirectory: true)
     }
 
     /// The folders a VM sees under `/Volumes/My Shared Files` (macOS) or
@@ -326,7 +365,7 @@ final class WorktreeVMManager {
         try shares(forRecord: VMIdentity.recordID(worktree: worktreeID, guest: guest))
     }
 
-    private func shares(forRecord recordID: String) throws -> [VMShare] {
+    func shares(forRecord recordID: String, bundlePath: String? = nil) throws -> [VMShare] {
         let (id, guest) = VMIdentity.parse(recordID: recordID)
         var shares: [VMShare] = []
         func addIfPresent(_ name: String, _ url: URL?) {
@@ -338,8 +377,14 @@ final class WorktreeVMManager {
         }
         addIfPresent("helper", guest == .linux ? linuxHelperDirectory : helperDirectory)
         guard !id.hasPrefix(Self.goldenIDPrefix) else { return shares }
-        addIfPresent("worktree", worktreePath(id))
-        let transfer = transferDirectory(forWorktree: id, guest: guest)
+        let transfer: URL
+        if let draftID = VMIdentity.projectDraftID(recordID: recordID) {
+            transfer = projectDraftTransferDirectory(draftID)
+        } else {
+            addIfPresent("worktree", worktreePath(id))
+            transfer = bundlePath.map { transferDirectory(forWorktree: id, guest: guest, bundlePath: $0) }
+                ?? transferDirectory(forWorktree: id, guest: guest)
+        }
         try FileManager.default.createDirectory(at: transfer, withIntermediateDirectories: true)
         shares.append(VMShare(name: "transfer", hostURL: transfer, readOnly: false))
         return shares
@@ -354,6 +399,7 @@ final class WorktreeVMManager {
     /// kept for builds that predate Linux guests does not count. An unreadable registry is
     /// quarantined once by a locked snapshot and read again.
     func vmKinds(forWorktree worktreeID: String) -> Set<VMGuestOS>? {
+        guard VMIdentity.projectDraftID(recordID: worktreeID) == nil else { return [] }
         guard vmsExist else { return [] }
         let ids = (try? registry.recordIDs(includingLinuxAliases: false)) ?? {
             _ = try? registry.snapshot()
@@ -387,7 +433,10 @@ final class WorktreeVMManager {
 
     /// The client for the guest helper of a VM this process runs; nil when it does not run here.
     func guestClient(for worktreeID: String, guest: VMGuestOS = .macOS) -> VMGuestClient? {
-        let worktreeID = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+        guestClient(recordID: VMIdentity.recordID(worktree: worktreeID, guest: guest))
+    }
+
+    func guestClient(recordID worktreeID: String) -> VMGuestClient? {
         guard let vm = runningVMs[worktreeID] else { return nil }
         if let client = guestClients[worktreeID] { return client }
         let client = VMGuestClient(connect: { @MainActor [weak vm] in
@@ -401,7 +450,10 @@ final class WorktreeVMManager {
     /// One registry read for a VM tab: whether the worktree has a VM and
     /// which other process, if any, runs it.
     func recordStatus(_ worktreeID: String, guest: VMGuestOS = .macOS) -> RecordStatus {
-        let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+        recordStatus(recordID: VMIdentity.recordID(worktree: worktreeID, guest: guest))
+    }
+
+    private func recordStatus(recordID id: String) -> RecordStatus {
         guard vmsExist, let record = (try? registry.snapshot())?.first(where: { $0.id == id }) else {
             return RecordStatus()
         }
@@ -413,7 +465,7 @@ final class WorktreeVMManager {
         let pausedAt = record.guestOS == .macOS && Self.isPaused(bundle) ? Self.savedAt(Self.savedStateURL(of: bundle)) : nil
         return RecordStatus(
             hasVM: true, runningElsewhere: elsewhere, bundlePath: record.bundlePath, pausedAt: pausedAt,
-            cleanPoint: Self.readCleanPoint(of: bundle))
+            cleanPoint: Self.readCleanPoint(of: bundle), fromProjectBase: record.goldenBuild.hasPrefix(Self.projectBasePrefix))
     }
 
     /// When the state file was saved; nil when there is none. Read with `stat`, which never
@@ -465,81 +517,107 @@ final class WorktreeVMManager {
 
     // MARK: - Lifecycle
 
-    /// Clones the newest sealed golden image of `guest` for `worktreeID` and
-    /// records it. Does not boot the VM. A no-op when the worktree already has
-    /// one of that guest. With `fromTemplate`, a matching project template is
-    /// cloned instead, and the VM starts with its clean point and no first boot.
+    private nonisolated static let projectBasePrefix = "project-base:"
+
+    enum MacOSSource { case projectBase, shared, unavailable }
+
+    func macOSSource(worktreeID: String) throws -> MacOSSource {
+        if let owner = projectVMOwner(worktreeID), try projectBases.status(projectID: owner.projectID).base != nil {
+            return .projectBase
+        }
+        return availableGolden() == nil ? .unavailable : .shared
+    }
+
+    /// A named guest command may opt in to the saved project base, never to the default.
+    func createFromProjectBaseIfPresent(worktreeID: String) throws -> Bool {
+        guard !isRemoteWorktree(worktreeID), let owner = projectVMOwner(worktreeID),
+              try projectBases.status(projectID: owner.projectID).base != nil else { return false }
+        return try createMacOSVM(worktreeID, fromTemplate: false, sharedAllowed: false)
+    }
+
+    /// Clones the selected source without booting. An existing record wins over source selection.
     func createVM(worktreeID: String, guest: VMGuestOS = .macOS, fromTemplate: Bool = true) throws {
+        guard VMIdentity.projectDraftID(recordID: worktreeID) == nil else {
+            throw VMError(message: "Open the project base window to manage this setup VM")
+        }
         guard !isRemoteWorktree(worktreeID) else {
             throw VMError(message: "VMs are only available for worktrees on this Mac, not on a remote host")
         }
         if guest == .linux { return try createLinuxVM(worktreeID: worktreeID, fromTemplate: fromTemplate) }
-        let root = root
-        guard let golden = availableGolden() else {
-            // A worktree that already has a VM needs no golden image.
-            guard try !(vmsExist && registry.snapshot().contains { $0.id == worktreeID }) else { return }
-            throw VMError(message: "Install and finish setting up the golden macOS image first")
-        }
-        let destination = Self.bundleURL(forWorktree: worktreeID, root: root)
-        // The check, stale-bundle cleanup, clone and record all happen under
-        // the registry lock, so another Alas process creating the same VM
-        // can neither delete this bundle as stale nor overwrite its record.
-        // An unreadable registry throws rather than passing for "no VM".
-        // If saving the record fails, the clone stays behind as a stale
-        // bundle; removing it outside the lock could delete another
-        // process's fresh clone, and the next create replaces it anyway.
-        // The alias stub for older builds follows in the same write.
-        try registry.update(syncingLinuxAliasFor: worktreeID) { records in
-            guard !records.contains(where: { $0.id == worktreeID }) else { return }
-            // Re-checked under the lock unsealing takes: another process may
-            // have reopened the golden, and booted it, since the read above.
-            guard golden.isSealed, !goldenRunsAnywhere(records),
-                  GoldenImageInstaller.availableGolden(root: root)?.url == golden.url
-            else {
-                throw VMError(message: "The base image is being customized. Finish customizing it first.")
-            }
-            // A bundle without a record is left over from an interrupted
-            // create or delete; cloning over it would fail forever.
+        _ = try createMacOSVM(worktreeID, fromTemplate: fromTemplate, sharedAllowed: true)
+    }
+
+    private func createMacOSVM(_ id: String, fromTemplate: Bool, sharedAllowed: Bool) throws -> Bool {
+        let destination = Self.bundleURL(forWorktree: id, root: root)
+        return try registry.update(syncingLinuxAliasFor: id) { records in
+            guard !records.contains(where: { $0.id == id }) else { return true }
             if FileManager.default.fileExists(atPath: destination.path) {
                 try FileManager.default.removeItem(at: destination)
             }
-            let fromTemplate = !fromTemplate ? nil : (try? Self.withTemplatesLocked(root: root) {
-                matchingTemplate(
-                    worktreeID: worktreeID, guest: .macOS, goldenBuild: golden.url.lastPathComponent,
-                    goldenSealedMarker: golden.sealedMarker
-                ).flatMap { template in
-                    cloneFromTemplate(worktreeID, template: template, to: destination) {
-                        try VMBundle.cloneForWorktree(
+            guard let build = try cloneMacOS(id, to: destination, records: records, fromTemplate: fromTemplate,
+                                             sharedAllowed: sharedAllowed) else { return false }
+            let date = now()
+            records.append(WorktreeVMRecord(
+                id: id, goldenBuild: build, bundlePath: destination.path, createdAt: date, lastUsedAt: date))
+            return true
+        }
+    }
+
+    /// The caller holds the registry lock, which also excludes shared image customization.
+    private func cloneMacOS(
+        _ id: String, to destination: URL, records: [WorktreeVMRecord], fromTemplate: Bool, sharedAllowed: Bool = true
+    ) throws -> String? {
+        if let owner = projectVMOwner(id), let base = try projectBases.withProject(owner.projectID, {
+            guard $0.state.base != nil else { return nil as ProjectVMBaseStore.Base? }
+            do {
+                let base = try $0.cloneBase(to: destination, identity: Self.newMacIdentity())
+                let bundle = VMBundle(url: destination)
+                try writeCleanPoint(id, bundle: bundle, setupScriptHash: base?.provenance.scriptHash)
+                return base
+            } catch {
+                try? FileManager.default.removeItem(at: destination)
+                throw error
+            }
+        }) {
+            return Self.projectBasePrefix + base.id.uuidString
+        }
+        guard sharedAllowed else { return nil }
+        guard let golden = availableGolden() else {
+            throw VMError(message: "Install and finish setting up the golden macOS image first")
+        }
+        guard !goldenRunsAnywhere(records) else {
+            throw VMError(message: "The base image is being customized. Finish customizing it first.")
+        }
+        let build = golden.url.lastPathComponent
+        if fromTemplate, (try? Self.withTemplatesLocked(root: root, {
+            matchingTemplate(worktreeID: id, guest: .macOS, goldenBuild: build, goldenSealedMarker: golden.sealedMarker)
+                .flatMap { template in
+                    cloneFromTemplate(id, template: template, to: destination) {
+                        let identity = try Self.newMacIdentity()
+                        return try VMBundle.cloneForWorktree(
                             golden: golden, to: destination,
-                            newMachineIdentifier: Self.newMachineIdentifier(),
-                            newMACAddress: VZMACAddress.randomLocallyAdministered().string,
+                            newMachineIdentifier: identity.machineIdentifier, newMACAddress: identity.macAddress,
                             diskFrom: template.slot.appendingPathComponent("disk.img"),
                             auxiliaryStorageFrom: template.slot.appendingPathComponent("aux.img"))
                     }
                 }
-            }) ?? nil
-            let bundle: VMBundle
-            if let fromTemplate {
-                bundle = fromTemplate
-            } else {
-                do {
-                    bundle = try VMBundle.cloneForWorktree(
-                        golden: golden, to: destination,
-                        newMachineIdentifier: Self.newMachineIdentifier(),
-                        newMACAddress: VZMACAddress.randomLocallyAdministered().string)
-                } catch let error as NSError
-                    where error.domain == NSPOSIXErrorDomain && [Int(EXDEV), Int(ENOTSUP)].contains(error.code)
-                {
-                    throw VMError(message: "The golden image and worktree VMs must be on the same APFS volume (\(error.localizedDescription))")
-                }
-                try Self.markFirstBootPending(bundle)
-                Self.writeGoldenStamp(of: golden.sealedMarker, into: bundle)
-            }
-            let now = Date()
-            records.append(WorktreeVMRecord(
-                id: worktreeID, goldenBuild: golden.url.lastPathComponent, bundlePath: bundle.url.path,
-                createdAt: now, lastUsedAt: now))
+        })) != nil { return build }
+
+        let identity = try Self.newMacIdentity()
+        do {
+            let bundle = try VMBundle.cloneForWorktree(
+                golden: golden, to: destination,
+                newMachineIdentifier: identity.machineIdentifier, newMACAddress: identity.macAddress)
+            try Self.markFirstBootPending(bundle)
+            Self.writeGoldenStamp(of: golden.sealedMarker, into: bundle)
+        } catch let error as NSError where error.domain == NSPOSIXErrorDomain && [Int(EXDEV), Int(ENOTSUP)].contains(error.code) {
+            throw VMError(message: "The golden image and worktree VMs must be on the same APFS volume (\(error.localizedDescription))")
         }
+        return build
+    }
+
+    private static func newMacIdentity() throws -> VMBundle.CloneIdentity {
+        try .init(machineIdentifier: newMachineIdentifier(), macAddress: VZMACAddress.randomLocallyAdministered().string)
     }
 
     /// Clones the newest sealed Linux golden for `worktreeID`, like `createVM`
@@ -604,6 +682,9 @@ final class WorktreeVMManager {
     /// interrupted setup or update left on.
     func startVM(worktreeID: String, guest: VMGuestOS = .macOS, keepingSSH: Bool = false) async throws -> VMStartOutcome {
         let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+        guard VMIdentity.projectDraftID(recordID: id) == nil else {
+            throw VMError(message: "Open the project base window to start its setup VM")
+        }
         if !keepingSSH { try await turnOffLeftoverSSHBeforeBoot(id: id) }
         return try await startRecorded(id: id, ensureRecord: nil)
     }
@@ -616,14 +697,13 @@ final class WorktreeVMManager {
 
     /// Pauses `other` (which must run in this process) and starts `worktreeID`.
     func startVM(worktreeID: String, pausing other: String) async throws -> RunningVM {
-        guard runningVMs[other] != nil else {
-            throw VMError(message: "The VM to pause is not running in this window")
-        }
-        guard !isRunningSetup(other) else {
-            throw VMError(message: "The VM to pause is running its setup script")
-        }
-        if await pauseVM(recordID: other) == .notRunning, runningVMs[other] != nil {
-            throw VMError(message: "The VM to pause couldn't be stopped")
+        try await pauseForSlot(other)
+        if worktreeID.hasPrefix(Self.goldenIDPrefix) {
+            switch try await startGolden(build: String(worktreeID.dropFirst(Self.goldenIDPrefix.count))) {
+            case .running(let vm): return vm
+            case .runningElsewhere(let label): throw VMError(message: "This VM is already running in \(label)")
+            case .needsUserChoice: throw VMError(message: "No VM slot is free; another Alas window took it")
+            }
         }
         switch try await startVM(worktreeID: worktreeID) {
         case .running(let vm):
@@ -632,6 +712,16 @@ final class WorktreeVMManager {
             throw VMError(message: "This VM is already running in \(label)")
         case .needsUserChoice:
             throw VMError(message: "No VM slot is free; another Alas window took it")
+        }
+    }
+
+    private func pauseForSlot(_ id: String) async throws {
+        guard runningVMs[id] != nil else { throw VMError(message: "The VM to pause is not running in this window") }
+        guard !isSetupRunning(recordID: id), !diskOperations.contains(id) else {
+            throw VMError(message: "The VM to pause is running setup or working on its disk")
+        }
+        if await pauseVM(recordID: id) == .notRunning, runningVMs[id] != nil {
+            throw VMError(message: "The VM to pause couldn't be stopped")
         }
     }
 
@@ -695,6 +785,9 @@ final class WorktreeVMManager {
     @discardableResult
     func deleteVM(worktreeID: String, guest: VMGuestOS = .macOS) async -> String? {
         let worktreeID = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+        guard VMIdentity.projectDraftID(recordID: worktreeID) == nil else {
+            return "open the project base window to discard its draft"
+        }
         guard !diskClaims.contains(worktreeID) else {
             logger.error("Not deleting VM \(worktreeID, privacy: .public): its disk is attached for an update")
             return "its disk is attached for an update; try again once that finishes"
@@ -744,7 +837,7 @@ final class WorktreeVMManager {
                 if FileManager.default.fileExists(atPath: bundle.path) {
                     try FileManager.default.removeItem(at: bundle)
                 }
-                let transfer = transferDirectory(forWorktree: worktree, guest: guest)
+                let transfer = transferDirectory(forWorktree: worktree, guest: guest, bundlePath: bundle.path)
                 if !worktreeID.hasPrefix(Self.goldenIDPrefix), FileManager.default.fileExists(atPath: transfer.path) {
                     try FileManager.default.removeItem(at: transfer)
                 }
@@ -757,6 +850,28 @@ final class WorktreeVMManager {
         return nil
     }
 
+    /// A draft must not depend on restoring volatile state after the app quits.
+    /// Fail the quit before any other teardown if its guest will not shut down.
+    func prepareProjectDraftsForQuit() async throws {
+        isQuitting = true
+        do {
+            for id in starting where VMIdentity.projectDraftID(recordID: id) != nil {
+                throw VMError(message: "A project setup VM is still starting. Wait and try quitting again.")
+            }
+            for id in Array(runningVMs.keys) where VMIdentity.projectDraftID(recordID: id) != nil {
+                guard !diskOperations.contains(id) else {
+                    throw VMError(message: "A project setup VM is saving or changing its disk. Wait and try quitting again.")
+                }
+                guard await pauseVM(recordID: id) == .stopped else {
+                    throw VMError(message: "A project setup VM didn't shut down. Shut it down in macOS, then quit Alas.")
+                }
+            }
+        } catch {
+            isQuitting = false
+            throw error
+        }
+    }
+
     /// Stops every VM this process runs. Called on quit so registry owners clear. macOS VMs
     /// that can save their state pause instead, all at once, within `quitPauseBound`; one still
     /// saving then is stopped as the others are. No VM starts afterwards, a disk operation's
@@ -765,11 +880,17 @@ final class WorktreeVMManager {
         isQuitting = true
         let ids = Array(runningVMs.keys)
         // A VM running its setup stops: restored, it would resume mid-script and never rerun it.
-        let pausable = Set(ids.filter { canSaveState($0) && !isRunningSetup($0) })
+        let pausable = Set(ids.filter { canSaveState($0) && !isSetupRunning(recordID: $0) && !diskOperations.contains($0) })
         let pauses = pausable.map { id in Task { await self.pauseVM(recordID: id) } }
         await withTaskGroup(of: Void.self) { group in
             for id in ids where !pausable.contains(id) {
-                group.addTask { await self.stopRecorded(id) }
+                group.addTask {
+                    if VMIdentity.projectDraftID(recordID: id) != nil {
+                        _ = await self.pauseVM(recordID: id)
+                    } else {
+                        await self.stopRecorded(id)
+                    }
+                }
             }
             group.addTask { await self.waitForQuitPauses(pauses, ids: pausable) }
         }
@@ -814,7 +935,7 @@ final class WorktreeVMManager {
     /// configuration supports it. A golden never does: sealing it needs a clean shutdown.
     private func canSaveState(_ id: String) -> Bool {
         VMIdentity.parse(recordID: id).guest == .macOS && !id.hasPrefix(Self.goldenIDPrefix)
-            && supportsSaveRestore(recordID: id)
+            && VMIdentity.projectDraftID(recordID: id) == nil && supportsSaveRestore(recordID: id)
     }
 
     /// Pauses the worktree's VM to free its slot: saves its machine state and stops it, so the
@@ -823,7 +944,7 @@ final class WorktreeVMManager {
         await pauseVM(recordID: VMIdentity.recordID(worktree: worktreeID, guest: guest))
     }
 
-    private func pauseVM(recordID id: String) async -> VMPauseOutcome {
+    func pauseVM(recordID id: String) async -> VMPauseOutcome {
         if let pause = pauses[id] { return await pause.value }
         guard runningVMs[id] != nil, !starting.contains(id) else { return .notRunning }
         pausing.insert(id)
@@ -842,6 +963,12 @@ final class WorktreeVMManager {
 
     private func pauseNow(_ id: String) async -> VMPauseOutcome {
         guard let vm = runningVMs[id] else { return .notRunning }
+        // Suspending requires a forced power-off. If restoration fails, a cold boot
+        // can lose disk writes the guest had not flushed yet. Keep drafts on disk.
+        if VMIdentity.projectDraftID(recordID: id) != nil {
+            let stopped = await shutDownProjectDraft(id, vm: vm)
+            return stopped && cleanlyShutDown[id] != nil ? .stopped : .notRunning
+        }
         guard canSaveState(id) else { return await stopInsteadOfPausing(id) }
         let bundle = bundle(forID: id)
         let state = Self.savedStateURL(of: bundle)
@@ -1023,13 +1150,12 @@ final class WorktreeVMManager {
     func resetFromScratch(worktreeID: String, guest: VMGuestOS = .macOS) async throws {
         let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
         try await withDiskOperation(id) {
-            // Checked first: without a base image the VM would be deleted and not cloned again.
-            let golden: Bool = switch guest {
-            case .macOS: availableGolden() != nil
-            case .linux: LinuxGoldenInstaller.availableGolden(root: root) != nil
+            if guest == .macOS {
+                try await replaceMacOSVM(worktreeID)
+                return
             }
-            guard golden else {
-                throw VMError(message: "The \(guest == .linux ? "Ubuntu" : "base") image isn't available to clone the VM from")
+            guard LinuxGoldenInstaller.availableGolden(root: root) != nil else {
+                throw VMError(message: "The Ubuntu image isn't available to clone the VM from")
             }
             if let reason = await deleteVM(worktreeID: worktreeID, guest: guest) {
                 throw VMError(message: "Couldn't delete the VM: \(reason)")
@@ -1039,8 +1165,52 @@ final class WorktreeVMManager {
         }
     }
 
+    private func replaceMacOSVM(_ id: String) async throws {
+        guard !isRemoteWorktree(id) else { throw VMError(message: "This worktree is on a remote host") }
+        guard try macOSSource(worktreeID: id) != .unavailable else {
+            throw VMError(message: "There is no macOS base image to clone this VM from")
+        }
+        let old = try registry.read().records.first { $0.id == id }
+        guard !diskClaims.contains(id) else { throw VMError(message: "The VM's disk is already open") }
+        try await stop(id, force: true)
+        let canonical = Self.bundleURL(forWorktree: id, root: root)
+        let destination = canonical.deletingLastPathComponent()
+            .appendingPathComponent(canonical.lastPathComponent + ".reset-" + UUID().uuidString, isDirectory: true)
+        do {
+            try registry.update(syncingLinuxAliasFor: id) { records in
+                let index = records.firstIndex { $0.id == id }
+                let current = index.map { records[$0] }
+                guard current?.bundlePath == old?.bundlePath, current?.bootGeneration == old?.bootGeneration,
+                      current?.runOwner == nil else {
+                    throw VMError(message: "The VM changed or is running in another Alas. Try again.")
+                }
+                guard let build = try cloneMacOS(id, to: destination, records: records, fromTemplate: false) else {
+                    throw VMError(message: "There is no macOS base image to clone this VM from")
+                }
+                let date = now()
+                let replacement = WorktreeVMRecord(
+                    id: id, goldenBuild: build, bundlePath: destination.path, createdAt: date, lastUsedAt: date,
+                    bootGeneration: current?.bootGeneration)
+                if let index { records[index] = replacement } else { records.append(replacement) }
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
+        cleanlyShutDown.removeValue(forKey: id)
+        onVMDeleted(id)
+        if let old {
+            try? registry.withSnapshotLocked { records in
+                guard !records.contains(where: { $0.bundlePath == old.bundlePath }) else { return }
+                try? FileManager.default.removeItem(atPath: old.bundlePath)
+                try? FileManager.default.removeItem(at: transferDirectory(forWorktree: id, guest: .macOS, bundlePath: old.bundlePath))
+            }
+        }
+        logger.notice("Reset VM \(id, privacy: .public) from scratch")
+    }
+
     /// Runs `body` as the only clean point or reset of VM `id`; other starts wait for it.
-    private func withDiskOperation(_ id: String, _ body: () async throws -> Void) async throws {
+    private func withDiskOperation<T>(_ id: String, _ body: @MainActor () async throws -> T) async throws -> T {
         guard !id.hasPrefix(Self.goldenIDPrefix) else { throw VMError(message: "A base image has no clean point") }
         guard !starting.contains(id) else { throw VMError(message: "The VM is starting. Try again once it runs.") }
         guard diskOperations.insert(id).inserted else {
@@ -1051,7 +1221,7 @@ final class WorktreeVMManager {
             if stoppedForDiskOperation.remove(id) != nil, runningVMs[id] == nil { onVMStopped(id) }
             diskOperationWaiters.removeValue(forKey: id)?.forEach { $0.resume() }
         }
-        try await body()
+        return try await body()
     }
 
     /// Stops VM `id` for a clean point: pauses it where it can save its state, else shuts its
@@ -1157,10 +1327,11 @@ final class WorktreeVMManager {
     private func matchingTemplate(
         worktreeID: String, guest: VMGuestOS, goldenBuild: String, goldenSealedMarker: URL
     ) -> (slot: URL, setupScriptHash: String)? {
-        guard let owner = templateOwner(worktreeID), let sealedAt = Self.sealedAt(goldenSealedMarker) else { return nil }
+        guard let owner = projectVMOwner(worktreeID), let hash = owner.setupScriptHash,
+              let sealedAt = Self.sealedAt(goldenSealedMarker) else { return nil }
         let slot = Self.templateSlot(projectID: owner.projectID, guest: guest, root: root)
         guard let template = Self.readTemplate(at: slot), template.projectID == owner.projectID,
-              template.matches(goldenBuild: goldenBuild, goldenSealedAt: sealedAt, setupScriptHash: owner.setupScriptHash)
+              template.matches(goldenBuild: goldenBuild, goldenSealedAt: sealedAt, setupScriptHash: hash)
         else { return nil }
         return (slot, template.setupScriptHash)
     }
@@ -1275,7 +1446,7 @@ final class WorktreeVMManager {
         let fm = FileManager.default
         guard let setupScriptHash, runningVMs[id] != nil, !Self.isPaused(bundle),
               fm.fileExists(atPath: Self.firstBootMarker(of: bundle).path),
-              let owner = templateOwner(vm.worktree),
+              let owner = projectVMOwner(vm.worktree), owner.setupScriptHash != nil,
               let golden = Self.currentGolden(vm.guest, root: root),
               let record = (try? registry.snapshot())?.first(where: { $0.id == id }),
               let stamp = (try? String(contentsOf: Self.goldenStampFile(of: bundle), encoding: .utf8)).flatMap(Double.init)
@@ -1386,7 +1557,8 @@ final class WorktreeVMManager {
     nonisolated static func runsFirstBootSetup(
         recordID: String, firstBootPending: Bool, setupRunning: Bool, setupFailed: Bool
     ) -> Bool {
-        !recordID.hasPrefix(goldenIDPrefix) && firstBootPending && !setupRunning && !setupFailed
+        !recordID.hasPrefix(goldenIDPrefix) && VMIdentity.projectDraftID(recordID: recordID) == nil
+            && firstBootPending && !setupRunning && !setupFailed
     }
 
     /// Whether creating a worktree also creates its macOS VM: the project (or its repo) asks, the
@@ -1807,11 +1979,56 @@ final class WorktreeVMManager {
     /// their record's worktree is neither on disk nor in a project. One any Alas runs, or one a
     /// record this build can't decode names, never is. One scan; sizes are read off the main
     /// actor. Throws when the registry can't be read, rather than taking every VM for an orphan.
-    func diskUse() async throws -> VMDiskUse {
-        let scanned = try scanBundles()
+    func diskUse(liveProjectIDs: Set<String>? = nil) async throws -> VMDiskUse {
+        let scanned = try scanBundles() + scanProjectBundles(liveProjectIDs: liveProjectIDs)
         async let bundles = VMBundleSummary.measured(scanned.filter { !$0.isOrphan })
         async let orphans = VMBundleSummary.measured(scanned.filter(\.isOrphan))
         return await VMDiskUse(bundles: bundles, orphans: orphans)
+    }
+
+    private func scanProjectBundles(liveProjectIDs: Set<String>?) throws -> [VMBundleSummary] {
+        try registry.withSnapshotSeeingForeignBundles { records, foreign in
+            var referenced = Set(foreign.lazy.map(Self.projectBundlePath))
+            referenced.formUnion(records.lazy.filter { !$0.bundlePath.isEmpty }.map { Self.projectBundlePath($0.bundlePath) })
+            let owned = Set(records.lazy.filter { $0.runOwner != nil }.map(\.id))
+            let projects = try projectBases.list(recoveringUnselected: { [self] url, draftID in
+                let path = Self.projectBundlePath(url.path)
+                if let draftID {
+                    let id = VMIdentity.projectDraftRecordID(draftID)
+                    guard !isBusyHere(id), !owned.contains(id) else { return }
+                }
+                guard !referenced.contains(where: { Self.projectPathsOverlap($0, path) }) else { return }
+                try? FileManager.default.removeItem(at: url)
+            })
+            let me = VMRunOwner.current(label: ownerLabel)
+            var summaries: [VMBundleSummary] = []
+            for entry in projects {
+                let project = entry.state.projectID
+                let orphan = liveProjectIDs.map { !$0.contains(project) } ?? false
+                if let base = entry.state.base, let url = entry.baseURL {
+                    summaries.append(.init(id: Self.projectBasePrefix + base.id.uuidString, kind: .projectBase,
+                        guest: .macOS, name: project, worktreeID: nil, url: url, runningHere: false, runningElsewhere: nil,
+                        isOrphan: orphan, leftovers: [], projectID: project, projectGeneration: base.id))
+                }
+                if let draft = entry.state.draft, let url = entry.draftURL {
+                    let id = VMIdentity.projectDraftRecordID(draft.id)
+                    let owner = records.first { $0.id == id }?.runOwner
+                    let elsewhere = owner.flatMap { me.map($0.isSameProcess(as:)) == true ? nil : $0.label }
+                    summaries.append(.init(id: id, kind: .projectDraft, guest: .macOS, name: project, worktreeID: nil,
+                        url: url, runningHere: isBusyHere(id), runningElsewhere: elsewhere, isOrphan: orphan,
+                        fromOtherBuild: foreign.contains(url.path), leftovers: [], projectID: project, projectGeneration: draft.id))
+                }
+            }
+            return summaries
+        }
+    }
+
+    private static func projectBundlePath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private static func projectPathsOverlap(_ first: String, _ second: String) -> Bool {
+        first == second || first.hasPrefix(second + "/") || second.hasPrefix(first + "/")
     }
 
     /// Deletes the orphans among `ids` (`VMBundleSummary.id`s) that a fresh scan still finds
@@ -1970,7 +2187,7 @@ final class WorktreeVMManager {
         func elsewhere(_ owner: VMRunOwner?) -> String? {
             owner.flatMap { me.map($0.isSameProcess(as:)) == true ? nil : $0.label }
         }
-        let vmRecords = records.filter { !$0.id.hasPrefix(Self.goldenIDPrefix) }
+        let vmRecords = records.filter { !$0.id.hasPrefix(Self.goldenIDPrefix) && VMIdentity.projectDraftID(recordID: $0.id) == nil }
         func clones(of goldenBuild: String) -> Int {
             vmRecords.filter { $0.goldenBuild == goldenBuild }.count
         }
@@ -2127,7 +2344,7 @@ final class WorktreeVMManager {
                 return .outcome(.runningElsewhere(label: label))
             case .needsUserChoice(let candidates):
                 return .outcome(.needsUserChoice(candidates: candidates.filter {
-                    localIDs.contains($0) && !isRunningSetup($0)
+                    localIDs.contains($0) && !isSetupRunning(recordID: $0) && !diskOperations.contains($0)
                 }))
             }
         }
@@ -2205,7 +2422,7 @@ final class WorktreeVMManager {
     /// Restores the VM from its saved state when it has one; a restore that fails is logged,
     /// never surfaced, and the VM cold-boots instead.
     private func bootOrRestore(_ id: String, bundle: VMBundle, restoringFrom state: URL?) async throws -> RunningVM {
-        let shares = try shares(forRecord: id)
+        let shares = try shares(forRecord: id, bundlePath: bundle.url.path)
         guard let state else { return try await start(id, bundle, shares, nil) }
         do {
             let vm = try await start(id, bundle, shares, state)
@@ -2257,9 +2474,28 @@ final class WorktreeVMManager {
         }
         guard runningVMs.removeValue(forKey: id) != nil else { return }
         // A pause clears the owner itself, once it recorded the saved state.
-        if !pausing.contains(id) { clearOwner(id) }
+        if !pausing.contains(id), !publishingDrafts.contains(id) { clearOwner(id) }
+        if let draft = VMIdentity.projectDraftID(recordID: id) {
+            projectDraftRuns.removeValue(forKey: draft)?.task.cancel()
+        }
         if diskOperations.contains(id) { stoppedForDiskOperation.insert(id) } else { onVMStopped(id) }
     }
+
+    func waitForSetupHelper(recordID id: String) async -> Bool {
+        await GuestSetupSteps.waitUntil(
+            timeout: .seconds(600), interval: .seconds(5),
+            sleep: { try? await Task.sleep(for: $0) }, now: { .now }
+        ) { [weak self] in
+            guard !Task.isCancelled, let self, let client = guestClient(recordID: id) else { return true }
+            return (try? await client.hello()) != nil
+        } && !Task.isCancelled && runningVMs[id] != nil
+    }
+
+    func isSetupRunning(recordID id: String) -> Bool {
+        isRunningSetup(id) || VMIdentity.projectDraftID(recordID: id).map(isProjectDraftSettingUp) == true
+    }
+
+    func isProjectDraftSettingUp(_ draft: UUID) -> Bool { projectDraftRuns[draft] != nil }
 
     private func clearOwner(_ id: String) {
         guard let me = VMRunOwner.current(label: ownerLabel) else { return }
@@ -2272,6 +2508,304 @@ final class WorktreeVMManager {
             }
         } catch {
             logger.error("Clearing VM owner for \(id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+}
+
+// MARK: - Project macOS base
+
+extension WorktreeVMManager {
+    enum ProjectDraftMode {
+        case customize
+        case rebuild(expectedDraft: UUID?)
+    }
+
+    enum ProjectDraftPreparation {
+        case draft(ProjectVMBaseStore.Draft)
+        case needsSharedBase
+    }
+
+    func projectBaseStatus(projectID: String) throws -> ProjectVMBaseStore.State {
+        try projectBases.status(projectID: projectID)
+    }
+
+    func projectDraftRecordStatus(draftID: UUID) -> RecordStatus {
+        recordStatus(recordID: VMIdentity.projectDraftRecordID(draftID))
+    }
+
+    func projectIDForDraft(_ draftID: UUID) -> String? {
+        (try? projectBases.list())?.first { $0.state.draft?.id == draftID }?.state.projectID
+    }
+
+    func projectDraftTransferDirectory(_ id: UUID) -> URL {
+        root.appendingPathComponent("transfer/project-drafts", isDirectory: true)
+            .appendingPathComponent(id.uuidString, isDirectory: true)
+    }
+
+    func isProjectDraftSharedBaseReady() -> Bool {
+        (try? registry.withSnapshotLocked { sharedSourceForProjectDraft($0) != nil }) == true
+    }
+
+    private func sharedSourceForProjectDraft(_ records: [WorktreeVMRecord]) -> (bundle: VMBundle, sealedAt: Date)? {
+        guard !goldenRunsAnywhere(records), let golden = availableGolden(),
+              let sealedAt = Self.sealedAt(golden.sealedMarker) else { return nil }
+        return (golden, sealedAt)
+    }
+
+    func prepareProjectDraft(projectID: String, script: String?, mode: ProjectDraftMode = .customize) async throws -> ProjectDraftPreparation {
+        let selectedScript = VMCleanPoint.scriptHash(script) == nil ? nil : script
+        switch mode {
+        case .customize, .rebuild(expectedDraft: nil):
+            return try selectProjectDraft(projectID: projectID, script: selectedScript, mode: mode)
+        case .rebuild(expectedDraft: let draftID?):
+            guard availableGolden() != nil else { return .needsSharedBase }
+            let id = VMIdentity.projectDraftRecordID(draftID)
+            return try await withDiskOperation(id) {
+                guard !isProjectDraftSettingUp(draftID) else { throw VMError(message: "Wait for the setup script to finish") }
+                if let pause = pauses[id] { _ = await pause.value }
+                if let vm = runningVMs[id] {
+                    guard await shutDownProjectDraft(id, vm: vm) else {
+                        throw VMError(message: "The draft is still running. Shut it down before rebuilding.")
+                    }
+                }
+                return try selectProjectDraft(projectID: projectID, script: selectedScript, mode: mode)
+            }
+        }
+    }
+
+    private func selectProjectDraft(projectID: String, script: String?, mode: ProjectDraftMode) throws -> ProjectDraftPreparation {
+        let result: ProjectDraftPreparation = try registry.withSnapshotLocked { records in
+            try projectBases.withProject(projectID) { transaction in
+                let expected: UUID?
+                let source: ProjectVMBaseStore.DraftSource
+                switch mode {
+                case .customize:
+                    if let draft = transaction.state.draft { return .draft(draft) }
+                    expected = nil
+                case .rebuild(let draftID):
+                    guard transaction.state.draft?.id == draftID else { throw ProjectVMBaseStore.Failure.changed }
+                    if let draftID { try requireStoppedDraft(draftID, records: records) }
+                    expected = draftID
+                }
+                if case .customize = mode, transaction.state.base != nil {
+                    source = .saved
+                } else {
+                    guard let (golden, sealedAt) = sharedSourceForProjectDraft(records) else { return .needsSharedBase }
+                    source = .shared(bundle: golden, provenance: .init(
+                        sharedBuild: golden.url.lastPathComponent, sharedSealedAt: sealedAt,
+                        scriptHash: VMCleanPoint.scriptHash(script)), script: script)
+                }
+                let draft = try transaction.replaceDraft(expected: expected, source: source, identity: Self.newMacIdentity())
+                return .draft(draft)
+            }
+        }
+        if case .draft = result {
+            collectRetiredProjectDrafts(projectID)
+            projectBaseRevision &+= 1
+        }
+        return result
+    }
+
+    func startProjectDraft(
+        projectID: String, draftID: UUID, retrySetup: Bool = false, pausing other: String? = nil
+    ) async throws -> VMStartOutcome {
+        let id = VMIdentity.projectDraftRecordID(draftID)
+        guard try projectBaseStatus(projectID: projectID).draft?.id == draftID else { throw ProjectVMBaseStore.Failure.changed }
+        if let other { try await pauseForSlot(other) }
+        let outcome = try await startRecorded(id: id) { [self] records in
+            try projectBases.withProject(projectID) { transaction in
+                let bundle = try transaction.selectedDraftBundle(id: draftID)
+                guard let draft = transaction.state.draft else { throw ProjectVMBaseStore.Failure.changed }
+                if let record = records.first(where: { $0.id == id }) {
+                    guard record.bundlePath == bundle.url.path else { throw ProjectVMBaseStore.Failure.changed }
+                } else {
+                    records.append(.init(id: id, goldenBuild: id, bundlePath: bundle.url.path,
+                                         createdAt: draft.createdAt, lastUsedAt: now()))
+                }
+            }
+        }
+        if case .running = outcome { _ = try scheduleDraftSetup(projectID: projectID, draftID: draftID, retry: retrySetup) }
+        return outcome
+    }
+
+    func retryProjectDraftSetup(projectID: String, draftID: UUID) async throws {
+        let run = try scheduleDraftSetup(projectID: projectID, draftID: draftID, retry: true)
+        await run?.value
+    }
+
+    private func scheduleDraftSetup(projectID: String, draftID: UUID, retry: Bool) throws -> Task<Void, Never>? {
+        guard let draft = try projectBaseStatus(projectID: projectID).draft, draft.id == draftID else {
+            throw ProjectVMBaseStore.Failure.changed
+        }
+        let id = VMIdentity.projectDraftRecordID(draftID)
+        guard let script = draft.script, draft.setup != .ready, retry || draft.setup == .pending else { return nil }
+        guard !diskOperations.contains(id), !pausing.contains(id), runningVMs[id] != nil,
+              let generation = try registry.read().records.first(where: { $0.id == id })?.bootGeneration else {
+            throw VMError(message: "Start the draft before running its setup script")
+        }
+        if let run = projectDraftRuns[draftID] { return run.task }
+        projectDraftSetupErrors[draftID] = nil
+        let token = UUID()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if projectDraftRuns[draftID]?.token == token { projectDraftRuns[draftID] = nil }
+            }
+            var setup = draftSetup()
+            setup.isCurrent = { [weak self] in self?.projectDraftRuns[draftID]?.token == token }
+            let result = await setup.executeScript(recordID: id, script: script)
+            guard projectDraftRuns[draftID]?.token == token, runningVMs[id] != nil else { return }
+            let next: ProjectVMBaseStore.Setup
+            switch result {
+            case .succeeded: next = .ready
+            case .failed(let code): next = .failed(exitCode: code)
+            case .helperUnavailable: next = .failed(exitCode: nil)
+            case .interrupted: return
+            }
+            do {
+                try registry.withSnapshotLocked { records in
+                    try requireOwnedDraftBoot(id, generation: generation, records: records)
+                    try projectBases.withProject(projectID) { try $0.setDraftSetup(id: draftID, setup: next) }
+                }
+                projectBaseRevision &+= 1
+            } catch {
+                projectDraftSetupErrors[draftID] = "Couldn't save the setup result: \(error.localizedDescription)"
+            }
+        }
+        projectDraftRuns[draftID] = DraftSetupRun(token: token, task: task)
+        return task
+    }
+
+    func saveProjectBase(projectID: String, draftID: UUID) async throws -> ProjectVMBaseStore.Base {
+        let id = VMIdentity.projectDraftRecordID(draftID)
+        let base = try await withDiskOperation(id) {
+            guard let draft = try projectBaseStatus(projectID: projectID).draft, draft.id == draftID else {
+                throw ProjectVMBaseStore.Failure.changed
+            }
+            guard draft.setup == .ready, !isProjectDraftSettingUp(draftID) else { throw ProjectVMBaseStore.Failure.notReady }
+            if let pause = pauses[id] { _ = await pause.value }
+            let running = runningVMs[id]
+            var claimed = false
+            if running != nil { publishingDrafts.insert(id) }
+            defer {
+                if claimed { releaseDisk(id: id) }
+                if publishingDrafts.remove(id) != nil, runningVMs[id] == nil { clearOwner(id) }
+            }
+            if let vm = running {
+                guard await shutDownProjectDraft(id, vm: vm) else {
+                    throw VMError(message: "The draft did not shut down. Shut down macOS and try again.")
+                }
+            } else {
+                guard cleanlyShutDown[id] != nil else { throw Self.projectDraftNeedsCleanStop }
+                try claimDisk(id: id)
+                claimed = true
+            }
+            guard let generation = cleanlyShutDown[id], runningVMs[id] == nil else { throw Self.projectDraftNeedsCleanStop }
+            return try registry.withSnapshotLocked { records in
+                try requireOwnedDraftBoot(id, generation: generation, records: records)
+                return try projectBases.withProject(projectID) { transaction in
+                    let bundle = try transaction.selectedDraftBundle(id: draftID)
+                    guard !FileManager.default.fileExists(atPath: Self.savedStateURL(of: bundle).path) else {
+                        throw Self.projectDraftNeedsCleanStop
+                    }
+                    return try transaction.publish(expectedDraft: draftID, savedAt: now())
+                }
+            }
+        }
+        collectRetiredProjectDrafts(projectID)
+        projectBaseRevision &+= 1
+        return base
+    }
+
+    func discardProjectDraft(
+        projectID: String, draftID: UUID, stillOrphaned: (() throws -> Bool)? = nil
+    ) async throws {
+        let id = VMIdentity.projectDraftRecordID(draftID)
+        try await withDiskOperation(id) {
+            guard try projectBaseStatus(projectID: projectID).draft?.id == draftID else { throw ProjectVMBaseStore.Failure.changed }
+            if let stillOrphaned, try !stillOrphaned() { throw ProjectVMBaseStore.Failure.changed }
+            try await stop(id, force: true)
+            try registry.withSnapshotLocked { records in
+                if let stillOrphaned, try !stillOrphaned() { throw ProjectVMBaseStore.Failure.changed }
+                try requireStoppedDraft(draftID, records: records)
+                try projectBases.withProject(projectID) { try $0.discard(expectedDraft: draftID) }
+            }
+        }
+        collectRetiredProjectDrafts(projectID)
+        projectBaseRevision &+= 1
+    }
+
+    func removeProjectBase(projectID: String, baseID: UUID, stillOrphaned: (() throws -> Bool)? = nil) throws {
+        try registry.withSnapshotLocked { _ in
+            if let stillOrphaned, try !stillOrphaned() { throw ProjectVMBaseStore.Failure.changed }
+            try projectBases.withProject(projectID) { try $0.removeBase(expectedBase: baseID) }
+        }
+        collectRetiredProjectDrafts(projectID)
+        projectBaseRevision &+= 1
+    }
+
+    private static var projectDraftNeedsCleanStop: VMError {
+        VMError(message: "Alas didn't observe a clean shutdown. Start the draft, then shut down macOS and try again.")
+    }
+
+    private func shutDownProjectDraft(_ id: String, vm: RunningVM) async -> Bool {
+        let command = GoldenProvisioner.shutdownCommand(account: .alas)
+        guard await vm.stopGracefully(requestingShutdown: { [self] in await sendGuestShutdown(id, command) },
+                                      timeout: GoldenProvisioner.shutdownTimeout) else { return false }
+        didStop(id)
+        return true
+    }
+
+    private func requireOwnedDraftBoot(_ id: String, generation: Int, records: [WorktreeVMRecord]) throws {
+        guard let record = records.first(where: { $0.id == id }), record.bootGeneration == generation,
+              let owner = record.runOwner, let me = VMRunOwner.current(label: ownerLabel), owner.isSameProcess(as: me) else {
+            throw Self.projectDraftNeedsCleanStop
+        }
+    }
+
+    private func requireStoppedDraft(_ draftID: UUID, records: [WorktreeVMRecord]) throws {
+        let id = VMIdentity.projectDraftRecordID(draftID)
+        guard !diskClaims.contains(id), runningVMs[id] == nil, !starting.contains(id) else {
+            throw VMError(message: "The project draft is busy")
+        }
+        if let owner = records.first(where: { $0.id == id })?.runOwner {
+            throw VMError(message: "The project draft is in use in \(owner.label)")
+        }
+    }
+
+    private func collectRetiredProjectDrafts(_ projectID: String) {
+        do {
+            try registry.updateSeeingForeignBundles(quarantining: false) { records, foreign in
+                let foreignPaths = foreign.map(Self.projectBundlePath)
+                try projectBases.withProject(projectID) { transaction in
+                    try transaction.visitUnselected { url, draftID in
+                        let path = Self.projectBundlePath(url.path)
+                        let recordID = draftID.map(VMIdentity.projectDraftRecordID)
+                        if let recordID, isBusyHere(recordID) || records.contains(where: { $0.id == recordID && $0.runOwner != nil }) {
+                            return
+                        }
+                        let retiredID = url.pathExtension.isEmpty ? recordID : nil
+                        guard !foreignPaths.contains(where: { Self.projectPathsOverlap($0, path) }),
+                              !records.contains(where: { record in
+                                  guard !record.bundlePath.isEmpty else { return false }
+                                  let reference = Self.projectBundlePath(record.bundlePath)
+                                  return Self.projectPathsOverlap(reference, path)
+                                      && !(record.id == retiredID && record.runOwner == nil && reference == path)
+                              }),
+                              (try? FileManager.default.removeItem(at: url)) != nil
+                        else { return }
+                        guard let draftID, let retiredID,
+                              !records.contains(where: { $0.id == retiredID && Self.projectBundlePath($0.bundlePath) != path })
+                        else { return }
+                        try? FileManager.default.removeItem(at: projectDraftTransferDirectory(draftID))
+                        records.removeAll { $0.id == retiredID }
+                        cleanlyShutDown.removeValue(forKey: retiredID)
+                        projectDraftSetupErrors[draftID] = nil
+                    }
+                }
+            }
+        } catch {
+            logger.error("Retiring project VM draft files failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }
