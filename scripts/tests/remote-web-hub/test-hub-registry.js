@@ -361,6 +361,15 @@ assert.deepEqual(
   { attention: 2, running: 1 }
 );
 assert.deepEqual(registry.attentionCounts(undefined), { attention: 0, running: 0 });
+{
+  const list = status => [{ id: "1", status }, { id: "2", status: "awaitingInput", isActive: false }, { id: "3", status: "idle" }];
+  const first = registry.newAttention(null, list("awaitingPermission"));
+  assert.deepEqual(first.fresh, [], "the first list is already known");
+  assert.deepEqual([...first.ids], ["1"]);
+  assert.deepEqual(registry.newAttention(first.ids, list("awaitingInput")).fresh, [], "still waiting is not new");
+  const answered = registry.newAttention(first.ids, list("streaming"));
+  assert.deepEqual(registry.newAttention(answered.ids, list("awaitingPermission")).fresh.map(s => s.id), ["1"], "asking again is new");
+}
 assert.equal(
   registry.otherAttentionTotal(
     [{ id: "a", counts: { attention: 2, running: 0 } }, { id: "b", counts: { attention: 3, running: 1 } }, { id: "c", counts: { attention: 1, running: 0 } }],

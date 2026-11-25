@@ -410,6 +410,7 @@ function handle(msg) {
     case "sessionList":
       gatewayCounts = RemoteHubRegistry.peerSessionCounts(msg.sessions, (activeServer() || {}).peers);
       renderSessions(msg.sessions);
+      notifyNewAttention(msg.sessions);
       worktreeCreation.markRecoveryListLoaded("sessions");
       refreshHubViews();
       break;
@@ -1544,6 +1545,50 @@ function showRepos() {
   $("bottom-tabbar").classList.toggle("hidden", !!currentSession);
 }
 
+// System notifications for a session that starts needing you while this window
+// is in the background. Needs a secure context (localhost or https), so a
+// plain-http LAN page hides the setting.
+const NOTIFY_OFF_KEY = "alas.notify.off";
+const canNotify = "Notification" in window && window.isSecureContext;
+let attentionSeen = { serverId: null, ids: null };
+
+function notificationsOn() {
+  return canNotify && Notification.permission === "granted" && localStorage.getItem(NOTIFY_OFF_KEY) !== "1";
+}
+
+function notifyNewAttention(sessions) {
+  // Another server's list is a first list too: what already waits there isn't new.
+  const seen = attentionSeen.serverId === hub.activeId ? attentionSeen.ids : null;
+  const { ids, fresh } = RemoteHubRegistry.newAttention(seen, sessions);
+  attentionSeen = { serverId: hub.activeId, ids };
+  if (!notificationsOn() || (!document.hidden && document.hasFocus())) return;
+  for (const session of fresh) {
+    const body = session.status === "awaitingPermission" ? "Needs your permission" : "Is waiting for your answer";
+    try {
+      const n = new Notification(session.title || "Session", { body, tag: session.id, icon: "icon-192.png" });
+      n.onclick = () => { window.focus(); openSession(session.id); n.close(); };
+    } catch (_) { /* Chrome on Android only notifies through a service worker. */ }
+  }
+}
+
+function renderNotifySetting() {
+  $("notify-section").hidden = !canNotify;
+  if (!canNotify) return;
+  const blocked = Notification.permission === "denied";
+  $("notify-toggle").checked = notificationsOn();
+  $("notify-toggle").disabled = blocked;
+  $("notify-note").hidden = !blocked;
+}
+
+$("notify-toggle").addEventListener("change", async e => {
+  if (!e.target.checked) localStorage.setItem(NOTIFY_OFF_KEY, "1");
+  else {
+    localStorage.removeItem(NOTIFY_OFF_KEY);
+    if (Notification.permission === "default") await Notification.requestPermission();
+  }
+  renderNotifySetting();
+});
+
 function showSettings() {
   if (currentSession && !wideLayout.matches) return;   // a phone hides the tab bar during session detail
   topLevelTab = "settings";
@@ -1552,6 +1597,7 @@ function showSettings() {
   $("sessions").classList.add("hidden");
   $("settings").classList.remove("hidden");
   renderServerList();
+  renderNotifySetting();
 }
 
 $("tab-repos").addEventListener("click", showRepos);

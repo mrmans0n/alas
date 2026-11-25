@@ -782,3 +782,7 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 #terminal-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 #terminal-status { padding: 0 16px 6px; }
 #terminal-screen { flex: 1; min-height: 0; overflow: auto; background: var(--term-bg); padding: 6px; }
+#notify-section { margin-top: 18px; }
+.notify-row { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 12px; background: var(--bg-2); box-shadow: inset 0 0 0 0.5px var(--ring); font-size: 15px; cursor: pointer; }
+.notify-row input { margin: 0; accent-color: var(--accent); }
+#notify-note { margin: 8px 4px 0; }

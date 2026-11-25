@@ -320,6 +320,20 @@ function classifySessionCount(session, counts) {
   else if (session.status === "streaming") counts.running += 1;
 }
 
+// Sessions that started needing you since `seenIds` (the ids that needed you
+// last time), plus the ids to remember for next time. A null `seenIds` is the
+// first list: everything is already known, so nothing is new.
+function newAttention(seenIds, sessions) {
+  const ids = new Set();
+  const fresh = [];
+  for (const session of sessions || []) {
+    if (!session || session.isActive === false || !ATTENTION_STATUSES.has(session.status)) continue;
+    ids.add(session.id);
+    if (seenIds && !seenIds.has(session.id)) fresh.push(session);
+  }
+  return { ids, fresh };
+}
+
 function attentionCounts(sessions) {
   const counts = { attention: 0, running: 0 };
   for (const session of sessions || []) classifySessionCount(session, counts);
@@ -460,6 +474,7 @@ globalThis.RemoteHubRegistry = {
   setLastOrigin,
   fallbackActiveId,
   attentionCounts,
+  newAttention,
   peerSessionCounts,
   serverBadgeCounts,
   otherAttentionTotal,
