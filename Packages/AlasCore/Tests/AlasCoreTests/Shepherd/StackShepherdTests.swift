@@ -35,12 +35,12 @@ struct StackShepherdTests {
     }
 
     /// `numbers` bottom-up; GG-IDs are `c-<number>`.
-    private static func stack(_ numbers: [Int]) -> GGStack {
+    private static func stack(_ numbers: [Int], queued: Int? = nil) -> GGStack {
         GGStack(
             name: "auth", base: "main", totalCommits: numbers.count, syncedCommits: numbers.count,
             currentPosition: numbers.count, behindBase: 0,
             entries: numbers.enumerated().map { index, number in
-                GGStackEntry(position: index + 1, sha: "sha\(number)", title: "Entry \(number)", ggId: "c-\(number)", prNumber: number)
+                GGStackEntry(position: index + 1, sha: "sha\(number)", title: "Entry \(number)", ggId: "c-\(number)", prNumber: number, autoMerge: number == queued)
             }
         )
     }
@@ -772,7 +772,8 @@ struct StackShepherdTests {
             archiveWorktreeIfAllowed: { _, _, _ in
                 archive()
                 return .declined
-            }
+            },
+            loadStackWithForgeState: { _ in stack }
         )
         return shepherd
     }
@@ -875,7 +876,7 @@ struct StackShepherdTests {
         #expect(events == expected)
     }
 
-    @Test func onePollSendsOneFixTurnForEveryEntryInNeed() async throws {
+    @Test func queuedMergeDefersTheCombinedFixTurnUntilTheQueueClears() async throws {
         let stack = Self.stack([41, 42, 43])
         var delivered: [String] = []
         let shepherd = makeShepherd(
@@ -887,6 +888,12 @@ struct StackShepherdTests {
             stack: stack,
             deliverPrompt: { delivered.append($0) })
         let record = await bind(shepherd, session: "session-1", stack: stack)
+        // The local listing lacks queue state; only the refreshed listing sees it.
+        shepherd.effects?.loadStackWithForgeState = { _ in Self.stack([41, 42, 43], queued: 42) }
+        await shepherd.evaluateNow(record.id)
+        #expect(delivered.isEmpty)
+        #expect(shepherd.records[record.id]?.entries.map(\.shepherd.fixAttempts) == [0, 0, 0])
+        shepherd.effects?.loadStackWithForgeState = { _ in stack }
 
         await shepherd.evaluateNow(record.id)
 
