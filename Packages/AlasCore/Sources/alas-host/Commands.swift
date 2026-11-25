@@ -414,9 +414,11 @@ enum HostCommands {
     static func restart(afterSaving: Bool = false) throws {
         #if os(Linux)
         let unit = HostSystemdUnit(executable: URL(fileURLWithPath: CommandLine.arguments[0]))
-        // Enabled, not active: a host replaced by an upgrade is briefly inactive while
-        // systemd restarts it, and `systemctl restart` starts a stopped unit anyway.
-        if FileManager.default.fileExists(atPath: unit.unitURL.path), systemctlUser("is-enabled", "--quiet", unit.name) == 0 {
+        // Active or enabled: a host replaced by an upgrade is briefly inactive while
+        // systemd restarts it, `systemctl restart` starts a stopped unit anyway, and
+        // a running unit whose autostart was disabled still restarts.
+        if FileManager.default.fileExists(atPath: unit.unitURL.path),
+           systemctlUser("is-active", "--quiet", unit.name) == 0 || systemctlUser("is-enabled", "--quiet", unit.name) == 0 {
             guard systemctlUser("restart", unit.name) == 0 else {
                 throw HostCommandError("systemctl could not restart \(unit.name)")
             }

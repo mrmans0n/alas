@@ -376,6 +376,9 @@ if let listen = config.hostRemoteListen {
         },
         signer: identityKey
     )
+    // As the app does: a forgotten or replaced device's open socket closes with
+    // its token, so `browsers remove` takes effect at once.
+    pairing.onDeviceRevoked = { [weak server] in server?.disconnectDevice($0) }
     localPeerIdentity = {
         RemotePeerManager.LocalIdentity(
             serverId: settings.serverId,
