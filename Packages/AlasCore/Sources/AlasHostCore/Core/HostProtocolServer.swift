@@ -417,6 +417,11 @@ public final class HostProtocolConnection {
                 throw HostError.notFound(what: "browser \(deviceID)")
             }
             return .done
+        case .forgetBrowser(let deviceID):
+            guard try localPairing().forgetBrowser(deviceId: deviceID) else {
+                throw HostError.notFound(what: "browser \(deviceID)")
+            }
+            return .done
         case .updateHost:
             // A person's request: a paired Mac or the local user, not an agent.
             switch caller {

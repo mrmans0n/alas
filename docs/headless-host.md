@@ -287,12 +287,16 @@ browser you trust, such as the web client on this machine, allow it for that
 one device:
 
 ```bash
-alas-host browsers list                     # id, name, whether it may open terminals
+alas-host browsers list                     # id, name (such as "Chrome on Linux"), whether it may open terminals
 alas-host browsers terminals <id|name> on   # or off
+alas-host browsers remove <id|name>         # forget it; it has to pair again
 ```
 
 Changing it disconnects that browser, which reconnects with the new setting.
-The phone app and paired Macs always get terminals.
+A browser that pairs again replaces its earlier entry and keeps its terminal
+setting. The phone app and paired Macs always get terminals. A terminal a
+browser opens starts under its control; one it picks from the list starts
+as a viewer until it takes control.
 
 ### Pair a Mac
 

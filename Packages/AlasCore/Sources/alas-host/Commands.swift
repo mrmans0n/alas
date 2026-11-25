@@ -116,6 +116,10 @@ enum HostCommands {
             let browser = try HostBrowserSummary.resolve(arguments[1], in: try await listBrowsers())
             try await setBrowserTerminals(browser.id, allowed)
             print("\(browser.id)  \(browser.name)  terminals: \(allowed ? "on" : "off")")
+        case ("browsers", "remove", 2):
+            let browser = try HostBrowserSummary.resolve(arguments[1], in: try await listBrowsers())
+            try await forgetBrowser(browser.id)
+            print("\(browser.id)  \(browser.name)")
         case ("registry", "search", 1), ("registry", "search", 2):
             let query = arguments.count == 2 ? arguments[1] : ""
             let installed = readConfig().agents.registry
@@ -334,6 +338,14 @@ enum HostCommands {
         }
     }
 
+    static func forgetBrowser(_ id: String) async throws {
+        try await perform(.forgetBrowser(deviceID: id)) { $0 == .done ? () : nil } inProcess: { _ in
+            guard RemotePairingService(store: FileDeviceStore()).forgetBrowser(deviceId: id) else {
+                throw HostError.notFound(what: "browser \(id)")
+            }
+        }
+    }
+
     private static func scopeLabel(_ scope: RemoteDeviceScope) -> String {
         switch scope {
         case .full: "full"
@@ -402,7 +414,11 @@ enum HostCommands {
     static func restart(afterSaving: Bool = false) throws {
         #if os(Linux)
         let unit = HostSystemdUnit(executable: URL(fileURLWithPath: CommandLine.arguments[0]))
-        if FileManager.default.fileExists(atPath: unit.unitURL.path), systemctlUser("is-active", "--quiet", unit.name) == 0 {
+        // Active or enabled: a host replaced by an upgrade is briefly inactive while
+        // systemd restarts it, `systemctl restart` starts a stopped unit anyway, and
+        // a running unit whose autostart was disabled still restarts.
+        if FileManager.default.fileExists(atPath: unit.unitURL.path),
+           systemctlUser("is-active", "--quiet", unit.name) == 0 || systemctlUser("is-enabled", "--quiet", unit.name) == 0 {
             guard systemctlUser("restart", unit.name) == 0 else {
                 throw HostCommandError("systemctl could not restart \(unit.name)")
             }

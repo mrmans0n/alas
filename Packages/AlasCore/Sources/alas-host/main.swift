@@ -17,7 +17,7 @@ usage: alas-host [--wait-for-lock]
        alas-host install-agent | uninstall-agent
        alas-host config list | get [<key>] | set <key> <value> [--restart]
        alas-host peers list | add <pairing-link> | remove <id|name|serverId>
-       alas-host browsers list | terminals <id|name> on|off
+       alas-host browsers list | terminals <id|name> on|off | remove <id|name>
        alas-host project list | add <path> [--name <name>] | remove <id|path>
        alas-host registry search [<query>] | install <id> | uninstall <id>
        alas-host restart
@@ -142,7 +142,10 @@ if arguments == ["install-agent"] || arguments == ["uninstall-agent"] {
         fail("systemctl --user could not start \(unit.name) from \(unit.unitURL.path)")
     }
     print("installed \(unit.unitURL.path)")
-    print("To keep it serving while you are logged out: loginctl enable-linger \(NSUserName())")
+    // logind records lingering users here; skip the hint once it is on.
+    if !FileManager.default.fileExists(atPath: "/var/lib/systemd/linger/\(NSUserName())") {
+        print("To keep it serving while you are logged out: loginctl enable-linger \(NSUserName())")
+    }
     exit(0)
     #else
     let agent = HostLaunchAgent(executable: executable)
@@ -373,6 +376,9 @@ if let listen = config.hostRemoteListen {
         },
         signer: identityKey
     )
+    // As the app does: a forgotten or replaced device's open socket closes with
+    // its token, so `browsers remove` takes effect at once.
+    pairing.onDeviceRevoked = { [weak server] in server?.disconnectDevice($0) }
     localPeerIdentity = {
         RemotePeerManager.LocalIdentity(
             serverId: settings.serverId,

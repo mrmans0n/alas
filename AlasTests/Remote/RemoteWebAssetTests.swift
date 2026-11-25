@@ -1598,7 +1598,7 @@ struct RemoteWebAssetTests {
     // address was even tried.
     @Test func pairingContinuesPastAnUnrelatedOriginsError() throws {
         let js = try asset("hub-links.js")
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4800) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds, replaces) {").map { js[$0.lowerBound...].prefix(4800) })
         #expect(pair.contains("const tryAt = (index, bestError) => {"))
         #expect(pair.contains("if (isAuthoritative(origin)) { err.confirmed = true; return Promise.reject(err); }"))
         #expect(pair.contains("return tryAt(index + 1, err);"))
@@ -1619,7 +1619,7 @@ struct RemoteWebAssetTests {
     @Test func pairingDoesNotChargeTheSameTargetsRateLimitOncePerAddress() throws {
         let js = try asset("hub-links.js")
         #expect(js.contains("const isLoopback = globalThis.RemoteHubRegistry.isLoopbackOrigin;"))
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4800) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds, replaces) {").map { js[$0.lowerBound...].prefix(4800) })
         #expect(pair.contains("const err = bestError || pairError(\"expired\");"))
         #expect(pair.contains("const err = bestError || pairError(\"origin\");"))
     }
@@ -1635,7 +1635,7 @@ struct RemoteWebAssetTests {
     // at all keeps the original loopback-only check.
     @Test func onlyLanAndTailnetOriginKindsAreTreatedAsAuthoritative() throws {
         let js = try asset("hub-links.js")
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4800) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds, replaces) {").map { js[$0.lowerBound...].prefix(4800) })
         #expect(pair.contains("const isAuthoritative = (origin) => {"))
         #expect(pair.contains("if (kind) return kind === \"lan\" || kind === \"tailnet\";"))
         #expect(pair.contains("return !isLoopback(origin);"))
@@ -1652,7 +1652,7 @@ struct RemoteWebAssetTests {
     // answer apart from an inconclusive one that leaked through.
     @Test func onlyAnAuthoritativeOriginsRejectionIsMarkedConfirmed() throws {
         let js = try asset("hub-links.js")
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4800) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds, replaces) {").map { js[$0.lowerBound...].prefix(4800) })
         #expect(pair.contains("if (isAuthoritative(origin)) { err.confirmed = true; return Promise.reject(err); }"))
         #expect(!pair.contains("bestError.confirmed"), "confirmation must not be forced onto an inherited bestError from a non-authoritative origin")
     }
@@ -1664,7 +1664,7 @@ struct RemoteWebAssetTests {
     // or accept a garbage, tokenless registry entry as success.
     @Test func pairFallsThroughAfterAnInvalidOrTokenlessResponse() throws {
         let js = try asset("hub-links.js")
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4800) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds, replaces) {").map { js[$0.lowerBound...].prefix(4800) })
         #expect(pair.contains("if (!body || typeof body.token !== \"string\" || !body.token) return tryAt(index + 1, bestError);"))
         #expect(pair.contains("return Promise.resolve(res.json()).then("))
     }
@@ -1680,7 +1680,7 @@ struct RemoteWebAssetTests {
     // parse, never a later tryAt() call's own rejection.
     @Test func pairDoesNotDoubleRetryRemainingOriginsAfterATokenlessResponse() throws {
         let js = try asset("hub-links.js")
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4800) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds, replaces) {").map { js[$0.lowerBound...].prefix(4800) })
         #expect(!pair.contains(".catch(() => tryAt(index + 1, bestError));"), "must not use .then().catch() around the recursive call")
         #expect(pair.contains("return Promise.resolve(res.json()).then("))
     }

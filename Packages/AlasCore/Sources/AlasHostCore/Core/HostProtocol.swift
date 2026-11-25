@@ -136,6 +136,8 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// Lets a paired browser open terminals, or stops it, and disconnects it
     /// so it reconnects with the change; local client only.
     case setBrowserTerminals(deviceID: String, allowed: Bool)
+    /// Forgets a paired browser and revokes its token; local client only.
+    case forgetBrowser(deviceID: String)
     /// Upgrades the Homebrew cask this host runs from and restarts it on the
     /// new version (`host.update.v1`). The connection usually drops before
     /// the answer, when the upgrade replaces the running executable.
