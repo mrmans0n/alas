@@ -74,12 +74,14 @@
       "type": "console",
       "console": { "detached": { "attachmentId": "a1", "reason": "targetExited" } }
     },
+    "pong": { "type": "pong", "requestId": "k3x9" },
     "consoleOpened": {
       "type": "console",
       "console": { "opened": { "requestId": "r1", "consoleId": "c1" } }
     }
   },
   "client": {
+    "ping": { "type": "ping", "requestId": "k3x9" },
     "consoleList": { "type": "console", "console": { "list": {} } },
     "consoleOpen": { "type": "console", "console": { "open": { "requestId": "r1", "worktreeId": "w1", "repoHook": { "skip": {} } } } },
     "consoleAttach": { "type": "console", "console": { "attach": { "consoleId": "c1", "attachmentId": "a1", "scrollbackRows": 1000 } } },
