@@ -1088,10 +1088,13 @@ function renderChanges() {
       row.onclick = () => openDiff(file.path, section.stage || null);
       row.append(el("span", "change-name", item.name));
       if (file.conflict) row.append(el("span", "change-conflict", "conflict"));
-      row.append(el("span", "change-status", file.status));
-      const counts = el("span", "change-counts");
-      counts.append(el("span", "count-add", "+" + (file.add || 0)), el("span", "count-del", "−" + (file.del || 0)));
-      row.append(counts);
+      row.append(el("span", "change-status status-" + file.status, file.status));
+      if (file.add || file.del) {   // a binary file has no line counts to show
+        const counts = el("span", "change-counts");
+        if (file.add) counts.append(el("span", "count-add", "+" + file.add));
+        if (file.del) counts.append(el("span", "count-del", "−" + file.del));
+        row.append(counts);
+      }
       list.appendChild(row);
     }
     for (const commit of section.commits || []) {
@@ -2614,6 +2617,17 @@ function insertMessage(m, open) {
   let anchor = box.lastElementChild;
   while (anchor && Number(anchor.dataset.index) > m.index) anchor = anchor.previousElementSibling;
   if (anchor) anchor.after(node); else box.prepend(node);
+  markRepeatedNotice(node);
+}
+
+// A status line that repeats the one just above it ("Agent disconnected." after each reconnect)
+// shows once.
+function markRepeatedNotice(node) {
+  for (const n of [node, node.nextElementSibling]) {
+    if (!n || !n.classList.contains("m-systemNotice")) continue;
+    const p = n.previousElementSibling;
+    n.classList.toggle("is-repeat", !!p && p.classList.contains("m-systemNotice") && p.textContent === n.textContent);
+  }
 }
 
 function upsertMessage(m) {
@@ -2643,6 +2657,7 @@ function upsertMessage(m) {
     node.dataset.sid = m.stableId;
     node.dataset.index = m.index;
     existing.replaceWith(node);
+    markRepeatedNotice(node);
     messages.set(m.stableId, m);
     messageNodes.set(m.stableId, node);
     return;
@@ -4275,8 +4290,9 @@ function structCard(verb, name, body, preview) {
   toggle.setAttribute("aria-expanded", "false");
   toggle.tabIndex = 0;
   toggle.append(icon("chevR", "tool-exp"));
-  toggle.append(el("span", "tool-verb", verb));
-  toggle.append(el("span", "tool-cmd", name || preview || ""));
+  // A card with nothing to name, such as a plan, shows its verb as the name.
+  if (name || preview) toggle.append(el("span", "tool-verb", verb), el("span", "tool-cmd", name || preview));
+  else toggle.append(el("span", "tool-cmd", verb));
   toggle.append(icon("chevD", "tool-chev"));
   const content = el("pre", "tool-body", body || "");
   content.dataset.cardBody = "true";
