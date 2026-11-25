@@ -525,12 +525,132 @@ extension RightPaneState {
         pendingGGRestack = nil
     }
 
+    private var supportsGGQueue: Bool {
+        let capabilities = ggCapabilities()
+        return commitRemote?.kind == .gitlab && capabilities.landAutoMerge
+            && capabilities.landJSONL && capabilities.clientOperationID
+    }
+
+    var canSyncAndLand: Bool {
+        guard supportsGGQueue, ggContext.isActive, ggStackLoadState == .loaded,
+              !ggSyncAndLandInFlight, !checkpointMutationsDisabled, !hasOtherGitMutationInFlight,
+              pendingGGLand == nil, ggActionState.pausedOperation == nil,
+              let stack = cachedGGStackSnapshot?.stack, !currentHeadSHA.isEmpty
+        else { return false }
+        return !stack.hasQueuedMerge && stack.unintegratedCommits?.isEmpty != false
+            && stack.entries.contains { $0.prState != .merged }
+    }
+
+    /// Sync only publishes. This explicit action uses the refreshed MR identities
+    /// to stage a separate landing confirmation; it never starts a landing itself.
+    func syncAndRequestGGLand(isSelectedWorktree: () -> Bool) async {
+        guard isSelectedWorktree(), canSyncAndLand, let before = cachedGGStackSnapshot?.stack,
+              let target = ggTargetForCommitPublish(), let remote = commitRemote
+        else { return }
+        ggSyncAndLandInFlight = true
+        defer { ggSyncAndLandInFlight = false }
+        let syncGeneration = ggActionState.actionGeneration &+ 1
+        do {
+            try Task.checkCancellation()
+            try await syncGGForCommitPublish(target: target)
+            try Task.checkCancellation()
+            guard isSelectedWorktree() else { return }
+            guard ggActionState.actionGeneration == syncGeneration, let publication = ggActionState.syncPublication else {
+                throw GGServiceError.commandFailed(stderr: "Sync finished, but gg did not identify the published MRs. Nothing was queued.")
+            }
+            let snapshot = try await ggService.currentStackSnapshot(
+                worktreePath: worktree.path.path, requireRemoteRefresh: true
+            )
+            guard let stack = snapshot.stack,
+                  let last = try Self.syncedLandingTarget(before: before, after: stack, publication: publication)
+            else { throw GGMutationError.staleConfirmation }
+            if let blocker = GGLandReadiness.blocker(target: last, in: stack, canWaitForReadiness: true) {
+                throw GGServiceError.commandFailed(stderr: blocker.message(reviewLabel: "MR"))
+            }
+            var prepared = try ggMutationCoordinator.prepare(.land(target: last.id, autoMerge: true), using: snapshot)
+            let members = try await ggFullMembers(of: stack, publication: publication)
+            prepared.expectedFullMembers = members
+            let branch = try await git.currentBranch(worktreePath: worktree.path)
+            let head = try await git.revParseHEAD(worktreePath: worktree.path)
+            let remotes = try await git.remotes(worktreePath: worktree.path)
+            let preferred = CodeHostRemoteDetector.preferredRemoteName(forBaseBranch: stack.base, remotes: remotes)
+            try Task.checkCancellation()
+            guard isSelectedWorktree() else { return }
+            guard supportsGGQueue, commitRemote == remote, ggContext.isActive,
+                  !checkpointMutationsDisabled, !hasOtherGitMutationInFlight, pendingGGLand == nil,
+                  ggActionState.actionGeneration == syncGeneration,
+                  CodeHostRemoteDetector.detect(from: remotes, preferredRemoteName: preferred) == remote,
+                  branch == target.branch, head == members.last?.sha
+            else { throw GGMutationError.staleConfirmation }
+            pendingGGPluginLandScope = nil
+            pendingGGSyncLandTarget = (.init(branch: branch, stackName: stack.name, base: stack.base, expectedHeadSHA: head), remote)
+            pendingGGLandPrepared = prepared
+            pendingGGLand = .until(entryId: last.id, title: last.title)
+        } catch is CancellationError {
+            return
+        } catch {
+            if !ggActionState.syncHasTerminalFailure {
+                ggActionState.setError(GGErrorPresentation.message(for: error))
+            }
+        }
+    }
+
+    private static func syncedLandingTarget(
+        before: GGStack, after: GGStack, publication: GGSyncPublication
+    ) throws -> GGStackEntry? {
+        let entries = after.entries.sorted { $0.position < $1.position }
+        let original = before.entries.sorted { $0.position < $1.position }
+        guard before.name == after.name, before.base == after.base,
+              after.name == publication.stack, after.base == publication.base,
+              before.unintegratedCommits?.isEmpty != false, after.unintegratedCommits?.isEmpty != false,
+              before.totalCommits == original.count, after.totalCommits == entries.count,
+              original.count >= entries.count, after.syncedCommits == entries.count,
+              entries.count == publication.members.count,
+              !entries.isEmpty
+        else { throw GGMutationError.staleConfirmation }
+        var ids = Set<String>()
+        var numbers = Set<Int>()
+        // Sync can remove a landed prefix or assign missing GG-IDs. An existing
+        // GG-ID must still occupy the same place in the surviving suffix.
+        for (index, pair) in zip(original.suffix(entries.count), entries).enumerated() {
+            let (old, new) = pair
+            let published = publication.members[index]
+            guard new.position == index + 1, published.position == new.position,
+                  !new.id.isEmpty, ids.insert(new.id).inserted,
+                  let number = new.prNumber, number > 0, numbers.insert(number).inserted,
+                  new.ggId == published.id, new.prNumber == published.number,
+                  old.ggId == nil || old.ggId == new.ggId,
+                  !publication.skippedClosedPositions.contains(new.position) || new.prState == .merged
+            else { throw GGMutationError.staleConfirmation }
+        }
+        return entries.last { $0.prState != .merged }
+    }
+
+    private func ggFullMembers(of stack: GGStack, publication: GGSyncPublication? = nil) async throws -> [GGStackMemberIdentity] {
+        if let publication, publication.members.count != stack.entries.count { throw GGMutationError.staleConfirmation }
+        var members: [GGStackMemberIdentity] = []
+        members.reserveCapacity(stack.entries.count)
+        for entry in stack.entries.sorted(by: { $0.position < $1.position }) {
+            let sha = try await git.resolveRevision(at: worktree.path, ref: entry.sha)
+            if let publication {
+                let reported = publication.members[members.count].sha
+                if reported != entry.sha {
+                    let publishedSHA = try await git.resolveRevision(at: worktree.path, ref: reported)
+                    guard publishedSHA == sha else { throw GGMutationError.staleConfirmation }
+                }
+            }
+            members.append(.init(id: entry.id, sha: sha, position: entry.position, number: entry.prNumber))
+        }
+        return members
+    }
+
     /// Stages the land confirmation from the stack already on screen so the
     /// dialog appears immediately. The forge round-trip that `gg ls` needs to
     /// re-validate the stack runs later, while the landing tab is visible —
     /// preparing first made the menu click look frozen for seconds.
     func requestGGLand(_ request: GGLandRequest) {
         pendingGGPluginLandScope = nil
+        pendingGGSyncLandTarget = nil
         guard let snapshot = cachedGGStackSnapshot,
               let stack = snapshot.stack,
               let target = Self.ggLandUntilTarget(for: request, in: stack)
@@ -757,6 +877,7 @@ extension RightPaneState {
         pendingGGLand = nil
         pendingGGLandPrepared = nil
         pendingGGPluginLandScope = nil
+        pendingGGSyncLandTarget = nil
     }
     func requestGGCleanAll() {
         Task { @MainActor in
@@ -879,6 +1000,12 @@ extension RightPaneState {
         else {
             return Self.ggLandConfirmationMessage(for: request, stack: ggStack)
         }
+        if case .land(_, autoMerge: true) = pendingGGLandPrepared?.request {
+            let scope = GGLandReadiness.scope(upTo: entry, in: stack).map {
+                "!\($0.prNumber.map(String.init) ?? "?") \($0.title)"
+            }.joined(separator: "\n")
+            return "Request GitLab auto-merge through these MRs. Without a merge train, gg may queue only the first MR.\n\n" + scope
+        }
         switch request {
         case .ready:
             return "Merge \(commits) approved, passing PR\(commits == 1 ? "" : "s") from the bottom of the stack."
@@ -896,9 +1023,13 @@ extension RightPaneState {
     func performGGLand(appState: AppState) {
         guard !checkpointMutationsDisabled else { return }
         guard pendingGGLand != nil, let prepared = pendingGGLandPrepared else { return }
-        pendingGGLand = nil
-        pendingGGLandPrepared = nil
-        pendingGGPluginLandScope = nil
+        let expectedTarget = pendingGGSyncLandTarget
+        cancelGGLand()
+        if case .land(_, autoMerge: true) = prepared.request,
+           !supportsGGQueue || appState.selectedWorktreeId != worktree.id || expectedTarget?.remote != commitRemote {
+            ggActionState.setError("The GitLab landing target changed. Sync and confirm again.")
+            return
+        }
         if prepared.expectedFullMembers != nil, !ggCapabilities().landJSONL || !ggCapabilities().clientOperationID {
             ggActionState.setError("Native stack landing support changed. Refresh and confirm the stack again.")
             return
@@ -912,22 +1043,22 @@ extension RightPaneState {
             appState.openGGLanding(projectId: worktree.projectId)
             return
         }
-        guard case .land(let target) = prepared.request,
-              let seed = ggLandingSeed(target: target, stack: prepared.stack) else { return }
+        guard case .land(let target, let autoMerge) = prepared.request,
+              let seed = ggLandingSeed(target: target, autoMerge: autoMerge, stack: prepared.stack) else { return }
         guard ggLandingStore.begin(seed) else {
             if let session = ggLandingStore.sessions[worktree.projectId],
                session.phase != .running, session.phase != .cancelling {
                 ggLandingStore.startPreparation(projectId: worktree.projectId) { [self] in
                     await ggLandingStore.waitForOperation(projectId: worktree.projectId)
                     guard ggLandingStore.begin(seed) else { return }
-                    startGGLanding(prepared, target: target)
+                    startGGLanding(prepared, target: target, expectedTarget: expectedTarget?.identity)
                 }
             }
             appState.openGGLanding(projectId: worktree.projectId)
             return
         }
         appState.openGGLanding(projectId: worktree.projectId)
-        startGGLanding(prepared, target: target)
+        startGGLanding(prepared, target: target, expectedTarget: expectedTarget?.identity)
     }
 
     func restartGGLand(target: String) {
@@ -949,7 +1080,9 @@ extension RightPaneState {
                 guard ggCapabilities().landJSONL else {
                     throw GGServiceError.commandFailed(stderr: "Live landing is no longer supported by gg.")
                 }
-                let prepared = try await ggMutationCoordinator.prepare(.land(target: target))
+                let autoMerge = session.confirmedScope.autoMerge
+                guard !autoMerge || supportsGGQueue else { throw GGMutationError.staleConfirmation }
+                var prepared = try await ggMutationCoordinator.prepare(.land(target: target, autoMerge: autoMerge))
                 try Task.checkCancellation()
                 guard let stack = prepared.stack,
                       Self.ggLandingScopeMatches(
@@ -958,8 +1091,12 @@ extension RightPaneState {
                         stack: stack,
                         landedIDs: completedIDs
                       ),
-                      let seed = ggLandingSeed(target: target, stack: stack)
+                      let seed = ggLandingSeed(target: target, autoMerge: autoMerge, stack: stack)
                 else { throw GGMutationError.staleConfirmation }
+                if autoMerge {
+                    prepared.expectedFullMembers = try await ggFullMembers(of: stack)
+                    try Task.checkCancellation()
+                }
                 guard ggLandingStore.sessions[projectId]?.id == sessionId else { return }
                 ggLandingStore.reconcilePreflightSeed(seed, projectId: projectId)
                 startGGLanding(prepared, target: target)
@@ -970,7 +1107,7 @@ extension RightPaneState {
         }
     }
 
-    private func ggLandingSeed(target: String, stack: GGStack? = nil) -> GGLandingSession.Seed? {
+    private func ggLandingSeed(target: String, autoMerge: Bool, stack: GGStack? = nil) -> GGLandingSession.Seed? {
         guard let stack = stack ?? ggStack,
               let entry = stack.entries.first(where: { $0.id == target || $0.sha == target })
         else { return nil }
@@ -987,7 +1124,8 @@ extension RightPaneState {
                         stableID: $0.id,
                         prNumber: $0.prNumber
                     )
-                }
+                },
+            autoMerge: autoMerge
         )
     }
 
@@ -1006,12 +1144,16 @@ extension RightPaneState {
         guard originalIDs.count == session.rows.count,
               originalIDs.last == targetEntry.id
         else { return false }
-        let currentIDs = stack.entries.sorted { $0.position < $1.position }
-            .filter { $0.position <= targetEntry.position }.map(\.id)
+        let current = stack.entries.filter { $0.position <= targetEntry.position }
+            .sorted { $0.position < $1.position }
         let remainingIDs = Set(stack.entries.map(\.id))
         let missingIDs = originalIDs.filter { !remainingIDs.contains($0) }
         guard missingIDs.allSatisfy({ landedIDs.contains($0) }) else { return false }
-        return currentIDs == originalIDs.filter { remainingIDs.contains($0) }
+        let remaining = session.rows.filter { ($0.stableID ?? $0.ggId).map(remainingIDs.contains) == true }
+        return current.elementsEqual(remaining) { entry, confirmed in
+            entry.id == (confirmed.stableID ?? confirmed.ggId)
+                && (!session.autoMerge || entry.prNumber == confirmed.prNumber)
+        }
     }
 
     /// The confirmation is staged against the on-screen stack, so the session's
@@ -1019,7 +1161,7 @@ extension RightPaneState {
     /// re-validated stack the command will actually run against — reseed the
     /// rows from it, otherwise a row count that drifted since the last refresh
     /// makes gg's `start` event look like a different stack.
-    private func startGGLanding(_ prepared: GGPreparedMutation, target: String) {
+    private func startGGLanding(_ prepared: GGPreparedMutation, target: String, expectedTarget: GGStackTargetIdentity? = nil) {
         Task { @MainActor in
             guard await checkpointMutationAllowedAfterJournalRevalidation() else {
                 ggLandingStore.fail(
@@ -1031,10 +1173,12 @@ extension RightPaneState {
             guard let operation = ggMutationCoordinator.startApplying(
                 prepared.request,
                 confirmedAgainst: prepared.snapshot,
+                expectedTarget: expectedTarget,
                 expectedFullMembers: prepared.expectedFullMembers,
                 onPreflight: { [weak self] fresh in
                     guard let self,
-                          let seed = self.ggLandingSeed(target: target, stack: fresh.stack)
+                          case .land(_, let autoMerge) = prepared.request,
+                          let seed = self.ggLandingSeed(target: target, autoMerge: autoMerge, stack: fresh.stack)
                     else { return }
                     self.ggLandingStore.reconcilePreflightSeed(seed, projectId: self.worktree.projectId)
                 }
@@ -1127,13 +1271,14 @@ extension RightPaneState {
     /// `request` is `.sync` or a scoped `.syncUntil`.
     func syncGGForCommitPublish(
         _ request: GGMutationRequest = .sync,
+        confirmedAgainst expected: GGStackIdentity? = nil,
         target: GGStackTargetIdentity? = nil,
         markExecutionStarted: @escaping @MainActor () -> Void = {}
     ) async throws {
         try await requireCheckpointMutationAllowedAfterJournalRevalidation()
         guard let operation = ggMutationCoordinator.startApplying(
             request,
-            confirmedAgainst: nil,
+            confirmedAgainst: expected,
             expectedTarget: target,
             onExecutionStarted: markExecutionStarted
         ) else {

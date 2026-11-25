@@ -178,7 +178,8 @@ struct GGServiceActionsTests {
         #expect(finished.activeWait == nil)
     }
 
-    @Test func landWithClientOperationPreservesUnlimitedWaitAndSingleOperationID() async throws {
+    @Test(arguments: [false, true])
+    func landWithClientOperationPreservesUnlimitedWaitAndSingleOperationID(autoMerge: Bool) async throws {
         let runner = RecordingGGRunner()
         runner.streamingLines = [
             #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#,
@@ -186,13 +187,13 @@ struct GGServiceActionsTests {
         ]
         runner.stdout = (runner.streamingLines ?? []).joined(separator: "\n")
         _ = try await GGService(runner: runner).execute(
-            .land(target: "c-abc"), worktreePath: "/tmp/wt", clientOperationID: "inbox-land",
+            .land(target: "c-abc", autoMerge: autoMerge), worktreePath: "/tmp/wt", clientOperationID: "inbox-land",
             supportsSyncJSONL: false, supportsLandJSONL: true,
             onSyncEvent: { _ in }, onLandEvent: { _ in true }
         )
         #expect(runner.requestedStreamingTimeout)
         #expect(runner.lastTimeout == nil)
-        #expect(runner.lastArgs == ["--client-operation-id", "inbox-land", "land", "--until", "c-abc", "--wait", "--jsonl", "--no-clean"])
+        #expect(runner.lastArgs == ["--client-operation-id", "inbox-land", "land", "--until", "c-abc", "--wait", "--jsonl", "--no-clean"] + (autoMerge ? ["--auto-merge"] : []))
     }
 
     @Test func landWithClientOperationInterruptsAndDrainsTerminalEntry() async {
@@ -361,7 +362,7 @@ struct GGServiceActionsTests {
         let service = GGService(runner: runner)
 
         var events: [GGSyncEvent] = []
-        for try await event in service.sync(worktreePath: "/tmp/wt", supportsJSONL: true) {
+        for try await event in service.sync(worktreePath: "/tmp/wt", supportsJSONL: true, until: "c-7", draft: true, rebaseIfNeeded: true) {
             events.append(event)
         }
         #expect(events == [
@@ -370,7 +371,7 @@ struct GGServiceActionsTests {
             .prCreated(position: 1, prNumber: 7, prURL: "https://x/pull/7", draft: false),
             .summary,
         ])
-        #expect(runner.calls == [["sync", "--jsonl"]])
+        #expect(runner.calls == [["sync", "--jsonl", "--until", "c-7", "--draft", "--rebase-if-needed"]])
         #expect(runner.lastCwd == URL(fileURLWithPath: "/tmp/wt"))
     }
 
@@ -455,12 +456,17 @@ struct GGServiceActionsTests {
         #expect(runner.lastArgs == ["land", "--all", "--json", "--no-clean"])
     }
 
-    @Test func landUntilSendsUntilTarget() async throws {
+    @Test(arguments: [false, true])
+    func landUntilPreservesScopeAndStrategy(autoMerge: Bool) async throws {
         let runner = RecordingGGRunner(
             stdout: #"{"version":1,"land":{"stack":"s","base":"main","landed":[]}}"#
         )
-        _ = try await GGService(runner: runner).land(worktreePath: "/tmp/wt", until: "c-abc")
-        #expect(runner.lastArgs == ["land", "--until", "c-abc", "--json", "--no-clean"])
+        _ = try await GGService(runner: runner).execute(
+            .land(target: "c-abc", autoMerge: autoMerge), worktreePath: "/tmp/wt", clientOperationID: nil,
+            supportsSyncJSONL: false, supportsLandJSONL: false, landStrategy: .mergeCommitsRebaseIfNeeded,
+            onSyncEvent: { _ in }, onLandEvent: { _ in true }
+        )
+        #expect(runner.lastArgs == ["land", "--until", "c-abc", "--json", "--no-clean", "--no-squash", "--rebase-if-needed"] + (autoMerge ? ["--auto-merge"] : []))
     }
 
     @Test func landMapsExit127ToCliMissing() async {

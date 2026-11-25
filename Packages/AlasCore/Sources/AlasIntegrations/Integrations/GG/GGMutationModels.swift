@@ -29,20 +29,25 @@ public struct GGCapabilities: Equatable, Sendable {
     public var syncJSONL: Bool = false
     /// `gg sync --until` and `--draft`: Ship can publish part of a stack.
     public var syncUntilDraft: Bool = false
+    /// `gg sync --rebase-if-needed` can retire a landed prefix without rewriting its children.
+    public var syncRebaseIfNeeded: Bool = false
     public var landJSONL: Bool = false
+    public var landAutoMerge: Bool = false
     /// `gg land --rebase-if-needed`: after a merge-commit landing, gg rebases
     /// the rest of the stack only when the next entry can't merge as it is.
     public var landRebaseIfNeeded: Bool = false
     public var localStackSnapshot: Bool = false
 
-    public init(structuredSplit: Bool, keepCurrentUnstack: Bool, clientOperationID: Bool = false, stagedOnlyAmend: Bool = false, syncJSONL: Bool = false, syncUntilDraft: Bool = false, landJSONL: Bool = false, landRebaseIfNeeded: Bool = false, localStackSnapshot: Bool = false) {
+    public init(structuredSplit: Bool, keepCurrentUnstack: Bool, clientOperationID: Bool = false, stagedOnlyAmend: Bool = false, syncJSONL: Bool = false, syncUntilDraft: Bool = false, syncRebaseIfNeeded: Bool = false, landJSONL: Bool = false, landAutoMerge: Bool = false, landRebaseIfNeeded: Bool = false, localStackSnapshot: Bool = false) {
         self.structuredSplit = structuredSplit
         self.keepCurrentUnstack = keepCurrentUnstack
         self.clientOperationID = clientOperationID
         self.stagedOnlyAmend = stagedOnlyAmend
         self.syncJSONL = syncJSONL
         self.syncUntilDraft = syncUntilDraft
+        self.syncRebaseIfNeeded = syncRebaseIfNeeded
         self.landJSONL = landJSONL
+        self.landAutoMerge = landAutoMerge
         self.landRebaseIfNeeded = landRebaseIfNeeded
         self.localStackSnapshot = localStackSnapshot
     }
@@ -74,7 +79,7 @@ public enum GGMutationRequest: Equatable, Sendable {
     case sync
     /// `gg sync --until target [--draft]`; a nil target syncs the whole stack.
     case syncUntil(target: String?, draft: Bool)
-    case land(target: String)
+    case land(target: String, autoMerge: Bool = false)
     case clean
     case continueOperation
     case abortOperation

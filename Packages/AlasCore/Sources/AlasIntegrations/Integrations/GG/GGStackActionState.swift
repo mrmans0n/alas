@@ -51,10 +51,12 @@ public final class GGStackActionState {
     public private(set) var completedRecoveryOperation: GGCompletedRecoveryOperation?
     public private(set) var lastActionSummary: String?
     @ObservationIgnored public private(set) var actionGeneration: UInt = 0
+    @ObservationIgnored public private(set) var syncPublication: GGSyncPublication?
 
     /// Returns false when another action is already running (one at a time).
     public func beginAction(_ action: GGStackActionKind) -> Bool {
         guard inFlightAction == nil else { return false }
+        syncPublication = nil
         if !syncProgress.isEmpty { syncProgress = [] }
         if syncHasTerminalFailure { syncHasTerminalFailure = false }
         clearError()
@@ -74,6 +76,10 @@ public final class GGStackActionState {
     @ObservationIgnored public var syncEventObserver: (@MainActor (GGSyncEvent) -> Void)?
 
     public func appendSyncEvent(_ event: GGSyncEvent) {
+        if case .publication(let publication) = event {
+            syncPublication = publication
+            return
+        }
         syncProgress.append(event)
         syncEventObserver?(event)
     }

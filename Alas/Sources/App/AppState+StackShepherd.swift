@@ -18,9 +18,9 @@ extension AppState {
                 let localOnly = GGAvailability.shared.capabilities.localStackSnapshot
                 return try await GGService().currentStack(worktreePath: path.path, refreshRemote: !localOnly)
             },
-            syncStack: { [weak self] worktreeID, plan, onEvent in
+            syncStack: { [weak self] worktreeID, plan, expected, onEvent in
                 guard let self else { throw GGMutationError.staleConfirmation }
-                try await self.syncStackForShip(worktreeID: worktreeID, plan: plan, onEvent: onEvent)
+                try await self.syncStackForShip(worktreeID: worktreeID, plan: plan, expected: expected, onEvent: onEvent)
             },
             rebaseStack: { [weak self] worktreeID, expected in
                 guard let self else { throw GGMutationError.staleConfirmation }
@@ -87,18 +87,18 @@ extension AppState {
     /// stack drawer's Sync and Commit & sync use: the same preflight, paused
     /// operation guard, progress and refresh.
     private func syncStackForShip(
-        worktreeID: String, plan: StackShipPlan, onEvent: @escaping @MainActor (GGSyncEvent) -> Void
+        worktreeID: String, plan: StackShipPlan, expected: GGStackIdentity, onEvent: @escaping @MainActor (GGSyncEvent) -> Void
     ) async throws {
         let pane = try ggPane(worktreeID: worktreeID)
         // The pane runs one gg mutation at a time, so this sees only this sync.
         pane.ggActionState.syncEventObserver = onEvent
         defer { pane.ggActionState.syncEventObserver = nil }
         guard plan != .wholeStack else {
-            try await pane.syncGGForCommitPublish(.sync)
+            try await pane.syncGGForCommitPublish(.sync, confirmedAgainst: expected)
             return
         }
         guard GGAvailability.shared.capabilities.syncUntilDraft else { throw GGMutationError.scopedSyncUnsupported }
-        try await pane.syncGGForCommitPublish(.syncUntil(target: plan.shipThroughEntryID, draft: plan.opensDrafts))
+        try await pane.syncGGForCommitPublish(.syncUntil(target: plan.shipThroughEntryID, draft: plan.opensDrafts), confirmedAgainst: expected)
     }
 
     /// The worktree's Changes pane state, which runs its gg mutations.

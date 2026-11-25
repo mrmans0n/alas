@@ -92,6 +92,7 @@ struct ChangesPreparationCard: View {
     let onOpenGGLanding: () -> Void
     /// Reloads the GG stack after it failed to load. Nil hides Retry.
     var onRetryGGStack: (() -> Void)?
+    var onSyncAndLand: (() -> Void)?
     /// Draws Review in the secondary style, so a question waiting in the chat
     /// leads instead.
     var quietsReview = false
@@ -177,6 +178,14 @@ struct ChangesPreparationCard: View {
                     }
                     reviewScopeButton(subtitle: nil)
                 }
+            }
+            if let onSyncAndLand, model.reconciliationAction?.kind == .sync {
+                secondaryButton(
+                    title: "Sync and land…", subtitle: "Confirm GitLab auto-merge after sync",
+                    iconName: "arrow.triangle.merge", showsDot: false,
+                    isEnabled: model.reconciliationAction?.isEnabled == true, action: onSyncAndLand
+                )
+                .accessibilityIdentifier("changes-preparation-gg-sync-and-land")
             }
         } else {
             if let reconciliationAction = model.reconciliationAction {
