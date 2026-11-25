@@ -85,8 +85,8 @@ if CommandLine.arguments.dropFirst().elementsEqual(["pair"]) {
         let origins = link.flatMap(RemotePairingLink.parse)?.origins ?? []
         if !origins.isEmpty, origins.allSatisfy({ URL(string: $0).map(RunEndpointPolicy.isLoopback) ?? true }) {
             notice += HostCommands.readConfig().hostReachability == .tailscale
-                ? "Reachable only from this Mac: tailscale serve is not running yet, or HTTPS is off on the tailnet.\n"
-                : "Reachable only from this Mac or a tunnel; set host.reachability to lan or tailscale for other Macs.\n"
+                ? "Reachable only from this machine: tailscale serve is not running yet, or HTTPS is off on the tailnet.\n"
+                : "Reachable only from this machine or a tunnel; set host.reachability to lan or tailscale for other devices.\n"
         }
         FileHandle.standardError.write(Data(notice.utf8))
         exit(0)

@@ -88,6 +88,7 @@ esac
 if [ "$("$root/alas-host/alas-host" config get host.reachability 2>/dev/null)" = off ]; then
   echo "Done. Remote is off: run '$host setup' to choose how your Mac reaches this server and pair it,"
   echo "or '$host config set host.reachability tailscale --restart' (or lan), then '$host pair'."
+  echo "To use Alas in a browser on this machine, set it to loopback instead and open the link '$host pair' prints."
 else
   echo "Done. Run '$host pair' for a link to pair this server from Alas on your Mac."
 fi
