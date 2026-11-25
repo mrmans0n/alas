@@ -146,7 +146,7 @@ enum ACPTurnDiffSessionBuilder {
             let file = combined[index]
             let counts = DiffReviewBatchLoading.lineCounts(in: file.diff)
             let model = modelsByIndex[index]
-            return DiffReviewFileSectionModel(
+            var section = DiffReviewFileSectionModel(
                 summary: DiffReviewFileSummary(
                     path: path, namespace: namespace, groupID: nil, groupTitle: nil, status: file.status,
                     additions: counts.additions, deletions: counts.deletions, isRenderable: model != nil
@@ -157,6 +157,9 @@ enum ACPTurnDiffSessionBuilder {
                 openFile: openFile(path),
                 contextProvider: nil
             )
+            // Edits without hunks stay listed next to the ones that have them.
+            if model != nil { section.notice = file.diff.metadataSummary }
+            return section
         }
         return DiffReviewLoadedSession(
             files: sections,

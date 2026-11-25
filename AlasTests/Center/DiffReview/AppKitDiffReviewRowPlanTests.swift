@@ -725,6 +725,18 @@ struct AppKitDiffReviewRowPlanTests {
         })
     }
 
+    @Test func fileNoticeRendersAboveTheHunks() {
+        var file = textFile()
+        file.notice = "Edit 2 of 3: Recorded diff unavailable"
+        let rows = AppKitDiffReviewRowPlanBuilder.build(
+            inputs: [AppKitDiffReviewRowInput(file: file, state: AppKitDiffReviewFileState(), theme: theme)]
+        ).corePlan.rows.map(\.id)
+
+        let notice = rows.firstIndex(of: AppKitDiffReviewRowID.notice(fileID: file.id))
+        let firstHunk = rows.firstIndex { $0.contains(":group:") }
+        #expect(notice != nil && firstHunk != nil && notice! < firstHunk!)
+    }
+
     @Test func hunkBusyStateChangesTheOuterRowToken() throws {
         var available = textFile()
         available.stagedMutationActions = .init(
