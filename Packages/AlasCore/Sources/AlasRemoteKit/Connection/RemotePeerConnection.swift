@@ -44,8 +44,8 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
         case hello(serverId: String, name: String, icon: PeerIcon? = nil, protocolVersion: Int, federationEnabled: Bool,
                    capabilities: [String] = [], hostVersion: String? = nil, peers: [RemoteHelloPeer] = [])
         case originChanged(String)
-        /// How long the latest `ping` took to come back as `pong`. Only sent
-        /// when `Config.pingInterval` is set and the peer answers `ping`.
+        /// How long the latest WebSocket ping took to come back. Only sent
+        /// when `Config.pingInterval` is set.
         case roundTrip(Duration)
         case message(RemoteServerMessageOf<ServerHost, ClientHost>)
     }
@@ -55,8 +55,8 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
         public var initialBackoff: TimeInterval = 1.5
         public var maxBackoff: TimeInterval = 30
         public var localProtocolVersion: Int = RemoteProtocolVersion.current
-        /// Seconds between `ping`s while online, timed into `.roundTrip`.
-        /// Nil sends none.
+        /// Seconds between WebSocket pings while online, timed into
+        /// `.roundTrip`. Nil sends none.
         public var pingInterval: TimeInterval?
 
         public init(handshakeTimeout: TimeInterval = 4, initialBackoff: TimeInterval = 1.5, maxBackoff: TimeInterval = 30, localProtocolVersion: Int = RemoteProtocolVersion.current,
@@ -101,9 +101,6 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
     private var reconnectTimer: Task<Void, Never>?
     private var backoff: TimeInterval
     private var acknowledged: [String] = []
-    /// The `ping` waiting for its `pong`. A later ping replaces it, so a
-    /// peer too old to answer never produces a round trip.
-    private var pendingPing: (requestId: String, sentAt: ContinuousClock.Instant)?
 
     public init(origins: [String], lastOrigin: String?, token: String, expectedServerId: String? = nil,
          expectedPublicKey: String? = nil,
@@ -389,11 +386,19 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
     /// cannot hold the handshake open indefinitely.
     private var maxFramesBeforeProof: Int { 4 }
 
+    /// WebSocket control pings rather than the `ping` message: every host
+    /// build answers them, and there is no request id to match.
     private func ping(every interval: TimeInterval, on socket: URLSessionWebSocketTask) async {
         while !Task.isCancelled, self.socket === socket {
-            let requestId = UUID().uuidString
-            pendingPing = (requestId, .now)
-            send(.ping(requestId: requestId))
+            let sentAt = ContinuousClock.now
+            socket.sendPing { [weak self] error in
+                guard error == nil else { return }
+                let roundTrip = ContinuousClock.now - sentAt
+                Task { @MainActor in
+                    guard let self, self.socket === socket else { return }
+                    self.onEvent(.roundTrip(roundTrip))
+                }
+            }
             try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
         }
     }
@@ -411,13 +416,6 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
             // Messages this build does not know are skipped, so a newer peer
             // never kills the link.
             guard let message = try? JSONDecoder().decode(RemoteServerMessageOf<ServerHost, ClientHost>.self, from: payload) else { continue }
-            if case .pong(let requestId) = message {
-                if let pendingPing, pendingPing.requestId == requestId {
-                    self.pendingPing = nil
-                    onEvent(.roundTrip(.now - pendingPing.sentAt))
-                }
-                continue
-            }
             onEvent(.message(message))
         }
     }
@@ -522,7 +520,6 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
         socket?.cancel(with: code, reason: nil)
         socket = nil
         secureOrigin = nil
-        pendingPing = nil
     }
 
     private func setState(_ new: State) {

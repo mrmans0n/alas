@@ -21,7 +21,7 @@ struct PeerHoverCardModel {
     let state: NativePeerState
     let subtitle: String?
     let connection: PeerConnectionKind?
-    /// The latest ping round trip; nil when the Mac does not answer pings.
+    /// The latest ping round trip; nil until the first ping comes back.
     let roundTrip: Duration?
     /// Nil while the Mac is not online.
     let counts: Counts?

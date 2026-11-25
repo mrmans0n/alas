@@ -194,8 +194,8 @@ struct RemotePeerConnectionTests {
         #expect(events.states.first == .connecting)
     }
 
-    /// The host answers the link's `ping` with a matching `pong`, which the
-    /// link turns into a round trip instead of passing it on as a message.
+    /// The host answers the link's WebSocket ping, and the link reports how
+    /// long it took.
     @Test func aLinkWithAPingIntervalReportsTheRoundTripToTheHost() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
@@ -209,7 +209,6 @@ struct RemotePeerConnectionTests {
         defer { link.disconnect() }
         try await waitUntil { !events.roundTrips.isEmpty }
         #expect(events.roundTrips.count == 1)
-        #expect(events.messages.allSatisfy { if case .pong = $0 { false } else { true } })
     }
 
     @Test func unknownServerMessageTypeIsSkippedAndTheConnectionStaysUp() async throws {

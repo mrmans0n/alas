@@ -42,9 +42,10 @@ footer).
 - **Chip:** presence dot + state label; when online, the connection kind
   derived from the last address: `*.ts.net` or `100.64.0.0/10` → "Tailscale",
   `.local` or a private IPv4/IPv6 → "LAN", otherwise the host name; then the
-  latest round trip ("23 ms"). The peer link sends the `ping` from #2744
-  every 10 s while online and times its `pong`; a peer too old to answer
-  shows no latency.
+  latest round trip ("23 ms"). The peer link sends a WebSocket ping every
+  10 s while online and times its pong. Not #2744's `ping` message: that one
+  exists because browsers cannot send control pings, and older hosts ignore
+  it, while every host answers control pings.
 - **Online (A/B):** four counts (waiting, working, terminals, worktrees), then
   up to three rows: "Waiting on you" when any wait, else "Working". Row =
   status dot, session title, branch.

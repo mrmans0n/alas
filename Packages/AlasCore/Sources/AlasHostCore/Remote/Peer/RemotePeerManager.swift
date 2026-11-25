@@ -121,8 +121,8 @@ public final class RemotePeerManager {
     /// The release each online peer that is a headless host said it runs,
     /// by `serverId`, from its `hello`.
     public private(set) var hostVersions: [String: String] = [:]
-    /// The latest round trip to each online peer, by `serverId`. Absent for
-    /// a peer whose build does not answer `ping`.
+    /// The latest ping round trip to each online peer, by `serverId`. Absent
+    /// until the first ping comes back.
     public private(set) var roundTrips: [String: Duration] = [:]
 
     private let store: RemotePeerStore
