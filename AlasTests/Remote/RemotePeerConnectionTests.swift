@@ -126,6 +126,7 @@ struct RemotePeerConnectionTests {
         var helloFederation: [Bool] { all.compactMap { if case .hello(_, _, _, _, let f, _, _, _) = $0 { return f } else { return nil } } }
         var origins: [String] { all.compactMap { if case .originChanged(let o) = $0 { return o } else { return nil } } }
         var messages: [RemoteServerMessage] { all.compactMap { if case .message(let m) = $0 { return m } else { return nil } } }
+        var roundTrips: [Duration] { all.compactMap { if case .roundTrip(let d) = $0 { return d } else { return nil } } }
     }
 
     /// `serverId` is what `/health` reports. Nil reproduces the default
@@ -191,6 +192,24 @@ struct RemotePeerConnectionTests {
         #expect(events.origins == [origin])
         #expect(link.lastOrigin == origin)
         #expect(events.states.first == .connecting)
+    }
+
+    /// The host answers the link's `ping` with a matching `pong`, which the
+    /// link turns into a round trip instead of passing it on as a message.
+    @Test func aLinkWithAPingIntervalReportsTheRoundTripToTheHost() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        let (server, origin) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+        let events = Events()
+        var config = fastConfig()
+        config.pingInterval = 60
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: token, config: config) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { !events.roundTrips.isEmpty }
+        #expect(events.roundTrips.count == 1)
+        #expect(events.messages.allSatisfy { if case .pong = $0 { false } else { true } })
     }
 
     @Test func unknownServerMessageTypeIsSkippedAndTheConnectionStaysUp() async throws {

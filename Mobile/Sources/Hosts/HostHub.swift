@@ -388,6 +388,8 @@ final class HostHub {
             guard let index = hosts.firstIndex(where: { $0.id == id }) else { return }
             hosts[index].lastOrigin = origin
             store.save(hosts)
+        case .roundTrip:
+            break
         case .message(let message):
             switch message {
             case .device(let event):

@@ -121,6 +121,9 @@ public final class RemotePeerManager {
     /// The release each online peer that is a headless host said it runs,
     /// by `serverId`, from its `hello`.
     public private(set) var hostVersions: [String: String] = [:]
+    /// The latest round trip to each online peer, by `serverId`. Absent for
+    /// a peer whose build does not answer `ping`.
+    public private(set) var roundTrips: [String: Duration] = [:]
 
     private let store: RemotePeerStore
     private let pairing: RemotePairingService
@@ -298,6 +301,7 @@ public final class RemotePeerManager {
                  token: peer.token,
                  expectedServerId: peer.serverId,
                  expectedPublicKey: peer.publicKey,
+                 config: .init(pingInterval: 10),
                  onEvent: onEvent)
          },
          now: @escaping () -> Date = { Date() }) {
@@ -1339,6 +1343,7 @@ public final class RemotePeerManager {
         for connection in connections.values { connection.disconnect() }
         connections = [:]
         states = [:]
+        roundTrips = [:]
         for peer in peers {
             onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
             onLinkChanged?(peer.id)
@@ -1369,6 +1374,7 @@ public final class RemotePeerManager {
             let wasUnauthorized = states[peerId] == .unauthorized
             states[peerId] = state
             if let peer = peers.first(where: { $0.id == peerId }) {
+                if state != .online { roundTrips[peer.serverId] = nil }
                 // A token still being tried out says nothing about the pairing:
                 // a failed re-pair revokes it and restores the confirmed one.
                 if state == .unauthorized, !wasUnauthorized,
@@ -1404,6 +1410,9 @@ public final class RemotePeerManager {
             // origin again over the one this connection just proved works.
             durableStateByServerId[peers[index].serverId] = peers[index]
             savePeers()
+        case .roundTrip(let duration):
+            guard let peer = peers.first(where: { $0.id == peerId }) else { return }
+            roundTrips[peer.serverId] = duration
         case .message(let message):
             // Nothing may be consumed for a peer whose record is not bound
             // to verified key material: an unverified record is only as
