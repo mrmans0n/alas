@@ -142,7 +142,10 @@ if arguments == ["install-agent"] || arguments == ["uninstall-agent"] {
         fail("systemctl --user could not start \(unit.name) from \(unit.unitURL.path)")
     }
     print("installed \(unit.unitURL.path)")
-    print("To keep it serving while you are logged out: loginctl enable-linger \(NSUserName())")
+    // logind records lingering users here; skip the hint once it is on.
+    if !FileManager.default.fileExists(atPath: "/var/lib/systemd/linger/\(NSUserName())") {
+        print("To keep it serving while you are logged out: loginctl enable-linger \(NSUserName())")
+    }
     exit(0)
     #else
     let agent = HostLaunchAgent(executable: executable)

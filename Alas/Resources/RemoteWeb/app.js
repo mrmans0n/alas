@@ -327,7 +327,7 @@ const transcriptImageLoader = createTranscriptImageLoader(send, applyTranscriptI
 // Resolves the registry entry; rejects with the link manager's { reason }
 // errors.
 async function pairAndAdd(input, options) {
-  const result = await links.pair(input.origins, input.code, navigator.userAgent.slice(0, 40), input.originKinds);
+  const result = await links.pair(input.origins, input.code, RemoteHubRegistry.browserDeviceName(navigator.userAgent), input.originKinds);
   const { server, rePaired } = RemoteHubRegistry.upsertPaired(hub, { origins: input.origins, token: result.token, now: Date.now(), targetId: options && options.targetId });
   RemoteHubRegistry.setLastOrigin(hub, server.id, result.origin);
   RemoteHubRegistry.save(localStorage, hub);

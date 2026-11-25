@@ -379,7 +379,29 @@ function otherAttentionTotal(links, activeId) {
   return total;
 }
 
+// The name a browser pairs under, such as "Chrome on Linux": `alas-host browsers
+// list` and the Mac's device list show it. Order matters: Edge also says Chrome,
+// Chrome also says Safari, and Android also says Linux.
+function browserDeviceName(userAgent) {
+  const ua = String(userAgent || "");
+  const browser = /Edg\//.test(ua) ? "Edge"
+    : /Firefox\//.test(ua) ? "Firefox"
+    : /Chromium\//.test(ua) ? "Chromium"
+    : /Chrome\//.test(ua) ? "Chrome"
+    : /Safari\//.test(ua) ? "Safari"
+    : "Browser";
+  const os = /iPhone|iPad/.test(ua) ? "iOS"
+    : /Android/.test(ua) ? "Android"
+    : /CrOS/.test(ua) ? "ChromeOS"
+    : /Mac OS X/.test(ua) ? "macOS"
+    : /Windows/.test(ua) ? "Windows"
+    : /Linux|X11/.test(ua) ? "Linux"
+    : "";
+  return os ? `${browser} on ${os}` : browser;
+}
+
 globalThis.RemoteHubRegistry = {
+  browserDeviceName,
   HUB_STORAGE_KEY,
   LEGACY_TOKEN_KEY,
   normalizeOrigin,
