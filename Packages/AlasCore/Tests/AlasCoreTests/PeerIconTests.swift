@@ -33,4 +33,26 @@ struct PeerIconTests {
         #expect(peer.iconOverride == expected)
         #expect(peer.displayIcon == expected ?? .server)
     }
+
+    @Test(arguments: [
+        ("wss://m1max.tail1234.ts.net", PeerConnectionKind.tailscale),
+        ("ws://100.101.2.3:7420", .tailscale),
+        ("ws://100.63.0.1:7420", .host("100.63.0.1")),
+        ("ws://m1max.local:7420", .lan),
+        ("ws://192.168.1.4:7420", .lan),
+        ("ws://10.0.0.2", .lan),
+        ("ws://172.20.1.1", .lan),
+        ("ws://172.32.1.1", .host("172.32.1.1")),
+        ("ws://[fd00::1]:7420", .lan),
+        ("ws://[fe80::1]:7420", .lan),
+        ("wss://mac.example.com", .host("mac.example.com")),
+    ] as [(String, PeerConnectionKind)])
+    func anOriginNamesHowThePeerIsReached(_ origin: String, _ expected: PeerConnectionKind) {
+        #expect(PeerConnectionKind.of(origin: origin) == expected)
+    }
+
+    @Test(arguments: [nil, "", "not a url"] as [String?])
+    func noOriginIsNoConnectionKind(_ origin: String?) {
+        #expect(PeerConnectionKind.of(origin: origin) == nil)
+    }
 }
