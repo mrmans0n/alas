@@ -93,8 +93,10 @@ struct ProjectVMBaseWindow: View {
             if project != nil { prepare(.customize) }
         }
         .onChange(of: vms.projectBaseRevision) { refresh() }
-        .onChange(of: scenePhase) { if scenePhase == .active { refresh(); installer.reloadFromDisk(); continueIfSealed() } }
-        .onChange(of: installer.phase) { continueIfSealed() }
+        .onChange(of: scenePhase) {
+            if scenePhase == .active { refresh(); installer.reloadFromDisk(); continueIfSharedBaseReady() }
+        }
+        .onChange(of: installer.phase) { continueIfSharedBaseReady() }
         .alert(confirm?.title ?? "", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
                presenting: confirm) { action in
             Button(actionLabel(action), role: .destructive) { execute(action) }
@@ -204,7 +206,6 @@ struct ProjectVMBaseWindow: View {
                 start: { build in perform { try await boot(.shared(build)) } },
                 finish: { build in perform {
                     try await SharedMacOSSetupView.finish(build: build, vms: vms, installer: installer)
-                    if let intent = sharedIntent { try await prepareDraft(intent) }
                 } })
         }
     }
@@ -267,8 +268,9 @@ struct ProjectVMBaseWindow: View {
         }
     }
 
-    private func continueIfSealed() {
-        guard !busy, case .sealed = installer.phase, let intent = sharedIntent, vms.availableGolden() != nil else { return }
+    private func continueIfSharedBaseReady() {
+        guard !busy, let intent = sharedIntent, vms.isProjectDraftSharedBaseReady() else { return }
+        sharedIntent = nil
         prepare(intent)
     }
 
@@ -286,6 +288,8 @@ struct ProjectVMBaseWindow: View {
             catch { errorMessage = error.localizedDescription }
             refresh()
             busy = false
+            // The installer may have notified us while the action was still busy.
+            continueIfSharedBaseReady()
         }
     }
 

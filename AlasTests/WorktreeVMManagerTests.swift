@@ -1229,6 +1229,32 @@ final class WorktreeVMManagerTests {
         #expect(manager.cleanPoint(recordID: id) != nil)
     }
 
+    @Test func projectDraftWaitsForTheSharedImageToBeUsableEvenWhenSealed() async throws {
+        let manager = makeManager()
+        let installer = GoldenImageInstaller(root: root)
+        guard case .needsSharedBase = try await manager.prepareProjectDraft(projectID: "p1", script: nil) else {
+            Issue.record("Prepared a draft before the shared image existed")
+            return
+        }
+
+        try makeSealedGoldens()
+        let golden = try #require(manager.availableGolden())
+        let build = golden.url.lastPathComponent
+        let id = WorktreeVMManager.goldenIDPrefix + build
+        try registry.update { records in
+            records.append(.init(id: id, goldenBuild: build, bundlePath: golden.url.path,
+                                 createdAt: .now, lastUsedAt: .now, runOwner: elsewhere))
+        }
+        installer.reloadFromDisk()
+        #expect(installer.phase == .sealed(build: build))
+        #expect(!manager.isProjectDraftSharedBaseReady())
+
+        try registry.update { records in records.removeAll { $0.id == id } }
+        #expect(manager.isProjectDraftSharedBaseReady())
+        let draft = try await prepareDraft(manager)
+        #expect(draft.provenance.sharedBuild == build)
+    }
+
     @Test func releasingADraftSlotShutsDownTheGuestInsteadOfSavingMemory() async throws {
         try makeSealedGoldens()
         let manager = makeManager()

@@ -2523,6 +2523,16 @@ extension WorktreeVMManager {
             .appendingPathComponent(id.uuidString, isDirectory: true)
     }
 
+    func isProjectDraftSharedBaseReady() -> Bool {
+        (try? registry.withSnapshotLocked { sharedSourceForProjectDraft($0) != nil }) == true
+    }
+
+    private func sharedSourceForProjectDraft(_ records: [WorktreeVMRecord]) -> (bundle: VMBundle, sealedAt: Date)? {
+        guard !goldenRunsAnywhere(records), let golden = availableGolden(),
+              let sealedAt = Self.sealedAt(golden.sealedMarker) else { return nil }
+        return (golden, sealedAt)
+    }
+
     func prepareProjectDraft(projectID: String, script: String?, mode: ProjectDraftMode = .customize) async throws -> ProjectDraftPreparation {
         let selectedScript = VMCleanPoint.scriptHash(script) == nil ? nil : script
         switch mode {
@@ -2561,8 +2571,7 @@ extension WorktreeVMManager {
                 if case .customize = mode, transaction.state.base != nil {
                     source = .saved
                 } else {
-                    guard let golden = availableGolden(), !goldenRunsAnywhere(records),
-                          let sealedAt = Self.sealedAt(golden.sealedMarker) else { return .needsSharedBase }
+                    guard let (golden, sealedAt) = sharedSourceForProjectDraft(records) else { return .needsSharedBase }
                     source = .shared(bundle: golden, provenance: .init(
                         sharedBuild: golden.url.lastPathComponent, sharedSealedAt: sealedAt,
                         scriptHash: VMCleanPoint.scriptHash(script)), script: script)
