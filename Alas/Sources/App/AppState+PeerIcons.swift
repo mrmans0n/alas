@@ -12,7 +12,7 @@ extension AppState {
         // Only reach for the lazy manager when a server is up, as
         // `remoteServerIdentity()` does.
         guard remoteServer != nil else { return .laptop }
-        return remotePeers.peers.first { $0.serverId == serverId }?.icon ?? .laptop
+        return remotePeers.peers.first { $0.serverId == serverId }?.displayIcon ?? .laptop
     }
 
     /// For sites that only carry a Mac's name, such as delegation labels a
@@ -23,7 +23,7 @@ extension AppState {
             return page.icon
         }
         if remoteServer != nil, let peer = remotePeers.peers.first(where: { $0.name == name }) {
-            return peer.icon ?? .laptop
+            return peer.displayIcon ?? .laptop
         }
         return name == remoteDisplayName ? remoteIcon : .laptop
     }
