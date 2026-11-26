@@ -129,7 +129,8 @@ public enum RemoteTailscale: Sendable {
                     }
                     while let result = await group.next() {
                         if let result { continuation.yield(result) }
-                        if Task.isCancelled { group.cancelAll(); break }
+                        if Task.isCancelled { group.cancelAll()
+                        break }
                         if let origin = pending.next() { enqueue(origin) }
                     }
                 }
