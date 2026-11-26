@@ -556,6 +556,44 @@ struct ACPBrokerClientTests {
         ]))
     }
 
+    @Test func brokerDispatchesMCPMessagesByMethodWhateverTheirKind() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "mcp-1",
+                    adapterRequestId: .string("mcp-1"),
+                    // What a broker files an unknown method under.
+                    kind: .terminal,
+                    payload: .object([
+                        "method": .string("mcp/message"),
+                        "params": .object([
+                            "serverId": .string("alas:s1"),
+                            "requestId": .string("r1"),
+                            "method": .string("tools/list"),
+                            "sessionId": .string("s1"),
+                        ])
+                    ])
+                ))
+            )
+        ])
+        let client = makeClient(service: service)
+        var iterator = client.mcpMessageRequests.makeAsyncIterator()
+
+        try await client.start()
+
+        let request = try #require(await iterator.next())
+        #expect(request.id == .string("mcp-1"))
+        #expect(request.params == .init(serverId: "alas:s1", requestId: "r1", method: "tools/list", sessionId: "s1"))
+        client.respondToMCPMessage(id: request.id, result: .success(Data(#"{"result":{"tools":[]}}"#.utf8)))
+
+        try await waitUntil { await service.responded.count == 1 }
+        let response = try await #require(service.responded.first)
+        #expect(response.requestId == .string("mcp-1"))
+        #expect(response.result == .object(["result": .object(["tools": .array([])])]))
+    }
+
     @Test func brokerAcknowledgesCursorExtensionRequests() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [

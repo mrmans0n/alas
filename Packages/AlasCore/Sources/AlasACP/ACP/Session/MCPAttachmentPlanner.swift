@@ -320,6 +320,8 @@ public enum MCPAttachmentPlanner: Sendable {
             return command == trimmedCommand && !trimmedCommand.isEmpty
         case let .http(_, url, _), let .sse(_, url, _):
             value = url
+        case .acp:
+            return true
         }
         guard let value, value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.contains(where: \.isWhitespace),

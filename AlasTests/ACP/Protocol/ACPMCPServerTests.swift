@@ -89,6 +89,15 @@ struct ACPMCPServerTests {
         }
     }
 
+    @Test("encodes an ACP-served server as its name and registration id")
+    func encodeACP() throws {
+        let server = ACPMCPServer.acp(name: "alas", serverId: "alas:s1")
+        let json = try encodedObject(server)
+
+        #expect(json as NSDictionary == ["type": "acp", "name": "alas", "serverId": "alas:s1"])
+        #expect(try JSONDecoder().decode(ACPMCPServer.self, from: JSONEncoder().encode(server)) == server)
+    }
+
     @Test("rejects unknown MCP server types")
     func decodeUnknownType() {
         let data = Data("""
@@ -105,12 +114,14 @@ struct ACPMCPServerTests {
         let httpOnly = try JSONDecoder().decode(ACPMCPServerCapabilities.self, from: Data("""
         { "http": true }
         """.utf8))
+        let acp = try JSONDecoder().decode(ACPMCPServerCapabilities.self, from: Data("""
+        { "acp": true }
+        """.utf8))
         let omitted = try JSONDecoder().decode(ACPMCPServerCapabilities.self, from: Data("{}".utf8))
 
-        #expect(httpOnly.http == true)
-        #expect(httpOnly.sse == false)
-        #expect(omitted.http == false)
-        #expect(omitted.sse == false)
+        #expect(httpOnly == .init(http: true))
+        #expect(acp == .init(acp: true))
+        #expect(omitted == .init())
     }
 
     private func encodedObject(_ server: ACPMCPServer) throws -> [String: Any] {

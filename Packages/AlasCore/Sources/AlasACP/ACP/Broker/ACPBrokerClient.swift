@@ -167,6 +167,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
     private let elicitationCompletionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
+    private let mcpMessagesCont: AsyncStream<ACPMCPMessageRequest>.Continuation
     private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
 
     public let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
@@ -178,6 +179,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
     public let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
     public let fileRequests: AsyncStream<ACPFileRequest>
     public let terminalRequests: AsyncStream<ACPTerminalRequest>
+    public let mcpMessageRequests: AsyncStream<ACPMCPMessageRequest>
     public let authStatusUpdates: AsyncStream<ACPAuthStatusEvent>
 
     private let stateLock = NSLock()
@@ -380,6 +382,10 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
         var t: AsyncStream<ACPTerminalRequest>.Continuation!
         terminalRequests = AsyncStream { t = $0 }
         terminalsCont = t
+
+        var mcp: AsyncStream<ACPMCPMessageRequest>.Continuation!
+        mcpMessageRequests = AsyncStream { mcp = $0 }
+        mcpMessagesCont = mcp
 
         var a: AsyncStream<ACPAuthStatusEvent>.Continuation!
         authStatusUpdates = AsyncStream { a = $0 }
@@ -757,6 +763,10 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
         respondToRawResult(id: id, result: result)
     }
 
+    public func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
+        respondToRawResult(id: id, result: result)
+    }
+
     public func hasPendingOutboundRequest(id: JSONRPCID) -> Bool {
         stateLock.lock()
         defer { stateLock.unlock() }
@@ -872,6 +882,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
         elicitationCompletionsCont.finish()
         filesCont.finish()
         terminalsCont.finish()
+        mcpMessagesCont.finish()
         authStatusCont.finish()
     }
 
@@ -1224,6 +1235,18 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
         }
         pendingInboundCursors[id] = cursor
         stateLock.unlock()
+
+        // A broker files `mcp/message` under whatever kind its name suggests,
+        // so it is recognized by method rather than kind.
+        if case .object(let object) = request.payload, object["method"] == .string("mcp/message") {
+            let payload = pendingRequestParamsPayload(request.payload)
+            if let params = try? JSONDecoder().decode(ACPMCPMessageParams.self, from: payload.data) {
+                mcpMessagesCont.yield(.init(id: id, params: params))
+            } else {
+                respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
+            }
+            return
+        }
 
         switch request.kind {
         case .permission:

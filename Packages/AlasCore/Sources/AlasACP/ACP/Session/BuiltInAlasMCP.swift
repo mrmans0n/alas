@@ -201,6 +201,8 @@ public enum BuiltInAlasMCP: Sendable {
     /// (worktree, workspace members) cannot strand it. Either way the build
     /// makes an app update count as another server, so an agent adopted
     /// across the update is restarted with the new tools.
+    /// ACP: the app answers every message itself, with whichever build is
+    /// running, so only the name and the registration identify it.
     public static func agentFingerprint(of server: ACPMCPServer) -> String {
         let identity: [String]
         switch server {
@@ -210,6 +212,8 @@ public enum BuiltInAlasMCP: Sendable {
         case let .stdio(name, command, args, env):
             identity = [name, "stdio", command] + args
                 + env.filter { agentIdentityEnv.contains($0.name) }.map(\.value)
+        case let .acp(name, serverId):
+            identity = [name, "acp", serverId]
         }
         return SHA256.hash(data: Data(identity.joined(separator: "\u{0}").utf8))
             .map { String(format: "%02x", $0) }.joined()
@@ -225,6 +229,7 @@ public enum BuiltInAlasMCP: Sendable {
         case let .http(name, _, _): identity = [name, "http"]
         case let .sse(name, _, _): identity = [name, "sse"]
         case let .stdio(name, command, args, _): identity = [name, "stdio", command] + args
+        case let .acp(name, _): identity = [name, "acp"]
         }
         return identity.joined(separator: "\u{0}")
     }
