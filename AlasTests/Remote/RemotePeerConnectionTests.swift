@@ -489,7 +489,8 @@ struct RemotePeerConnectionTests {
                                         expectedServerId: "srv-a", expectedPublicKey: signer.publicKey,
                                         config: fastConfig(), discoverOrigins: {
                                             discoveryCalls += 1
-                                            return [origin]
+                                            // Keep discovery open while the socket connects.
+                                            return AsyncStream { $0.yield(origin) }
                                         }) { events.all.append($0) }
         link.connect()
         defer { link.disconnect() }

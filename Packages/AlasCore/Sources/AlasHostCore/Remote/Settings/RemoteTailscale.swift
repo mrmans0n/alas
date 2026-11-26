@@ -101,34 +101,41 @@ public enum RemoteTailscale: Sendable {
     }
 
     @MainActor
-    static func discover(peer: RemotePeer, local: RemotePeerManager.LocalIdentity) async -> [String] {
-        guard let key = peer.publicKey, !key.isEmpty, !local.publicKey.isEmpty, let executable = executable(),
-              let status = try? await Process.run(executable, args: ["status", "--json"], env: environment, timeout: timeout),
-              status.exitCode == 0 else { return [] }
-        let ports = Set(peer.origins.compactMap { URL(string: $0)?.port })
-        let candidates = candidateOrigins(status: Data(status.stdout.utf8), ports: ports.sorted())
-            .filter { !peer.origins.contains($0) && $0 != peer.lastOrigin }
-        let requester = ApprovalPeer(serverID: local.serverId, publicKey: local.publicKey, name: local.name,
-                                     origins: Array(local.origins.prefix(RemotePairingLink.maxOrigins)))
-        // Bound concurrent requests, including on large tailnets. No pairing request
-        // is submitted: the challenge reply already signs the receiver's own origins.
-        return await withTaskGroup(of: String?.self) { group in
-            var pending = candidates.makeIterator()
-            func enqueue(_ origin: String) {
-                group.addTask {
-                    await verifiedOrigin(origin, serverID: peer.serverId, key: key, requester: requester)
+    static func discover(peer: RemotePeer, local: RemotePeerManager.LocalIdentity) -> AsyncStream<String> {
+        AsyncStream { continuation in
+            let task = Task { @MainActor in
+                guard let key = peer.publicKey, !key.isEmpty, !local.publicKey.isEmpty, let executable = executable(),
+                      let status = try? await Process.run(executable, args: ["status", "--json"], env: environment, timeout: timeout),
+                      status.exitCode == 0 else {
+                    continuation.finish()
+                    return
                 }
+                let ports = Set(peer.origins.compactMap { URL(string: $0)?.port })
+                let candidates = candidateOrigins(status: Data(status.stdout.utf8), ports: ports.sorted())
+                    .filter { !peer.origins.contains($0) && $0 != peer.lastOrigin }
+                let requester = ApprovalPeer(serverID: local.serverId, publicKey: local.publicKey, name: local.name,
+                                             origins: Array(local.origins.prefix(RemotePairingLink.maxOrigins)))
+                // Bound concurrent requests, including on large tailnets. No pairing request
+                // is submitted: the challenge reply already signs the receiver's own origins.
+                await withTaskGroup(of: String?.self) { group in
+                    var pending = candidates.makeIterator()
+                    func enqueue(_ origin: String) {
+                        group.addTask {
+                            await verifiedOrigin(origin, serverID: peer.serverId, key: key, requester: requester)
+                        }
+                    }
+                    for _ in 0..<4 {
+                        if let origin = pending.next() { enqueue(origin) }
+                    }
+                    while let result = await group.next() {
+                        if let result { continuation.yield(result) }
+                        if Task.isCancelled { group.cancelAll(); break }
+                        if let origin = pending.next() { enqueue(origin) }
+                    }
+                }
+                continuation.finish()
             }
-            for _ in 0..<4 {
-                if let origin = pending.next() { enqueue(origin) }
-            }
-            var verified: [String] = []
-            while let result = await group.next() {
-                if let result { verified.append(result) }
-                if Task.isCancelled { break }
-                if let origin = pending.next() { enqueue(origin) }
-            }
-            return verified
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 

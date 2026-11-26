@@ -77,7 +77,7 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
     public var verifiedHTTPSOrigin: URL? { state == .online ? secureOrigin : nil }
     private var secureOrigin: URL?
 
-    private let discoverOrigins: @MainActor () async -> [String]
+    private let discoverOrigins: @MainActor () -> AsyncStream<String>
     private let origins: [String]
     /// The peer's token. Travels only as the WebSocket subprotocol; it is
     /// never logged, never part of an error, and never in the URL.
@@ -106,7 +106,7 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
     public init(origins: [String], lastOrigin: String?, token: String, expectedServerId: String? = nil,
          expectedPublicKey: String? = nil,
          config: Config = Config(), session: URLSession = .shared,
-         discoverOrigins: @escaping @MainActor () async -> [String] = { [] },
+         discoverOrigins: @escaping @MainActor () -> AsyncStream<String> = { AsyncStream { $0.finish() } },
          onEvent: @escaping @MainActor (Event) -> Void) {
         self.discoverOrigins = discoverOrigins
         self.origins = origins
@@ -171,12 +171,21 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
             ordered.append(origin)
         }
         var pending = ordered.makeIterator()
+        var discovered: AsyncStream<String>.Iterator?
         var triedDiscovery = false
         while !Task.isCancelled {
-            guard let origin = pending.next() else {
+            let origin: String?
+            if var stream = discovered {
+                origin = await stream.next()
+                discovered = stream
+                if let origin, ordered.contains(origin) { continue }
+            } else {
+                origin = pending.next()
+            }
+            guard let origin else {
                 guard !triedDiscovery, expectedPublicKey != nil else { break }
                 triedDiscovery = true
-                pending = await discoverOrigins().filter { !ordered.contains($0) }.makeIterator()
+                discovered = discoverOrigins().makeAsyncIterator()
                 continue
             }
             if Task.isCancelled { return }
@@ -315,6 +324,7 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
                 scheduleReconnect(reportedState: .incompatible(remoteVersion: version))
                 return
             }
+            discovered = nil
             socket = candidate
             if expectedServerId != nil, expectedPublicKey != nil,
                let expected = Self.httpsOrigin(of: url),

@@ -310,7 +310,7 @@ public final class RemotePeerManager {
                  expectedPublicKey: peer.publicKey,
                  config: .init(pingInterval: 10),
                  discoverOrigins: {
-                     await RemoteTailscale.discover(peer: peer, local: localIdentity())
+                     RemoteTailscale.discover(peer: peer, local: localIdentity())
                  }, onEvent: onEvent)
         }
         self.now = now
