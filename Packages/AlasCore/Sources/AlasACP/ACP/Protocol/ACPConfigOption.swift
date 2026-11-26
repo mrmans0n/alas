@@ -254,6 +254,83 @@ public struct ACPSessionSetConfigOptionParams: Codable, Equatable, Sendable {
     }
 }
 
+/// One value sent with `session/new`, `session/load`, `session/resume` or
+/// `session/fork` to an agent that advertised `sessionCapabilities.options`.
+/// The agent applies the entries in order and skips one it no longer knows
+/// or accepts; the setup response carries the values it actually used.
+public struct ACPInitialConfigOption: Codable, Equatable, Sendable {
+    public let configId: String
+    public let value: ACPConfigValue
+
+    public enum CodingKeys: String, CodingKey, Sendable {
+        case configId, type, value
+    }
+
+    public init(configId: String, value: ACPConfigValue) {
+        self.configId = configId
+        self.value = value
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        configId = try c.decode(String.self, forKey: .configId)
+        value = try c.decode(ACPConfigValue.self, forKey: .value)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(configId, forKey: .configId)
+        switch value {
+        case .string: try c.encode("id", forKey: .type)
+        case .boolean: try c.encode("boolean", forKey: .type)
+        }
+        try c.encode(value, forKey: .value)
+    }
+
+    /// The entries for a chosen `model` and `values` (by option id), in the
+    /// order `preview` lists their options, as the agent asks: a model entry
+    /// can change what the entries after it accept. A value the preview's
+    /// option does not list is still sent, because the option was previewed
+    /// for the default model. A choice with no option in the preview is left
+    /// out, for the caller to set once the session exists.
+    public static func entries(
+        model: String?,
+        values: [String: ACPConfigValue],
+        preview: [ACPConfigOption]
+    ) -> [ACPInitialConfigOption] {
+        let modelOptionId = model == nil ? nil : preview.first {
+            $0.type == "select" && !$0.options.isEmpty && ($0.category == "model" || $0.category == "Model")
+        }?.id
+        return preview.compactMap { option in
+            if option.id == modelOptionId, let model {
+                return ACPInitialConfigOption(configId: option.id, value: .string(model))
+            }
+            guard let value = values[option.id] else { return nil }
+            switch (option.type, value) {
+            case ("boolean", .boolean), ("select", .string):
+                return ACPInitialConfigOption(configId: option.id, value: value)
+            default:
+                return nil
+            }
+        }
+    }
+}
+
+/// Params for `session/options`: the options a session would start with in
+/// `cwd`, or the ones `sessionId` would restore or fork with, without
+/// creating or touching a session.
+public struct ACPSessionOptionsParams: Codable, Equatable, Sendable {
+    public let cwd: String
+    public let additionalDirectories: [String]?
+    public let sessionId: String?
+
+    public init(cwd: String, additionalDirectories: [String] = [], sessionId: String? = nil) {
+        self.cwd = cwd
+        self.additionalDirectories = additionalDirectories.isEmpty ? nil : additionalDirectories
+        self.sessionId = sessionId
+    }
+}
+
 /// Result of `session/set_config_option`. The agent returns the complete
 /// refreshed `configOptions` list because a single change can ripple to
 /// dependent options (e.g. codex's reasoning effort altering available

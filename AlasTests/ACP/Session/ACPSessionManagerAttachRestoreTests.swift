@@ -4852,6 +4852,54 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.currentModel == "sonnet")
     }
 
+    @Test("fresh attach sends the chosen model and effort with session/new when the agent takes them there", arguments: [
+        ("high", "high"),     // applied by the agent: nothing left to set
+        ("ultra", "medium"),  // skipped by the agent as stale: creation still succeeds
+    ])
+    func freshAttachSendsInitialConfigOptionsWithSessionNew(chosen: String, used: String) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        func options(model: String, effort: String) -> [ACPConfigOption] {
+            [
+                ACPConfigOption(id: "model", name: "Model", category: "model", currentValue: model,
+                                options: [.init(id: "opus", name: "Opus"), .init(id: "sonnet", name: "Sonnet")]),
+                ACPConfigOption(id: "effort", name: "Thinking", currentValue: effort,
+                                options: [.init(id: "medium", name: "Medium"), .init(id: "high", name: "High")]),
+            ]
+        }
+        func setup(sessionId: String, model: String, effort: String) throws -> Data {
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: sessionId, availableModels: [], availableModes: [], currentModel: nil,
+                currentMode: nil, promptSuggestions: [], configOptions: options(model: model, effort: effort)))
+        }
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(sessionCapabilities: .init(options: .init())),
+                authMethods: []))
+        }
+        client.script(method: "session/options") { _ in try setup(sessionId: "", model: "opus", effort: "medium") }
+        client.script(method: "session/new") { _ in try setup(sessionId: "remote-new", model: "sonnet", effort: used) }
+        let manager = manager(store: store, client: client, delegatedReasoningRefreshTimeout: .milliseconds(100))
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.pendingModel[session.id] = "sonnet"
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string(chosen))
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        try await waitUntil { session.agentState == .ready }
+        #expect(client.sent.map(\.method) == ["initialize", "session/options", "session/new"])
+        let params = try #require(client.sent.last?.params as? ACPSessionNewParams)
+        #expect(params.configOptions == [
+            .init(configId: "model", value: .string("sonnet")),
+            .init(configId: "effort", value: .string(chosen)),
+        ])
+        #expect(session.currentModel == "sonnet")
+        #expect(ACPConfigOption.currentValues(in: session.availableConfigOptions)["effort"] == .string(used))
+    }
+
     @Test("fresh attach waits for the new model's thinking levels before applying a queued effort")
     func freshAttachWaitsForModelDependentConfigOptionsBeforeApplyingQueuedEffort() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
