@@ -43,6 +43,13 @@ public enum ACPTranscriptQueuePolicy: Sendable {
         queue[..<idx].filter { shouldRenderQueueBubble($0) }.count + 1
     }
 
+    /// The item ⌃⏎ in an empty composer sends now: the first "Up next" row
+    /// that dispatches in FIFO order. Scheduled items wait for their own
+    /// clock, so they are never picked.
+    public nonisolated static func nextItemToSendNow(queue: [QueuedPrompt]) -> QueuedPrompt? {
+        queue.first { shouldRenderQueueBubble($0) && $0.scheduledAt == nil }
+    }
+
     /// The `moveInQueue` destination for a one-row "Move up" (`step == -1`)
     /// or "Move down" (`step == 1`) from `idx`: the index of the neighboring
     /// rendered row, skipping hidden delegated items so the move is never a

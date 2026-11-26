@@ -523,7 +523,15 @@ struct ACPComposer: View {
                 onCommandAction: { configId, value in
                     apply(configOptionId: configId, value: .string(value))
                 },
-                onOpenSkill: openSkill
+                onOpenSkill: openSkill,
+                onSendNextQueuedNow: {
+                    guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror),
+                          let item = ACPTranscriptQueuePolicy.nextItemToSendNow(queue: session.queue)
+                    else { return false }
+                    let sessionId = session.id
+                    Task { await manager.queueForceSend(for: sessionId, itemId: item.id) }
+                    return true
+                }
             )
             .disabled(isMirror)
             .opacity(isMirror ? 0.5 : 1)

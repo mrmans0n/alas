@@ -213,7 +213,10 @@ struct ACPQueueItemRow: View {
                 actionButton(
                     systemName: "paperplane.fill",
                     foreground: theme.color("accent"),
-                    help: "Send now (interrupts a running turn)",
+                    // ⌃⏎ in an empty composer sends the first FIFO row.
+                    help: position == 1 && item.scheduledAt == nil
+                        ? "Send now (interrupts a running turn). ⌃⏎ from an empty composer."
+                        : "Send now (interrupts a running turn)",
                     action: onSendNow
                 )
                 if item.lastError != nil {
