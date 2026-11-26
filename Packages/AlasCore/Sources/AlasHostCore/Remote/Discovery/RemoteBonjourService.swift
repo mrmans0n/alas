@@ -2,6 +2,9 @@ import Foundation
 #if canImport(Network)
 import Network
 #endif
+#if canImport(IOKit)
+import IOKit
+#endif
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -141,6 +144,28 @@ public enum RemoteBonjourService: Sendable {
         guard sysctlbyname("hw.model", &buffer, &size, nil, 0) == 0 else { return nil }
         let model = String(cString: buffer).trimmingCharacters(in: .whitespacesAndNewlines)
         return model.isEmpty ? nil : model
+        #endif
+    }
+
+    /// This Mac's icon by its hardware, e.g. `.macMini`, or nil off macOS
+    /// or on a machine that names no kind of Mac (a virtual one). Read once:
+    /// the hardware does not change while the process runs.
+    public static let hardwareIcon: PeerIcon? = PeerIcon(productName: productName(), model: hardwareModel())
+
+    /// The marketing name from the device tree, e.g. "Mac mini (2024)".
+    /// Apple silicon only; Intel Macs have no such entry and return nil.
+    static func productName() -> String? {
+        #if !canImport(IOKit)
+        return nil
+        #else
+        let entry = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/product")
+        guard entry != IO_OBJECT_NULL else { return nil }
+        defer { IOObjectRelease(entry) }
+        guard let data = IORegistryEntryCreateCFProperty(entry, "product-name" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? Data else { return nil }
+        let name = String(decoding: data.prefix { $0 != 0 }, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
         #endif
     }
 }

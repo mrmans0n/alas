@@ -58,6 +58,28 @@ public enum PeerIcon: String, CaseIterable, Codable, Sendable, Identifiable {
         self = icon
     }
 
+    /// The icon for a Mac's hardware, or nil when neither input names a kind
+    /// of Mac. `productName` is the marketing name ("Mac mini (2024)") and
+    /// wins: Apple silicon models report a generic `hw.model` ("Mac16,10")
+    /// that no longer says what the machine is. `model` covers older Macs,
+    /// whose identifiers still do ("Macmini9,1").
+    public init?(productName: String?, model: String?) {
+        let byName: [(String, PeerIcon)] = [
+            ("Mac mini", .macMini), ("Mac Studio", .macStudio), ("Mac Pro", .macPro),
+            ("MacBook", .laptop), ("iMac", .desktop),
+        ]
+        let byModel: [(String, PeerIcon)] = [
+            ("Macmini", .macMini), ("MacPro", .macPro), ("MacBook", .laptop), ("iMac", .desktop),
+        ]
+        let name = productName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let identifier = model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let match = byName.first(where: { name.hasPrefix($0.0) }) ?? byModel.first(where: { identifier.hasPrefix($0.0) }) {
+            self = match.1
+        } else {
+            return nil
+        }
+    }
+
     /// Never throws on an unknown string: decodes `.laptop`, so one record
     /// from a newer build cannot fail a whole store.
     public init(from decoder: Decoder) throws {
