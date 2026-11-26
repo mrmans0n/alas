@@ -8096,11 +8096,6 @@ extension ACPSessionManager {
                     return
                 }
             } else if freshlyCreated {
-                let initialConfigOptions = await initialConfigOptions(
-                    for: sessionId,
-                    cwd: worktreePath,
-                    using: connection,
-                    sessionCapabilities: initialized.sessionCapabilities)
                 result = try await performRemoteSessionCreation(
                     for: attempt,
                     using: connection,
@@ -8109,14 +8104,12 @@ extension ACPSessionManager {
                     try await connection.newSession(
                         cwd: worktreePath,
                         mcpServers: wireMCPServers,
-                        configOptions: initialConfigOptions,
                         brokerOperationKey: Self.brokerStartupOperationKey(
                             sessionId: sessionId,
                             method: "session/new"
                         )
                     )
                 }
-                dropAppliedInitialConfigOptions(initialConfigOptions, shownBy: result.configOptions, for: sessionId)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                     // Same late-result ownership as the fork guard above:
                     // the tracked remote-close path closes (and only then
@@ -10810,43 +10803,6 @@ extension ACPSessionManager {
         await detach(sessionId: sessionId)
         guard sessions[sessionId] != nil else { return }
         await attach(to: sessionId, freshlyCreated: false)
-    }
-
-    /// The model and option values chosen for a session that does not exist
-    /// yet, as entries for its `session/new`, when the agent takes them
-    /// there.
-    private func initialConfigOptions(
-        for sessionId: ACPSession.ID,
-        cwd: String,
-        using connection: ACPConnection,
-        sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities
-    ) async -> [ACPInitialConfigOption] {
-        guard sessionCapabilities.supportsOptions,
-              pendingModel[sessionId] != nil || pendingConfigOptionValues[sessionId]?.isEmpty == false,
-              let preview = try? await connection.sessionOptions(cwd: cwd)
-        else { return [] }
-        return ACPInitialConfigOption.entries(
-            model: pendingModel[sessionId],
-            values: pendingConfigOptionValues[sessionId] ?? [:],
-            preview: preview.configOptions)
-    }
-
-    /// Forgets the queued choices the setup response shows as applied. One
-    /// the agent skipped stays queued, for the attach to set as before.
-    private func dropAppliedInitialConfigOptions(
-        _ sent: [ACPInitialConfigOption],
-        shownBy options: [ACPConfigOption],
-        for sessionId: ACPSession.ID
-    ) {
-        for entry in sent where options.first(where: { $0.id == entry.configId })?.currentValue == entry.value {
-            if pendingConfigOptionValues[sessionId]?.removeValue(forKey: entry.configId) == nil,
-               entry.value == pendingModel[sessionId].map(ACPConfigValue.string) {
-                pendingModel[sessionId] = nil
-            }
-        }
-        if pendingConfigOptionValues[sessionId]?.isEmpty == true {
-            pendingConfigOptionValues[sessionId] = nil
-        }
     }
 
     private func performRemoteSessionCreation(
