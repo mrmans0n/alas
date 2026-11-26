@@ -977,6 +977,7 @@ final class AppState {
     var builtInMCPSessionState: BuiltInMCPSessionState { mcpHTTPSupervisor.state }
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()
     let acpAdapterInstallCoordinator = ACPAdapterInstallCoordinator()
+    let acpTranscriptAdapterUpdates = ACPTranscriptAdapterUpdates()
 
     // MARK: Remote control
     /// Paired-device registry backed by an on-disk JSON store. Lazy so the
@@ -13002,6 +13003,75 @@ final class AppState {
                 remoteSessionId: session.remoteSessionId
             )
         await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
+    }
+
+    func reattachACP(manager: ACPSessionManager, sessionId: ACPSession.ID) async {
+        guard let session = manager.liveSession(for: sessionId) else { return }
+        manager.retainSession(id: sessionId)
+        defer { manager.releaseSession(id: sessionId) }
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(owner: manager.owner, fallbackWorktree: nil) else {
+            session.lastError = Self.checkpointRecoveryBlocksACPMessage
+            return
+        }
+        guard manager.liveSession(for: sessionId) === session else { return }
+        await manager.detach(sessionId: sessionId)
+        guard manager.liveSession(for: sessionId) === session else { return }
+        session.lastError = nil
+        session.setupState = .checking
+        let freshlyCreated = ACPSessionAttachFreshness.isFresh(
+            restoredFromPersistence: session.restoredFromPersistence,
+            remoteSessionId: session.remoteSessionId
+        )
+        await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
+    }
+
+    func startACPTranscriptAdapterUpdate(
+        target: ACPAdapterTarget,
+        agentID: String,
+        agentDisplayName: String,
+        latest: String,
+        detectedOwner: ACPDetectedAgentOwner?,
+        manager: ACPSessionManager,
+        sessionId: ACPSession.ID
+    ) {
+        let installCoordinator = acpAdapterInstallCoordinator
+        let updateStore = acpAdapterUpdateStore
+        let key = detectedOwner.map { ACPAdapterUpdateKey.detectedCLI(agentID: agentID, owner: $0) }
+            ?? ACPAdapterUpdateKey(target: target, agentID: agentID)
+
+        acpTranscriptAdapterUpdates.start(key: key, latest: latest, install: {
+            if let detectedOwner {
+                try await installCoordinator.updateDetectedAgent(agentID: agentID, owner: detectedOwner)
+            } else {
+                try await installCoordinator.install(target: target, agentID: agentID, mode: .update)
+            }
+            await updateStore.clear(key: key)
+        }, onInstalled: { [weak self] in
+            guard let self else { return }
+            if let visibleWorktreeID = self.inAppBannerWorktreeID {
+                let sharedOwner = self.selectedWorkspaceCheckout.map { SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation) }
+                let visibleOwner = sharedOwner ?? .worktree(visibleWorktreeID)
+                let visibleTab = self.centerTabComposition(
+                    focusedWorktreeID: visibleWorktreeID,
+                    sharedSessionOwner: sharedOwner
+                ).activeTab
+                if case .acpSession(let tab) = visibleTab, tab.sessionId == sessionId, visibleOwner == manager.owner {
+                    // The originating tab already shows the successful update.
+                } else {
+                    let message: String
+                    if detectedOwner != nil {
+                        message = "\(agentDisplayName) updated"
+                    } else if case .ssh(let host) = target {
+                        message = "\(agentDisplayName) adapter updated on \(host)"
+                    } else {
+                        message = "\(agentDisplayName) adapter updated"
+                    }
+                    self.inAppNotifications.post(message, severity: .success, worktreeID: visibleWorktreeID)
+                }
+            }
+            guard self.acpManager(for: manager.owner) === manager else { return }
+            await self.reattachACP(manager: manager, sessionId: sessionId)
+        })
     }
 
     /// Brings an open chat tab's session up so a prompt can be handed to it.

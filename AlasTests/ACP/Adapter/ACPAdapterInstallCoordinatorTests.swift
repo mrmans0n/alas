@@ -67,6 +67,42 @@ struct ACPAdapterInstallCoordinatorTests {
         #expect(await recorder.remoteRequests.isEmpty)
     }
 
+    @Test("Transcript update remains visible and finishes after the starting tab goes away")
+    @MainActor
+    func transcriptUpdateOutlivesStartingTab() async throws {
+        let updates = ACPTranscriptAdapterUpdates()
+        let key = ACPAdapterUpdateKey(target: .local, agentID: "codex")
+        let (release, gate) = AsyncStream<Void>.makeStream()
+        defer { gate.finish() }
+        let (started, startedSignal) = AsyncStream<Task<Void, Never>>.makeStream()
+        var completions = 0
+        let startingTab = Task {
+            let update = updates.start(key: key, latest: "2.0", install: {
+                for await _ in release { break }
+                try Task.checkCancellation()
+            }, onInstalled: {
+                completions += 1
+            })
+            if let update { startedSignal.yield(update) }
+            startedSignal.finish()
+            await update?.value
+        }
+        defer { startingTab.cancel() }
+        var iterator = started.makeAsyncIterator()
+        let update = try #require(await iterator.next())
+
+        startingTab.cancel()
+        #expect(updates.status(for: key, latest: "2.0") == .installing)
+        #expect(updates.start(key: key, latest: "2.0", install: {}, onInstalled: {}) == nil)
+
+        gate.yield(())
+        gate.finish()
+        await update.value
+
+        #expect(updates.status(for: key, latest: "2.0") == .installed)
+        #expect(completions == 1)
+    }
+
     private func makeCoordinator(_ recorder: CoordinatorInstallRecorder) -> ACPAdapterInstallCoordinator {
         ACPAdapterInstallCoordinator(
             localInstall: { agentID, _ in try await recorder.installLocal(agentID) },
