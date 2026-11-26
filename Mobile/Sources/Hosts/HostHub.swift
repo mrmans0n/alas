@@ -29,6 +29,8 @@ final class ListenerToken {
 final class HostHub {
     private(set) var hosts: [PairedHost]
     private var states: [UUID: PhoneConnection.State] = [:]
+    /// The latest ping round trip of each online host.
+    private(set) var roundTrips: [UUID: Duration] = [:]
     private var sessionLists: [UUID: [RemoteSessionSummary]] = [:]
     /// Counts each host's arrivals online, so a link that dropped and came back between two
     /// looks still reads as new: the host forgot whatever the old socket held.
@@ -173,6 +175,7 @@ final class HostHub {
         connections.removeValue(forKey: id)?.disconnect()
         hosts.removeAll { $0.id == id }
         states[id] = nil
+        roundTrips[id] = nil
         listedLive.remove(id)
         capabilities[id] = nil
         sessionLists[id] = nil
@@ -355,7 +358,8 @@ final class HostHub {
         let id = host.id
         let connection = PhoneConnection(
             origins: host.origins, lastOrigin: host.lastOrigin, token: token,
-            expectedServerId: host.serverId, expectedPublicKey: host.publicKey
+            expectedServerId: host.serverId, expectedPublicKey: host.publicKey,
+            config: .init(pingInterval: 10)
         ) { [weak self] event in
             self?.handle(event, from: id)
         }
@@ -368,6 +372,7 @@ final class HostHub {
         case .stateChanged(let state):
             states[id] = state
             if state != .online {
+                roundTrips[id] = nil
                 listedLive.remove(id)
                 runTrackers[id]?.disconnect()
             }
@@ -388,8 +393,8 @@ final class HostHub {
             guard let index = hosts.firstIndex(where: { $0.id == id }) else { return }
             hosts[index].lastOrigin = origin
             store.save(hosts)
-        case .roundTrip:
-            break
+        case .roundTrip(let roundTrip):
+            roundTrips[id] = roundTrip
         case .message(let message):
             switch message {
             case .device(let event):

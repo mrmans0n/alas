@@ -33,14 +33,9 @@ struct PeerHoverCardModel {
 
     var chipText: String {
         guard state.carriesSessions else { return state.label }
-        return [state.label, connection?.label, roundTrip.map(Self.latencyLabel)]
+        return [state.label, connection?.label, roundTrip?.roundTripLabel]
             .compactMap { $0 }
             .joined(separator: " · ")
-    }
-
-    private static func latencyLabel(_ roundTrip: Duration) -> String {
-        let ms = roundTrip / .milliseconds(1)
-        return ms < 1 ? "<1 ms" : "\(Int(ms.rounded())) ms"
     }
 }
 
