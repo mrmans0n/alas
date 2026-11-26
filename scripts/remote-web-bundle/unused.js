@@ -2,6 +2,7 @@
 // Shiki's WebAssembly engine. The default, Shiki's JavaScript engine, is bundled.
 const unused = () => { throw new Error("Not bundled in the Alas web client"); };
 export const codeToTokens = unused;
+export const registerLanguages = unused;
 export const isSupportedLanguage = () => false;
 export const LiveTokenizer = class { constructor() { unused(); } };
 export const createOnigurumaEngine = unused;

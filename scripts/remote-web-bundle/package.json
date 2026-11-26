@@ -3,7 +3,7 @@
   "description": "Builds Alas/Resources/RemoteWeb/diffs from @pierre/diffs. Run `npm ci && node build.mjs` here after changing a version.",
   "type": "module",
   "dependencies": {
-    "@pierre/diffs": "1.7.1",
+    "@pierre/diffs": "1.7.2",
     "esbuild": "0.28.2"
   }
 }
