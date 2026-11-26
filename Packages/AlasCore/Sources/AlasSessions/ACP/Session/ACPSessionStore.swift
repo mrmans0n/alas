@@ -1514,6 +1514,30 @@ extension ACPSessionStore {
         return true
     }
 
+    /// Removes the session's rows from `seq` on: the agent rewound its
+    /// conversation to before that message. The rows before it keep their
+    /// positions.
+    ///
+    /// What is stored against a removed row goes with it or moves to the last
+    /// row left: turn captions of removed answers are deleted, and a submitted
+    /// draft's `submitted_after_seq` and the `source_boundary_seq` of this
+    /// session's forks stop at the new tail. A fork keeps the rows it copied.
+    /// Does not open a transaction; callers wrap it in one.
+    public func truncateMessages(sessionId: String, fromSeq seq: Int64) throws {
+        try db.exec("DELETE FROM messages WHERE session_id = ? AND seq >= ?", bindings: [sessionId, seq])
+        try db.exec(
+            "DELETE FROM session_turn_captions WHERE session_id = ? AND answer_seq >= ?",
+            bindings: [sessionId, seq])
+        try db.exec("""
+        UPDATE composer_drafts SET submitted_after_seq = ?
+        WHERE session_id = ? AND submitted_after_seq >= ?
+        """, bindings: [seq - 1, sessionId, seq])
+        try db.exec("""
+        UPDATE session_forks SET source_boundary_seq = ?
+        WHERE source_session_id = ? AND source_boundary_seq >= ?
+        """, bindings: [seq - 1, sessionId, seq])
+    }
+
     public func loadMessages(sessionId: String) throws -> [ACPStoredMessage] {
         let rows = try db.query("""
         SELECT id, session_id, kind, seq, payload, created_at

@@ -506,6 +506,24 @@ public final class ACPSessionManager: ChangeTracking {
         return await runner.userCancel()
     }
 
+    /// Whether the user message `messageID` can be edited in place: its
+    /// agent announced a cursor before it that a rewind accepts, and this
+    /// instance drives the session.
+    public func canRewind(sessionID id: ACPSession.ID, beforeUserMessage messageID: UUID) -> Bool {
+        guard legacyRuntimeAllowed(id), runners[id] != nil, _ownedLeases.contains(id) else { return false }
+        return sessions[id]?.cursor(beforeUserMessage: messageID)?.canRewind == true
+    }
+
+    /// Cuts the session back to before the user message `messageID`, stopping
+    /// a running turn first. On `.rewound` the message and every row after
+    /// it are gone and the caller sends the edited prompt. Files are not
+    /// reverted.
+    public func rewind(sessionID id: ACPSession.ID, beforeUserMessage messageID: UUID) async -> ACPSessionRewindResult {
+        guard legacyRuntimeAllowed(id) else { return .unavailable }
+        guard await confirmedWriterLease(for: id), let runner = runners[id] else { return .unavailable }
+        return await runner.rewind(beforeUserMessage: messageID)
+    }
+
     // MARK: - Failure incident actions
 
     /// Nil only for an unknown session. A session with no runner still gets a

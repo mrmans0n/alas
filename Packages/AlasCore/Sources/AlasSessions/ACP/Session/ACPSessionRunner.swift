@@ -4100,6 +4100,62 @@ extension ACPSessionRunner {
         flushQueueIfIdle()
     }
 
+    /// Cuts the conversation back to before the user message `id`, in the
+    /// agent and here: the message and every row after it go, so an edited
+    /// prompt can take its place. Files the removed turns changed stay as
+    /// they are.
+    ///
+    /// A running turn is stopped first. The queue must be empty and no input
+    /// pending. Until the agent has answered, nothing is removed.
+    public func rewind(beforeUserMessage id: UUID) async -> ACPSessionRewindResult {
+        guard let cursor = session.cursor(beforeUserMessage: id), cursor.canRewind,
+              let remoteSessionId = session.remoteSessionId, !remoteSessionId.isEmpty
+        else { return .unavailable }
+        if activePromptID != nil || session.transcript.streamingState != .idle {
+            // The agent refuses to cut under a running turn, so stop it and
+            // wait for its prompt to settle.
+            let running = latestPromptTask
+            guard await userCancel() else { return .notIdle }
+            await running?.value
+        }
+        // Holds the queue and confirms the lease, like a native fork: nothing
+        // may start a turn between the agent's cut and ours.
+        guard await beginNativeForkBarrier() else { return .notIdle }
+        defer { endNativeForkBarrier() }
+        flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        await flushPersistence()
+        let outcome: ACPSessionRewindOutcome
+        do {
+            outcome = try await connection.rewindSession(sessionId: remoteSessionId, cursorId: cursor.cursorId)
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+        guard case .rewound = outcome else {
+            if case .refused(let reason) = outcome { return .refused(reason) }
+            return .unavailable
+        }
+        guard !stopped, isConnectionCurrent(), holdsLeaseForWrite() else {
+            // The agent cut, and this runner can no longer write. The next
+            // writer's load replays the cut history.
+            return .failed("The session changed hands during the rewind.")
+        }
+        flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        guard let firstRemoved = session.truncateTranscript(fromUserMessage: id) else { return .rewound }
+        persistedMessageCount = min(persistedMessageCount, firstRemoved)
+        lastPersistedPayloads = lastPersistedPayloads.filter { $0.key < firstRemoved }
+        pendingStreamingPersistIndices = pendingStreamingPersistIndices.filter { $0 < firstRemoved }
+        pendingStreamingPersistRevisions = pendingStreamingPersistRevisions.filter { $0.key < firstRemoved }
+        pendingStreamingPersistSnapshots = pendingStreamingPersistSnapshots.filter { $0.key < firstRemoved }
+        let sessionId = session.id
+        let fence = leaseFenceProvider()
+        enqueuePersistence { persistence in
+            try await persistence.truncateMessages(sessionId: sessionId, fromSeq: Int64(firstRemoved), fence: fence)
+        }
+        await flushPersistence()
+        onPersist?()
+        return .rewound
+    }
+
     private var canBeginNativeForkBarrier: Bool {
         !nativeForkBarrierActive
             && !steerInProgress

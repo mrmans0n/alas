@@ -143,3 +143,16 @@ extension ACPSessionRewindOutcome: Decodable {
         }
     }
 }
+
+/// What became of a request to rewind a session to before a user message.
+public enum ACPSessionRewindResult: Equatable, Sendable {
+    /// The agent cut its conversation and the transcript follows it.
+    case rewound
+    /// The agent left the conversation as it was.
+    case refused(ACPSessionRewindRefusal)
+    /// The agent announced no rewind position before the message.
+    case unavailable
+    /// A turn runs, input is pending or prompts are queued.
+    case notIdle
+    case failed(String)
+}

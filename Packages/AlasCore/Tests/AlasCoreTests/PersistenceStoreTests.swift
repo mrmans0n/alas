@@ -109,6 +109,40 @@ struct PersistenceStoreTests {
         #expect(try store.db.query("SELECT id FROM acp_v2_response_intents").isEmpty)
     }
 
+    @Test func truncatingMessagesTakesWhatWasStoredAgainstTheRemovedRows() throws {
+        let store = try ACPSessionStore(path: tmpURL().path)
+        defer { try? FileManager.default.removeItem(atPath: store.path) }
+        func row(_ id: String) -> ACPSessionRow {
+            .init(id: id, agentId: "fixture", title: id, autoRun: false,
+                createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false)
+        }
+        func message(_ session: String, _ seq: Int64) -> ACPStoredMessage {
+            .init(id: "msg-\(session)-\(seq)", sessionId: session, kind: "system", seq: seq, payload: Data("{}".utf8), createdAt: 1)
+        }
+        for id in ["s", "other", "early", "late"] { try store.upsertSession(row(id)) }
+        try store.upsertMessages((0..<6).map { message("s", $0) } + (0..<6).map { message("other", $0) })
+        for (target, boundary) in [("early", Int64(1)), ("late", 5)] {
+            try store.upsertFork(.init(
+                targetSessionID: target, sourceSessionID: "s", sourceAgentID: "fixture",
+                sourceBoundarySequence: boundary, inheritedMessageCount: Int(boundary) + 1,
+                phase: .ready, contextDeliveryPending: false))
+        }
+        for answer in [2, 4] {
+            try store.saveTurnCaption(sessionId: "s", .init(answerIndex: answer, filesDigest: "d", caption: "c"))
+        }
+        try store.upsertComposerDraft(
+            sessionId: "s", draft: .init(segments: []), updatedAt: 1, submittedRecovery: true, submittedAfterSeq: 5)
+
+        try store.truncateMessages(sessionId: "s", fromSeq: 3)
+
+        #expect(try store.loadMessages(sessionId: "s").map(\.seq) == [0, 1, 2])
+        #expect(try store.loadMessages(sessionId: "other").count == 6)
+        #expect(try store.loadTurnCaptions(sessionId: "s").map(\.answerIndex) == [2])
+        #expect(try store.loadComposerDraftRecord(sessionId: "s")?.submittedAfterSeq == 2)
+        #expect(try store.loadFork(targetSessionID: "early")?.sourceBoundarySequence == 1)
+        #expect(try store.loadFork(targetSessionID: "late")?.sourceBoundarySequence == 2)
+    }
+
     private func previewRow() -> ACPSessionRow {
         .init(id: "preview", agentId: "fixture", title: "Preview", autoRun: false,
             createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false)
