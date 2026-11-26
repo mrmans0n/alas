@@ -256,6 +256,7 @@ private struct ACPSessionView: View {
     @State private var sideQuestionDrag: CGPoint?
     /// The `/btw` card's draft and collapse state, shared by its three docks.
     @State private var sideQuestionCardState = ACPSideQuestionCardState()
+    @State private var adapterInstallStatus: ACPSetupNudgeBanner.Status = .idle
     @State private var updateState: AdapterUpdateState?
     @State private var dismissedLatest: String?
     /// Hides the install nudge for this view only. Never persisted: without
@@ -287,6 +288,10 @@ private struct ACPSessionView: View {
 
     private var adapterUpdateKey: ACPAdapterUpdateKey {
         ACPAdapterUpdateKey(target: adapterTarget, agentID: session.agentId)
+    }
+
+    private var detectedAgentUpdateKey: ACPAdapterUpdateKey? {
+        agentUpdateOwner.map { .detectedCLI(agentID: session.agentId, owner: $0) }
     }
 
     private var adapterTargetHost: String? {
@@ -373,6 +378,15 @@ private struct ACPSessionView: View {
             // Optional and possibly slow (`brew outdated`); never gate startup
             // recovery on it.
             await refreshAdapterUpdateState()
+        }
+        .task(id: state.acpTranscriptAdapterUpdates.installedVersion(for: adapterUpdateKey)) {
+            guard state.acpTranscriptAdapterUpdates.installedVersion(for: adapterUpdateKey) != nil else { return }
+            await refreshManagedAdapterUpdateState()
+        }
+        .task(id: detectedAgentUpdateKey.flatMap { state.acpTranscriptAdapterUpdates.installedVersion(for: $0) }) {
+            guard let key = detectedAgentUpdateKey,
+                  state.acpTranscriptAdapterUpdates.installedVersion(for: key) != nil else { return }
+            await refreshDetectedAgentUpdateState()
         }
         .onExitCommand {
             handleEscape()
@@ -1512,13 +1526,11 @@ private struct ACPSessionView: View {
             case .showInstall where !isSetupNudgeDismissed:
                 if ACPManagedAdapterDescriptor.descriptor(for: session.agentId) != nil {
                     ACPSetupNudgeBanner(
-                        agentID: session.agentId,
                         agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
                         targetHost: adapterTargetHost,
-                        mode: .install,
+                        status: adapterInstallStatus,
                         onDismiss: { dismissNudge() },
-                        install: { try await installAdapter(mode: .reinstall) },
-                        onInstalled: { await reattachAfterAdapterChange() }
+                        onInstall: installMissingAdapter
                     )
                 } else if case .needsSetup(let reason) = session.setupState {
                     setupReasonBanner(reason: reason)
@@ -1534,28 +1546,24 @@ private struct ACPSessionView: View {
             case .showUpdate(let current, let latest):
                 if ACPManagedAdapterDescriptor.descriptor(for: session.agentId) != nil {
                     ACPSetupNudgeBanner(
-                        agentID: session.agentId,
                         agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
                         targetHost: adapterTargetHost,
                         mode: .update(current: current, latest: latest),
+                        status: state.acpTranscriptAdapterUpdates.status(for: adapterUpdateKey, latest: latest),
                         onDismiss: { dismissUpdate(latest: latest) },
-                        install: { try await installAdapter(mode: .update) },
-                        onInstalled: { await reattachAfterAdapterChange() }
+                        onInstall: { updateAdapter(latest: latest) }
                     )
                 }
             case .showAgentUpdate(let current, let latest):
                 if let owner = agentUpdateOwner {
                     ACPSetupNudgeBanner(
-                        agentID: session.agentId,
                         agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
                         mode: .agentUpdate(current: current, latest: latest, manager: owner.managerName),
+                        status: state.acpTranscriptAdapterUpdates.status(
+                            for: .detectedCLI(agentID: session.agentId, owner: owner), latest: latest
+                        ),
                         onDismiss: { dismissAgentUpdate(latest: latest, owner: owner) },
-                        install: {
-                            try await state.acpAdapterInstallCoordinator.updateDetectedAgent(
-                                agentID: session.agentId,
-                                owner: owner)
-                        },
-                        onInstalled: { await reattachAfterAgentUpdate(owner: owner) }
+                        onInstall: { updateAdapter(latest: latest, detectedOwner: owner) }
                     )
                 }
             default:
@@ -1604,20 +1612,7 @@ private struct ACPSessionView: View {
     }
 
     private func reattach() async {
-        guard await !state.checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: worktree) else {
-            session.lastError = AppState.checkpointRecoveryBlocksACPMessage
-            return
-        }
-        // Drop any half-attached connection state, clear the prior error,
-        // then re-run attach with the session's persisted-origin state.
-        await manager.detach(sessionId: sessionId)
-        session.lastError = nil
-        session.setupState = .checking
-        let freshlyCreated = ACPSessionAttachFreshness.isFresh(
-            restoredFromPersistence: session.restoredFromPersistence,
-            remoteSessionId: session.remoteSessionId
-        )
-        await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
+        await state.reattachACP(manager: manager, sessionId: sessionId)
     }
 
     private func launchAuth(_ method: ACPInitializeResult.ACPAuthMethod) {
@@ -1673,6 +1668,32 @@ private struct ACPSessionView: View {
             target: adapterTarget,
             agentID: session.agentId,
             mode: mode
+        )
+    }
+
+    private func installMissingAdapter() {
+        adapterInstallStatus = .installing
+        Task {
+            do {
+                try await installAdapter(mode: .reinstall)
+                adapterInstallStatus = .installed
+                await reattachAfterAdapterChange()
+                adapterInstallStatus = .idle
+            } catch {
+                adapterInstallStatus = .error(error.localizedDescription)
+            }
+        }
+    }
+
+    private func updateAdapter(latest: String, detectedOwner: ACPDetectedAgentOwner? = nil) {
+        state.startACPTranscriptAdapterUpdate(
+            target: adapterTarget,
+            agentID: session.agentId,
+            agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
+            latest: latest,
+            detectedOwner: detectedOwner,
+            manager: manager,
+            sessionId: sessionId
         )
     }
 
@@ -1737,16 +1758,6 @@ private struct ACPSessionView: View {
         await MainActor.run {
             updateState = nil
             dismissedLatest = nil
-        }
-        await reattach()
-        await refreshAdapterUpdateState()
-    }
-
-    private func reattachAfterAgentUpdate(owner: ACPDetectedAgentOwner) async {
-        await state.acpAdapterUpdateStore.clear(key: .detectedCLI(agentID: session.agentId, owner: owner))
-        await MainActor.run {
-            agentUpdateState = nil
-            agentDismissedLatest = nil
         }
         await reattach()
         await refreshAdapterUpdateState()

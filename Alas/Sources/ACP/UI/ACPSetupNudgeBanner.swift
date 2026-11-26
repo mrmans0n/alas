@@ -2,38 +2,16 @@ import SwiftUI
 
 struct ACPSetupNudgeBanner: View {
     @Environment(\.designScale) private var scale
-    let agentID: String
     let agentDisplayName: String
-    let targetHost: String?
-    let install: () async throws -> Void
-    let mode: ACPSetupNudgeMode
+    var targetHost: String? = nil
+    var mode: ACPSetupNudgeMode = .install
+    let status: Status
     let onDismiss: () -> Void
-    /// Called after a successful install. Lets the parent re-run setup
-    /// check + attach so the chat connects without a manual reload.
-    let onInstalled: () async -> Void
+    let onInstall: () -> Void
 
-    @State private var status: Status = .idle
     @Environment(\.theme) private var theme
 
     enum Status: Equatable { case idle, installing, installed, error(String) }
-
-    init(
-        agentID: String,
-        agentDisplayName: String,
-        targetHost: String? = nil,
-        mode: ACPSetupNudgeMode = .install,
-        onDismiss: @escaping () -> Void,
-        install: @escaping () async throws -> Void,
-        onInstalled: @escaping () async -> Void
-    ) {
-        self.agentID = agentID
-        self.agentDisplayName = agentDisplayName
-        self.targetHost = targetHost
-        self.mode = mode
-        self.onDismiss = onDismiss
-        self.install = install
-        self.onInstalled = onInstalled
-    }
 
     var body: some View {
         HStack(spacing: scale.space[2]) {
@@ -50,8 +28,7 @@ struct ACPSetupNudgeBanner: View {
                     .frame(width: 12, height: 12)
             }
             if showsInstallButton {
-                Button(installButtonTitle) { runInstall() }
-                    .disabled(status == .installing)
+                Button(installButtonTitle, action: onInstall)
             }
             Button { onDismiss() } label: {
                 Image(systemName: "xmark")
@@ -117,17 +94,47 @@ struct ACPSetupNudgeBanner: View {
     private var installButtonTitle: String {
         ACPSetupNudgeBannerCopy.installButtonTitle(mode: mode, errored: isErrored)
     }
+}
 
-    private func runInstall() {
-        status = .installing
-        Task {
+/// Shared by transcript tabs. The update and its result outlive any banner.
+@MainActor @Observable
+final class ACPTranscriptAdapterUpdates {
+    private struct Update {
+        let latest: String
+        let status: ACPSetupNudgeBanner.Status
+    }
+
+    private var updates: [ACPAdapterUpdateKey: Update] = [:]
+
+    func status(for key: ACPAdapterUpdateKey, latest: String) -> ACPSetupNudgeBanner.Status {
+        guard let update = updates[key] else { return .idle }
+        if update.status == .installing { return .installing }
+        return update.latest == latest ? update.status : .idle
+    }
+
+    func installedVersion(for key: ACPAdapterUpdateKey) -> String? {
+        guard let update = updates[key], update.status == .installed else { return nil }
+        return update.latest
+    }
+
+    @discardableResult
+    func start(
+        key: ACPAdapterUpdateKey,
+        latest: String,
+        install: @escaping @MainActor () async throws -> Void,
+        onInstalled: @escaping @MainActor () async -> Void
+    ) -> Task<Void, Never>? {
+        guard updates[key]?.status != .installing else { return nil }
+        updates[key] = Update(latest: latest, status: .installing)
+        return Task {
             do {
                 try await install()
-                await MainActor.run { status = .installed }
-                await onInstalled()
             } catch {
-                await MainActor.run { status = .error(error.localizedDescription) }
+                updates[key] = Update(latest: latest, status: .error(error.localizedDescription))
+                return
             }
+            updates[key] = Update(latest: latest, status: .installed)
+            await onInstalled()
         }
     }
 }
