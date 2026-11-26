@@ -89,6 +89,11 @@ in the address bar (or ⋮ › Cast, save and share › Install page as app). Th
 installed app opens even while the host is down and reconnects once it is
 back.
 
+To hear about a session that needs you while the window is in the background,
+turn on **Notify me when a session needs me** in Settings. Browsers allow
+notifications only on `localhost` or HTTPS, so a page opened over plain-http
+LAN doesn't show the setting.
+
 The browser gets no terminals until you allow it:
 
 ```bash

@@ -320,6 +320,27 @@ function classifySessionCount(session, counts) {
   else if (session.status === "streaming") counts.running += 1;
 }
 
+// Sessions that started needing you since `seenIds` (the ids that needed you
+// last time), plus the ids to remember for next time. A null `seenIds` is the
+// first list: everything is already known, so nothing is new.
+function newAttention(seenIds, sessions) {
+  const ids = new Set();
+  const fresh = [];
+  for (const session of sessions || []) {
+    if (!session || session.isActive === false || !ATTENTION_STATUSES.has(session.status)) continue;
+    ids.add(session.id);
+    if (seenIds && !seenIds.has(session.id)) fresh.push(session);
+  }
+  return { ids, fresh };
+}
+
+// What clicking a notification from host `serverId` does: open the session
+// here, switch back to that host first, or nothing once that host is gone.
+function notificationClick(doc, serverId) {
+  if (serverId === doc.activeId) return "open";
+  return doc.servers.some(s => s.id === serverId) ? "switch" : "none";
+}
+
 function attentionCounts(sessions) {
   const counts = { attention: 0, running: 0 };
   for (const session of sessions || []) classifySessionCount(session, counts);
@@ -460,6 +481,8 @@ globalThis.RemoteHubRegistry = {
   setLastOrigin,
   fallbackActiveId,
   attentionCounts,
+  newAttention,
+  notificationClick,
   peerSessionCounts,
   serverBadgeCounts,
   otherAttentionTotal,
