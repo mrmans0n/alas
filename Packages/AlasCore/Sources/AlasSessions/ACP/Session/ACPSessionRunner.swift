@@ -50,6 +50,17 @@ public final class ACPSessionRunner {
     /// Told of a `$/cancel_request` nothing pending claimed; its request may
     /// still arrive.
     private let onUnclaimedCancelRequest: ((JSONRPCID) -> Void)?
+    /// Answers `mcp/message` for the servers Alas serves over this ACP
+    /// connection. Without one, every message names an unavailable server.
+    private let mcpMessageRouter: ACPMCPMessageRouter?
+    /// `mcp/message` requests the router has not answered yet, so a
+    /// `$/cancel_request` for one reaches its server.
+    private var inFlightMCPMessageIDs: Set<JSONRPCID> = []
+    /// The MCP outcome of a `tools/call` an earlier app run started and never
+    /// answered: a tool error, so the agent checks before calling it again.
+    static let interruptedMCPToolCallOutcome = Data("""
+    {"result":{"resultType":"complete","isError":true,"content":[{"type":"text","text":"Alas restarted while this tool call was running, so its outcome is unknown. Check whether it took effect before calling it again."}]}}
+    """.utf8)
     /// Called with the id of a foreground prompt that stopped being active.
     private let onForegroundPromptEnded: ((Int) -> Void)?
     /// Called when the runner forces transcript tail-follow before recording
@@ -180,6 +191,7 @@ public final class ACPSessionRunner {
     private var cancelRequestsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
     private var terminalsTask: Task<Void, Never>?
+    private var mcpMessagesTask: Task<Void, Never>?
     /// `$/cancel_request` ids (OpenCode v2) that haven't yet matched a
     /// dequeued permission or file request. A cancellation can arrive
     /// before the request it targets — buffered broker replay, or both
@@ -417,6 +429,7 @@ public final class ACPSessionRunner {
          onUserCancel: (() -> Void)? = nil,
          onCancelRequest: ((JSONRPCID) -> Bool)? = nil,
          onUnclaimedCancelRequest: ((JSONRPCID) -> Void)? = nil,
+         mcpMessageRouter: ACPMCPMessageRouter? = nil,
          onForegroundPromptEnded: ((Int) -> Void)? = nil,
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
          onPersist: (() -> Void)? = nil,
@@ -490,6 +503,7 @@ public final class ACPSessionRunner {
         self.onUserCancel = onUserCancel
         self.onCancelRequest = onCancelRequest
         self.onUnclaimedCancelRequest = onUnclaimedCancelRequest
+        self.mcpMessageRouter = mcpMessageRouter
         self.onForegroundPromptEnded = onForegroundPromptEnded
         self.onResumeTranscriptTail = onResumeTranscriptTail
         self.onCheckpointCapture = onCheckpointCapture
@@ -764,6 +778,11 @@ public final class ACPSessionRunner {
             guard let self else { return }
             for await id in self.connection.client.cancelRequests {
                 guard self.isConnectionCurrent() else { continue }
+                if self.inFlightMCPMessageIDs.contains(id) {
+                    let router = self.mcpMessageRouter
+                    Task { await router?.cancel(requestID: id) }
+                    continue
+                }
                 if self.onCancelRequest?(id) == true { continue }
                 if self.policy.cancelRequest(id: id) { continue }
                 self.pendingCancelledRequestIDs.insert(id)
@@ -772,6 +791,41 @@ public final class ACPSessionRunner {
         }
 
         startAuthStatusListening()
+
+        mcpMessagesTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let client = self.connection.client
+            for await request in client.mcpMessageRequests {
+                guard self.isConnectionCurrent() else { continue }
+                guard let router = self.mcpMessageRouter else {
+                    client.respondToMCPMessage(id: request.id, result: .failure(.init(
+                        code: -33001, message: "MCP server registration unavailable", data: nil)))
+                    continue
+                }
+                let message = request.params
+                let persistence = self.persistence
+                let guardsToolCall = message.method == "tools/call"
+                // A store that cannot record the call does not hold it back.
+                if guardsToolCall, (try? await persistence.beginMCPToolCall(
+                    sessionId: self.sessionId, serverId: message.serverId, requestId: message.requestId
+                )) == false {
+                    client.respondToMCPMessage(id: request.id, result: .success(Self.interruptedMCPToolCallOutcome))
+                    try? await persistence.endMCPToolCall(serverId: message.serverId, requestId: message.requestId)
+                    continue
+                }
+                // Each message runs on its own: tool calls may take minutes
+                // and the agent may issue several at once.
+                self.inFlightMCPMessageIDs.insert(request.id)
+                Task { @MainActor [weak self] in
+                    let result = await router.handle(request)
+                    self?.inFlightMCPMessageIDs.remove(request.id)
+                    client.respondToMCPMessage(id: request.id, result: result)
+                    if guardsToolCall {
+                        try? await persistence.endMCPToolCall(serverId: message.serverId, requestId: message.requestId)
+                    }
+                }
+            }
+        }
 
         // Agent-spawned terminals must see the exact env the agent
         // itself was launched with — same augmented PATH (npm / cargo
@@ -2188,6 +2242,7 @@ public final class ACPSessionRunner {
         cancelRequestsTask?.cancel()
         filesTask?.cancel()
         terminalsTask?.cancel()
+        mcpMessagesTask?.cancel()
         authStatusTask?.cancel()
         // A detach/takeover can land while a permission prompt is parked.
         // userCancel() already resolves it; stop() must too, or the policy's

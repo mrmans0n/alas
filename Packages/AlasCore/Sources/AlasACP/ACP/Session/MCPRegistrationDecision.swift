@@ -86,7 +86,7 @@ public enum MCPRegistrationDecision: Sendable {
     ) -> Bool {
         guard adoptedAgentServer == .kept, !previousAttachFoundNoServer else { return false }
         switch builtInTransport {
-        case .stdio, .http:
+        case .stdio, .http, .acp:
             return true
         case .sse, nil:
             return false
@@ -103,7 +103,9 @@ public enum MCPRegistrationDecision: Sendable {
         attachedTransport: MCPTransportKind?
     ) -> MCPRegistrationEvidence {
         guard let serverTransport else { return .request }
-        return serverTransport == attachedTransport ? .serverRequest : .none
+        // An ACP-served server is the app's HTTP process behind the router.
+        let servingTransport = attachedTransport == .acp ? .http : attachedTransport
+        return serverTransport == servingTransport ? .serverRequest : .none
     }
 
     /// Whether a missing proof can become a warning once the grace elapses.

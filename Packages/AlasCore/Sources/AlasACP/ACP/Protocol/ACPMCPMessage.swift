@@ -60,22 +60,30 @@ public actor ACPMCPMessageRouter {
         let requestId: String
     }
 
-    private var backends: [String: Backend] = [:]
+    private var backends: [String: (token: UUID, backend: Backend)] = [:]
     private var active: [Active: JSONRPCID] = [:]
 
     public init() {}
 
-    public func register(serverId: String, backend: @escaping Backend) {
-        backends[serverId] = backend
+    /// Serves `serverId` with `backend` from now on, replacing any earlier
+    /// registration. Returns the token that unregisters this one.
+    @discardableResult
+    public func register(serverId: String, backend: @escaping Backend) -> UUID {
+        let token = UUID()
+        backends[serverId] = (token, backend)
+        return token
     }
 
-    public func unregister(serverId: String) {
+    /// Stops serving `serverId`, unless a later registration replaced the
+    /// one `token` names: a session's server id outlives each attach.
+    public func unregister(serverId: String, token: UUID) {
+        guard backends[serverId]?.token == token else { return }
         backends[serverId] = nil
     }
 
     public func handle(_ request: ACPMCPMessageRequest) async -> Result<Data, JSONRPCError> {
         let message = request.params
-        guard let backend = backends[message.serverId] else {
+        guard let backend = backends[message.serverId]?.backend else {
             return .failure(.init(code: -33001, message: "MCP server registration unavailable", data: nil))
         }
         let key = Active(serverId: message.serverId, requestId: message.requestId)
@@ -118,7 +126,7 @@ public actor ACPMCPMessageRouter {
     /// best effort. Its `mcp/message` still gets whatever the server answers.
     public func cancel(requestID: JSONRPCID) async {
         guard let key = active.first(where: { $0.value == requestID })?.key,
-              let backend = backends[key.serverId]
+              let backend = backends[key.serverId]?.backend
         else { return }
         let notification: ACPBrokerJSONValue = .object([
             "jsonrpc": .string("2.0"),

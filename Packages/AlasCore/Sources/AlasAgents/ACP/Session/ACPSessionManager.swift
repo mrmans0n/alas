@@ -122,6 +122,11 @@ public final class ACPSessionManager: ChangeTracking {
     /// The prepared built-in server of each session's current connection,
     /// keyed by the connection owner (attach attempt) that requested it.
     private var builtInMCPAttachments: [ACPSession.ID: (ownerID: UUID, attachment: PreparedBuiltInMCPAttachment)] = [:]
+    /// Answers `mcp/message` for the built-in servers this manager's sessions
+    /// are served over ACP. Each session's server id keeps one registration,
+    /// replaced by every attach that serves it.
+    public let mcpMessageRouter = ACPMCPMessageRouter()
+    private var acpMCPRegistrations: [ACPSession.ID: (serverId: String, token: UUID)] = [:]
     /// The built-in MCP server's last hello for a local session id, or nil
     /// without one. Read after the post-attach grace to decide between
     /// `.registered` and `.notRegistered`, and at attach to tell whether a
@@ -6651,6 +6656,10 @@ extension ACPSessionManager {
               ownerID == nil || entry.ownerID == ownerID
         else { return }
         builtInMCPAttachments.removeValue(forKey: sessionId)
+        if let registration = acpMCPRegistrations.removeValue(forKey: sessionId) {
+            let router = mcpMessageRouter
+            Task { await router.unregister(serverId: registration.serverId, token: registration.token) }
+        }
         Task { await entry.attachment.invalidate() }
     }
 
@@ -7592,7 +7601,10 @@ extension ACPSessionManager {
                     ? remoteCoordinator?.fence(sessionId: sessionId).map { .ssh(host: remoteHost, fence: $0) }
                     : nil
             } else {
-                builtInLocation = .local(adapterSupportsHTTP: initialized.mcpCapabilities.http)
+                builtInLocation = .local(
+                    adapterSupportsHTTP: initialized.mcpCapabilities.http,
+                    adapterSupportsACP: initialized.mcpCapabilities.acp
+                )
             }
             let builtInAttachment: BuiltInMCPAttachment
             if let builtInMCPProvider, let builtInLocation, !session.unattendedReview {
@@ -7621,6 +7633,13 @@ extension ACPSessionManager {
                 builtInSkippedStatus = nil
                 retireBuiltInMCPAttachment(sessionId: sessionId)
                 builtInMCPAttachments[sessionId] = (attempt.id, prepared)
+                // Registered before the session is set up: an agent may
+                // discover the server's tools before its setup call returns.
+                if case .acp(_, let serverId) = prepared.injection.server, let backend = prepared.acpBackend {
+                    acpMCPRegistrations[sessionId] = (
+                        serverId, await mcpMessageRouter.register(serverId: serverId, backend: backend)
+                    )
+                }
             case .skipped(let status):
                 builtInMCP = nil
                 builtInSkippedStatus = status
@@ -7881,6 +7900,7 @@ extension ACPSessionManager {
                                           onUnclaimedCancelRequest: { [weak elicitationCoordinator] id in
                                               elicitationCoordinator?.rememberWithdrawn(id: id)
                                           },
+                                          mcpMessageRouter: mcpMessageRouter,
                                           onForegroundPromptEnded: { [weak elicitationCoordinator] promptID in
                                               elicitationCoordinator?.foregroundPromptEnded(promptID)
                                           },

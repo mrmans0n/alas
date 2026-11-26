@@ -93,10 +93,11 @@ struct AgentsPane: View {
                         AlasToggle(on: state.bind(\.harness.acpContinueInterruptedSessions))
                     }
                     SettingsRow(name: "Alas MCP transport",
-                                desc: "How the built-in Alas MCP server is delivered. Use HTTP if your agent restricts stdio MCP servers by policy.") {
+                                desc: "How the built-in Alas MCP server is delivered. Use HTTP if your agent restricts stdio MCP servers by policy. ACP serves it over the agent's own connection, falling back to HTTP for agents that do not support that.") {
                         Picker("", selection: state.bind(\.harness.alasMCPTransport)) {
                             Text("Standard I/O (default)").tag(AlasMCPTransport.stdio)
                             Text("HTTP (localhost)").tag(AlasMCPTransport.http)
+                            Text("ACP connection").tag(AlasMCPTransport.acp)
                         }
                         .labelsHidden()
                         .pickerStyle(.menu)

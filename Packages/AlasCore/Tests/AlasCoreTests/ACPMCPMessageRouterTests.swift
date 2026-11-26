@@ -136,6 +136,17 @@ struct ACPMCPMessageRouterTests {
         #expect(try Self.object(await router.handle(Self.request("r1", id: 4)))["result"] != nil)
     }
 
+    @Test("an attach's late cleanup leaves the registration that replaced it")
+    func staleUnregisterKeepsTheReplacement() async throws {
+        let router = ACPMCPMessageRouter()
+        let first = await router.register(serverId: "alas:s1") { _ in Data() }
+        await router.register(serverId: "alas:s1") { Self.echoResult(try Self.message($0)) }
+
+        await router.unregister(serverId: "alas:s1", token: first)
+
+        #expect(try Self.object(await router.handle(Self.request("r1")))["result"] != nil)
+    }
+
     @Test("cancelling the agent's request tells the server which MCP request to stop")
     func cancelNamesTheMCPRequest() async throws {
         let server = Server(reply: Self.echoResult)

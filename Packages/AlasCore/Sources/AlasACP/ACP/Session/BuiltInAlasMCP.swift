@@ -60,7 +60,9 @@ public enum BuiltInMCPToolGroup: String, CaseIterable, Codable, Sendable {
 /// What the session manager knows when it asks for the built-in server.
 public struct BuiltInMCPAttachmentContext: Sendable {
     public enum Location: Equatable, Sendable {
-        case local(adapterSupportsHTTP: Bool)
+        /// `adapterSupportsACP`: the agent takes servers the app answers over
+        /// the ACP connection (`mcpCapabilities.acp`).
+        case local(adapterSupportsHTTP: Bool, adapterSupportsACP: Bool = false)
         /// The fence is the session's confirmed remote authority at attach.
         case ssh(host: String, fence: RemoteSessionFence)
     }
@@ -105,10 +107,14 @@ public enum BuiltInMCPAttachment {
     case skipped(MCPAttachmentServerStatus)
     case prepared(PreparedBuiltInMCPAttachment)
 
-    /// A local injection needs no resources beyond the agent's own process.
+    /// A local injection needs no resources beyond the agent's own process,
+    /// or, served over ACP, the backend that answers its messages.
     @MainActor
-    public static func local(_ injection: BuiltInAlasMCP.Injection?) -> BuiltInMCPAttachment {
-        injection.map { .prepared(PreparedBuiltInMCPAttachment(injection: $0)) } ?? .omitted
+    public static func local(
+        _ injection: BuiltInAlasMCP.Injection?,
+        acpBackend: ACPMCPMessageRouter.Backend? = nil
+    ) -> BuiltInMCPAttachment {
+        injection.map { .prepared(PreparedBuiltInMCPAttachment(injection: $0, acpBackend: acpBackend)) } ?? .omitted
     }
 }
 
@@ -117,10 +123,17 @@ public enum BuiltInMCPAttachment {
 @MainActor
 public final class PreparedBuiltInMCPAttachment {
     public let injection: BuiltInAlasMCP.Injection
+    /// Answers the agent's `mcp/message` when the injection is `.acp`.
+    public let acpBackend: ACPMCPMessageRouter.Backend?
     private var cleanup: (@Sendable () async -> Void)?
 
-    public init(injection: BuiltInAlasMCP.Injection, cleanup: (@Sendable () async -> Void)? = nil) {
+    public init(
+        injection: BuiltInAlasMCP.Injection,
+        acpBackend: ACPMCPMessageRouter.Backend? = nil,
+        cleanup: (@Sendable () async -> Void)? = nil
+    ) {
         self.injection = injection
+        self.acpBackend = acpBackend
         self.cleanup = cleanup
     }
 
@@ -186,6 +199,37 @@ public enum BuiltInAlasMCP: Sendable {
             self.toolScope = toolScope
             self.hiddenToolGroups = hiddenToolGroups
         }
+    }
+
+    public enum Delivery: Equatable, Sendable {
+        /// Agent-spawned `alas mcp`.
+        case stdio
+        /// The app's `alas mcp --http` process, which the agent connects to.
+        case http
+        /// The app's `alas mcp --http` process behind the ACP connection:
+        /// the agent sends `mcp/message` and the app forwards it.
+        case acp
+    }
+
+    /// How a local session gets the built-in server: the preferred transport
+    /// when the agent supports it, falling back from ACP to HTTP to stdio.
+    public static func delivery(
+        preference: AlasMCPTransport,
+        adapterSupportsHTTP: Bool,
+        adapterSupportsACP: Bool
+    ) -> Delivery {
+        switch preference {
+        case .acp where adapterSupportsACP: .acp
+        case .acp, .http: adapterSupportsHTTP ? .http : .stdio
+        case .stdio: .stdio
+        }
+    }
+
+    /// The registration id a session's server is served over ACP under. It
+    /// stays the same across attaches: an agent adopted from its broker keeps
+    /// the configuration it started with and goes on naming this id.
+    public static func acpServerId(sessionId: String) -> String {
+        "alas-\(sessionId)"
     }
 
     /// The stdio env entries that identify the server an agent runs.
@@ -346,7 +390,8 @@ public enum BuiltInAlasMCP: Sendable {
         deviceTools: Bool = true,
         hiddenToolGroups: Set<BuiltInMCPToolGroup> = [],
         cliBuild: String? = nil,
-        serverName: String = BuiltInAlasMCP.serverName
+        serverName: String = BuiltInAlasMCP.serverName,
+        acpServerId: String? = nil
     ) -> Injection? {
         guard shouldInject(
             enabled: enabled,
@@ -358,7 +403,11 @@ public enum BuiltInAlasMCP: Sendable {
 
         let server: ACPMCPServer
         let transport: MCPTransportKind
-        if let httpEndpoint {
+        if let acpServerId {
+            // The app answers each message itself, so the agent needs no address.
+            server = .acp(name: serverName, serverId: acpServerId)
+            transport = .acp
+        } else if let httpEndpoint {
             server = .http(
                 name: serverName,
                 url: httpEndpoint.url,
