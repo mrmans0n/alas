@@ -109,6 +109,22 @@ struct PersistenceStoreTests {
         #expect(try store.db.query("SELECT id FROM acp_v2_response_intents").isEmpty)
     }
 
+    @Test func aSessionKeepsTheFirstStartupSettingsSaved() throws {
+        let store = try ACPSessionStore(path: tmpURL().path)
+        defer { try? FileManager.default.removeItem(atPath: store.path) }
+        try store.upsertSession(.init(id: "s", agentId: "fixture", title: "s", autoRun: false,
+                                      createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        let first: [ACPInitialConfigOption] = [
+            .init(configId: "model", value: .string("sonnet")),
+            .init(configId: "fast", value: .boolean(true)),
+        ]
+
+        #expect(try store.loadInitialConfigOptions(sessionId: "s") == nil)
+        #expect(try store.saveInitialConfigOptions(sessionId: "s", first) == first)
+        #expect(try store.saveInitialConfigOptions(sessionId: "s", [.init(configId: "model", value: .string("opus"))]) == first)
+        #expect(try store.loadInitialConfigOptions(sessionId: "s") == first)
+    }
+
     @Test func truncatingMessagesTakesWhatWasStoredAgainstTheRemovedRows() throws {
         let store = try ACPSessionStore(path: tmpURL().path)
         defer { try? FileManager.default.removeItem(atPath: store.path) }

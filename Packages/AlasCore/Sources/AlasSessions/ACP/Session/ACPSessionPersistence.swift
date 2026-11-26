@@ -112,6 +112,24 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         try openedStore().loadTurnCaptions(sessionId: sessionId)
     }
 
+    public func loadInitialConfigOptions(sessionId: String) throws -> [ACPInitialConfigOption]? {
+        try openedStore().loadInitialConfigOptions(sessionId: sessionId)
+    }
+
+    /// See `ACPSessionStore.saveInitialConfigOptions`. Fenced: only the
+    /// writer starts the session, so only it records what `session/new`
+    /// sends. Nil when the lease was lost.
+    public func saveInitialConfigOptions(
+        sessionId: String,
+        _ entries: [ACPInitialConfigOption],
+        fence: ACPSessionLeaseFence?
+    ) throws -> [ACPInitialConfigOption]? {
+        let store = try openedStore()
+        let operation = { try store.saveInitialConfigOptions(sessionId: sessionId, entries) }
+        if let fence { return try store.withLeaseFence(fence, operation) }
+        return try store.db.transaction(operation)
+    }
+
     public func saveTurnCaption(sessionId: String, _ caption: StoredTurnCaption) throws {
         try openedStore().saveTurnCaption(sessionId: sessionId, caption)
     }
