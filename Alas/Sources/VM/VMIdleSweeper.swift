@@ -52,7 +52,7 @@ final class VMIdleSweeper {
             let guest = VMIdentity.parse(recordID: id).guest
             // A golden runs only for its setup, whose sealing needs a clean shutdown.
             guard guest == .macOS, !id.hasPrefix(WorktreeVMManager.goldenIDPrefix),
-                  let since = manager.runningSince(id)
+                  !manager.diskOperations.contains(id), let since = manager.runningSince(id)
             else { continue }
             let use = activity(id)
             guard VMIdlePolicy.shouldPause(
@@ -61,7 +61,7 @@ final class VMIdleSweeper {
                 starting: use.starting || manager.isStarting(id), inSetupFlow: use.inSetupFlow,
                 runningSince: since, now: now()
             ) else { continue }
-            _ = await manager.pauseVM(worktreeID: VMIdentity.parse(recordID: id).worktree, guest: guest)
+            _ = await manager.pauseVM(recordID: id)
         }
     }
 }

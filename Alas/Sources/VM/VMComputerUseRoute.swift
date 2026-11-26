@@ -17,6 +17,15 @@ enum VMComputerUseRoute: Equatable {
     /// The worktree has a macOS and a Linux VM and the call named neither.
     case ambiguous(worktreeID: String)
 
+    /// An unqualified shell call never uses the host. Unqualified computer use still can.
+    func permitsProjectBaseCreation(vmRun: Bool) -> Bool {
+        switch self {
+        case .vmMissing(.macOS): true
+        case .desktop: vmRun
+        default: false
+        }
+    }
+
     static let vmNotRunningMessage = "computer_vm_stopped: This worktree's VM isn't running. Start it from its VM tab."
     static let linuxVMNotRunningMessage =
         "computer_vm_stopped: This worktree's Linux VM isn't running. Start it from its Linux VM tab."

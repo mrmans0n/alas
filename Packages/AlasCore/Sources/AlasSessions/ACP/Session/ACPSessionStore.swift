@@ -7,7 +7,7 @@ import AlasCode
 import AlasACP
 
 public final class ACPSessionStore {
-    public static let targetSchemaVersion = 39
+    public static let targetSchemaVersion = 40
     public let path: String
     public let db: SQLiteDatabase
 
@@ -114,6 +114,7 @@ public final class ACPSessionStore {
         }
         if current < 38 { try createV2PreviewDisplaySchema() }
         if current < 39 { try createTurnCaptionsSchema() }
+        if current < 40 { try createInitialConfigOptionsSchema() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -858,6 +859,40 @@ extension ACPSessionStore {
         """)
     }
 
+    /// The `configOptions` a session's `session/new` carries, stored before
+    /// the request is sent so a replay of its startup operation key, after
+    /// a restart, sends the same payload; the broker refuses a different
+    /// one. Local to this machine like the broker, so not replicated.
+    private func createInitialConfigOptionsSchema() throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS session_initial_config_options (
+          session_id  TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+          entries     TEXT NOT NULL
+        )
+        """)
+    }
+
+    public func loadInitialConfigOptions(sessionId: String) throws -> [ACPInitialConfigOption]? {
+        guard let json = try db.query(
+            "SELECT entries FROM session_initial_config_options WHERE session_id = ?",
+            bindings: [sessionId]
+        ).first?["entries"] as? String else { return nil }
+        return try JSONDecoder().decode([ACPInitialConfigOption].self, from: Data(json.utf8))
+    }
+
+    /// Returns the entries stored for the session, which stay the first ones
+    /// saved: an earlier attempt may already have sent them.
+    public func saveInitialConfigOptions(
+        sessionId: String,
+        _ entries: [ACPInitialConfigOption]
+    ) throws -> [ACPInitialConfigOption] {
+        let json = String(decoding: try JSONEncoder().encode(entries), as: UTF8.self)
+        try db.exec(
+            "INSERT OR IGNORE INTO session_initial_config_options (session_id, entries) VALUES (?,?)",
+            bindings: [sessionId, json])
+        return try loadInitialConfigOptions(sessionId: sessionId) ?? entries
+    }
+
     public func loadTurnCaptions(sessionId: String) throws -> [StoredTurnCaption] {
         try db.query(
             "SELECT answer_seq, files_digest, caption FROM session_turn_captions WHERE session_id = ? ORDER BY answer_seq",
@@ -1512,6 +1547,30 @@ extension ACPSessionStore {
             )
         }
         return true
+    }
+
+    /// Removes the session's rows from `seq` on: the agent rewound its
+    /// conversation to before that message. The rows before it keep their
+    /// positions.
+    ///
+    /// What is stored against a removed row goes with it or moves to the last
+    /// row left: turn captions of removed answers are deleted, and a submitted
+    /// draft's `submitted_after_seq` and the `source_boundary_seq` of this
+    /// session's forks stop at the new tail. A fork keeps the rows it copied.
+    /// Does not open a transaction; callers wrap it in one.
+    public func truncateMessages(sessionId: String, fromSeq seq: Int64) throws {
+        try db.exec("DELETE FROM messages WHERE session_id = ? AND seq >= ?", bindings: [sessionId, seq])
+        try db.exec(
+            "DELETE FROM session_turn_captions WHERE session_id = ? AND answer_seq >= ?",
+            bindings: [sessionId, seq])
+        try db.exec("""
+        UPDATE composer_drafts SET submitted_after_seq = ?
+        WHERE session_id = ? AND submitted_after_seq >= ?
+        """, bindings: [seq - 1, sessionId, seq])
+        try db.exec("""
+        UPDATE session_forks SET source_boundary_seq = ?
+        WHERE source_session_id = ? AND source_boundary_seq >= ?
+        """, bindings: [seq - 1, sessionId, seq])
     }
 
     public func loadMessages(sessionId: String) throws -> [ACPStoredMessage] {

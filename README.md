@@ -225,12 +225,26 @@ without the hook; a session-open action can also be cancelled.
 
 - **`"vmForNewWorktrees": true`** in `.alas/config.json` gives every new
   worktree a macOS VM.
-- **`.alas/vm-setup.sh`** is the guest setup script. It runs inside the VM,
-  once per project, and later VMs start from its result.
+- **`.alas/vm-setup.sh`** is the guest setup script. Without a saved project
+  base, Alas can reuse the result of a successful setup for later VMs.
 
 Both are read from the project's main checkout. The project settings dialog
 starts from them; anything you change there applies only to you, and clearing
 the script falls back to the repo's again.
+
+On an Apple silicon Mac, open **Edit Project → Automation → Worktree VMs →
+Customize macOS base…** for a local Git project. Install software or change
+settings in the setup VM, then click **Save as Project Base**. Alas shuts down
+the guest before saving. New macOS VMs and **Reset from scratch** use the saved
+base without rerunning the guest setup script. Existing VMs are unchanged.
+Don't put credentials on the setup disk; new VMs inherit its files.
+
+In a macOS 26.6.2 guest, a fresh clone retained the manually approved Screen
+Recording and Accessibility grants for the same signed Alas 0.24.10 app. Check
+**Settings → Computer Use** inside the clone before relying on those grants.
+Carryover isn't guaranteed across macOS versions, app rebuilds, signing
+changes, or other apps. Grant any missing permissions in guest System Settings.
+See the [manual verification](docs/manual-test.md#project-macos-base-privacy-grants).
 
 ### PR shepherd rules
 

@@ -12,7 +12,7 @@ struct PairedMacEntry: Identifiable, Equatable {
     var id: String { serverId ?? devices.first?.id ?? "" }
     var serverId: String? { peer?.serverId ?? devices.lazy.compactMap(\.peerServerId).first }
     var name: String { peer?.name ?? devices.first?.name ?? "" }
-    var icon: PeerIcon { peer?.icon ?? .laptop }
+    var icon: PeerIcon { peer?.displayIcon ?? .laptop }
     /// Whether this Mac dials it and it dials this Mac.
     var isPairedBothWays: Bool { peer.map { !$0.isInboundOnly } == true && !devices.isEmpty }
     var lastSeenAt: Date? { devices.compactMap(\.lastSeenAt).max() }

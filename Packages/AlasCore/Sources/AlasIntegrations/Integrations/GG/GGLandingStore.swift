@@ -38,14 +38,16 @@ public struct GGLandingSession: Equatable, Identifiable, Sendable {
         public let base: String
         public let target: String
         public var rows: [GGLandingRow]
+        public let autoMerge: Bool
 
-        public init(projectId: String, worktreeId: String, stack: String, base: String, target: String, rows: [GGLandingRow]) {
+        public init(projectId: String, worktreeId: String, stack: String, base: String, target: String, rows: [GGLandingRow], autoMerge: Bool = false) {
             self.projectId = projectId
             self.worktreeId = worktreeId
             self.stack = stack
             self.base = base
             self.target = target
             self.rows = rows
+            self.autoMerge = autoMerge
         }
     }
 

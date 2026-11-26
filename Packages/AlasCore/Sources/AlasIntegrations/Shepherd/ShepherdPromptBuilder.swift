@@ -197,7 +197,7 @@ public enum ShepherdPromptBuilder {
             "Run the tests your repository instructions require for the files you touch.",
             "If a check failure is unrelated to your change and the log shows a flake or infrastructure error, rerun it with \(cli) and say why.",
             "A cancelled check usually needs a rerun with \(cli), not a code change.",
-            "Reply on threads you decline. Resolve threads you fixed.",
+            "Reply on threads you decline. Resolve a thread only after confirming its fix is on the remote. A ship still in progress is not confirmation.",
             "If you can't make progress, say so plainly. Alas will notify the user.",
         ]
     }

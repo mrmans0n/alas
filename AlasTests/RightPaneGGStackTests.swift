@@ -265,6 +265,75 @@ private final class NDJSONSyncFakeGGRunner: GGCommandRunning, @unchecked Sendabl
     }
 }
 
+private actor SyncAndLandRunner: GGCommandRunning {
+    enum Scenario: CaseIterable, Sendable {
+        case syncOnly, confirm, dismiss, failed, cancelled, switchedWorktree, changedStack, draft, incomplete
+        case reconciledJSON, reconciledJSONL, staleSHA, changedMR, missingReceipt
+
+        var rewritesHead: Bool { self == .reconciledJSON || self == .reconciledJSONL || self == .staleSHA }
+    }
+
+    let scenario: Scenario
+    let head: String
+    private var rewrittenHead: String?
+    let baseSHA: String
+    private(set) var calls: [[String]] = []
+
+    init(_ scenario: Scenario, head: String, baseSHA: String) {
+        self.scenario = scenario
+        self.head = head
+        self.baseSHA = baseSHA
+    }
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        calls.append(args)
+        if args.first == "sync" {
+            if scenario == .cancelled { throw CancellationError() }
+            if scenario.rewritesHead, let cwd {
+                // Only the disposable test worktree changes. GG assigned an ID
+                // to the surviving entry and rewrote its commit message.
+                _ = try await Process.git(["commit", "--amend", "-q", "-m", "Feature", "-m", "GG-ID: abc123"], cwd: cwd)
+                rewrittenHead = try await GitService().revParseHEAD(worktreePath: cwd)
+            }
+            let publishedSHA = scenario == .staleSHA ? head : rewrittenHead ?? head
+            let entries: String
+            switch scenario {
+            case .failed: entries = #"[{"position":1,"error":"push failed"}]"#
+            case .missingReceipt: entries = "[]"
+            default:
+                entries = #"[{"position":1,"sha":"\#(publishedSHA.prefix(7))","gg_id":"abc123","action":"created","pr_number":21}]"#
+            }
+            let summary = #""stack":"stack","base":"main","entries":\#(entries)"#
+            let output = args.contains("--jsonl")
+                ? #"{"version":1,"command":"sync","status":"ok","event":"summary",\#(summary)}"#
+                : #"{"version":1,"sync":{\#(summary)}}"#
+            return ProcessResult(exitCode: 0, stdout: output, stderr: "")
+        }
+        if args.first == "ls" {
+            let published = calls.contains { $0.first == "sync" }
+            let withLandedPrefix = !published && scenario.rewritesHead
+            let prefix = withLandedPrefix
+                ? #"{"position":1,"title":"Landed","sha":"\#(baseSHA.prefix(12))","gg_id":"base-id","pr_number":20,"pr_state":"merged"},"#
+                : ""
+            let id = published && scenario == .changedStack ? "other" : "abc123"
+            let idField = withLandedPrefix ? "" : #","gg_id":"\#(id)""#
+            let state = scenario == .draft ? "draft" : "open"
+            let number = scenario == .incomplete ? "null" : scenario == .changedMR ? "22" : "21"
+            let mr = published ? #","pr_number":\#(number),"pr_state":"\#(state)""# : ""
+            return ProcessResult(exitCode: 0, stdout: """
+            {"version":1,"stack":{"name":"stack","base":"main","total_commits":\(withLandedPrefix ? 2 : 1),"synced_commits":\(published || withLandedPrefix ? 1 : 0),"entries":[\(prefix){"position":\(withLandedPrefix ? 2 : 1),"sha":"\((rewrittenHead ?? head).prefix(12))","title":"Feature"\(idField)\(mr)}]}}
+            """, stderr: "")
+        }
+        if args.contains("land") {
+            return ProcessResult(exitCode: 0, stdout: """
+            {"version":1,"command":"land","status":"ok","event":"start","stack":"stack","base":"main","total_entries":1}
+            {"version":1,"command":"land","status":"ok","event":"summary","stack":"stack","base":"main","landed":[{"position":1,"pr_number":21,"action":"queued"}],"remaining":1,"cleaned":false,"warnings":[],"error":null}
+            """, stderr: "")
+        }
+        return ProcessResult(exitCode: 1, stdout: "", stderr: "Unexpected command: \(args)")
+    }
+}
+
 private final class ReentrantSyncFakeGGRunner: GGCommandRunning, @unchecked Sendable {
     private(set) var syncCallCount = 0
     private let suspendSync: Bool
@@ -694,6 +763,76 @@ struct RightPaneGGStackErrorPresentationTests {
 
 @MainActor
 struct RightPaneGGStackTests {
+    @Test(arguments: SyncAndLandRunner.Scenario.allCases)
+    fileprivate func syncAndLandRequiresAnExplicitSuccessfulSyncInTheSameWorktree(
+        _ scenario: SyncAndLandRunner.Scenario
+    ) async throws {
+        let (repo, root) = try await createSyncedStackRepoWithUpstream()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try await Process.git(["config", "protocol.https.allow", "never"], cwd: repo)
+        _ = try await Process.git(["remote", "set-url", "origin", "https://gitlab.invalid/team/project.git"], cwd: repo)
+        let worktree = makeWorktree(path: repo)
+        let head = try await GitService().revParseHEAD(worktreePath: repo)
+        let baseSHA = try await GitService().resolveRevision(at: repo, ref: "main")
+        let runner = SyncAndLandRunner(scenario, head: head, baseSHA: baseSHA)
+        let state = await makeMutationReadyState(worktree: worktree, reviewLoop: ReviewLoopState(
+            worktreePath: repo, baseBranch: "main", providerRegistry: .init(providers: [:])
+        ))
+        var capabilities = GGCapabilities(structuredSplit: false, keepCurrentUnstack: false, clientOperationID: true, landJSONL: true)
+        capabilities.landAutoMerge = true
+        capabilities.syncJSONL = scenario == .reconciledJSONL
+        state.ggCapabilities = { capabilities }
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
+        await state.refresh()
+        await state.ggStackRefreshTask?.value
+        try #require(state.canSyncAndLand)
+
+        if scenario == .syncOnly {
+            let sync = try #require(state.runGGMutation(.sync))
+            await sync.value
+        } else {
+            var firstSelectionCheck = true
+            await state.syncAndRequestGGLand {
+                defer { firstSelectionCheck = false }
+                return firstSelectionCheck || scenario != .switchedWorktree
+            }
+        }
+        let calls = await runner.calls
+        #expect(calls.contains { $0.first == "sync" })
+        #expect(!calls.contains { $0.contains("land") })
+        if scenario == .confirm || scenario == .dismiss || scenario == .reconciledJSON || scenario == .reconciledJSONL {
+            let currentHead = try await GitService().revParseHEAD(worktreePath: repo)
+            if scenario.rewritesHead {
+                #expect(head != currentHead)
+                #expect(state.pendingGGSyncLandTarget?.identity.expectedHeadSHA == currentHead)
+            }
+            #expect(calls.contains(["ls", "--json", "--refresh"]))
+            #expect(state.pendingGGLandPrepared?.request == .land(target: "abc123", autoMerge: true))
+            #expect(state.pendingGGLandPrepared?.expectedFullMembers == [.init(id: "abc123", sha: currentHead, position: 1, number: 21)])
+            #expect(state.pendingGGLandConfirmationMessage?.contains("!21 Feature") == true)
+            if scenario == .dismiss {
+                state.cancelGGLand()
+            } else {
+                let app = AppState(store: MemoryStore())
+                app.selectedWorktreeId = worktree.id
+                state.performGGLand(appState: app)
+                for _ in 0..<500 where state.ggLandingStore.sessions[worktree.projectId]?.phase == .running {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                await state.ggLandingStore.waitForOperation(projectId: worktree.projectId)
+                let session = try #require(state.ggLandingStore.sessions[worktree.projectId])
+                #expect(session.phase == .succeeded, "\(session.error ?? "")")
+                #expect(session.rows.first?.outcome?.action == "queued")
+                let args = try #require(await runner.calls.first { $0.contains("land") })
+                #expect(args.contains("--auto-merge"))
+                #expect(args.contains("--until") && args.contains("abc123"))
+            }
+        }
+        #expect(state.pendingGGLand == nil)
+        #expect(state.pendingGGLandPrepared == nil)
+    }
+
     @Test func commitPublishSyncThrowsAndPublishesFailureOnce() async throws {
         let state = await makeMutationReadyState()
         let runner = ThrowingFakeGGRunner()
@@ -788,13 +927,16 @@ struct RightPaneGGStackTests {
 
     private func makeMutationReadyState(
         worktree: Worktree? = nil,
-        syncJSONL: Bool = false
+        syncJSONL: Bool = false,
+        reviewLoop: ReviewLoopState? = nil
     ) async -> RightPaneState {
         let worktree = worktree ?? makeWorktree()
         let state = RightPaneState(
             worktree: worktree,
             baseBranch: "main",
-            checkpointService: NoopCheckpointService()
+            ggLandingStore: GGLandingStore(),
+            checkpointService: NoopCheckpointService(),
+            reviewLoop: reviewLoop
         )
         state.checkpointTargetProvider = {
             CheckpointWorktreeTarget(

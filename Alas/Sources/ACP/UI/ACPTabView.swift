@@ -983,6 +983,12 @@ private struct ACPSessionView: View {
                     }
                 }
             },
+            editMessageItem: { [manager, session] messageID in
+                guard manager.canRewind(sessionID: sessionId, beforeUserMessage: messageID) else { return nil }
+                return ACPMessageMenuItem(title: "Edit message…", icon: "pencil") { text in
+                    ACPMessageEdit.confirmAndRewind(manager: manager, session: session, messageID: messageID, text: text)
+                }
+            },
             // Nil in a mirror so the row never draws a Cancel the reader
             // cannot use. The closure ALSO re-reads `isMirror` when it
             // fires, for the same reason the queue callbacks above do: a

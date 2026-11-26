@@ -27,7 +27,7 @@ public enum StackShepherdPromptBuilder {
     }
 
     /// One turn for every entry in `fixes`, bottom-up, and for the `landed`
-    /// entries gg still lists, which `stack_ship` rebases away. `logs` holds
+    /// entries gg still lists, which `stack_ship` reconciles. `logs` holds
     /// the failing-check logs by request number.
     public static func fixPrompt(
         record: StackShepherdRecord,
@@ -112,7 +112,7 @@ public enum StackShepherdPromptBuilder {
             \(fence)
             \(result)
             \(fence)
-            Fix what it says, then call stack_ship again.
+            Retry stack_ship only after the blocker clears. Do not cancel a queued merge to make the push succeed.
             """
             : """
             \(header)\(stack)
@@ -193,7 +193,7 @@ public enum StackShepherdPromptBuilder {
     }
 
     /// Landing an entry merges its request but leaves its commit in the
-    /// local stack; `stack_ship` rebases it away before it syncs.
+    /// local stack; `stack_ship` reconciles it with the fetched base.
     private static func landedSection(_ record: StackShepherdRecord, landed: [StackShepherdEntry], alsoFixing: Bool) -> String {
         let kind = record.remote.kind
         let lines = landed.map { "- Entry \($0.position) · \(reference($0, kind: kind)) \"\($0.title)\"" }
@@ -201,8 +201,7 @@ public enum StackShepherdPromptBuilder {
         let requests = kind == .gitlab ? "merge requests" : "pull requests"
         return (["# Landed on \(record.base)"] + lines + [
             "These merged, but this worktree's stack still holds their commits. \(when) from the top of the stack (`gg last`): "
-                + "it rebases the stack onto the latest \(record.base), which drops what landed, then publishes the remaining entries with gg sync and retargets their \(requests). "
-                + "Don't run gg sync yourself first: before the rebase it would push the landed commits again. "
+                + "it drops the landed entries and retargets the remaining \(requests). Let stack_ship decide whether the remaining branches need a rebase. "
                 + "If the rebase stops on a conflict, resolve it, run `gg continue`, and call stack_ship again.",
         ]).joined(separator: "\n")
     }

@@ -246,6 +246,7 @@ struct ACPContextBreakdownView: View {
     static let width: CGFloat = 460
     private static let columns = 10
     private static let squareSize: CGFloat = 11
+    private static let squareSpacing: CGFloat = 2
     private static let maxDetailRows = 12
     /// Theme tokens for `used` categories, by their order in the breakdown.
     /// The adapter sends no stable category id, and its color names are
@@ -257,16 +258,10 @@ struct ACPContextBreakdownView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space[2]) {
             if isCompact {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: scale.space[3]) {
-                        grid
-                        legend
-                    }
-                    VStack(alignment: .leading, spacing: scale.space[2]) {
-                        grid
-                        legend
-                    }
-                }
+                // The card's column is narrow: stack, and let the grid and
+                // legend take its full width.
+                grid
+                legend
             } else {
                 HStack(alignment: .top, spacing: scale.space[3]) {
                     grid
@@ -276,6 +271,7 @@ struct ACPContextBreakdownView: View {
             details
         }
         .frame(width: isCompact ? nil : Self.width, alignment: .leading)
+        .frame(maxWidth: isCompact ? .infinity : nil, alignment: .leading)
     }
 
     // MARK: Grid
@@ -284,16 +280,24 @@ struct ACPContextBreakdownView: View {
     private var grid: some View {
         let cells = breakdown.gridCells(squares: Self.columns * Self.columns)
         if cells.count == Self.columns * Self.columns {
-            Grid(horizontalSpacing: 2, verticalSpacing: 2) {
-                ForEach(0..<Self.columns, id: \.self) { row in
-                    GridRow {
-                        ForEach(0..<Self.columns, id: \.self) { column in
-                            square(cells[row * Self.columns + column])
-                        }
-                    }
+            let column = isCompact
+                ? GridItem(.flexible(), spacing: Self.squareSpacing)
+                : GridItem(.fixed(Self.squareSize), spacing: Self.squareSpacing)
+            LazyVGrid(
+                columns: Array(repeating: column, count: Self.columns),
+                alignment: .leading,
+                spacing: Self.squareSpacing
+            ) {
+                ForEach(cells.indices, id: \.self) { index in
+                    square(cells[index])
                 }
             }
+            .frame(width: isCompact ? nil : Self.gridWidth)
         }
+    }
+
+    private static var gridWidth: CGFloat {
+        squareSize * CGFloat(columns) + squareSpacing * CGFloat(columns - 1)
     }
 
     private func square(_ cell: ACPContextBreakdown.GridCell) -> some View {
@@ -301,17 +305,18 @@ struct ACPContextBreakdownView: View {
         let fill = fillColor(category: cell.category)
         return shape
             .fill(theme.color("bg-4").opacity(0.35))
-            .overlay(alignment: .bottom) {
+            .overlay {
                 if let fill {
                     // A sliver under a quarter square is hard to see.
-                    Rectangle().fill(fill).frame(height: Self.squareSize * max(cell.fullness, 0.25))
+                    Rectangle().fill(fill)
+                        .scaleEffect(x: 1, y: max(cell.fullness, 0.25), anchor: .bottom)
                 }
             }
             .overlay {
                 if fill == nil { shape.strokeBorder(theme.color("bg-5"), lineWidth: 1) }
             }
             .clipShape(shape)
-            .frame(width: Self.squareSize, height: Self.squareSize)
+            .aspectRatio(1, contentMode: .fit)
     }
 
     /// Nil draws an outlined free square.
@@ -340,6 +345,7 @@ struct ACPContextBreakdownView: View {
                             .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg"))
                             .lineLimit(1)
+                            .frame(maxWidth: isCompact ? .infinity : nil, alignment: .leading)
                         tokenText(category.tokens)
                             .gridColumnAlignment(.trailing)
                         Text(percentText(category.tokens))

@@ -121,6 +121,9 @@ public final class RemotePeerManager {
     /// The release each online peer that is a headless host said it runs,
     /// by `serverId`, from its `hello`.
     public private(set) var hostVersions: [String: String] = [:]
+    /// The latest ping round trip to each online peer, by `serverId`. Absent
+    /// until the first ping comes back.
+    public private(set) var roundTrips: [String: Duration] = [:]
 
     private let store: RemotePeerStore
     private let pairing: RemotePairingService
@@ -298,6 +301,7 @@ public final class RemotePeerManager {
                  token: peer.token,
                  expectedServerId: peer.serverId,
                  expectedPublicKey: peer.publicKey,
+                 config: .init(pingInterval: 10),
                  onEvent: onEvent)
          },
          now: @escaping () -> Date = { Date() }) {
@@ -1029,6 +1033,16 @@ public final class RemotePeerManager {
         savePeers()
     }
 
+    /// Sets the icon this Mac shows for `peerId`, or clears it back to the
+    /// one the peer advertises, and tells the sidebar and this Mac's clients.
+    public func setIconOverride(_ icon: PeerIcon?, peerId: String) {
+        guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
+        peers[index].iconOverride = icon
+        durableStateByServerId[peers[index].serverId] = peers[index]
+        savePeers()
+        onFederationEvent?(.availabilityChanged(serverId: peers[index].serverId))
+    }
+
     /// The peers as `alas-host peers list` shows them.
     public var summaries: [HostPeerSummary] {
         peers.map { peer in
@@ -1329,6 +1343,7 @@ public final class RemotePeerManager {
         for connection in connections.values { connection.disconnect() }
         connections = [:]
         states = [:]
+        roundTrips = [:]
         for peer in peers {
             onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
             onLinkChanged?(peer.id)
@@ -1359,6 +1374,7 @@ public final class RemotePeerManager {
             let wasUnauthorized = states[peerId] == .unauthorized
             states[peerId] = state
             if let peer = peers.first(where: { $0.id == peerId }) {
+                if state != .online { roundTrips[peer.serverId] = nil }
                 // A token still being tried out says nothing about the pairing:
                 // a failed re-pair revokes it and restores the confirmed one.
                 if state == .unauthorized, !wasUnauthorized,
@@ -1394,6 +1410,9 @@ public final class RemotePeerManager {
             // origin again over the one this connection just proved works.
             durableStateByServerId[peers[index].serverId] = peers[index]
             savePeers()
+        case .roundTrip(let duration):
+            guard let peer = peers.first(where: { $0.id == peerId }) else { return }
+            roundTrips[peer.serverId] = duration
         case .message(let message):
             // Nothing may be consumed for a peer whose record is not bound
             // to verified key material: an unverified record is only as
@@ -1588,7 +1607,7 @@ extension RemotePeerManager: FederatedPeerLinks {
     /// An inbound-only record is left out: this Mac can never reach that peer.
     public var helloPeers: [RemoteHelloPeer] {
         peers.filter { !$0.isInboundOnly }.map { peer in
-            RemoteHelloPeer(serverId: peer.serverId, name: peer.name, state: helloState(for: peer), icon: peer.icon)
+            RemoteHelloPeer(serverId: peer.serverId, name: peer.name, state: helloState(for: peer), icon: peer.displayIcon)
         }
     }
 

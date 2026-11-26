@@ -140,26 +140,30 @@ struct GGAvailabilityTests {
         #expect(!(await old.probeCapabilities()).stagedOnlyAmend)
     }
 
-    @Test func syncJSONLCapabilityUsesSyncHelpAndDefaultsOff() async {
+    @Test func syncCapabilitiesUseSyncHelpIndependentlyOfLand() async {
         let current = GGService(runner: HelpGGRunner(
-            split: "", unstack: "", sync: "--json --jsonl"
+            split: "", unstack: "", sync: "--json --jsonl --rebase-if-needed"
         ))
-        #expect((await current.probeCapabilities()).syncJSONL)
+        let supported = await current.probeCapabilities()
+        #expect(supported.syncJSONL && supported.syncRebaseIfNeeded)
 
         let old = GGService(runner: HelpGGRunner(
-            split: "", unstack: "", sync: "--json"
+            split: "", unstack: "", sync: "--json", land: "--rebase-if-needed"
         ))
-        #expect(!(await old.probeCapabilities()).syncJSONL)
+        let legacy = await old.probeCapabilities()
+        #expect(!legacy.syncJSONL && !legacy.syncRebaseIfNeeded)
     }
 
     @Test func landCapabilitiesUseLandHelpAndDefaultOff() async {
         let current = GGService(runner: HelpGGRunner(
-            split: "", unstack: "", land: "--json --jsonl --rebase-if-needed"
+            split: "", unstack: "", land: "--json --jsonl --rebase-if-needed --auto-merge"
         ))
         let probed = await current.probeCapabilities()
         #expect(probed.landJSONL && probed.landRebaseIfNeeded)
+        #expect(probed.landAutoMerge)
         let old = await GGService(runner: HelpGGRunner(split: "", unstack: "", land: "--json --jsonl")).probeCapabilities()
         #expect(!old.landRebaseIfNeeded)
+        #expect(!old.landAutoMerge)
         #expect(!GGCapabilities(structuredSplit: false, keepCurrentUnstack: false).landJSONL)
     }
 

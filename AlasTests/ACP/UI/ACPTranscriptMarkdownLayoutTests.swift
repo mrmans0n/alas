@@ -74,7 +74,7 @@ import Testing
     }
 
     /// A native row must be as tall as the SwiftUI row it replaces when a message
-    /// finishes, with prose held to the reading column and code and tables past it.
+    /// finishes, with prose and alerts held to the reading column and code and tables past it.
     /// Every width at the default size; 12 and 15pt, where line heights round
     /// differently, at a narrow and a wide one.
     @Test(arguments: [UIDensity.comfortable, .compact], [
@@ -90,6 +90,11 @@ import Testing
         A paragraph long enough to wrap onto more than one line at every width in this test, \
         which it does by going on for rather longer than any sensible first sentence would, \
         and then carrying on for a while after that so that even the widest column has to wrap.
+
+        > [!WARNING]
+        > An alert whose body wraps at the narrower widths, because it also goes on for longer than a single line of the reading column holds, with a `code span` in it.
+
+        > [!TIP]
 
         ```swift
         \(wideLine)
@@ -139,6 +144,25 @@ import Testing
         host.frame.size = host.fittingSize
         host.layoutSubtreeIfNeeded() // the SwiftUI table reads its viewport width on the next pass
         #expect(abs(measured - host.fittingSize.height) <= 1, "native \(measured), SwiftUI \(host.fittingSize.height)")
+    }
+
+    /// Quotes and alerts break at the same width in both renderers, so a finished message never
+    /// rewraps. Swept across widths because a mismatch only shows where a line ends near the edge.
+    @Test(arguments: [UIDensity.comfortable, .compact], [
+        "> A quote long enough to wrap, whose last words land near the edge at some of the widths swept here.",
+        "> [!NOTE]\n> An alert long enough to wrap, whose last words land near the edge at some of the widths swept here.",
+    ])
+    func quotesAndAlertsWrapAsTheSwiftUIBlocksDo(density: UIDensity, source: String) throws {
+        let scale = DesignScale.resolved(for: density)
+        let typography = ACPChatTypography(fontFamily: "", fontSize: 13, density: density)
+        for width in stride(from: CGFloat(300), to: 700, by: 3) {
+            let layout = try #require(ACPTranscriptMarkdownLayout.make(
+                source: source, width: width, theme: theme, typography: typography, scale: scale
+            ))
+            let host = NSHostingView(rootView: ACPMarkdownText(raw: source, typography: typography)
+                .environment(\.theme, theme).environment(\.designScale, scale).frame(width: width))
+            #expect(abs(layout.height - host.fittingSize.height) <= 1, "at \(width): native \(layout.height), SwiftUI \(host.fittingSize.height)")
+        }
     }
 
     @Test(arguments: [

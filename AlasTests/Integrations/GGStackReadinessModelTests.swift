@@ -101,6 +101,16 @@ struct GGStackReadinessModelTests {
         #expect(model.primaryActions[0].title == "Rebase onto main")
     }
 
+    @Test func aMergeCommitAheadOfTheStackDoesNotRequireRebasingToPublish() {
+        let model = GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .merged), entry(position: 2, prState: .open)], synced: 2, behind: 1),
+            action: GGStackActionState(),
+            syncRebaseIfNeeded: true
+        )
+        #expect(model.primaryActions.map(\.kind) == [.sync])
+        #expect(model.overflowActions.contains { $0.kind == .rebase })
+    }
+
     @Test func belowThresholdKeepsSyncPrimary() {
         let model = GGStackReadinessModel.make(
             stack: stack([entry(position: 1, prState: nil)], behind: 1),

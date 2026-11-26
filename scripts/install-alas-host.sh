@@ -85,9 +85,13 @@ case ":$PATH:" in
 esac
 # A new host serves nobody until Remote is reachable; settings it already
 # has are left alone.
-if [ "$("$root/alas-host/alas-host" config get host.reachability 2>/dev/null)" = off ]; then
+reachability="$("$root/alas-host/alas-host" config get host.reachability 2>/dev/null)"
+if [ "$reachability" = off ]; then
   echo "Done. Remote is off: run '$host setup' to choose how your Mac reaches this server and pair it,"
   echo "or '$host config set host.reachability tailscale --restart' (or lan), then '$host pair'."
+  echo "To use Alas in a browser on this machine, set it to loopback instead and open the link '$host pair' prints."
+elif [ "$reachability" = loopback ]; then
+  echo "Done. Run '$host pair' and open the link it prints in a browser on this machine."
 else
   echo "Done. Run '$host pair' for a link to pair this server from Alas on your Mac."
 fi

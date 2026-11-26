@@ -51,7 +51,7 @@
 # agent-badge-popovers shows a gallery of the sidebar agent badge hover card for scripted sessions
 # next to worktree-row badge strips (DesignCaptureAgentBadges); no session or harness is read.
 # devices, devices-empty, devices-settings and devices-switcher show galleries of Devices tab states over scripted devices
-# (DesignCaptureDevices); run-report, web-preview, computer-use-badge and space-pager (ALAS_CAPTURE_CENTER)
+# (DesignCaptureDevices); run-report, web-preview, computer-use-badge, space-pager and pager-peer-cards (ALAS_CAPTURE_CENTER)
 # and run-script-help, new-run-script and repo-hook-approval (ALAS_CAPTURE_DIALOG) show the remaining
 # small views over scripted state (DesignCaptureLeftovers). No simulator, VM, model or hook is touched.
 # ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes

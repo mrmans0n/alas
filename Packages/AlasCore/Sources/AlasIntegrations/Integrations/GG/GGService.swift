@@ -511,7 +511,9 @@ public struct GGService: Sendable {
             syncUntilDraft: sync?.exitCode == 0
                 && sync?.stdout.contains("--until") == true
                 && sync?.stdout.contains("--draft") == true,
+            syncRebaseIfNeeded: sync?.exitCode == 0 && sync?.stdout.contains("--rebase-if-needed") == true,
             landJSONL: land?.exitCode == 0 && land?.stdout.contains("--jsonl") == true,
+            landAutoMerge: land?.exitCode == 0 && land?.stdout.contains("--auto-merge") == true,
             landRebaseIfNeeded: land?.exitCode == 0 && land?.stdout.contains("--rebase-if-needed") == true,
             localStackSnapshot: ls?.exitCode == 0
                 && ls?.stdout.contains("--no-refresh") == true
@@ -679,10 +681,13 @@ public struct GGService: Sendable {
         worktreePath: String,
         supportsJSONL: Bool,
         until: String? = nil,
-        draft: Bool = false
+        draft: Bool = false,
+        rebaseIfNeeded: Bool = false
     ) -> AsyncThrowingStream<GGSyncEvent, Error> {
-        let scope = (until.map { ["--until", $0] } ?? []) + (draft ? ["--draft"] : [])
-        return AsyncThrowingStream { continuation in
+        var scope = until.map { ["--until", $0] } ?? []
+        if draft { scope.append("--draft") }
+        if rebaseIfNeeded { scope.append("--rebase-if-needed") }
+        return AsyncThrowingStream { [scope] continuation in
             Task {
                 do {
                     if supportsJSONL {
@@ -763,9 +768,10 @@ public struct GGService: Sendable {
 
     /// Lands ready entries (bottom-up). `until` lands up to a target
     /// (position/GG-ID/SHA); nil lands all currently-approved entries.
-    public func land(worktreePath: String, until: String?, strategy: GGLandMergeStrategy = .squashAndRebase) async throws -> GGLandResult {
+    public func land(worktreePath: String, until: String?, strategy: GGLandMergeStrategy = .squashAndRebase, autoMerge: Bool = false) async throws -> GGLandResult {
         let scope = until.map { ["--until", $0] } ?? ["--all"]
-        let args = ["land"] + scope + ["--json", "--no-clean"] + strategy.landArguments
+        var args = ["land"] + scope + ["--json", "--no-clean"] + strategy.landArguments
+        if autoMerge { args.append("--auto-merge") }
         let result = try await runChecked(args: args, worktreePath: worktreePath)
         do {
             return try GGLandResult.decode(fromJSON: Data(result.stdout.utf8))
@@ -778,14 +784,14 @@ public struct GGService: Sendable {
         // decode) and anything else still propagate.
     }
 
-    public func landStream(worktreePath: String, until: String, strategy: GGLandMergeStrategy = .squashAndRebase) -> GGLandStream {
+    public func landStream(worktreePath: String, until: String, strategy: GGLandMergeStrategy = .squashAndRebase, autoMerge: Bool = false) -> GGLandStream {
         let interruption = GGStreamingCancellation()
         let events = AsyncThrowingStream { continuation in
             let producer = Task {
                 var validator = GGLandStreamValidator()
                 do {
                     for try await line in runner.runStreaming(
-                        args: ["land", "--until", until, "--wait", "--jsonl", "--no-clean"] + strategy.landArguments,
+                        args: ["land", "--until", until, "--wait", "--jsonl", "--no-clean"] + strategy.landArguments + (autoMerge ? ["--auto-merge"] : []),
                         cwd: URL(fileURLWithPath: worktreePath),
                         timeout: nil,
                         interruption: interruption

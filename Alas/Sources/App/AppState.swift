@@ -2238,10 +2238,10 @@ final class AppState {
         }
         vmManager.onVMStarted = { [weak self] recordID in self?.vmStarted(recordID: recordID) }
         vmManager.isRunningSetup = { [weak self] recordID in self?.vmSetupScriptsRunning.contains(recordID) ?? false }
-        vmManager.templateOwner = { [weak self] worktreeID in
+        vmManager.projectVMOwner = { [weak self] worktreeID in
             guard let self, let project = projectAndWorktree(withWorktreeId: worktreeID)?.project,
-                  let hash = VMCleanPoint.scriptHash(effectiveVMGuestSetupScript(for: project)) else { return nil }
-            return (project.id, hash)
+                  project.host == nil, !project.isFolder else { return nil }
+            return (project.id, VMCleanPoint.scriptHash(effectiveVMGuestSetupScript(for: project)))
         }
         // The test host shares the user's VM root, and an unreadable projects.json reads as no
         // projects: neither may delete templates.
@@ -2253,7 +2253,15 @@ final class AppState {
         vmManager.now = { [weak self] in self?.vmNow() ?? Date() }
         vmIdleSweeper.start(interval: vmIdleSweepInterval)
         AlasTerminationCoordinator.shared.confirm = { [weak self] in
-            await self?.confirmDiscardingUnsavedHostFiles(reason: "Quitting discards edits not saved to the host.") ?? true
+            guard let self else { return true }
+            guard await confirmDiscardingUnsavedHostFiles(reason: "Quitting discards edits not saved to the host.") else { return false }
+            do {
+                try await vmManager.prepareProjectDraftsForQuit()
+                return true
+            } catch {
+                showFileActionError(title: "Couldn't Quit Alas", message: error.localizedDescription)
+                return false
+            }
         }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await self?.shutdownLocalTextFeatures()
@@ -3326,6 +3334,12 @@ final class AppState {
     }
 
     var projects: [ProjectConfig] { projectsManager.projects }
+
+    /// Both this window's projects and the latest saved list protect project-owned VM data.
+    func liveProjectIDsForVMStorage() throws -> Set<String>? {
+        guard let saved = try store.readIfExists(ProjectsFile.self, from: Paths.projectsFile) else { return nil }
+        return Set(projects.map(\.id)).union(saved.projects.map(\.id))
+    }
 
     var activeSpaceProjects: [ProjectConfig] {
         spacesManager.activeProjects(from: projects)

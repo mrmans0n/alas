@@ -61,6 +61,7 @@ public protocol GGMutationExecuting {
         worktreePath: String,
         clientOperationID: String?,
         supportsSyncJSONL: Bool,
+        syncRebaseIfNeeded: Bool,
         supportsLandJSONL: Bool,
         landStrategy: GGLandMergeStrategy,
         onSyncEvent: (GGSyncEvent) -> Void,
@@ -80,8 +81,10 @@ public final class GGMutationCoordinator {
     private let undoMarkerStore: any GGUndoMarkerStoring
     private let clientOperationIDCapability: () -> Bool
     private let syncJSONLCapability: () -> Bool
+    private let syncRebaseIfNeededCapability: () -> Bool
     private let landJSONLCapability: () -> Bool
     private let landRebaseIfNeededCapability: () -> Bool
+    private let landAutoMergeCapability: (_ base: String) async -> Bool
     private let clientOperationIDGenerator: () -> String
     private let context: GGMutationContext
     private let mutationGate: GGProjectMutationGate
@@ -108,12 +111,16 @@ public final class GGMutationCoordinator {
         syncJSONLCapability: @escaping () -> Bool = {
             GGAvailability.shared.capabilities.syncJSONL
         },
+        syncRebaseIfNeededCapability: @escaping () -> Bool = {
+            GGAvailability.shared.capabilities.syncRebaseIfNeeded
+        },
         landJSONLCapability: @escaping () -> Bool = {
             GGAvailability.shared.capabilities.landJSONL
         },
         landRebaseIfNeededCapability: @escaping () -> Bool = {
             GGAvailability.shared.capabilities.landRebaseIfNeeded
         },
+        landAutoMergeCapability: @escaping (_ base: String) async -> Bool = { _ in false },
         clientOperationIDGenerator: @escaping () -> String = {
             "alas:\(UUID().uuidString)"
         },
@@ -128,8 +135,10 @@ public final class GGMutationCoordinator {
         self.undoMarkerStore = undoMarkerStore
         self.clientOperationIDCapability = clientOperationIDCapability
         self.syncJSONLCapability = syncJSONLCapability
+        self.syncRebaseIfNeededCapability = syncRebaseIfNeededCapability
         self.landJSONLCapability = landJSONLCapability
         self.landRebaseIfNeededCapability = landRebaseIfNeededCapability
+        self.landAutoMergeCapability = landAutoMergeCapability
         self.clientOperationIDGenerator = clientOperationIDGenerator
         self.context = context
         self.mutationGate = mutationGate ?? GGProjectMutationGate()
@@ -407,6 +416,11 @@ public final class GGMutationCoordinator {
         if case .land = request, landRebaseIfNeededCapability(), let base = snapshot?.stack?.base {
             landStrategy = .decide(supportsRebaseIfNeeded: true, settings: await context.loadLandMergeSettings(base))
         }
+        if case .land(_, autoMerge: true) = request {
+            guard let base = snapshot?.stack?.base, await landAutoMergeCapability(base) else {
+                throw GGServiceError.commandFailed(stderr: "Queueing requires a GitLab repository and gg land --auto-merge support. Refresh and confirm again.")
+            }
+        }
         GGStackGate.markAlasGGOperationInProgress(repoPath: worktreePath)
 
         do {
@@ -417,6 +431,7 @@ public final class GGMutationCoordinator {
                 worktreePath: worktreePath,
                 clientOperationID: clientOperationID,
                 supportsSyncJSONL: syncJSONLCapability(),
+                syncRebaseIfNeeded: syncRebaseIfNeededCapability(),
                 supportsLandJSONL: supportsLandJSONL,
                 landStrategy: landStrategy,
                 onSyncEvent: { [actionState] event in
@@ -544,7 +559,7 @@ public final class GGMutationCoordinator {
             guard stack.entry(matchingStableID: target) != nil else {
                 throw GGMutationError.staleConfirmation
             }
-        case .land(let target):
+        case .land(let target, _):
             guard let targetEntry = stack.entry(matchingStableID: target),
                   GGLandReadiness.canStartLand(
                       target: targetEntry,
@@ -670,7 +685,7 @@ public final class GGMutationCoordinator {
                 lowerStack: stack.name,
                 newStack: name
             )
-        case .land(let target):
+        case .land(let target, _):
             guard let entry = stack.entry(matchingStableID: target) else { return nil }
             return .land(
                 target: target,
@@ -867,7 +882,7 @@ private extension GGMutationRequest {
     var generatesClientOperationID: Bool {
         switch self {
         case .amendCurrent, .absorbStaged, .drop, .reorder, .restack,
-             .rebase, .applySplit:
+             .rebase, .applySplit, .land:
             true
         default:
             false
@@ -894,6 +909,7 @@ extension GGService: GGMutationExecuting {
         worktreePath: String,
         clientOperationID: String?,
         supportsSyncJSONL: Bool,
+        syncRebaseIfNeeded: Bool = false,
         supportsLandJSONL: Bool,
         landStrategy: GGLandMergeStrategy = .squashAndRebase,
         onSyncEvent: (GGSyncEvent) -> Void,
@@ -927,7 +943,8 @@ extension GGService: GGMutationExecuting {
         case .sync:
             for try await event in service.sync(
                 worktreePath: worktreePath,
-                supportsJSONL: supportsSyncJSONL
+                supportsJSONL: supportsSyncJSONL,
+                rebaseIfNeeded: syncRebaseIfNeeded
             ) {
                 onSyncEvent(event)
             }
@@ -936,14 +953,15 @@ extension GGService: GGMutationExecuting {
                 worktreePath: worktreePath,
                 supportsJSONL: supportsSyncJSONL,
                 until: target,
-                draft: draft
+                draft: draft,
+                rebaseIfNeeded: syncRebaseIfNeeded
             ) {
                 onSyncEvent(event)
             }
-        case .land(let target):
+        case .land(let target, let autoMerge):
             if supportsLandJSONL {
                 do {
-                    let stream = service.landStream(worktreePath: worktreePath, until: target, strategy: landStrategy)
+                    let stream = service.landStream(worktreePath: worktreePath, until: target, strategy: landStrategy, autoMerge: autoMerge)
                     let consume = Task {
                         var summary: GGLandResult?
                         for try await event in stream.events {
@@ -969,7 +987,7 @@ extension GGService: GGMutationExecuting {
                     throw error
                 }
             }
-            return .land(try await service.land(worktreePath: worktreePath, until: target, strategy: landStrategy))
+            return .land(try await service.land(worktreePath: worktreePath, until: target, strategy: landStrategy, autoMerge: autoMerge))
         case .clean:
             try await service.clean(worktreePath: worktreePath)
         case .continueOperation:

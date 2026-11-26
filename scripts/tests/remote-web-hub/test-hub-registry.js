@@ -361,6 +361,21 @@ assert.deepEqual(
   { attention: 2, running: 1 }
 );
 assert.deepEqual(registry.attentionCounts(undefined), { attention: 0, running: 0 });
+{
+  const list = status => [{ id: "1", status }, { id: "2", status: "awaitingInput", isActive: false }, { id: "3", status: "idle" }];
+  const first = registry.newAttention(null, list("awaitingPermission"));
+  assert.deepEqual(first.fresh, [], "the first list is already known");
+  assert.deepEqual([...first.ids], ["1"]);
+  assert.deepEqual(registry.newAttention(first.ids, list("awaitingInput")).fresh, [], "still waiting is not new");
+  const answered = registry.newAttention(first.ids, list("streaming"));
+  assert.deepEqual(registry.newAttention(answered.ids, list("awaitingPermission")).fresh.map(s => s.id), ["1"], "asking again is new");
+}
+{
+  const doc = { activeId: "b", servers: [{ id: "a" }, { id: "b" }] };
+  assert.equal(registry.notificationClick(doc, "b"), "open");
+  assert.equal(registry.notificationClick(doc, "a"), "switch", "a session from another host opens there, not here");
+  assert.equal(registry.notificationClick(doc, "gone"), "none");
+}
 assert.equal(
   registry.otherAttentionTotal(
     [{ id: "a", counts: { attention: 2, running: 0 } }, { id: "b", counts: { attention: 3, running: 1 } }, { id: "c", counts: { attention: 1, running: 0 } }],
@@ -493,3 +508,20 @@ assert.deepEqual(
 }
 
 console.log("hub-registry tests passed");
+
+for (const [ua, name] of [
+  ["Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36", "Chrome on Linux"],
+  ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0", "Edge on Windows"],
+  ["Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0", "Firefox on Linux"],
+  ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15", "Safari on macOS"],
+  ["Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36", "Chrome on Android"],
+  ["Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1", "Safari on iOS"],
+  ["", "Browser"],
+]) assert.equal(registry.browserDeviceName(ua), name, ua);
+
+{
+  const { createHash } = require("node:crypto");
+  for (const text of ["", "abc", "a".repeat(55), "a".repeat(56), "a".repeat(64), "x".repeat(1000), "tökén-é"]) {
+    assert.equal(registry.sha256Hex(text), createHash("sha256").update(text).digest("hex"), `length ${text.length}`);
+  }
+}

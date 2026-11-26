@@ -242,6 +242,7 @@ a:hover { color: var(--accent-hover); }
 .md hr { border: none; border-top: 0.5px solid var(--line-strong); margin: 10px 0; }
 .md table { border-collapse: collapse; margin: 8px 0; font-size: 13px; display: block; overflow-x: auto; }
 .md th, .md td { border: 0.5px solid var(--line-strong); padding: 5px 9px; }
+.md th { background: oklch(1 0 0 / 0.05); font-weight: 600; text-align: left; }
 
 /* Thinking — pips + label on a left rule; the body is collapsed by default. */
 .m-thought { align-self: stretch; padding-left: 11px; border-left: 2px solid oklch(1 0 0 / 0.12); }
@@ -509,6 +510,8 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 .server-main { flex: 1; min-width: 0; }
 .server-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .server-origin { color: var(--fg-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-latency { flex: none; color: var(--fg-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.server-latency:empty { display: none; }
 .server-menu { flex: 0 0 auto; }
 .dot.off { background: oklch(1 0 0 / 0.18); }
 .dot.connecting { background: var(--mod); }
@@ -779,3 +782,7 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 #terminal-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 #terminal-status { padding: 0 16px 6px; }
 #terminal-screen { flex: 1; min-height: 0; overflow: auto; background: var(--term-bg); padding: 6px; }
+#notify-section { margin-top: 18px; }
+.notify-row { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 12px; background: var(--bg-2); box-shadow: inset 0 0 0 0.5px var(--ring); font-size: 15px; cursor: pointer; }
+.notify-row input { margin: 0; accent-color: var(--accent); }
+#notify-note { margin: 8px 4px 0; }

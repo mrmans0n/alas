@@ -159,6 +159,9 @@ public struct RemoteHTTPResponder: Sendable {
             let scope: String?
             /// "ios" from the native app, which pairs as `.phone`; absent from browsers.
             let client: String?
+            /// SHA-256 hashes of tokens a browser already holds, so a re-pair
+            /// replaces its earlier record. Absent from older clients.
+            let replaces: [String]?
         }
         struct PairReply: Encodable {
             let token: String
@@ -292,7 +295,8 @@ public struct RemoteHTTPResponder: Sendable {
                 localDeviceId: result.deviceId, redeemedCode: code, inboundOnly: inboundOnly))
         } else {
             guard let issued = try? pairing.redeem(code: code, deviceName: pr.deviceName,
-                                                   kind: pr.client == "ios" ? .phone : .browser) else { return unauthorized }
+                                                   kind: pr.client == "ios" ? .phone : .browser,
+                                                   replacing: pr.replaces ?? []) else { return unauthorized }
             token = issued
         }
         let reply = PairReply(

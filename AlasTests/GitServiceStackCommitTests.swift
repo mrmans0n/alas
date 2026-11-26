@@ -86,7 +86,7 @@ struct GitServiceStackCommitTests {
     /// A landed stack entry is on the base either as itself or, after a
     /// squash merge, as a new commit with the same change; an open entry is
     /// neither.
-    @Test func commitsAlreadyInCountsAncestorsAndPatchEquivalentsOfTheUpstream() async throws {
+    @Test func distinguishesAnUnchangedLandingFromARewrittenOne() async throws {
         let fixture = try await makeTwoCommitRepo()
         defer { try? FileManager.default.removeItem(at: fixture.repo) }
         let repo = fixture.repo
@@ -103,7 +103,8 @@ struct GitServiceStackCommitTests {
             upstream: "upstream", shas: [fixture.base, fixture.tip, open], worktreePath: repo
         )
 
-        #expect(landed == [fixture.base, fixture.tip])
+        #expect(landed.reachable == [fixture.base])
+        #expect(landed.patchEquivalent == [fixture.tip])
     }
 
     @Test func parserIndexesReversedRecordsByResolvedSHA() throws {

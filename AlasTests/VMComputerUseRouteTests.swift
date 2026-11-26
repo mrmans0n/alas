@@ -62,6 +62,19 @@ struct VMComputerUseRouteTests {
         #expect(route == c.expected)
     }
 
+    @Test(arguments: [
+        (VMComputerUseRoute.vmMissing(guest: .macOS), true, true),
+        (.vmMissing(guest: .macOS), false, true),
+        (.desktop, true, true),
+        (.desktop, false, false),
+        (.vmMissing(guest: .linux), true, false),
+        (.vmNotRunning(worktreeID: "w", guest: .linux), true, false),
+        (.vmStateUnreadable(worktreeID: "w"), true, false),
+    ])
+    func projectBaseCreationRequiresMacOSGuestIntent(route: VMComputerUseRoute, vmRun: Bool, expected: Bool) {
+        #expect(route.permitsProjectBaseCreation(vmRun: vmRun) == expected)
+    }
+
     private static func object(_ line: String) throws -> NSDictionary {
         try #require(JSONSerialization.jsonObject(with: Data(line.utf8)) as? NSDictionary)
     }

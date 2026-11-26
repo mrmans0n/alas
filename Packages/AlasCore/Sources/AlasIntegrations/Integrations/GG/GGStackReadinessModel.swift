@@ -54,6 +54,7 @@ public struct GGStackReadinessProjection: Sendable {
         behindBase: GitService.BehindStatus?,
         mergeOperation: MergeOperation?,
         effectiveConfig: GGEffectiveConfig,
+        syncRebaseIfNeeded: Bool = false,
         localChanges: GGLocalChangeStatistics,
         undoCandidate: GGUndoCandidate?
     ) -> GGStackReadinessModel? {
@@ -71,6 +72,7 @@ public struct GGStackReadinessProjection: Sendable {
                 pausedGGOperation: action.pausedOperation
             ),
             effectiveConfig: effectiveConfig,
+            syncRebaseIfNeeded: syncRebaseIfNeeded,
             localChanges: localChanges,
             undoCandidate: undoCandidate
         )
@@ -164,6 +166,7 @@ public struct GGStackReadinessModel: Equatable, Sendable {
         liveBehindBase: Int? = nil,
         hasBlockingGitOperation: Bool = false,
         effectiveConfig: GGEffectiveConfig = .defaults,
+        syncRebaseIfNeeded: Bool = false,
         localChanges: GGLocalChangeStatistics = .zero,
         undoCandidate: GGUndoCandidate? = nil
     ) -> GGStackReadinessModel {
@@ -197,6 +200,7 @@ public struct GGStackReadinessModel: Equatable, Sendable {
             ]
         } else if behind > 0,
                   rebaseThreshold > 0,
+                  !syncRebaseIfNeeded,
                   !effectiveConfig.syncAutoRebase,
                   behind >= rebaseThreshold {
             primaryActions = [
@@ -209,15 +213,19 @@ public struct GGStackReadinessModel: Equatable, Sendable {
                 ),
             ]
         } else if unsynced > 0 || behind > 0 || stack.entries.contains(where: { $0.prState == nil }) {
+            let detail: String?
+            if syncRebaseIfNeeded && behind > 0 {
+                detail = "Rebase only if needed"
+            } else if rebaseThreshold > 0 && effectiveConfig.syncAutoRebase && behind >= rebaseThreshold {
+                detail = "Includes rebase onto \(stack.base)"
+            } else {
+                detail = nil
+            }
             primaryActions = [
                 makeAction(
                     .sync,
                     title: "Sync stack",
-                    detail: rebaseThreshold > 0
-                        && effectiveConfig.syncAutoRebase
-                        && behind >= rebaseThreshold
-                        ? "Includes rebase onto \(stack.base)"
-                        : nil,
+                    detail: detail,
                     enabled: !busy,
                     inFlight: inFlight,
                     emphasis: .primary
@@ -234,7 +242,7 @@ public struct GGStackReadinessModel: Equatable, Sendable {
         let mutableRegionCanReorder = stack.entries
             .split(whereSeparator: { $0.prState == .merged })
             .contains { $0.count > 1 }
-        let overflowActions: [Action] = isPaused ? [] : [
+        var overflowActions: [Action] = isPaused ? [] : [
             makeAction(
                 .reorder,
                 title: "Reorder Stack…",
@@ -255,6 +263,9 @@ public struct GGStackReadinessModel: Equatable, Sendable {
                 inFlight: inFlight
             ),
         ]
+        if !isPaused, behind > 0, syncRebaseIfNeeded {
+            overflowActions.append(makeAction(.rebase, title: "Rebase onto \(stack.base)", enabled: !busy, inFlight: inFlight))
+        }
 
         let isRetainedSyncFailure = inFlight == nil
             && action.pausedOperation == nil
@@ -431,7 +442,7 @@ public struct GGStackReadinessModel: Equatable, Sendable {
             case .lintEntryStarted(let position, let title):
                 if !title.isEmpty { entries[position, default: .init()].title = title }
                 liveStatus = titledStatus("Linting", position: position)
-            case .lintEntryDone:
+            case .lintEntryDone, .publication:
                 break
             case .entryStarted(let position, let title):
                 entries[position, default: .init()].title = title

@@ -12,6 +12,16 @@ public enum VMIdentity {
     public static let aliasGuestRaw = "linux-alias"
 
     private static let linuxPrefix = "linux:"
+    private static let projectDraftPrefix = "project-draft:"
+
+    public static func projectDraftRecordID(_ id: UUID) -> String {
+        projectDraftPrefix + id.uuidString
+    }
+
+    public static func projectDraftID(recordID: String) -> UUID? {
+        guard recordID.hasPrefix(projectDraftPrefix) else { return nil }
+        return UUID(uuidString: String(recordID.dropFirst(projectDraftPrefix.count)))
+    }
 
     public static func recordID(worktree: String, guest: VMGuestOS) -> String {
         switch guest {

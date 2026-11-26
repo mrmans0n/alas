@@ -92,9 +92,31 @@ public final class RemotePairingService {
 
     /// Exchanges a valid pairing code for a fresh per-device token. The code is consumed.
     /// `kind` is the client's claim: `.browser` or `.phone`.
-    public func redeem(code: String, deviceName: String, kind: RemoteDeviceKind = .browser) throws -> String {
-        try redeemCore(code: code, deviceName: deviceName, kind: kind == .phone ? .phone : .browser, peerServerId: nil).token
+    ///
+    /// `replacing` holds the SHA-256 hashes of tokens the client already
+    /// holds, so pairing the same browser again replaces its record instead
+    /// of adding one: matching records of the same kind are revoked, and the
+    /// new one keeps their terminal permission. Only a holder of the token
+    /// knows its hash, and a hash can't be used to connect, so a client may
+    /// send those of every host it knows.
+    public func redeem(code: String, deviceName: String, kind: RemoteDeviceKind = .browser,
+                       replacing tokenHashes: [String] = []) throws -> String {
+        let kind: RemoteDeviceKind = kind == .phone ? .phone : .browser
+        let result = try redeemCore(code: code, deviceName: deviceName, kind: kind, peerServerId: nil)
+        let hashes = Set(tokenHashes.prefix(Self.maxReplacedTokens).map { $0.lowercased() })
+        let replaced = devices.filter { $0.id != result.deviceId && $0.kind == kind && hashes.contains($0.tokenHash) }
+        if replaced.contains(where: \.allowsTerminals), let i = devices.firstIndex(where: { $0.id == result.deviceId }) {
+            devices[i].allowsTerminals = true
+            saveDevices()
+        }
+        for device in replaced {
+            revoke(deviceId: device.id)
+        }
+        return result.token
     }
+
+    /// Bounds the hashes one redeem compares, against an oversized request.
+    public static let maxReplacedTokens = 32
 
     /// Same exchange for another Alas instance. Existing records for the same
     /// `peerServerId` are left alone: a redeem only proves the caller holds a
@@ -286,6 +308,14 @@ public final class RemotePairingService {
         guard let i = devices.firstIndex(where: { $0.id == deviceId }) else { return }
         devices[i].lastSeenAt = now()
         saveDevices()
+    }
+
+    /// Revokes browser `deviceId`. Returns false when no browser has that id.
+    @discardableResult
+    public func forgetBrowser(deviceId: String) -> Bool {
+        guard devices.contains(where: { $0.id == deviceId && $0.kind == .browser }) else { return false }
+        revoke(deviceId: deviceId)
+        return true
     }
 
     public func revoke(deviceId: String) {

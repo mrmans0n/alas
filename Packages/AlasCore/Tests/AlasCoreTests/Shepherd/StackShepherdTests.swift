@@ -35,12 +35,12 @@ struct StackShepherdTests {
     }
 
     /// `numbers` bottom-up; GG-IDs are `c-<number>`.
-    private static func stack(_ numbers: [Int]) -> GGStack {
+    private static func stack(_ numbers: [Int], queued: Int? = nil) -> GGStack {
         GGStack(
             name: "auth", base: "main", totalCommits: numbers.count, syncedCommits: numbers.count,
             currentPosition: numbers.count, behindBase: 0,
             entries: numbers.enumerated().map { index, number in
-                GGStackEntry(position: index + 1, sha: "sha\(number)", title: "Entry \(number)", ggId: "c-\(number)", prNumber: number)
+                GGStackEntry(position: index + 1, sha: "sha\(number)", title: "Entry \(number)", ggId: "c-\(number)", prNumber: number, autoMerge: number == queued)
             }
         )
     }
@@ -760,7 +760,7 @@ struct StackShepherdTests {
                 .init(worktreeID: worktreeID, path: URL(fileURLWithPath: "/tmp/\(worktreeID)"), stackName: contextStackName, isEligible: true)
             },
             loadStack: { _ in stack },
-            syncStack: { _, _, _ in },
+            syncStack: { _, _, _, _ in },
             rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, prompt, _ in
@@ -772,7 +772,8 @@ struct StackShepherdTests {
             archiveWorktreeIfAllowed: { _, _, _ in
                 archive()
                 return .declined
-            }
+            },
+            loadStackWithForgeState: { _ in stack }
         )
         return shepherd
     }
@@ -875,7 +876,7 @@ struct StackShepherdTests {
         #expect(events == expected)
     }
 
-    @Test func onePollSendsOneFixTurnForEveryEntryInNeed() async throws {
+    @Test func queuedMergeDefersTheCombinedFixTurnUntilTheQueueClears() async throws {
         let stack = Self.stack([41, 42, 43])
         var delivered: [String] = []
         let shepherd = makeShepherd(
@@ -887,6 +888,12 @@ struct StackShepherdTests {
             stack: stack,
             deliverPrompt: { delivered.append($0) })
         let record = await bind(shepherd, session: "session-1", stack: stack)
+        // The local listing lacks queue state; only the refreshed listing sees it.
+        shepherd.effects?.loadStackWithForgeState = { _ in Self.stack([41, 42, 43], queued: 42) }
+        await shepherd.evaluateNow(record.id)
+        #expect(delivered.isEmpty)
+        #expect(shepherd.records[record.id]?.entries.map(\.shepherd.fixAttempts) == [0, 0, 0])
+        shepherd.effects?.loadStackWithForgeState = { _ in stack }
 
         await shepherd.evaluateNow(record.id)
 
@@ -1120,7 +1127,7 @@ struct StackShepherdTests {
         core.stackShepherd.effects = StackShepherd.Effects(
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: nil, isEligible: true) },
             loadStack: { _ in nil },
-            syncStack: { _, _, _ in },
+            syncStack: { _, _, _, _ in },
             rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
@@ -1265,7 +1272,7 @@ struct StackShepherdTests {
         core.stackShepherd.effects = StackShepherd.Effects(
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "b", isEligible: true) },
             loadStack: { _ in otherStack },
-            syncStack: { _, _, _ in synced += 1 },
+            syncStack: { _, _, _, _ in synced += 1 },
             rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
@@ -1305,7 +1312,7 @@ struct StackShepherdTests {
         core.stackShepherd.effects = StackShepherd.Effects(
             worktreeContext: { .init(worktreeID: $0, path: repo, stackName: "auth", isEligible: true) },
             loadStack: { _ in stack },
-            syncStack: { _, plan, _ in log.plans.append(plan) },
+            syncStack: { _, plan, _, _ in log.plans.append(plan) },
             rebaseStack: { _, _ in Issue.record("nothing landed, so nothing should be rebased") },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
@@ -1314,6 +1321,27 @@ struct StackShepherdTests {
             archiveWorktreeIfAllowed: { _, _, _ in .declined }
         )
         return (core, log, stack, shas)
+    }
+
+    @Test(arguments: [true, false])
+    func shipLetsCapableSyncRetireAnUnchangedParentWithoutPreRebasing(supported: Bool) async throws {
+        let (core, log, _, shas) = try await stackShipCore(published: [true, true, false])
+        let repo = try #require(core.stackShepherd.effects?.worktreeContext("wt-1")?.path)
+        defer { try? FileManager.default.removeItem(at: repo.deletingLastPathComponent()) }
+        // Point fetch at this test's own main, not the shared template's origin.
+        for args in [["checkout", "-qb", "test/auth"], ["branch", "-f", "main", shas[0]], ["remote", "set-url", "origin", "."]] {
+            let result = try await Process.git(args, cwd: repo)
+            try #require(result.exitCode == 0, "\(result.stderr)")
+        }
+        core.stackShepherd.effects?.syncRebaseIfNeeded = { supported }
+        var preRebases = 0
+        core.stackShepherd.effects?.rebaseStack = { _, _ in
+            preRebases += 1
+            throw CancellationError()
+        }
+        _ = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1")
+        #expect(preRebases == (supported ? 0 : 1))
+        #expect(log.plans == (supported ? [.wholeStack] : []))
     }
 
     /// The plan shipping through `name`, with `sha<index>` read as the
@@ -1356,7 +1384,7 @@ struct StackShepherdTests {
         core.stackShepherd.effects = StackShepherd.Effects(
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "auth", isEligible: true) },
             loadStack: { _ in stack },
-            syncStack: { _, _, _ in synced += 1 },
+            syncStack: { _, _, _, _ in synced += 1 },
             rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
@@ -1446,7 +1474,7 @@ struct StackShepherdTests {
             probe.listed += 1
             return try await loadStack(path)
         }
-        core.stackShepherd.effects?.syncStack = { _, _, onEvent in
+        core.stackShepherd.effects?.syncStack = { _, _, _, onEvent in
             onEvent(.start(totalEntries: 3))
             onEvent(.lintStarted(totalEntries: 3))
             onEvent(.lintEntryStarted(position: 2, title: "t"))
@@ -1589,7 +1617,7 @@ struct StackShepherdTests {
                 if gated { await probe.sync() }
                 return Self.stack(published: [false])
             },
-            syncStack: { _, _, _ in },
+            syncStack: { _, _, _, _ in },
             rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
@@ -1638,7 +1666,7 @@ struct StackShepherdTests {
                 await probe.sync()
                 throw GGServiceError.commandFailed(stderr: "glab: 401 Unauthorized")
             },
-            syncStack: { _, _, _ in },
+            syncStack: { _, _, _, _ in },
             rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },

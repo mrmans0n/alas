@@ -589,7 +589,7 @@ struct CenterPaneView: View {
                         )
                         .id(s.id)
                     case .turnDiff(let s):
-                        ACPTurnDiffTabView(state: s)
+                        ACPTurnDiffTabView(state: s, appState: state, worktree: worktree)
                             .id(s.id)
                     case .commit(let s):
                         CommitTabView(

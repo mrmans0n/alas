@@ -18,6 +18,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     let onFork: (ACPForkMessageBoundary, String) -> Void
     var onRestoreCheckpoint: (CheckpointID) -> Void = { _ in }
     var messageMenuItems: () -> [ACPMessageMenuItem] = { [] }
+    var editMessageItem: (UUID) -> ACPMessageMenuItem? = { _ in nil }
+
+    /// The extra menu items of `message`: a user message leads with its edit item.
+    func menuItems(for message: ACPMessage) -> () -> [ACPMessageMenuItem] {
+        guard case .user(let id, _, _, _, _, _) = message else { return messageMenuItems }
+        let editMessageItem = editMessageItem, messageMenuItems = messageMenuItems
+        return { (editMessageItem(id).map { [$0] } ?? []) + messageMenuItems() }
+    }
     /// Cancels a native subagent by child session id.
     var onCancelSubagent: ((String) -> Void)?
     /// Opens a link clicked in a subagent's transcript.
@@ -930,7 +938,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     onQuote: host.onQuote,
                     onFork: host.onFork,
                     onRestoreCheckpoint: host.onRestoreCheckpoint,
-                    messageMenuItems: host.messageMenuItems
+                    messageMenuItems: host.menuItems(for: message)
                 )
             }
             return .init(
@@ -1251,7 +1259,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 onQuote: host.onQuote,
                 onFork: host.onFork,
                 onRestoreCheckpoint: host.onRestoreCheckpoint,
-                messageMenuItems: host.messageMenuItems,
+                messageMenuItems: host.menuItems(for: message),
                 onCancelSubagent: host.onCancelSubagent,
                 onOpenSubagentLink: host.onOpenSubagentLink,
                 onRevealDelegation: onRevealDelegation,

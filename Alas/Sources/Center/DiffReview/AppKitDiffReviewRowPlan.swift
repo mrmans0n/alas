@@ -5,6 +5,7 @@ enum AppKitDiffReviewRowID {
     static func placeholder(fileID: DiffReviewFileID) -> String { "file:\(fileID.rawValue):placeholder" }
     static func image(fileID: DiffReviewFileID) -> String { "file:\(fileID.rawValue):image" }
     static func contextError(fileID: DiffReviewFileID) -> String { "file:\(fileID.rawValue):context-error" }
+    static func notice(fileID: DiffReviewFileID) -> String { "file:\(fileID.rawValue):notice" }
     static func groupHeader(fileID: DiffReviewFileID, groupID: String) -> String { "file:\(fileID.rawValue):group:\(groupID):header" }
     static func segment(fileID: DiffReviewFileID, segmentID: String, blockID: String) -> String { "file:\(fileID.rawValue):segment:\(segmentID):rows:\(blockID)" }
     static func composer(fileID: DiffReviewFileID, segmentID: String) -> String { "file:\(fileID.rawValue):composer:\(segmentID)" }
@@ -491,6 +492,18 @@ enum AppKitDiffReviewRowPlanBuilder {
                         message: contextLoadError,
                         theme: input.theme
                     ))
+                }
+            }
+            if let notice = input.file.notice, input.file.displayModel != nil {
+                let lineCount = notice.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+                append(
+                    &rows,
+                    id: AppKitDiffReviewRowID.notice(fileID: fileID),
+                    input: input,
+                    signature: notice.hashValue,
+                    height: 18 + CGFloat(lineCount) * 16
+                ) {
+                    AnyView(DiffReviewFileNoticeRowBody(message: notice, theme: input.theme))
                 }
             }
 
@@ -1608,6 +1621,23 @@ struct DiffReviewContextErrorRowBody: View {
                 identifier: "diff-review-context-error-\(fileID.rawValue)",
                 label: "Could not load surrounding context: \(message)"
             ))
+    }
+}
+
+struct DiffReviewFileNoticeRowBody: View {
+    @Environment(\.designScale) private var scale
+    let message: String
+    let theme: Theme
+
+    var body: some View {
+        Text(message)
+            .font(scale.meta.font)
+            .foregroundColor(theme.color("fg-dim"))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, scale.space[4])
+            .padding(.vertical, scale.space[2])
+            .background(theme.color("bg-2"))
+            .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
 }
 

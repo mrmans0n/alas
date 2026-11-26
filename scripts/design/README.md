@@ -97,7 +97,8 @@ hovering a shut-down simulator.
 
 Set `ALAS_CAPTURE_CENTER` to `run-report` (a failed run's report tab with a scripted on-device failure brief),
 `web-preview` (the web preview on a demo page served from this Mac's loopback), `computer-use-badge` (the badge in
-the agent toolbar, "Using the VM") or `space-pager` (two demo spaces added, so the pager shows), and
+the agent toolbar, "Using the VM"), `space-pager` (two demo spaces added, so the pager shows) or
+`pager-peer-cards` (the pager's paired-Mac hover card in three states), and
 `ALAS_CAPTURE_DIALOG` to `run-script-help`, `new-run-script` or `repo-hook-approval` (a demo hook; nothing runs) to
 capture those views (`DesignCaptureLeftovers`). `Sidebar/RepoDot.swift` is not used anywhere, so it has no capture.
 

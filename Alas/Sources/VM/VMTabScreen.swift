@@ -53,6 +53,8 @@ enum VMTabScreen: Equatable {
         hasVM: Bool,
         customizingHere: Bool,
         goldenAvailable: Bool,
+        projectBaseAvailable: Bool = false,
+        fromProjectBase: Bool = false,
         installerPhase: GoldenImageInstaller.Phase,
         linuxInstallerPhase: LinuxGoldenInstaller.Phase = .idle,
         helper: HelperUpdate,
@@ -72,6 +74,10 @@ enum VMTabScreen: Equatable {
         if let runningElsewhere { return .runningElsewhere(label: runningElsewhere) }
         if !loaded { return .loading }
         let pausedScreen = pausedAt.map { VMTabScreen.paused(savedAt: $0) }
+        if !customizingHere {
+            if hasVM && fromProjectBase { return pausedScreen ?? .stopped }
+            if !hasVM && projectBaseAvailable { return .createVM }
+        }
         switch installerPhase {
         case .awaitingSetup(let build):
             if hasVM && !customizingHere { return .stoppedWhileCustomizing }

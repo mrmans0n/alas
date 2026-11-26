@@ -2352,17 +2352,20 @@ extension GitService {
         head: String = "HEAD",
         shas: [String],
         worktreePath: URL
-    ) async throws -> Set<String> {
+    ) async throws -> (reachable: Set<String>, patchEquivalent: Set<String>) {
         let result = try await Process.git(["cherry", upstream, head], cwd: worktreePath)
         guard result.exitCode == 0 else {
             throw ProcessError.nonZeroExit(result.exitCode, result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        // `+` marks a commit upstream lacks; `-` one it has an equivalent of.
-        // A commit not listed at all is reachable from upstream.
-        let missing = result.stdout.split(separator: "\n").compactMap { line -> Substring? in
-            line.hasPrefix("+ ") ? line.dropFirst(2) : nil
+        var reachable = Set(shas.filter { !$0.isEmpty })
+        var patchEquivalent = Set<String>()
+        for line in result.stdout.split(separator: "\n") {
+            let oid = line.dropFirst(2)
+            guard let sha = reachable.first(where: { oid.hasPrefix($0) }) else { continue }
+            reachable.remove(sha)
+            if line.hasPrefix("- ") { patchEquivalent.insert(sha) }
         }
-        return Set(shas.filter { sha in !sha.isEmpty && !missing.contains { $0.hasPrefix(sha) || sha.hasPrefix($0) } })
+        return (reachable, patchEquivalent)
     }
 
     /// Returns the remote and branch to fetch if `ref` is a remote-tracking

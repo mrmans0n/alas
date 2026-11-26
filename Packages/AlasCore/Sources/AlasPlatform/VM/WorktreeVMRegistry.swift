@@ -8,14 +8,17 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
     private let fileURL: URL
     private let lockURL: URL
     private let isAlive: @Sendable (VMRunOwner) -> Bool
+    private let writeData: @Sendable (Data, URL) throws -> Void
 
     public init(
         fileURL: URL = Paths.vmsRoot.appendingPathComponent("registry.json"),
-        isAlive: @escaping @Sendable (VMRunOwner) -> Bool = VMRunOwner.isAlive
+        isAlive: @escaping @Sendable (VMRunOwner) -> Bool = VMRunOwner.isAlive,
+        writeData: @escaping @Sendable (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }
     ) {
         self.fileURL = fileURL
         self.lockURL = fileURL.appendingPathExtension("lock")
         self.isAlive = isAlive
+        self.writeData = writeData
     }
 
     /// Runs `body` on the records under the lock. With `syncingLinuxAliasFor`, the worktree's
@@ -33,10 +36,12 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
 
     /// Like `update`, with the bundle paths of the records this build cannot decode, which `body`
     /// sees nowhere else: their bundles belong to another (newer) build's VMs.
+    /// Set `quarantining` to false for recovery that must not mistake a corrupt registry for an empty one.
     public func updateSeeingForeignBundles<T>(
+        quarantining: Bool = true,
         _ body: (inout [WorktreeVMRecord], _ foreignBundlePaths: Set<String>) throws -> T
     ) throws -> T {
-        try withLock { records, foreign in try body(&records, Self.bundlePaths(of: foreign)) }
+        try withLock(quarantining: quarantining) { records, foreign in try body(&records, Self.bundlePaths(of: foreign)) }
     }
 
     /// The records and the bundle paths of those this build cannot decode, read without taking
@@ -78,7 +83,39 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
         ] as [String: Any])
     }
 
-    private func withLock<T>(_ body: (inout [WorktreeVMRecord], inout [Any]) throws -> T) throws -> T {
+    /// Coordinates a separate on-disk commit with VM admission without rewriting the registry.
+    public func withSnapshotLocked<T>(_ body: ([WorktreeVMRecord]) throws -> T) throws -> T {
+        try withFileLock {
+            var (records, _) = try load(quarantining: false)
+            clearDeadOwners(in: &records)
+            return try body(records)
+        }
+    }
+
+    /// Like `withSnapshotLocked`, including paths this build must not reclaim.
+    public func withSnapshotSeeingForeignBundles<T>(
+        _ body: ([WorktreeVMRecord], Set<String>) throws -> T
+    ) throws -> T {
+        try withFileLock {
+            var (records, foreign) = try load(quarantining: false)
+            clearDeadOwners(in: &records)
+            return try body(records, Self.bundlePaths(of: foreign))
+        }
+    }
+
+    private func withLock<T>(
+        quarantining: Bool = true, _ body: (inout [WorktreeVMRecord], inout [Any]) throws -> T
+    ) throws -> T {
+        try withFileLock {
+            var (records, foreign) = try load(quarantining: quarantining)
+            clearDeadOwners(in: &records)
+            let result = try body(&records, &foreign)
+            try write(records, foreign: foreign)
+            return result
+        }
+    }
+
+    private func withFileLock<T>(_ body: () throws -> T) throws -> T {
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let fd = open(lockURL.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
@@ -91,13 +128,13 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
         while flock(fd, LOCK_EX) != 0 {
             guard errno == EINTR else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         }
-        var (records, foreign) = try load()
+        return try body()
+    }
+
+    private func clearDeadOwners(in records: inout [WorktreeVMRecord]) {
         for index in records.indices {
             if let owner = records[index].runOwner, !isAlive(owner) { records[index].runOwner = nil }
         }
-        let result = try body(&records, &foreign)
-        try write(records, foreign: foreign)
-        return result
     }
 
     public func snapshot() throws -> [WorktreeVMRecord] {
@@ -159,7 +196,7 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
         let encoded = try JSONSerialization.jsonObject(with: Self.encoder.encode(records)) as? [Any] ?? []
         let data = try JSONSerialization.data(
             withJSONObject: encoded + foreign, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: fileURL, options: .atomic)
+        try writeData(data, fileURL)
     }
 
     private static let encoder: JSONEncoder = {

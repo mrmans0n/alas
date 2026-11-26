@@ -1832,6 +1832,28 @@ actor RawBrokerFixture: ACPBrokerServicing {
 }
 
 struct ACPBrokerRawHelperTests {
+    @Test(arguments: [false, true])
+    func releasingAHelloCannotLoseTheReplyWhileItIsBeingPrepared(releaseBeforePreparation: Bool) async throws {
+        let transport = RawHelperTransport(supported: true, holdHello: true)
+        // send advertises the method before encoding its reply. A caller can
+        // observe hello and release it before that reply has been prepared.
+        if releaseBeforePreparation { transport.releaseHello() }
+        try transport.send(Data(#"{"jsonrpc":"2.0","id":1,"method":"hello","params":{}}"#.utf8))
+        if !releaseBeforePreparation { transport.releaseHello() }
+        transport.terminate()
+
+        var incoming = transport.incoming.makeAsyncIterator()
+        let event = try #require(await incoming.next())
+        guard case .frame(let data, let onConsumed) = event else {
+            Issue.record("Expected the released hello reply")
+            return
+        }
+        onConsumed?()
+        let reply = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(reply["id"] as? Int == 1)
+        #expect(await incoming.next() == nil)
+    }
+
     @Test func brokerOpenRevalidatesAfterHelperCapabilityPreparation() async throws {
         let transport = RawHelperTransport(supported: true, holdHello: true)
         let client = RemoteHelperClient(host: "local", idleShutdownNanoseconds: 0, transportFactory: { transport })
@@ -1969,10 +1991,21 @@ private final class RawHelperTransport: JSONRPCStdioTransporting, @unchecked Sen
     private let holdAck: Bool
     private let deferExit: Bool
     private let holdHello: Bool
-    private let heldHello = Mutex<Data?>(nil)
-    func releaseHello() { if let data = heldHello.withLock({ value in let data = value
-    value = nil
-    return data }) { continuation.yield(.frame(data)) } }
+    // A one-way gate for the fixture's single capability handshake. Remember
+    // release even if send has advertised hello but not prepared its reply yet.
+    private struct HelloState {
+        var response: Data?
+        var released = false
+    }
+    private let heldHello = Mutex(HelloState())
+    func releaseHello() {
+        let response = heldHello.withLock { state in
+            state.released = true
+            defer { state.response = nil }
+            return state.response
+        }
+        if let response { continuation.yield(.frame(response)) }
+    }
     var methods: [String] { lock.lock()
     defer { lock.unlock() }
     return sent }
@@ -2005,8 +2038,14 @@ private final class RawHelperTransport: JSONRPCStdioTransporting, @unchecked Sen
             result = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(ACPBrokerRawReplyResult(params: params, status: .written))) as? [String: Any])
         } else { result = ["ok": true] }
         let response = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": object["id"]!, "result": result])
-        if method == "hello", holdHello { heldHello.withLock { $0 = response } }
-        else { continuation.yield(.frame(response)) }
+        if method == "hello", holdHello {
+            let released = heldHello.withLock { state in
+                if state.released { return true }
+                state.response = response
+                return false
+            }
+            if released { continuation.yield(.frame(response)) }
+        } else { continuation.yield(.frame(response)) }
     }
     func loseObservation() { continuation.yield(.observationLost) }
     func exit(status: Int32) { continuation.yield(.exited(status))

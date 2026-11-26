@@ -95,7 +95,8 @@ public final class StackShepherd {
         /// Sync uses.
         /// `onEvent` hears each event the sync streams.
         public var syncStack: @MainActor (
-            _ worktreeID: String, _ plan: StackShipPlan, _ onEvent: @escaping @MainActor (GGSyncEvent) -> Void
+            _ worktreeID: String, _ plan: StackShipPlan, _ expected: GGStackIdentity,
+            _ onEvent: @escaping @MainActor (GGSyncEvent) -> Void
         ) async throws -> Void
         /// `gg rebase` onto the stack's base through the guarded path the
         /// stack drawer's Rebase uses. Drops entries that already landed.
@@ -121,6 +122,7 @@ public final class StackShepherd {
         /// for a headless host): its records are that instance's, so this
         /// one never changes, escalates, archives or removes them.
         public var servesWorktree: @MainActor (_ worktreeID: String) -> Bool
+        public var syncRebaseIfNeeded: @MainActor () -> Bool = { GGAvailability.shared.capabilities.syncRebaseIfNeeded }
         /// Review before push state for the stack; nil when the lever is off.
         public var reviewGate: @MainActor (_ record: StackShepherdRecord) -> ShepherdReviewGate? = { _ in nil }
 
@@ -128,7 +130,8 @@ public final class StackShepherd {
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
             loadStack: @escaping @MainActor (_ path: URL) async throws -> GGStack?,
             syncStack: @escaping @MainActor (
-                _ worktreeID: String, _ plan: StackShipPlan, _ onEvent: @escaping @MainActor (GGSyncEvent) -> Void
+                _ worktreeID: String, _ plan: StackShipPlan, _ expected: GGStackIdentity,
+                _ onEvent: @escaping @MainActor (GGSyncEvent) -> Void
             ) async throws -> Void,
             rebaseStack: @escaping @MainActor (_ worktreeID: String, _ expected: GGStackIdentity) async throws -> Void,
             sessionState: @escaping @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState,
@@ -685,7 +688,6 @@ public final class StackShepherd {
         // A turn may have ended or the record been rebound while this ran:
         // decide on the current record, and not at all for another owner.
         guard let current = records[id], current.sessionID == owner, !current.isFinished else { return }
-        failureCounts[id] = nil
         let publication = StackShepherdPolicy.publication(
             of: onStack, local: probed.local,
             landed: onStack.map { StackShepherdPolicy.landedEntryIDs(of: current, in: $0) } ?? [],
@@ -707,16 +709,22 @@ public final class StackShepherd {
             reviewGate: effects.reviewGate(current)
         )
         var decision = StackShepherdPolicy.decide(current, observation)
-        // Only a restack about to be requested needs to know whether a merge
-        // is queued, and only a listing with the forge's state tells.
-        if !decision.restack.isEmpty {
-            let forgeStack = try? await effects.loadStackWithForgeState(context.path)
-            guard records[id] == current else { return }
-            if let forgeStack, forgeStack.name == id.stackName, forgeStack.hasQueuedMerge {
+        // Both turns ask the owner to push. Read queue state only when a turn is due.
+        if !decision.fixes.isEmpty || !decision.restack.isEmpty {
+            let forgeStack: GGStack?
+            do {
+                forgeStack = try await effects.loadStackWithForgeState(context.path)
+            } catch {
+                if records[id] == current { noteFailure(id, error.localizedDescription) }
+                return
+            }
+            guard records[id] == current, let forgeStack, forgeStack.name == id.stackName else { return }
+            if forgeStack.hasQueuedMerge {
                 observation.hasQueuedMerge = true
                 decision = StackShepherdPolicy.decide(current, observation)
             }
         }
+        failureCounts[id] = nil
         if decision.isRetired {
             stackShepherdLogger.notice("Retiring stack shepherd record \(id.storageKey, privacy: .private): no entries are left")
             remove(id)

@@ -378,6 +378,7 @@ struct ChangesTabView: View {
             behindBase: rps.behindBase,
             mergeOperation: rps.mergeOp.current,
             effectiveConfig: rps.ggEffectiveConfig,
+            syncRebaseIfNeeded: rps.ggCapabilities().syncRebaseIfNeeded,
             localChanges: rps.ggLocalChangeStatistics,
             undoCandidate: rps.ggUndoCandidate
         )
@@ -621,10 +622,11 @@ struct ChangesTabView: View {
             let quietsReview = Self.quietsReview(
                 harnessState: appState.harnessSummary(forWorktree: rps.worktree.id)?.state
             )
+            let offersSyncAndLand = rps.canSyncAndLand
             rows.append(appKitRow(
                 id: "changes-preparation",
                 token: String(reflecting: preparation) + String(reflecting: reviewScopeShortcut)
-                    + String(reflecting: reviewScopeOptions) + "\(quietsReview)",
+                    + String(reflecting: reviewScopeOptions) + "\(quietsReview)-\(offersSyncAndLand)",
                 estimatedHeight: 92
             ) {
                 ChangesPreparationCard(
@@ -644,6 +646,9 @@ struct ChangesTabView: View {
                     onDismissSyncFailure: { rps.ggActionState.dismissCompletedSyncFailure() },
                     onOpenGGLanding: { appState.openGGLanding(projectId: rps.worktree.projectId) },
                     onRetryGGStack: { Task { await rps.refreshGGStack(forceRemote: true) } },
+                    onSyncAndLand: offersSyncAndLand ? {
+                        Task { await rps.syncAndRequestGGLand { appState.selectedWorktreeId == rps.worktree.id } }
+                    } : nil,
                     quietsReview: quietsReview
                 )
             })

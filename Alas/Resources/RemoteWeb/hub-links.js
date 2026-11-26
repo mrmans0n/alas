@@ -415,7 +415,9 @@ function createLinks(deps, hooks) {
   // (not actually down) origin can still process and consume the
   // single-use code after the client has already moved on to the next
   // origin, which then gets a legitimate-looking but misleading 401.
-  function pair(origins, code, deviceName, originKinds) {
+  // `replaces`: SHA-256 hashes of tokens this browser holds, so the host can
+  // replace its earlier record of this browser instead of adding another.
+  function pair(origins, code, deviceName, originKinds, replaces) {
     // Every pairing link includes "localhost" alongside the target Mac's
     // real addresses, so it can answer from a completely unrelated local
     // Alas instance that has never heard of this code — a 401 from there
@@ -446,7 +448,7 @@ function createLinks(deps, hooks) {
       if (index >= origins.length) return Promise.reject(bestError || pairError("net"));
       const origin = origins[index];
       const controller = new AbortController();
-      const request = deps.fetch(origin + "/pair", { method: "POST", body: JSON.stringify({ code, deviceName }), signal: controller.signal });
+      const request = deps.fetch(origin + "/pair", { method: "POST", body: JSON.stringify(replaces && replaces.length ? { code, deviceName, replaces } : { code, deviceName }), signal: controller.signal });
       return withTimeout(request, PAIR_TIMEOUT_MS, () => controller.abort())
         .then(
           (res) => {

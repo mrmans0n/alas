@@ -70,7 +70,7 @@ extension AlasCoreContext {
                 let localOnly = GGAvailability.shared.capabilities.localStackSnapshot
                 return try await GGService().currentStack(worktreePath: path.path, refreshRemote: !localOnly)
             },
-            syncStack: { [weak self] worktreeID, plan, onEvent in
+            syncStack: { [weak self] worktreeID, plan, expected, onEvent in
                 guard let self else { throw GGMutationError.staleConfirmation }
                 let request: GGMutationRequest
                 if plan == .wholeStack {
@@ -81,7 +81,7 @@ extension AlasCoreContext {
                 }
                 let actionState = GGStackActionState()
                 actionState.syncEventObserver = onEvent
-                try await runShepherdGGMutation(request, confirmedAgainst: nil, worktreeID: worktreeID, actionState: actionState)
+                try await runShepherdGGMutation(request, confirmedAgainst: expected, worktreeID: worktreeID, actionState: actionState)
                 if actionState.syncHasTerminalFailure {
                     throw GGMutationError.syncTerminalFailure(message: actionState.lastError ?? "GG sync failed.")
                 }
@@ -115,7 +115,9 @@ extension AlasCoreContext {
                 ) ?? .declined
             },
             servesWorktree: { [weak self] in self?.servesShepherdWorktree($0) ?? false },
-            loadStackWithForgeState: { path in try await GGService().currentStack(worktreePath: path.path) },
+            loadStackWithForgeState: { path in
+                try await GGService().currentStackSnapshot(worktreePath: path.path, requireRemoteRefresh: true).stack
+            },
             reviewGate: { [weak self] in self?.stackReviewGate(for: $0) }
         )
         shipReviewNotice = { [weak self] id, message in

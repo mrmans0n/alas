@@ -179,6 +179,33 @@ function retryConnection() {
 
 function activeServer() { return hub.servers.find((s) => s.id === hub.activeId) || null; }
 
+// Round trip to the active host, timed by a ping every 10 s while the page is
+// visible. Hosts without `pong` never answer, so it stays null and nothing shows.
+const latency = { ms: null, requestId: "", sentAt: 0 };
+function sendPing() {
+  const link = links.activeLink();
+  if (document.hidden || !link || link.state !== "online") return;
+  latency.requestId = Math.random().toString(36).slice(2, 10);
+  latency.sentAt = performance.now();
+  send({ type: "ping", requestId: latency.requestId });
+}
+function receivePong(requestId) {
+  if (requestId !== latency.requestId) return;
+  latency.ms = Math.round(performance.now() - latency.sentAt);
+  latency.requestId = "";
+  $("status").title = `${latency.ms} ms to the host`;
+  // In place: rebuilding the list every 10 s would drop keyboard focus.
+  const label = document.querySelector("#server-list .server-row.is-active .server-latency");
+  if (label) label.textContent = `${latency.ms} ms`;
+}
+function restartLatency() {
+  latency.ms = null;
+  $("status").title = "";
+  sendPing();
+}
+setInterval(sendPing, 10000);
+document.addEventListener("visibilitychange", sendPing);
+
 function connectedLabel() {
   const server = activeServer();
   return server ? (server.name || server.lastOrigin) : "Connected";
@@ -216,6 +243,7 @@ function onActiveOpen() {
   setStatus(connectedLabel(), "ok");
   hideGate();
   send({ type: "listSessions" });
+  restartLatency();
   applyActiveCapabilities();
   terminals.reconnected();
   resubscribe();   // re-sync images and transcript after reconnect
@@ -299,7 +327,10 @@ const transcriptImageLoader = createTranscriptImageLoader(send, applyTranscriptI
 // Resolves the registry entry; rejects with the link manager's { reason }
 // errors.
 async function pairAndAdd(input, options) {
-  const result = await links.pair(input.origins, input.code, navigator.userAgent.slice(0, 40), input.originKinds);
+  // Every stored token's hash: the host can't tell which entry is itself until
+  // it says hello, and a hash it doesn't hold matches nothing.
+  const replaces = hub.servers.map(s => s.token).filter(Boolean).slice(0, 32).map(RemoteHubRegistry.sha256Hex);
+  const result = await links.pair(input.origins, input.code, RemoteHubRegistry.browserDeviceName(navigator.userAgent), input.originKinds, replaces);
   const { server, rePaired } = RemoteHubRegistry.upsertPaired(hub, { origins: input.origins, token: result.token, now: Date.now(), targetId: options && options.targetId });
   RemoteHubRegistry.setLastOrigin(hub, server.id, result.origin);
   RemoteHubRegistry.save(localStorage, hub);
@@ -345,6 +376,7 @@ function resetServerScopedState() {
   composerGeneration++;
   renderSessions([]);
   showRepos();
+  notifiedOpen = null;
 }
 
 function switchServer(id) {
@@ -379,6 +411,8 @@ function handle(msg) {
     case "sessionList":
       gatewayCounts = RemoteHubRegistry.peerSessionCounts(msg.sessions, (activeServer() || {}).peers);
       renderSessions(msg.sessions);
+      notifyNewAttention(msg.sessions);
+      openNotifiedSession();
       worktreeCreation.markRecoveryListLoaded("sessions");
       refreshHubViews();
       break;
@@ -386,6 +420,7 @@ function handle(msg) {
     case "transcriptDelta": applyDelta(msg); break;
     case "transcriptPage": applyPage(msg); break;
     case "stopPending": if (msg.sessionId === currentSession) markStopping(true); break;
+    case "pong": receivePong(msg.requestId); break;
     case "queueState": applyQueueState(msg); break;
     case "turnCaptions": applyTurnCaptions(msg); break;
     case "queueEditRestored": applyQueueEditRestored(msg); break;
@@ -1257,7 +1292,9 @@ const DIFF_CSS = `:host, pre {
   --diffs-font-size: 12px;
   --diffs-line-height: 19px;
   --diffs-bg-separator-override: var(--bg-2);
-}`;
+}
+/* pierre-dark's #737373 comments fade into the add and delete tints. */
+[data-line] span[style*="#737373"] { color: #9a9a9a !important; }`;
 
 async function renderDiff(path, stage, hunks, truncated, metadataNote) {
   if (!isActiveDiff(path, stage)) return;
@@ -1510,6 +1547,67 @@ function showRepos() {
   $("bottom-tabbar").classList.toggle("hidden", !!currentSession);
 }
 
+// System notifications for a session that starts needing you while this window
+// is in the background. Needs a secure context (localhost or https), so a
+// plain-http LAN page hides the setting.
+const NOTIFY_OFF_KEY = "alas.notify.off";
+const canNotify = "Notification" in window && window.isSecureContext;
+let attentionSeen = { serverId: null, ids: null };
+let notifiedOpen = null;   // { serverId, sessionId } clicked while another host was active
+
+function notificationsOn() {
+  return canNotify && Notification.permission === "granted" && localStorage.getItem(NOTIFY_OFF_KEY) !== "1";
+}
+
+function notifyNewAttention(sessions) {
+  // Another server's list is a first list too: what already waits there isn't new.
+  const seen = attentionSeen.serverId === hub.activeId ? attentionSeen.ids : null;
+  const { ids, fresh } = RemoteHubRegistry.newAttention(seen, sessions);
+  attentionSeen = { serverId: hub.activeId, ids };
+  if (!notificationsOn() || (!document.hidden && document.hasFocus())) return;
+  for (const session of fresh) {
+    const body = session.status === "awaitingPermission" ? "Needs your permission" : "Is waiting for your answer";
+    try {
+      const n = new Notification(session.title || "Session", { body, tag: session.id, icon: "icon-192.png" });
+      const serverId = hub.activeId;
+      n.onclick = () => {
+        window.focus(); n.close();
+        const action = RemoteHubRegistry.notificationClick(hub, serverId);
+        if (action === "open") { openSession(session.id); return; }
+        if (action === "none") return;
+        // The session lives on the host it came from: switch back, then open it once that list lands.
+        switchServer(serverId); showRepos();
+        notifiedOpen = { serverId, sessionId: session.id };   // after the switch, which clears it
+      };
+    } catch (_) { /* Chrome on Android only notifies through a service worker. */ }
+  }
+}
+
+function openNotifiedSession() {
+  if (!notifiedOpen || notifiedOpen.serverId !== hub.activeId || !listedSessions.has(notifiedOpen.sessionId)) return;
+  const id = notifiedOpen.sessionId;
+  notifiedOpen = null;
+  openSession(id);
+}
+
+function renderNotifySetting() {
+  $("notify-section").hidden = !canNotify;
+  if (!canNotify) return;
+  const blocked = Notification.permission === "denied";
+  $("notify-toggle").checked = notificationsOn();
+  $("notify-toggle").disabled = blocked;
+  $("notify-note").hidden = !blocked;
+}
+
+$("notify-toggle").addEventListener("change", async e => {
+  if (!e.target.checked) localStorage.setItem(NOTIFY_OFF_KEY, "1");
+  else {
+    localStorage.removeItem(NOTIFY_OFF_KEY);
+    if (Notification.permission === "default") await Notification.requestPermission();
+  }
+  renderNotifySetting();
+});
+
 function showSettings() {
   if (currentSession && !wideLayout.matches) return;   // a phone hides the tab bar during session detail
   topLevelTab = "settings";
@@ -1518,6 +1616,7 @@ function showSettings() {
   $("sessions").classList.add("hidden");
   $("settings").classList.remove("hidden");
   renderServerList();
+  renderNotifySetting();
 }
 
 $("tab-repos").addEventListener("click", showRepos);
@@ -1797,6 +1896,10 @@ function renderServerList() {
     main.append(el("div", "server-name", server.name || server.lastOrigin));
     main.append(el("div", "server-origin", serverSubtitle(server, link)));
     row.append(main);
+    if (server.id === hub.activeId) {
+      const online = link && link.state === "online" && latency.ms !== null;
+      row.append(el("span", "server-latency", online ? `${latency.ms} ms` : ""));
+    }
     if (counts.attention > 0) row.append(el("span", "tab-count", String(counts.attention)));
     const menu = el("button", "iconbtn server-menu", "⋯");
     menu.type = "button";

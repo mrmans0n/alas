@@ -95,6 +95,10 @@ assert.equal(filter.relativeTimeShort(now - 30_000, now), "now");
 assert.equal(filter.relativeTimeShort(now - 21 * 60_000, now), "21 min");
 assert.equal(filter.relativeTimeShort(now - 15 * 3_600_000, now), "15 hr");
 assert.equal(filter.relativeTimeShort(now - 4 * 86_400_000, now), "4 d");
+assert.equal(filter.relativeTimeShort(now - 20 * 86_400_000, now), "3 wk");
+assert.equal(filter.relativeTimeShort(now - 100 * 86_400_000, now), "3 mo");
+assert.equal(filter.relativeTimeShort(now - 314 * 86_400_000, now), "10 mo");
+assert.equal(filter.relativeTimeShort(now - 800 * 86_400_000, now), "2 yr");
 assert.deepEqual(filter.diffBarSegments(999, 1), [true, true, true, true, false], "a lone delete keeps a segment");
 assert.deepEqual(filter.diffBarSegments(0, 0), [false, false, false, false, false]);
 

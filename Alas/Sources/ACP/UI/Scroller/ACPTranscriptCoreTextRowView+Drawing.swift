@@ -510,6 +510,12 @@ extension ACPTranscriptCoreTextRowView {
         for table in markdown.tables where table.rect.intersects(local) {
             drawTable(table, origin: origin)
         }
+        for icon in markdown.icons where icon.rect.intersects(local) {
+            icon.image.draw(
+                in: icon.rect.offsetBy(dx: origin.x, dy: origin.y), from: .zero, operation: .sourceOver, fraction: 1,
+                respectFlipped: true, hints: nil
+            )
+        }
         let lines = markdown.linesIntersecting(local)
         drawTextSelection(markdown, origin: origin, lines: lines, context: context)
         for index in lines.indices {

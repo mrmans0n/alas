@@ -112,6 +112,24 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         try openedStore().loadTurnCaptions(sessionId: sessionId)
     }
 
+    public func loadInitialConfigOptions(sessionId: String) throws -> [ACPInitialConfigOption]? {
+        try openedStore().loadInitialConfigOptions(sessionId: sessionId)
+    }
+
+    /// See `ACPSessionStore.saveInitialConfigOptions`. Fenced: only the
+    /// writer starts the session, so only it records what `session/new`
+    /// sends. Nil when the lease was lost.
+    public func saveInitialConfigOptions(
+        sessionId: String,
+        _ entries: [ACPInitialConfigOption],
+        fence: ACPSessionLeaseFence?
+    ) throws -> [ACPInitialConfigOption]? {
+        let store = try openedStore()
+        let operation = { try store.saveInitialConfigOptions(sessionId: sessionId, entries) }
+        if let fence { return try store.withLeaseFence(fence, operation) }
+        return try store.db.transaction(operation)
+    }
+
     public func saveTurnCaption(sessionId: String, _ caption: StoredTurnCaption) throws {
         try openedStore().saveTurnCaption(sessionId: sessionId, caption)
     }
@@ -859,6 +877,21 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         }
         if let fence { return try store.withLeaseFence(fence, operation) ?? false }
         return try store.db.transaction(operation)
+    }
+
+    /// See `ACPSessionStore.truncateMessages`. Fenced like a row write: a
+    /// process that lost the lease must not delete the new writer's rows.
+    @discardableResult
+    public func truncateMessages(
+        sessionId: String,
+        fromSeq seq: Int64,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let operation = { try store.truncateMessages(sessionId: sessionId, fromSeq: seq) }
+        if let fence { return try store.withLeaseFence(fence, operation) != nil }
+        try store.db.transaction(operation)
+        return true
     }
 
     /// Child-session transcript rows. Fenced exactly like parent rows so a

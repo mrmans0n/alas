@@ -493,6 +493,8 @@ final class RightPaneState: GGSplitCommitServicing {
     var pendingGGLand: GGLandRequest? = nil
     var pendingGGPluginLandScope: String? = nil
     @ObservationIgnored var pendingGGLandPrepared: GGPreparedMutation? = nil
+    @ObservationIgnored var pendingGGSyncLandTarget: (identity: GGStackTargetIdentity, remote: CodeHostRemote)?
+    var ggSyncAndLandInFlight = false
     var pendingGGDrop: GGDropPresentation? = nil
     @ObservationIgnored var pendingGGDropPrepared: GGPreparedMutation? = nil
     var pendingGGUnstack: GGUnstackModel? = nil
@@ -669,9 +671,19 @@ final class RightPaneState: GGSplitCommitServicing {
             worktreePath: worktree.path.path,
             service: ggService,
             actionState: ggActionState,
+            clientOperationIDCapability: { [weak self] in self?.ggCapabilities().clientOperationID ?? false },
             syncJSONLCapability: { [weak self] in self?.ggCapabilities().syncJSONL ?? false },
+            syncRebaseIfNeededCapability: { [weak self] in self?.ggCapabilities().syncRebaseIfNeeded ?? false },
             landJSONLCapability: { [weak self] in self?.ggCapabilities().landJSONL ?? false },
             landRebaseIfNeededCapability: { [weak self] in self?.ggCapabilities().landRebaseIfNeeded ?? false },
+            landAutoMergeCapability: { [weak self] base in
+                guard let self, let remote = commitRemote, remote.kind == .gitlab,
+                      let remotes = try? await git.remotes(worktreePath: worktree.path)
+                else { return false }
+                let preferred = CodeHostRemoteDetector.preferredRemoteName(forBaseBranch: base, remotes: remotes)
+                return CodeHostRemoteDetector.detect(from: remotes, preferredRemoteName: preferred) == remote
+                    && commitRemote == remote && ggCapabilities().landAutoMerge
+            },
             mutationGate: ggProjectMutationGate,
             projectID: worktree.projectId,
             context: GGMutationContext(

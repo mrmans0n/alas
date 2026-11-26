@@ -32,7 +32,7 @@ struct ACPConnectionTests {
             let meta = try #require(capabilities["_meta"] as? [String: Any])
             #expect((meta["goal"] as? [String: Any])?.isEmpty == true)
             #expect(meta["async-tasks"] as? Bool == true)
-            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint", "diffPatch", "planFile", "sessionFailure", "agentFileChangeReport", "permissionPresentation", "questionCustomAnswer", "recommendedConfigValue", "commandPresentation", "loadReplayEnd", "promptSuggestions"])
+            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint", "diffPatch", "planFile", "sessionFailure", "agentFileChangeReport", "permissionPresentation", "questionCustomAnswer", "recommendedConfigValue", "commandPresentation", "loadReplayEnd", "promptSuggestions", "sessionRewind"])
             // The client-neutral session index opt-in, never the AIR declaration.
             #expect(meta["sessionIndex"] as? [String: Int] == ["version": 1])
             #expect(meta["forkPoint"] as? [String: Int] == ["version": 1])
@@ -1167,6 +1167,22 @@ struct ACPConnectionTests {
         #expect(req.method == "authenticate")
         let params = try #require(req.params as? ACPAuthenticateParams)
         #expect(params.methodId == "claude-login")
+    }
+
+    @Test("session/options previews a workspace and its extra directories without a session")
+    func sessionOptionsRPC() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "session/options") { _ in
+            Data(#"{"configOptions":[{"id":"model","name":"Model","type":"select","category":"model","currentValue":"opus","options":[{"value":"opus","name":"Opus"}]}]}"#.utf8)
+        }
+
+        let preview = try await ACPConnection(client: mock)
+            .sessionOptions(cwd: "/work/project", additionalDirectories: ["/work/shared"])
+
+        let params = try #require(mock.sent.last?.params as? ACPSessionOptionsParams)
+        let wire = try JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? NSDictionary
+        #expect(wire == ["cwd": "/work/project", "additionalDirectories": ["/work/shared"]])
+        #expect(preview.configOptions.map(\.id) == ["model"])
     }
 
     @Test("setConfigOption sends session/set_config_option with sessionId, configId, value")

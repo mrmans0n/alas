@@ -383,6 +383,7 @@ struct SidebarView: View {
                             onSettings()
                         },
                         onEditPeer: openPairedMacSettings(serverId:),
+                        peerCard: { [state] in state.peerHoverCard(serverId: $0) },
                         onScrollPage: { offset in
                             pageSpace(offset: offset)
                         }

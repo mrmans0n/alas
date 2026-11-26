@@ -3346,21 +3346,35 @@ fn write_restrictive_json<T: Serialize>(
 }
 
 fn write_restrictive_bytes(path: &Path, bytes: &[u8]) -> Result<(), AcpBrokerProcessError> {
+    // Readers validate metadata before taking the open lock. Publish a complete
+    // file in one rename so they never see an empty or partially written JSON.
+    let temp = path.with_extension(format!(
+        "{}-{}.pending",
+        std::process::id(),
+        current_nanos()
+    ));
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
     let mut file = options
-        .open(path)
+        .open(&temp)
         .map_err(|error| broker_error(-32070, format!("file create failed: {error}")))?;
-    file.write_all(bytes)
-        .map_err(|error| broker_error(-32070, format!("file write failed: {error}")))?;
-    file.flush()
-        .map_err(|error| broker_error(-32070, format!("file flush failed: {error}")))?;
-    Ok(())
+    let result = (|| {
+        file.write_all(bytes)
+            .map_err(|error| broker_error(-32070, format!("file write failed: {error}")))?;
+        file.flush()
+            .map_err(|error| broker_error(-32070, format!("file flush failed: {error}")))?;
+        std::fs::rename(&temp, path)
+            .map_err(|error| broker_error(-32070, format!("file publish failed: {error}")))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
 }
 
 #[cfg(unix)]
@@ -3400,6 +3414,44 @@ fn broker_error(code: i64, message: impl Into<String>) -> AcpBrokerProcessError 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_readers_keep_a_complete_snapshot_during_publication() {
+        let dir = std::env::temp_dir().join(format!(
+            "alas-metadata-publication-{}-{}",
+            std::process::id(),
+            current_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("metadata.json");
+        let mut metadata = steering_runtime_state().broker.snapshot().metadata;
+        metadata.adapter_args = vec!["old argument".repeat(64)];
+        write_restrictive_json(&path, &metadata).unwrap();
+
+        // Stop a real reader just before the end of the published document.
+        let mut reader = std::fs::File::open(&path).unwrap();
+        let mut bytes = vec![0; std::fs::metadata(&path).unwrap().len() as usize - 1];
+        reader.read_exact(&mut bytes).unwrap();
+        metadata.adapter_args.clear();
+        metadata.generation = BrokerGeneration::new(2);
+        write_restrictive_json(&path, &metadata).unwrap();
+        reader.read_to_end(&mut bytes).unwrap();
+        let observed = serde_json::from_slice::<ACPBrokerMetadata>(&bytes);
+        let current = read_broker_metadata(&dir).unwrap();
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777
+        };
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let observed =
+            observed.expect("a concurrent publication must not truncate a reader's JSON");
+        assert_eq!(observed.generation, BrokerGeneration::new(1));
+        assert_eq!(current.generation, BrokerGeneration::new(2));
+        #[cfg(unix)]
+        assert_eq!(mode, 0o600);
+    }
 
     #[test]
     fn reviewed_operation_replay_preserves_success_and_delivers_rejection_before_eviction() {

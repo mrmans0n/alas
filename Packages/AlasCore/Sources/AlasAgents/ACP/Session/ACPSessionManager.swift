@@ -506,6 +506,24 @@ public final class ACPSessionManager: ChangeTracking {
         return await runner.userCancel()
     }
 
+    /// Whether the user message `messageID` can be edited in place: its
+    /// agent announced a cursor before it that a rewind accepts, and this
+    /// instance drives the session.
+    public func canRewind(sessionID id: ACPSession.ID, beforeUserMessage messageID: UUID) -> Bool {
+        guard legacyRuntimeAllowed(id), runners[id] != nil, _ownedLeases.contains(id) else { return false }
+        return sessions[id]?.cursor(beforeUserMessage: messageID)?.canRewind == true
+    }
+
+    /// Cuts the session back to before the user message `messageID`, stopping
+    /// a running turn first. On `.rewound` the message and every row after
+    /// it are gone and the caller sends the edited prompt. Files are not
+    /// reverted.
+    public func rewind(sessionID id: ACPSession.ID, beforeUserMessage messageID: UUID) async -> ACPSessionRewindResult {
+        guard legacyRuntimeAllowed(id) else { return .unavailable }
+        guard await confirmedWriterLease(for: id), let runner = runners[id] else { return .unavailable }
+        return await runner.rewind(beforeUserMessage: messageID)
+    }
+
     // MARK: - Failure incident actions
 
     /// Nil only for an unknown session. A session with no runner still gets a
@@ -811,6 +829,9 @@ public final class ACPSessionManager: ChangeTracking {
     public var pendingModel: [ACPSession.ID: String] = [:]
     public var pendingMode: [ACPSession.ID: String] = [:]
     public private(set) var pendingConfigOptionValues: [ACPSession.ID: [String: ACPConfigValue]] = [:]
+    /// The `configOptions` each session's `session/new` carries, once decided.
+    /// See `startupConfigOptions(for:cwd:using:sessionCapabilities:)`.
+    private var decidedStartupConfigOptions: [ACPSession.ID: [ACPInitialConfigOption]] = [:]
     private struct DeferredConfigOptionUpdate {
         let configId: String
         let value: ACPConfigValue
@@ -3288,6 +3309,7 @@ public final class ACPSessionManager: ChangeTracking {
         pendingModel.removeValue(forKey: id)
         pendingMode.removeValue(forKey: id)
         pendingConfigOptionValues.removeValue(forKey: id)
+        decidedStartupConfigOptions.removeValue(forKey: id)
         discardDeferredConfigOptionUpdates(for: id)
         discardDeferredModelModeUpdates(for: id)
         onSessionRuntimeEnded?(id)
@@ -3362,6 +3384,7 @@ public final class ACPSessionManager: ChangeTracking {
         pendingModel.removeValue(forKey: id)
         pendingMode.removeValue(forKey: id)
         pendingConfigOptionValues.removeValue(forKey: id)
+        decidedStartupConfigOptions.removeValue(forKey: id)
         discardDeferredConfigOptionUpdates(for: id)
         discardDeferredModelModeUpdates(for: id)
 
@@ -5040,6 +5063,8 @@ public final class ACPSessionManager: ChangeTracking {
             sessionCapabilities: sessionCapabilities
         )
         do {
+            let startupConfigOptions = await startupConfigOptions(
+                for: targetSessionID, cwd: worktreePath, using: connection, sessionCapabilities: sessionCapabilities)
             let result = try await performRemoteSessionCreation(
                 for: attempt,
                 using: connection,
@@ -5048,6 +5073,7 @@ public final class ACPSessionManager: ChangeTracking {
                 try await connection.newSession(
                     cwd: worktreePath,
                     mcpServers: wireMCPServers,
+                    configOptions: startupConfigOptions,
                     brokerOperationKey: Self.brokerStartupOperationKey(
                         sessionId: targetSessionID,
                         method: "session/new"
@@ -5355,6 +5381,8 @@ public final class ACPSessionManager: ChangeTracking {
             )
             return (result, true)
         }
+        let startupConfigOptions = await startupConfigOptions(
+            for: session.id, cwd: worktreePath, using: connection, sessionCapabilities: initialized.sessionCapabilities)
         let result = try await performRemoteSessionCreation(
             for: attempt,
             using: connection,
@@ -5363,6 +5391,7 @@ public final class ACPSessionManager: ChangeTracking {
             try await connection.newSession(
                 cwd: worktreePath,
                 mcpServers: wireMCPServers,
+                configOptions: startupConfigOptions,
                 brokerOperationKey: Self.brokerStartupOperationKey(
                     sessionId: session.id,
                     method: "session/new"
@@ -8078,6 +8107,12 @@ extension ACPSessionManager {
                     return
                 }
             } else if freshlyCreated {
+                let startupConfigOptions = await startupConfigOptions(
+                    for: sessionId,
+                    cwd: worktreePath,
+                    using: connection,
+                    sessionCapabilities: initialized.sessionCapabilities,
+                    decide: true)
                 result = try await performRemoteSessionCreation(
                     for: attempt,
                     using: connection,
@@ -8086,12 +8121,14 @@ extension ACPSessionManager {
                     try await connection.newSession(
                         cwd: worktreePath,
                         mcpServers: wireMCPServers,
+                        configOptions: startupConfigOptions,
                         brokerOperationKey: Self.brokerStartupOperationKey(
                             sessionId: sessionId,
                             method: "session/new"
                         )
                     )
                 }
+                dropAppliedInitialConfigOptions(startupConfigOptions, shownBy: result.configOptions, for: sessionId)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                     // Same late-result ownership as the fork guard above:
                     // the tracked remote-close path closes (and only then
@@ -8180,6 +8217,9 @@ extension ACPSessionManager {
                             try await recoverRemoteConversation(session: session, attempt: attempt)
                             return
                         }
+                        let startupConfigOptions = await startupConfigOptions(
+                            for: sessionId, cwd: worktreePath, using: connection,
+                            sessionCapabilities: initialized.sessionCapabilities)
                         result = try await performRemoteSessionCreation(
                             for: attempt,
                             using: connection,
@@ -8188,6 +8228,7 @@ extension ACPSessionManager {
                             try await connection.newSession(
                                 cwd: worktreePath,
                                 mcpServers: wireMCPServers,
+                                configOptions: startupConfigOptions,
                                 brokerOperationKey: Self.brokerStartupOperationKey(
                                     sessionId: sessionId,
                                     method: "session/new"
@@ -8393,6 +8434,9 @@ extension ACPSessionManager {
                             try await recoverRemoteConversation(session: session, attempt: attempt)
                             return
                         }
+                        let startupConfigOptions = await startupConfigOptions(
+                            for: sessionId, cwd: worktreePath, using: connection,
+                            sessionCapabilities: initialized.sessionCapabilities)
                         result = try await performRemoteSessionCreation(
                             for: attempt,
                             using: connection,
@@ -8401,6 +8445,7 @@ extension ACPSessionManager {
                             try await connection.newSession(
                                 cwd: worktreePath,
                                 mcpServers: wireMCPServers,
+                                configOptions: startupConfigOptions,
                                 brokerOperationKey: Self.brokerStartupOperationKey(
                                     sessionId: sessionId,
                                     method: "session/new"
@@ -8438,6 +8483,13 @@ extension ACPSessionManager {
                     throw ACPSessionAttachError.remoteSessionUnsupported
                 }
             } else {
+                // Same startup key as a fresh session: one stopped before the
+                // agent's id was saved resends exactly what it sent then.
+                let startupConfigOptions = await startupConfigOptions(
+                    for: sessionId,
+                    cwd: worktreePath,
+                    using: connection,
+                    sessionCapabilities: initialized.sessionCapabilities)
                 result = try await performRemoteSessionCreation(
                     for: attempt,
                     using: connection,
@@ -8446,12 +8498,14 @@ extension ACPSessionManager {
                     try await connection.newSession(
                         cwd: worktreePath,
                         mcpServers: wireMCPServers,
+                        configOptions: startupConfigOptions,
                         brokerOperationKey: Self.brokerStartupOperationKey(
                             sessionId: sessionId,
                             method: "session/new"
                         )
                     )
                 }
+                dropAppliedInitialConfigOptions(startupConfigOptions, shownBy: result.configOptions, for: sessionId)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                     if !attempt.shouldCloseRemoteResultOnCompletion {
                         await connection.shutdown()
@@ -10785,6 +10839,60 @@ extension ACPSessionManager {
         await detach(sessionId: sessionId)
         guard sessions[sessionId] != nil else { return }
         await attach(to: sessionId, freshlyCreated: false)
+    }
+
+    /// The `configOptions` for this session's `session/new`, decided once.
+    /// Every `session/new` of a session shares one startup key, and the
+    /// broker refuses that key replayed with a different payload, so each
+    /// sends what the first one did, including after a restart, when the
+    /// queued choices are gone: entries are stored before they are first
+    /// sent, and none are sent unless they were stored. Only a session that
+    /// has never started (`decide`) picks them; any other may already have
+    /// sent a `session/new` without them.
+    private func startupConfigOptions(
+        for sessionId: ACPSession.ID,
+        cwd: String,
+        using connection: ACPConnection,
+        sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities,
+        decide: Bool = false
+    ) async -> [ACPInitialConfigOption] {
+        if let decided = decidedStartupConfigOptions[sessionId] { return decided }
+        var entries: [ACPInitialConfigOption] = []
+        if let stored = try? await persistence.loadInitialConfigOptions(sessionId: sessionId) {
+            entries = stored
+        } else if decide, sessionCapabilities.supportsOptions,
+                  pendingModel[sessionId] != nil || pendingConfigOptionValues[sessionId]?.isEmpty == false,
+                  let preview = try? await connection.sessionOptions(cwd: cwd) {
+            let chosen = ACPInitialConfigOption.entries(
+                model: pendingModel[sessionId],
+                values: pendingConfigOptionValues[sessionId] ?? [:],
+                preview: preview.configOptions)
+            if !chosen.isEmpty,
+               let stored = try? await persistence.saveInitialConfigOptions(
+                   sessionId: sessionId, chosen, fence: leaseFence(sessionId: sessionId)) {
+                entries = stored
+            }
+        }
+        decidedStartupConfigOptions[sessionId] = entries
+        return entries
+    }
+
+    /// Forgets the queued choices the setup response shows as applied. One
+    /// the agent skipped stays queued, for the attach to set as before.
+    private func dropAppliedInitialConfigOptions(
+        _ sent: [ACPInitialConfigOption],
+        shownBy options: [ACPConfigOption],
+        for sessionId: ACPSession.ID
+    ) {
+        for entry in sent where options.first(where: { $0.id == entry.configId })?.currentValue == entry.value {
+            if pendingConfigOptionValues[sessionId]?.removeValue(forKey: entry.configId) == nil,
+               entry.value == pendingModel[sessionId].map(ACPConfigValue.string) {
+                pendingModel[sessionId] = nil
+            }
+        }
+        if pendingConfigOptionValues[sessionId]?.isEmpty == true {
+            pendingConfigOptionValues[sessionId] = nil
+        }
     }
 
     private func performRemoteSessionCreation(

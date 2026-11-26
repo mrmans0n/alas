@@ -157,8 +157,8 @@ public final class RemoteSessionGateway {
         }
         if let federation, let downstream, federation.route(message, from: downstream) { return }
         switch message {
-        case .helloAck:
-            // Version acknowledgement from an Alas peer; nothing to do server-side.
+        case .helloAck, .ping:
+            // Answered by the connection before reaching the gateway.
             break
         case .host(let request):
             serveHost(request)

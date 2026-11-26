@@ -589,6 +589,11 @@ public final class RemoteConnection: @unchecked Sendable {
     /// a `sendPrompt` before the `takeOver` the client sent just before it.
     private func dispatchMessage(_ payload: Data) {
         guard let msg = try? JSONDecoder().decode(RemoteClientMessage.self, from: payload) else { return }
+        // Answered before any queued session work, so it times the link alone.
+        if case .ping(let requestId) = msg {
+            sendServerMessage(.pong(requestId: String(requestId.prefix(64))))
+            return
+        }
         // Answered here rather than in the gateway: proving who this Mac is
         // belongs to the connection, not to the session surface, and the
         // answer must be able to go out before any session work exists.

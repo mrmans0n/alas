@@ -23,6 +23,22 @@ public struct VMBundle: Sendable {
         public let description: String
     }
 
+    public struct CloneIdentity: Sendable {
+        public let machineIdentifier: Data
+        public let macAddress: String
+
+        public init(machineIdentifier: Data, macAddress: String) {
+            self.machineIdentifier = machineIdentifier
+            self.macAddress = macAddress
+        }
+    }
+
+    /// Copies only the boot files. A nil identity makes a nonbootable base.
+    /// The caller must hold the source stable and confirm its disk is clean.
+    public static func stageClone(from source: VMBundle, to: URL, identity: CloneIdentity?) throws -> VMBundle {
+        try stageClone(from: source, to: to, identity: identity, disk: source.diskImage, auxiliary: source.auxiliaryStorage)
+    }
+
     /// Clones a sealed golden bundle into `to`. Disk and auxiliary storage use
     /// `clonefile(2)` (APFS copy-on-write); the hardware model is copied and a
     /// fresh machine identifier and MAC address are written. The work happens
@@ -35,6 +51,14 @@ public struct VMBundle: Sendable {
         guard golden.isSealed else {
             throw CloneError(description: "Golden VM bundle at \(golden.url.path) is not sealed")
         }
+        return try stageClone(
+            from: golden, to: to, identity: CloneIdentity(machineIdentifier: newMachineIdentifier, macAddress: newMACAddress),
+            disk: diskFrom ?? golden.diskImage, auxiliary: auxiliaryStorageFrom ?? golden.auxiliaryStorage)
+    }
+
+    private static func stageClone(
+        from source: VMBundle, to: URL, identity: CloneIdentity?, disk: URL, auxiliary: URL
+    ) throws -> VMBundle {
         let fm = FileManager.default
         let partial = to.appendingPathExtension("partial")
         try? fm.removeItem(at: partial)
@@ -42,11 +66,13 @@ public struct VMBundle: Sendable {
         do {
             try fm.createDirectory(at: partial, withIntermediateDirectories: false)
             let staged = VMBundle(url: partial)
-            try cloneFile(diskFrom ?? golden.diskImage, to: staged.diskImage)
-            try cloneFile(auxiliaryStorageFrom ?? golden.auxiliaryStorage, to: staged.auxiliaryStorage)
-            try fm.copyItem(at: golden.hardwareModel, to: staged.hardwareModel)
-            try newMachineIdentifier.write(to: staged.machineIdentifier)
-            try Data(newMACAddress.utf8).write(to: staged.macAddress)
+            try cloneFile(disk, to: staged.diskImage)
+            try cloneFile(auxiliary, to: staged.auxiliaryStorage)
+            try fm.copyItem(at: source.hardwareModel, to: staged.hardwareModel)
+            if let identity {
+                try identity.machineIdentifier.write(to: staged.machineIdentifier)
+                try Data(identity.macAddress.utf8).write(to: staged.macAddress)
+            }
             try fm.moveItem(at: partial, to: to)
         } catch {
             try? fm.removeItem(at: partial)

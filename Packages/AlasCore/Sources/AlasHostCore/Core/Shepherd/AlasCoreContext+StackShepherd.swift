@@ -248,8 +248,9 @@ extension AlasCoreContext {
         // would be pushed again, and one `gg land` already forgot would get
         // a new request.
         var toSync = stack
-        let landed = try await landedEntries(of: stack, worktreeID: worktreeID, path: context.path)
-        if !landed.isEmpty, let top = stack.entries.max(by: { $0.position < $1.position }) {
+        let (landed, exactPrefix) = try await landedEntries(of: stack, worktreeID: worktreeID, path: context.path)
+        let syncDropsPrefix = exactPrefix && effects.syncRebaseIfNeeded()
+        if !landed.isEmpty, !syncDropsPrefix, let top = stack.entries.max(by: { $0.position < $1.position }) {
             // The checks above read this stack; the rebase refuses to run on
             // whatever the worktree moved to while they ran.
             let inspected = GGStackIdentity(stackName: stack.name, base: stack.base, headSHA: top.sha)
@@ -273,7 +274,14 @@ extension AlasCoreContext {
             toSync = rebased
         }
         let isUsersChoice = explicitPlan != nil || stackShepherd.pendingShipPlans[sessionID] != nil
-        let chosen = explicitPlan ?? stackShepherd.shipPlan(sessionID: sessionID, id: id)
+        var chosen = explicitPlan ?? stackShepherd.shipPlan(sessionID: sessionID, id: id)
+        if syncDropsPrefix, let boundary = chosen.shipThroughEntryID, landed.contains(where: { $0.id == boundary }) {
+            guard !isUsersChoice, let lastLanded = landed.last,
+                  let published = stack.entries.filter({ $0.position > lastLanded.position && $0.prNumber != nil })
+                    .max(by: { $0.position < $1.position })
+            else { throw Self.missingShipEntryError(stack) }
+            chosen = StackShipPlan(shipThroughEntryID: published.id, opensDrafts: chosen.opensDrafts)
+        }
         // Resolved on the stack about to sync, rebased or not. A boundary
         // below a published entry rises to it. One gg no longer lists never
         // widens a fresh choice; the record's, gone after Clean or a landing,
@@ -286,9 +294,13 @@ extension AlasCoreContext {
         if let top = Self.topShippedEntry(of: toSync, plan: plan) {
             try gateStackPush(sessionID: sessionID, worktreeID: worktreeID, plan: plan, base: toSync.base, headSHA: top.sha)
         }
+        guard let head = toSync.entries.max(by: { $0.position < $1.position }) else {
+            throw GGMutationError.staleConfirmation
+        }
+        let expected = GGStackIdentity(stackName: toSync.name, base: toSync.base, headSHA: head.sha)
         progress { $0 = .init(phase: .syncing) }
         do {
-            try await effects.syncStack(worktreeID, plan) { event in progress { $0.apply(event) } }
+            try await effects.syncStack(worktreeID, plan, expected) { event in progress { $0.apply(event) } }
         } catch {
             throw PRShepherdCLIError(message: "gg sync did not finish: \(Self.prShepherdErrorMessage(error))")
         }
@@ -341,17 +353,20 @@ extension AlasCoreContext {
     /// into the entry below it has not reached the base. Throws when the
     /// base can't be fetched or compared: syncing without knowing would push
     /// a landed commit again.
-    private func landedEntries(of stack: GGStack, worktreeID: String, path: URL) async throws -> [GGStackEntry] {
+    private func landedEntries(
+        of stack: GGStack, worktreeID: String, path: URL
+    ) async throws -> (entries: [GGStackEntry], exactPrefix: Bool) {
+        guard let tip = stack.entries.max(by: { $0.position < $1.position }) else { return ([], false) }
         let seenMerged = stackShepherd.records.values
             .filter { $0.id.worktreeID == worktreeID }
             .reduce(into: Set<String>()) { $0.formUnion(StackShepherdPolicy.landedEntryIDs(of: $1, in: stack)) }
         let git = GitService()
         // gg rebases onto origin's base, so that is what decides.
-        let onBase: Set<String>
+        let onBase: (reachable: Set<String>, patchEquivalent: Set<String>)
         do {
             try await git.fetchRef(worktreePath: path, remote: "origin", branch: stack.base)
             onBase = try await git.commitsAlreadyIn(
-                upstream: "origin/\(stack.base)", shas: stack.entries.map(\.sha), worktreePath: path
+                upstream: "origin/\(stack.base)", head: tip.sha, shas: stack.entries.map(\.sha), worktreePath: path
             )
         } catch {
             throw PRShepherdCLIError(
@@ -359,9 +374,14 @@ extension AlasCoreContext {
                     + "Check that origin is reachable and has \(stack.base), then call stack_ship again."
             )
         }
-        return stack.entries
-            .filter { seenMerged.contains($0.id) || onBase.contains($0.sha) }
-            .sorted { $0.position < $1.position }
+        let landed = stack.entries.filter {
+            seenMerged.contains($0.id) || onBase.reachable.contains($0.sha) || onBase.patchEquivalent.contains($0.sha)
+        }.sorted { $0.position < $1.position }
+        // A squash can carry the same patch under a different SHA. Its children still need a rebase.
+        let exactPrefix = landed.count < stack.entries.count && landed.enumerated().allSatisfy {
+            $0.element.position == $0.offset + 1 && onBase.reachable.contains($0.element.sha)
+        }
+        return (landed, exactPrefix)
     }
 
     /// Binds the worktree's already published stack to `sessionID` without

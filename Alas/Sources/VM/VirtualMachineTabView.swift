@@ -17,6 +17,7 @@ struct VirtualMachineTabView: View {
     /// on every render: reading the registry takes a file lock.
     @State private var record = WorktreeVMManager.RecordStatus()
     @State private var goldenAvailable = false
+    @State private var projectBaseAvailable = false
     @State private var loaded = false
     /// The VM disk's allocated size, formatted; read off the main actor on refresh.
     @State private var diskSize: String?
@@ -95,6 +96,8 @@ struct VirtualMachineTabView: View {
             hasVM: record.hasVM,
             customizingHere: vms.customizingFrom == worktreeID,
             goldenAvailable: goldenAvailable,
+            projectBaseAvailable: projectBaseAvailable,
+            fromProjectBase: record.fromProjectBase,
             installerPhase: installer.phase,
             linuxInstallerPhase: linuxInstaller.phase,
             helper: helperUpdate(recordID),
@@ -154,6 +157,7 @@ struct VirtualMachineTabView: View {
         // Progress ticks change the phase constantly; only a change of kind
         // can change what the registry or disk say.
         .onChange(of: phaseKind) { _, _ in refresh() }
+        .onChange(of: vms.projectBaseRevision) { refresh() }
         // Starting or stopping changes the disk's size and the registry.
         .onChange(of: ownVM != nil) { _, _ in refresh() }
         // A pause records the VM as paused only after it stopped.
@@ -394,7 +398,7 @@ struct VirtualMachineTabView: View {
                 .vmDisabled(busy)
             overflowMenu(
                 updateHelper: canUpdateHelper ? recordID : nil, reveal: ownBundleURL, deletable: true,
-                newSetupScript: VMTabScreen.offersNewSetupScript(
+                newSetupScript: !record.fromProjectBase && VMTabScreen.offersNewSetupScript(
                     cleanPoint: record.cleanPoint, projectScript: state.vmGuestSetupScript(recordID: recordID)))
         }
     }
@@ -656,81 +660,14 @@ struct VirtualMachineTabView: View {
         return titles
     }
 
-    @ViewBuilder
-    private var macOSSetupView: some View {
-        if let position = VMSetupSteps.position(of: installer.phase) {
-            VMEmptyStateCard(
-                icon: "desktopcomputer", title: "Setting up the base image",
-                subtitle: "This happens once. Every worktree VM starts from it."
-            ) {
-                VMSetupSteps(current: position.current, fraction: position.fraction)
-            }
-        } else {
-            if case .failed(let message) = installer.phase {
-                VMCallout(title: "macOS setup couldn't finish", message: message)
-            }
-            VMEmptyStateCard(
-                icon: "desktopcomputer", title: "Set up a macOS VM",
-                subtitle: "Alas downloads macOS once and prepares a base image. Every worktree VM starts from it."
-            ) {
-                EmptyView()
-            } actions: {
-                AlasButton(title: "Set up", style: .primary) {
-                    Task { await installer.start() }
-                }
-            }
-        }
+    private var macOSSetupView: some View { sharedSetup(build: nil) }
+
+    private func goldenSetupView(build: String) -> some View { sharedSetup(build: build) }
+
+    private func sharedSetup(build: String?) -> some View {
+        SharedMacOSSetupView(installer: installer, vms: vms, build: build, display: { state.tabs.vmView(tabID: tab.id) },
+                            finishing: finishingSetup, start: { start(.golden(build: $0)) }, finish: finishGoldenSetup)
     }
-
-    @ViewBuilder
-    private func goldenSetupView(build: String) -> some View {
-        let customized = vms.isGoldenCustomized(build: build)
-        if let note = installer.failureNote {
-            VMCallout(title: "Automatic setup stopped", message: note)
-        }
-        VMCallout(tone: .info, title: customized ? "Customize the base image" : "Finish the setup by hand") {
-            VMNumberedSteps(steps: customized ? Self.customizeSteps : Self.manualSetupSteps)
-                .padding(.top, scale.space[0])
-        } actions: {
-            // Not for a golden the user runs, which it would force off, nor
-            // one reopened by Customize, which is for the user's own changes.
-            if !customized {
-                AlasButton(title: "Set up automatically", compact: true) {
-                    Task { await installer.start() }
-                }
-                .vmDisabled(finishingSetup || vms.isGoldenRunning(build: build))
-            }
-            AlasButton(title: "Done", style: .primary, compact: true) { finishGoldenSetup(build: build) }
-                .vmDisabled(finishingSetup)
-        }
-        if let golden = vms.runningGolden() {
-            VMDisplaySurface(view: state.tabs.vmView(tabID: tab.id), virtualMachine: golden.vm)
-        } else if vms.isStarting(StartTarget.golden(build: build).id) || finishingSetup {
-            Spinner().frame(width: 16, height: 16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            VMEmptyStateCard(
-                icon: "desktopcomputer", title: "The setup VM is off",
-                subtitle: customized ? "Start it to make your changes." : "Start it to finish setting up macOS."
-            ) {
-                EmptyView()
-            } actions: {
-                AlasButton(title: "Start VM", icon: "play.fill", style: .primary) { start(.golden(build: build)) }
-            }
-        }
-    }
-
-    private static let manualSetupSteps = [
-        "Create a user that logs in automatically.",
-        "Install the helper: open My Shared Files › helper › Install Alas VM Guest.",
-        "Allow it in Accessibility and Screen Recording.",
-        "Shut down macOS from the Apple menu, then click Done.",
-    ]
-
-    private static let customizeSteps = [
-        "Make your changes in the VM.",
-        "Shut down macOS from the Apple menu, then click Done. New VMs start from your changes.",
-    ]
 
     @ViewBuilder
     private func choiceView(_ choice: SlotChoice) -> some View {
@@ -746,12 +683,12 @@ struct VirtualMachineTabView: View {
         } else {
             VMEmptyStateCard(
                 icon: "rectangle.on.rectangle", title: "Both VM slots are busy",
-                subtitle: "macOS runs two VMs at a time. Pause one to start this VM."
+                subtitle: "macOS runs two VMs at a time. Free a slot to start this VM."
             ) {
                 EmptyView()
             } actions: {
                 ForEach(choice.candidates, id: \.self) { candidate in
-                    AlasButton(title: "Pause \(state.vmDisplayName(forRecordID: candidate))") {
+                    AlasButton(title: VMSlotCard.releaseTitle(recordID: candidate, name: state.vmDisplayName(forRecordID: candidate))) {
                         start(choice.target, pausing: candidate)
                     }
                 }
@@ -769,6 +706,9 @@ struct VirtualMachineTabView: View {
             // Another Alas process may have sealed or replaced the golden image.
             installer.reloadFromDisk()
             goldenAvailable = vms.availableGolden() != nil
+            let source = try? vms.macOSSource(worktreeID: worktreeID)
+            // A corrupt selection must go through Create to show the error, not shared setup.
+            projectBaseAvailable = source == .projectBase || source == nil
         }
         record = vms.recordStatus(worktreeID, guest: guest)
         loaded = true
@@ -1027,20 +967,8 @@ struct VirtualMachineTabView: View {
         errorMessage = nil
         finishingSetup = true
         Task {
-            switch await vms.shutDownGoldenForSealing(build: build) {
-            case .clean:
-                do {
-                    // An interrupted helper update may have left sshd on.
-                    try await vms.turnOffLeftoverSSH(id: StartTarget.golden(build: build).id)
-                    try installer.markSetupDone()
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
-            case .stillRunning:
-                errorMessage = "Shut down macOS from the Apple menu, then click Done."
-            case .forcedOff:
-                errorMessage = "macOS was powered off without shutting down. Start it, shut down macOS from the Apple menu, then click Done."
-            }
+            do { try await SharedMacOSSetupView.finish(build: build, vms: vms, installer: installer) }
+            catch { errorMessage = error.localizedDescription }
             finishingSetup = false
             refresh()
         }
