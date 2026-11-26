@@ -463,6 +463,9 @@ public final class RemoteServer {
         configured.onApprovedPeerPaired = { [weak self] request, requestID, localPeer in
             self?.onApprovedPeerPaired?(request, requestID, localPeer)
         }
+        configured.proveRoute = { origin, nonce in
+            signer?.proof(challenge: nonce, serverId: RemoteTailscale.routeIdentity(identity().serverId, origin: origin))
+        }
         configured.identity = identity
         configured.identityProof = proveIdentity
         if let coordinator = approvalCoordinator {

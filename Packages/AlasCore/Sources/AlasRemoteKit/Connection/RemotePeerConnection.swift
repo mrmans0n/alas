@@ -77,6 +77,7 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
     public var verifiedHTTPSOrigin: URL? { state == .online ? secureOrigin : nil }
     private var secureOrigin: URL?
 
+    private let discoverOrigins: @MainActor () async -> [String]
     private let origins: [String]
     /// The peer's token. Travels only as the WebSocket subprotocol; it is
     /// never logged, never part of an error, and never in the URL.
@@ -105,7 +106,9 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
     public init(origins: [String], lastOrigin: String?, token: String, expectedServerId: String? = nil,
          expectedPublicKey: String? = nil,
          config: Config = Config(), session: URLSession = .shared,
+         discoverOrigins: @escaping @MainActor () async -> [String] = { [] },
          onEvent: @escaping @MainActor (Event) -> Void) {
+        self.discoverOrigins = discoverOrigins
         self.origins = origins
         self.lastOrigin = lastOrigin
         self.token = token
@@ -167,7 +170,15 @@ public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Send
         for origin in [lastOrigin].compactMap({ $0 }) + origins where !ordered.contains(origin) {
             ordered.append(origin)
         }
-        for origin in ordered {
+        var pending = ordered.makeIterator()
+        var triedDiscovery = false
+        while !Task.isCancelled {
+            guard let origin = pending.next() else {
+                guard !triedDiscovery, expectedPublicKey != nil else { break }
+                triedDiscovery = true
+                pending = await discoverOrigins().filter { !ordered.contains($0) }.makeIterator()
+                continue
+            }
             if Task.isCancelled { return }
             guard let url = Self.socketURL(for: origin) else { continue }
             let candidate = session.webSocketTask(with: url, protocols: [token])

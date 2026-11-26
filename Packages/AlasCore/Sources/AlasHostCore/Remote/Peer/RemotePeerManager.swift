@@ -285,7 +285,14 @@ public final class RemotePeerManager {
          pairer: RemotePeerPairer = .live,
          reciprocalConfirmationTimeout: TimeInterval = 35,
          localIdentity: @escaping @MainActor () -> LocalIdentity,
-         makeConnection: @escaping MakeConnection = { peer, onEvent in
+         makeConnection: MakeConnection? = nil,
+         now: @escaping () -> Date = { Date() }) {
+        self.store = store
+        self.pairing = pairing
+        self.pairer = pairer
+        self.reciprocalConfirmationTimeout = reciprocalConfirmationTimeout
+        self.localIdentity = localIdentity
+        self.makeConnection = makeConnection ?? { peer, onEvent in
              // `expectedServerId` binds the link to the identity this record
              // was paired with: the socket's `hello` must report it or the
              // connection is refused, and the /health probe must report it
@@ -302,15 +309,10 @@ public final class RemotePeerManager {
                  expectedServerId: peer.serverId,
                  expectedPublicKey: peer.publicKey,
                  config: .init(pingInterval: 10),
-                 onEvent: onEvent)
-         },
-         now: @escaping () -> Date = { Date() }) {
-        self.store = store
-        self.pairing = pairing
-        self.pairer = pairer
-        self.reciprocalConfirmationTimeout = reciprocalConfirmationTimeout
-        self.localIdentity = localIdentity
-        self.makeConnection = makeConnection
+                 discoverOrigins: {
+                     await RemoteTailscale.discover(peer: peer, local: localIdentity())
+                 }, onEvent: onEvent)
+        }
         self.now = now
         self.peers = store.load()
         // `reduce`, not `Dictionary(uniqueKeysWithValues:)`: a corrupted

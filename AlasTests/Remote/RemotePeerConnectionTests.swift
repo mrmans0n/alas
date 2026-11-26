@@ -476,19 +476,26 @@ struct RemotePeerConnectionTests {
         }
     }
 
-    @Test func aPinnedLinkGoesOnlineOnlyAfterTheSocketProvesTheKey() async throws {
+    @Test(arguments: [true, false]) func aPinnedLinkGoesOnlineOnlyAfterTheSocketProvesTheKey(savedAddressWorks: Bool) async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
         let signer = StubSigner()
         let (server, origin) = try await startServer(pairing: pairing, signer: signer)
         defer { server.stop() }
         let events = Events()
-        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: token,
+        var discoveryCalls = 0
+        let saved = savedAddressWorks ? origin : "http://127.0.0.1:1"
+        let link = RemotePeerConnection(origins: [saved], lastOrigin: nil, token: token,
                                         expectedServerId: "srv-a", expectedPublicKey: signer.publicKey,
-                                        config: fastConfig()) { events.all.append($0) }
+                                        config: fastConfig(), discoverOrigins: {
+                                            discoveryCalls += 1
+                                            return [origin]
+                                        }) { events.all.append($0) }
         link.connect()
         defer { link.disconnect() }
         try await waitUntil { link.state == .online }
+        #expect(discoveryCalls == (savedAddressWorks ? 0 : 1))
+        #expect(link.lastOrigin == origin)
         #expect(signer.proofCalls == 1)
         #expect(events.hellos == ["srv-a"])
     }

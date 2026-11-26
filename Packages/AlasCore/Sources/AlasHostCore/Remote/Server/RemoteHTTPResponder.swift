@@ -15,6 +15,7 @@ public struct RemoteDiagnosticsSnapshot: Codable, Equatable, Sendable {
     public let pairedDeviceCount: Int
     public let serverId: String?
     public let name: String?
+    public var routeProof: RemoteIdentityProof?
     public var pairingApprovalVersion: Int?
 
     public init(
@@ -69,6 +70,7 @@ public struct RemoteHTTPResponder: Sendable {
     /// to a key string anyone could have copied from a public advertisement.
     /// Shared with the socket's own proof, so both prove the same key.
     public var identityProof: (@MainActor (String) -> RemoteIdentityProof?)?
+    var proveRoute: ((String, String) -> RemoteIdentityProof?)?
     public var approval: RemotePairingApprovalHTTP?
     public var onApprovedPeerPaired: (@MainActor (RemotePeerPairingRequest, String, ApprovalPeer) -> Void)?
 
@@ -101,7 +103,13 @@ public struct RemoteHTTPResponder: Sendable {
                              extraHeaders: cors)
         }
         if req.method == "GET", req.path == "/remote-info" {
-            let data = (try? JSONEncoder().encode(diagnostics())) ?? Data(#"{"error":"encode"}"#.utf8)
+            var snapshot = diagnostics()
+            if let nonce = req.headers["x-alas-route-nonce"], RemoteIdentityCrypto.isPlausibleChallenge(nonce),
+               let origin = req.headers["x-alas-route-origin"],
+               snapshot.addresses.contains(where: { $0.kind == .tailnet && $0.url == origin }) {
+                snapshot.routeProof = proveRoute?(origin, nonce)
+            }
+            let data = (try? JSONEncoder().encode(snapshot)) ?? Data(#"{"error":"encode"}"#.utf8)
             return Self.http(status: "200 OK", contentType: "application/json; charset=utf-8", body: data)
         }
         if req.method == "POST", req.path == "/pair" {

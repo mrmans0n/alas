@@ -5,7 +5,7 @@ import Crypto
 /// Carries the public half so the verifier can compare it against the key its
 /// record is pinned to, and a signature over the verifier's own fresh
 /// challenge so the answer cannot be replayed or precomputed.
-public struct RemoteIdentityProof: Equatable, Sendable {
+public struct RemoteIdentityProof: Codable, Equatable, Sendable {
     public let challenge: String
     public let publicKey: String
     public let signature: String
