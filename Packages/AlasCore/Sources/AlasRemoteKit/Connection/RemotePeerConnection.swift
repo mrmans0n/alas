@@ -559,3 +559,11 @@ private struct Health: Decodable {
     let serverId: String?
     let federationEnabled: Bool?
 }
+
+public extension Duration {
+    /// A ping round trip as people read it: "12 ms", or "<1 ms" on loopback.
+    var roundTripLabel: String {
+        let ms = self / .milliseconds(1)
+        return ms < 1 ? "<1 ms" : "\(Int(ms.rounded())) ms"
+    }
+}

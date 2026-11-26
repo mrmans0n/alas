@@ -23,6 +23,7 @@ struct PeersView: View {
                             PeerRow(
                                 host: host,
                                 state: hub.state(of: host.id),
+                                roundTrip: hub.roundTrips[host.id],
                                 sessionCount: hub.sessions(of: host.id).count,
                                 openDevices: hub.state(of: host.id) == .online && hub.supports(PeerDeviceCapability.v1, on: host.id)
                                     ? { viewingDevices = host } : nil
@@ -95,6 +96,7 @@ struct PeersView: View {
 private struct PeerRow: View {
     let host: PairedHost
     let state: PhoneConnection.State
+    let roundTrip: Duration?
     let sessionCount: Int
     let openDevices: (() -> Void)?
     let pairAgain: () -> Void
@@ -110,7 +112,8 @@ private struct PeerRow: View {
                 Text(host.name).font(.headline)
                 HStack(spacing: 6) {
                     Circle().fill(dotColor).frame(width: 7, height: 7)
-                    Text(state.label)
+                    Text([state.label, roundTrip?.roundTripLabel].compactMap(\.self).joined(separator: " · "))
+                        .monospacedDigit()
                 }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
