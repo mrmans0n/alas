@@ -979,6 +979,7 @@ jobs:
         run: |
           npm ci --prefix scripts/remote-web-bundle --no-audit --no-fund
           node scripts/remote-web-bundle/build.mjs
+          node scripts/remote-web-bundle/test-backends.mjs
           node scripts/remote-web-bundle/test-notices.mjs
           test -z "$(git status --porcelain -- Alas/Resources/RemoteWeb/diffs)" || {
             git status --short -- Alas/Resources/RemoteWeb/diffs
