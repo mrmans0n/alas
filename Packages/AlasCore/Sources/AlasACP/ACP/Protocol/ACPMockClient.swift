@@ -27,6 +27,7 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
     private let completionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
+    private let mcpMessagesCont: AsyncStream<ACPMCPMessageRequest>.Continuation
     private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
     private let sessionListChangesCont: AsyncStream<ACPSessionListChanges>.Continuation
     private let updateCountLock = NSLock()
@@ -49,10 +50,12 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
     public let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
     public let fileRequests: AsyncStream<ACPFileRequest>
     public let terminalRequests: AsyncStream<ACPTerminalRequest>
+    public let mcpMessageRequests: AsyncStream<ACPMCPMessageRequest>
     public let authStatusUpdates: AsyncStream<ACPAuthStatusEvent>
     public let sessionListChanges: AsyncStream<ACPSessionListChanges>
 
     public var terminalResponses: [JSONRPCID: Result<Data, JSONRPCError>] = [:]
+    public var mcpMessageResponses: [JSONRPCID: Result<Data, JSONRPCError>] = [:]
 
     public init(providesDurableOperationKeyDeduplication: Bool = false) {
         self.providesDurableOperationKeyDeduplication =
@@ -84,6 +87,9 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
         var t: AsyncStream<ACPTerminalRequest>.Continuation!
         self.terminalRequests = AsyncStream { t = $0 }
         self.terminalsCont = t
+        var m: AsyncStream<ACPMCPMessageRequest>.Continuation!
+        self.mcpMessageRequests = AsyncStream { m = $0 }
+        self.mcpMessagesCont = m
         var a: AsyncStream<ACPAuthStatusEvent>.Continuation!
         self.authStatusUpdates = AsyncStream { a = $0 }
         self.authStatusCont = a
@@ -176,6 +182,7 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
     }
     public func emitFile(_ req: ACPFileRequest) { filesCont.yield(req) }
     public func emitTerminal(_ req: ACPTerminalRequest) { terminalsCont.yield(req) }
+    public func emitMCPMessage(_ req: ACPMCPMessageRequest) { mcpMessagesCont.yield(req) }
     public func emitAuthStatus(
         _ status: ACPAuthStatus,
         durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil
@@ -216,6 +223,9 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
     public func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
         terminalResponses[id] = result
     }
+    public func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
+        mcpMessageResponses[id] = result
+    }
 
     public func script(method: String, _ handler: @escaping (ACPRequest) throws -> Data) {
         scripts[method] = handler
@@ -244,6 +254,7 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
         completionsCont.finish()
         filesCont.finish()
         terminalsCont.finish()
+        mcpMessagesCont.finish()
         authStatusCont.finish()
         sessionListChangesCont.finish()
     }

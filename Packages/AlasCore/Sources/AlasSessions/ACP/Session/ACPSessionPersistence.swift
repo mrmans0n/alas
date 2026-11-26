@@ -130,6 +130,18 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         return try store.db.transaction(operation)
     }
 
+    /// See `ACPSessionStore.beginMCPToolCall`.
+    public func beginMCPToolCall(sessionId: String, serverId: String, requestId: String) throws -> Bool {
+        let store = try openedStore()
+        return try store.db.transaction {
+            try store.beginMCPToolCall(sessionId: sessionId, serverId: serverId, requestId: requestId)
+        }
+    }
+
+    public func endMCPToolCall(serverId: String, requestId: String) throws {
+        try openedStore().endMCPToolCall(serverId: serverId, requestId: requestId)
+    }
+
     public func saveTurnCaption(sessionId: String, _ caption: StoredTurnCaption) throws {
         try openedStore().saveTurnCaption(sessionId: sessionId, caption)
     }

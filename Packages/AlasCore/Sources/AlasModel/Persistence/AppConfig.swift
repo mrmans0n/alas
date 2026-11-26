@@ -44,6 +44,9 @@ public struct ContentMaterialOverride: Codable, Equatable, Sendable {
 public enum AlasMCPTransport: String, Codable, Equatable, Sendable {
     case stdio
     case http
+    /// Over the agent's ACP connection when it supports that, else HTTP,
+    /// else stdio.
+    case acp
 }
 
 /// A microphone chosen for dictation. Kept by CoreAudio UID, which stays the

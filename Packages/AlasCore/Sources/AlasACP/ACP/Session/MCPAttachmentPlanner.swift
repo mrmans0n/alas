@@ -282,6 +282,7 @@ public enum MCPAttachmentPlanner: Sendable {
         case .stdio: true
         case .http: capabilities.http
         case .sse: capabilities.sse
+        case .acp: capabilities.acp
         }
     }
 
@@ -320,6 +321,8 @@ public enum MCPAttachmentPlanner: Sendable {
             return command == trimmedCommand && !trimmedCommand.isEmpty
         case let .http(_, url, _), let .sse(_, url, _):
             value = url
+        case .acp:
+            return true
         }
         guard let value, value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.contains(where: \.isWhitespace),
@@ -381,7 +384,7 @@ public enum MCPAttachmentPlanner: Sendable {
             return .success(.http(name: name, url: url, headers: resolvedHeaders))
         case .sse:
             return .success(.sse(name: name, url: url, headers: resolvedHeaders))
-        case .stdio:
+        case .stdio, .acp:
             preconditionFailure("Remote server must use an HTTP transport")
         }
     }

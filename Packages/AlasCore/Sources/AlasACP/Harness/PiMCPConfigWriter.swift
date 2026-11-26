@@ -54,6 +54,9 @@ public enum PiMCPConfigWriter: Sendable {
                     entry["headers"] = Dictionary(headers.map { ($0.name, $0.value) }) { _, last in last }
                 }
                 mcpServers[name] = entry
+            case .acp:
+                // Served over an ACP connection, which Pi's own MCP loader has no part in.
+                continue
             }
         }
         let payload: [String: Any] = [

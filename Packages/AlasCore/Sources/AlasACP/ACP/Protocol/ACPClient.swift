@@ -142,6 +142,13 @@ public protocol ACPClient: AnyObject {
     )
     func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>)
     func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>)
+
+    /// `mcp/message` requests for servers the client serves over ACP. The
+    /// owner must call `respondToMCPMessage(id:result:)` exactly once per
+    /// request, with the binding's result or error.
+    var mcpMessageRequests: AsyncStream<ACPMCPMessageRequest> { get }
+    func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>)
+
     func hasPendingOutboundRequest(id: JSONRPCID) -> Bool
 
     func detach() async
@@ -160,6 +167,13 @@ public protocol ACPRequestHandoffPreparing: ACPClient {
 
 extension ACPClient {
     public var sessionUpdateProtocolVersion: ACPProtocolVersion { .v1 }
+
+    /// Clients that never register an ACP-served MCP server get no messages.
+    public var mcpMessageRequests: AsyncStream<ACPMCPMessageRequest> {
+        AsyncStream { $0.finish() }
+    }
+
+    public func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>) {}
 
     public var incomingV2Updates: AsyncStream<ACPV2SessionUpdateDelivery> {
         AsyncStream { $0.finish() }

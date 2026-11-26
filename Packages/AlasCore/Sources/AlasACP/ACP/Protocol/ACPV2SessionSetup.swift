@@ -24,6 +24,7 @@ public struct ACPV2SessionNewParams: Encodable, Sendable {
                 guard Self.isAbsolutePath(command) else { throw ACPV2SessionSetupError.invalidInput }
                 transport = "stdio"
             case .http: transport = "http"
+            case .acp: transport = "acp"
             case .sse: throw ACPV2SessionSetupError.unsupportedCapability
             }
             guard capabilities.capability(at: ["session", "mcp", transport]) != nil else { throw ACPV2SessionSetupError.unsupportedCapability }
@@ -54,12 +55,15 @@ public struct ACPV2SessionNewParams: Encodable, Sendable {
                 try item.encode("http", forKey: .type)
                 try item.encode(url, forKey: .url)
                 try item.encode(headers, forKey: .headers)
+            case .acp(_, let serverId):
+                try item.encode("acp", forKey: .type)
+                try item.encode(serverId, forKey: .serverId)
             case .sse: throw ACPV2SessionSetupError.unsupportedCapability
             }
         }
     }
     private enum Keys: String, CodingKey { case cwd, mcpServers }
-    private enum ServerKeys: String, CodingKey { case type, name, command, args, env, url, headers }
+    private enum ServerKeys: String, CodingKey { case type, name, command, args, env, url, headers, serverId }
 }
 
 /// Setup metadata remains raw until an integration implements its semantics.

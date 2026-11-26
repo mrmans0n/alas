@@ -15,10 +15,14 @@ public enum ACPMCPServer: Codable, Equatable, Sendable {
     case stdio(name: String, command: String, args: [String], env: [ACPMCPKeyValue])
     case http(name: String, url: String, headers: [ACPMCPKeyValue])
     case sse(name: String, url: String, headers: [ACPMCPKeyValue])
+    /// A server the client answers itself over the ACP connection
+    /// (MCP-over-ACP): the agent sends each MCP message as `mcp/message`
+    /// naming `serverId`, an opaque id for this registration.
+    case acp(name: String, serverId: String)
 
     public var name: String {
         switch self {
-        case let .stdio(name, _, _, _), let .http(name, _, _), let .sse(name, _, _):
+        case let .stdio(name, _, _, _), let .http(name, _, _), let .sse(name, _, _), let .acp(name, _):
             return name
         }
     }
@@ -31,6 +35,7 @@ public enum ACPMCPServer: Codable, Equatable, Sendable {
         case env
         case url
         case headers
+        case serverId
     }
 
     public init(from decoder: Decoder) throws {
@@ -58,6 +63,8 @@ public enum ACPMCPServer: Codable, Equatable, Sendable {
                 url: try container.decode(String.self, forKey: .url),
                 headers: try container.decodeIfPresent([ACPMCPKeyValue].self, forKey: .headers) ?? []
             )
+        case "acp":
+            self = .acp(name: name, serverId: try container.decode(String.self, forKey: .serverId))
         case let .some(type):
             throw DecodingError.dataCorruptedError(
                 forKey: .type,
@@ -86,6 +93,10 @@ public enum ACPMCPServer: Codable, Equatable, Sendable {
             try container.encode(name, forKey: .name)
             try container.encode(url, forKey: .url)
             try container.encode(headers, forKey: .headers)
+        case let .acp(name, serverId):
+            try container.encode("acp", forKey: .type)
+            try container.encode(name, forKey: .name)
+            try container.encode(serverId, forKey: .serverId)
         }
     }
 }
@@ -93,15 +104,19 @@ public enum ACPMCPServer: Codable, Equatable, Sendable {
 public struct ACPMCPServerCapabilities: Codable, Equatable, Sendable {
     public let http: Bool
     public let sse: Bool
+    /// The agent takes `type: "acp"` servers (MCP-over-ACP, ACP v1).
+    public let acp: Bool
 
-    public init(http: Bool = false, sse: Bool = false) {
+    public init(http: Bool = false, sse: Bool = false, acp: Bool = false) {
         self.http = http
         self.sse = sse
+        self.acp = acp
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         http = try container.decodeIfPresent(Bool.self, forKey: .http) ?? false
         sse = try container.decodeIfPresent(Bool.self, forKey: .sse) ?? false
+        acp = try container.decodeIfPresent(Bool.self, forKey: .acp) ?? false
     }
 }

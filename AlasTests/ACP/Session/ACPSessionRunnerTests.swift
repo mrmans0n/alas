@@ -3914,6 +3914,49 @@ struct ACPSessionRunnerTests {
         #expect(text.value == "before edit")
     }
 
+    @Test("mcp/message is answered through the router, and a tool call an earlier run left unanswered is not run again")
+    func mcpMessagesAndInterruptedToolCalls() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        // The app quit while this call ran; the broker delivers it again.
+        #expect(try store.beginMCPToolCall(sessionId: "s", serverId: "alas-s", requestId: "interrupted"))
+
+        let served = MCPRequestLog()
+        let router = ACPMCPMessageRouter()
+        await router.register(serverId: "alas-s") { body in
+            await served.append(body)
+            return Data(#"{"jsonrpc":"2.0","id":"x","result":{"content":[],"isError":false}}"#.utf8)
+        }
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(session: session, connection: ACPConnection(client: mock), store: store,
+                                      sessionId: "s", worktreePath: "/tmp", mcpMessageRouter: router)
+        runner.start()
+        defer { runner.stop() }
+        func toolCall(_ requestId: String) -> ACPMCPMessageParams {
+            .init(serverId: "alas-s", requestId: requestId, method: "tools/call",
+                  params: .object(["name": .string("pr_status"), "arguments": .object([:])]), sessionId: "s")
+        }
+        func response(_ id: JSONRPCID) throws -> NSDictionary {
+            let body = try #require(mock.mcpMessageResponses[id]).get()
+            return try #require(JSONSerialization.jsonObject(with: body) as? NSDictionary)
+        }
+
+        mock.emitMCPMessage(.init(id: .number(1), params: toolCall("fresh")))
+        mock.emitMCPMessage(.init(id: .number(2), params: toolCall("interrupted")))
+        try await waitUntil { mock.mcpMessageResponses[.number(1)] != nil && mock.mcpMessageResponses[.number(2)] != nil }
+
+        #expect(try response(.number(1)) == ["result": ["content": [], "isError": false]])
+        let interruptedResponse = try response(.number(2))
+        let interrupted = try #require(interruptedResponse["result"] as? NSDictionary)
+        #expect(interrupted["isError"] as? Bool == true)
+        #expect(await served.count == 1, "the interrupted call must not reach the server again")
+        try await waitUntil { (try? store.db.query("SELECT 1 FROM acp_mcp_started_tool_calls").isEmpty) == true }
+    }
+
     @Test("file writes stop when the runner is superseded during lease validation")
     func fileWriteStopsWhenRunnerIsSupersededDuringLeaseValidation() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
@@ -8520,4 +8563,11 @@ extension ACPSessionUpdate {
         if let id { end["id"] = id }
         return .sessionInfoUpdate(.init(metadata: AnyCodable(["loadReplayEnd": end])))
     }
+}
+
+/// The bodies an MCP backend received, in order.
+private actor MCPRequestLog {
+    private var bodies: [Data] = []
+    var count: Int { bodies.count }
+    func append(_ body: Data) { bodies.append(body) }
 }

@@ -60,6 +60,9 @@ public enum CodexMCPRequirementsProbe {
             let quotedArgs = args.compactMap(tomlString)
             guard let command = tomlString(command), quotedArgs.count == args.count else { return nil }
             return ["-c", "\(key).command=\(command)", "-c", "\(key).args=[\(quotedArgs.joined(separator: ","))]"]
+        case .acp:
+            // Codex has no config form for a server the client serves over ACP.
+            return nil
         }
     }
 

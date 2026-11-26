@@ -20,7 +20,7 @@ public enum ACPRemoteMCPFilter: Sendable {
             switch server {
             case let .stdio(name, _, _, _):
                 droppedStdio.append(name)
-            case .http, .sse:
+            case .http, .sse, .acp:
                 kept.append(server)
             }
         }

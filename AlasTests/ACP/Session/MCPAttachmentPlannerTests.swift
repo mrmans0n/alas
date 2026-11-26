@@ -488,9 +488,6 @@ struct MCPAttachmentPlannerTests {
     }
 
     private func serverName(_ server: ACPMCPServer) -> String {
-        switch server {
-        case let .stdio(name, _, _, _), let .http(name, _, _), let .sse(name, _, _):
-            name
-        }
+        server.name
     }
 }

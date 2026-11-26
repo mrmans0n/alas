@@ -21,6 +21,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
     private let elicitationCompletionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
+    private let mcpMessagesCont: AsyncStream<ACPMCPMessageRequest>.Continuation
     private let stderrCont: AsyncStream<Data>.Continuation
     private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
     private let sessionListChangesCont: AsyncStream<ACPSessionListChanges>.Continuation
@@ -44,6 +45,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
     public let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
     public let fileRequests: AsyncStream<ACPFileRequest>
     public let terminalRequests: AsyncStream<ACPTerminalRequest>
+    public let mcpMessageRequests: AsyncStream<ACPMCPMessageRequest>
     public let incomingStderr: AsyncStream<Data>
     public let authStatusUpdates: AsyncStream<ACPAuthStatusEvent>
     public let sessionListChanges: AsyncStream<ACPSessionListChanges>
@@ -130,6 +132,10 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         self.terminalRequests = AsyncStream { tC = $0 }
         self.terminalsCont = tC
 
+        var mC: AsyncStream<ACPMCPMessageRequest>.Continuation!
+        self.mcpMessageRequests = AsyncStream { mC = $0 }
+        self.mcpMessagesCont = mC
+
         var eC: AsyncStream<Data>.Continuation!
         self.incomingStderr = AsyncStream { eC = $0 }
         self.stderrCont = eC
@@ -201,6 +207,10 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         var tC: AsyncStream<ACPTerminalRequest>.Continuation!
         self.terminalRequests = AsyncStream { tC = $0 }
         self.terminalsCont = tC
+
+        var mC: AsyncStream<ACPMCPMessageRequest>.Continuation!
+        self.mcpMessageRequests = AsyncStream { mC = $0 }
+        self.mcpMessagesCont = mC
 
         var eC: AsyncStream<Data>.Continuation!
         self.incomingStderr = AsyncStream { eC = $0 }
@@ -476,6 +486,17 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
                 deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 terminalsCont.yield(.release(id: id, params: p))
             }
+        case "mcp/message":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPMCPMessageParams>.self, from: data),
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                mcpMessagesCont.yield(.init(id: id, params: p))
+            } else if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
+            }
         case "cursor/create_plan":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorCreatePlanParams>.self, from: data),
                let id = env.id, let params = env.params {
@@ -615,6 +636,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         elicitationCompletionsCont.finish()
         filesCont.finish()
         terminalsCont.finish()
+        mcpMessagesCont.finish()
         authStatusCont.finish()
         sessionListChangesCont.finish()
     }
@@ -924,6 +946,13 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
     }
 
     public func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
+        Task { [weak self] in
+            guard let self else { return }
+            self.respondFile(id: id, result: result)
+        }
+    }
+
+    public func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
         Task { [weak self] in
             guard let self else { return }
             self.respondFile(id: id, result: result)

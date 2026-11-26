@@ -13305,7 +13305,7 @@ final class AppState {
                 let sessionId = context.sessionId
                 let serverName = self.config.agents.alasMCPServerName(for: context.agentID)
                 let hiddenToolGroups = self.config.agents.alasMCPHiddenToolGroups(for: context.agentID)
-                guard case .local(let adapterSupportsHTTP) = context.location else {
+                guard case .local(let adapterSupportsHTTP, let adapterSupportsACP) = context.location else {
                     // Remote projects keep app-level servers only (repo config
                     // is a local-only layer in v1).
                     return await self.remoteVisualMCPAttachment(
@@ -13344,8 +13344,12 @@ final class AppState {
                         trust: project.repoMCPTrust
                     ).active
                 }()
-                if self.config.harness.alasMCPTransport == .http,
-                   adapterSupportsHTTP,
+                let delivery = BuiltInAlasMCP.delivery(
+                    preference: self.config.harness.alasMCPTransport,
+                    adapterSupportsHTTP: adapterSupportsHTTP,
+                    adapterSupportsACP: adapterSupportsACP
+                )
+                if delivery != .stdio,
                    let binaryPath, let socketPath = self.acpSessionSocketPath(sessionId: sessionId),
                    BuiltInAlasMCP.shouldInject(
                        enabled: self.config.harness.exposeAlasMCP,
@@ -13363,6 +13367,7 @@ final class AppState {
                         deviceTools: self.config.deviceAgentsEnabled,
                         hiddenToolGroups: hiddenToolGroups
                     ) {
+                        let acpServerId = delivery == .acp ? BuiltInAlasMCP.acpServerId(sessionId: sessionId) : nil
                         return .local(BuiltInAlasMCP.injection(
                             enabled: self.config.harness.exposeAlasMCP,
                             configuredServers: configuredServers,
@@ -13375,8 +13380,9 @@ final class AppState {
                             deviceTools: self.config.deviceAgentsEnabled,
                             hiddenToolGroups: hiddenToolGroups,
                             cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
-                            serverName: serverName
-                        ))
+                            serverName: serverName,
+                            acpServerId: acpServerId
+                        ), acpBackend: acpServerId.map { _ in ACPMCPHTTPBackend.backend(endpoint: endpoint) })
                     }
                     // Supervisor couldn't get a port — fall through to stdio
                     // (better than no tools).
@@ -13780,7 +13786,7 @@ final class AppState {
                 let hiddenToolGroups = self.config.agents.alasMCPHiddenToolGroups(for: context.agentID)
                 let current = self.currentWorkspaceCheckoutSnapshot(checkout)
                 let configuredServers = self.workspaceFrozenMCPServers(for: current)
-                guard case .local(let adapterSupportsHTTP) = context.location else {
+                guard case .local(let adapterSupportsHTTP, let adapterSupportsACP) = context.location else {
                     return await self.remoteVisualMCPAttachment(
                         context: context, configuredServers: configuredServers, allowsPRTools: false)
                 }
@@ -13792,8 +13798,12 @@ final class AppState {
                     rootPath: current.rootPath,
                     members: current.members.map { .init(id: $0.id, availability: $0.availability) }
                 )
-                if self.config.harness.alasMCPTransport == .http,
-                   adapterSupportsHTTP,
+                let delivery = BuiltInAlasMCP.delivery(
+                    preference: self.config.harness.alasMCPTransport,
+                    adapterSupportsHTTP: adapterSupportsHTTP,
+                    adapterSupportsACP: adapterSupportsACP
+                )
+                if delivery != .stdio,
                    let socketPath = self.acpSessionSocketPath(sessionId: sessionId),
                    BuiltInAlasMCP.shouldInject(
                        enabled: self.config.harness.exposeAlasMCP,
@@ -13811,6 +13821,7 @@ final class AppState {
                        workspaceOnly: true,
                        hiddenToolGroups: hiddenToolGroups
                    ) {
+                    let acpServerId = delivery == .acp ? BuiltInAlasMCP.acpServerId(sessionId: sessionId) : nil
                     return .local(BuiltInAlasMCP.injection(
                         enabled: self.config.harness.exposeAlasMCP,
                         configuredServers: configuredServers,
@@ -13822,8 +13833,9 @@ final class AppState {
                         workspaceContext: workspaceContext,
                         hiddenToolGroups: hiddenToolGroups,
                         cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
-                        serverName: serverName
-                    ))
+                        serverName: serverName,
+                        acpServerId: acpServerId
+                    ), acpBackend: acpServerId.map { _ in ACPMCPHTTPBackend.backend(endpoint: endpoint) })
                 }
                 self.mcpHTTPSupervisor.end(sessionId: sessionId)
                 return .local(BuiltInAlasMCP.injection(
