@@ -7,7 +7,7 @@ import AlasCode
 import AlasACP
 
 public final class ACPSessionStore {
-    public static let targetSchemaVersion = 40
+    public static let targetSchemaVersion = 41
     public let path: String
     public let db: SQLiteDatabase
 
@@ -115,6 +115,7 @@ public final class ACPSessionStore {
         if current < 38 { try createV2PreviewDisplaySchema() }
         if current < 39 { try createTurnCaptionsSchema() }
         if current < 40 { try createInitialConfigOptionsSchema() }
+        if current < 41 { try createStartedMCPToolCallsSchema() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -870,6 +871,40 @@ extension ACPSessionStore {
           entries     TEXT NOT NULL
         )
         """)
+    }
+
+    private func createStartedMCPToolCallsSchema() throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS acp_mcp_started_tool_calls (
+          session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          server_id   TEXT NOT NULL,
+          request_id  TEXT NOT NULL,
+          PRIMARY KEY (server_id, request_id)
+        )
+        """)
+    }
+
+    /// Records that a `tools/call` an agent sent over ACP is about to run.
+    /// False when it was already recorded: an earlier app run started it and
+    /// never answered, and the broker delivered it again, so running it now
+    /// could do its work twice.
+    public func beginMCPToolCall(sessionId: String, serverId: String, requestId: String) throws -> Bool {
+        let started = try db.query(
+            "SELECT 1 FROM acp_mcp_started_tool_calls WHERE server_id = ? AND request_id = ?",
+            bindings: [serverId, requestId]
+        )
+        guard started.isEmpty else { return false }
+        try db.exec(
+            "INSERT INTO acp_mcp_started_tool_calls (session_id, server_id, request_id) VALUES (?,?,?)",
+            bindings: [sessionId, serverId, requestId])
+        return true
+    }
+
+    /// Forgets a `tools/call` once it has been answered.
+    public func endMCPToolCall(serverId: String, requestId: String) throws {
+        try db.exec(
+            "DELETE FROM acp_mcp_started_tool_calls WHERE server_id = ? AND request_id = ?",
+            bindings: [serverId, requestId])
     }
 
     public func loadInitialConfigOptions(sessionId: String) throws -> [ACPInitialConfigOption]? {

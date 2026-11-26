@@ -120,6 +120,9 @@ struct MCPRegistrationDecisionTests {
         // A stdio server left running after switching this attach to HTTP.
         (.stdio, .http, MCPRegistrationEvidence.none),
         (.http, nil, MCPRegistrationEvidence.none),
+        // An ACP-served server is the app's HTTP process behind the router.
+        (.http, .acp, .serverRequest),
+        (.stdio, .acp, MCPRegistrationEvidence.none),
     ])
     func requestEvidence(
         server: MCPTransportKind?, attached: MCPTransportKind?, expected: MCPRegistrationEvidence

@@ -206,6 +206,7 @@ public struct ACPMCPStatusState: Equatable, Sendable {
         case .stdio: transport = "stdio"
         case .http: transport = "HTTP"
         case .sse: transport = "Legacy SSE"
+        case .acp: transport = "ACP"
         }
 
         switch status.disposition {

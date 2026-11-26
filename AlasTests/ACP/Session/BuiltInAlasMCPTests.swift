@@ -12,7 +12,8 @@ struct BuiltInAlasMCPTests {
         worktreePath: String = "/repos/proj/wt",
         sessionId: String = "acp-1",
         httpEndpoint: BuiltInAlasMCP.HTTPEndpoint? = nil,
-        cliBuild: String? = nil
+        cliBuild: String? = nil,
+        acpServerId: String? = nil
     ) -> BuiltInAlasMCP.Injection? {
         BuiltInAlasMCP.injection(
             enabled: enabled,
@@ -22,7 +23,8 @@ struct BuiltInAlasMCPTests {
             worktreePath: worktreePath,
             sessionId: sessionId,
             httpEndpoint: httpEndpoint,
-            cliBuild: cliBuild
+            cliBuild: cliBuild,
+            acpServerId: acpServerId
         )
     }
 
@@ -289,5 +291,33 @@ struct BuiltInAlasMCPTests {
         #expect(try fingerprint("a") == fingerprint("a"))
         #expect(try fingerprint("a") != fingerprint("b"))
         #expect(try fingerprint(nil) != fingerprint("a"))
+    }
+
+    @Test("served over ACP, the entry names only the registration, so an app update keeps the agent")
+    func acpEntryOutlivesCLIBuilds() throws {
+        let endpoint = BuiltInAlasMCP.HTTPEndpoint(url: "http://localhost:5599/mcp", token: "TOK")
+        let serverId = BuiltInAlasMCP.acpServerId(sessionId: "acp-1")
+        func injection(_ build: String) throws -> BuiltInAlasMCP.Injection {
+            try #require(make(httpEndpoint: endpoint, cliBuild: build, acpServerId: serverId))
+        }
+
+        #expect(try injection("a").server == .acp(name: "alas", serverId: serverId))
+        #expect(try injection("a").status.transport == .acp)
+        #expect(try BuiltInAlasMCP.agentFingerprint(of: injection("a").server)
+            == BuiltInAlasMCP.agentFingerprint(of: injection("b").server))
+    }
+
+    @Test("the preferred transport is used when the agent supports it, falling back from ACP to HTTP to stdio",
+          arguments: [
+              (AlasMCPTransport.acp, true, true, BuiltInAlasMCP.Delivery.acp),
+              (.acp, true, false, .http),
+              (.acp, false, false, .stdio),
+              (.http, true, true, .http),
+              (.http, false, true, .stdio),
+              (.stdio, true, true, .stdio),
+          ])
+    func delivery(preference: AlasMCPTransport, http: Bool, acp: Bool, expected: BuiltInAlasMCP.Delivery) {
+        #expect(BuiltInAlasMCP.delivery(
+            preference: preference, adapterSupportsHTTP: http, adapterSupportsACP: acp) == expected)
     }
 }
