@@ -1,7 +1,12 @@
 //! MCP stdio server mode: newline-delimited JSON-RPC on stdin/stdout,
 //! translating tool calls into the same socket requests the CLI sends.
-//! Hand-rolled on purpose — the surface is five methods; an MCP SDK would
-//! be the largest dependency in the workspace.
+//! Hand-rolled on purpose — the surface is a handful of methods; an MCP SDK
+//! would be the largest dependency in the workspace.
+//!
+//! It speaks both MCP eras. A legacy client opens with `initialize`; a
+//! 2026-07-28 client may open with `server/discover` and carries its protocol
+//! version in every request's `params._meta`, with no handshake. Results
+//! carry the 2026-07-28 fields either way, which legacy clients ignore.
 
 use alas_client::{Command, Response, TransportError, VisualOption, VisualQuestion};
 use serde_json::{Value, json};
@@ -12,6 +17,9 @@ use std::sync::{
 };
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
+/// The handshake-free MCP version, which MCP-over-ACP servers must speak.
+pub const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
+const PROTOCOL_VERSION_META: &str = "io.modelcontextprotocol/protocolVersion";
 
 /// Injected by the app in the MCP server definition. Both values are
 /// required: `alas mcp` is launched by Alas itself and deliberately has no
@@ -252,19 +260,30 @@ fn handle_line_with_parent(
     }
     // Messages without an id are notifications (e.g. notifications/initialized).
     let id = msg.get("id").cloned()?;
+    if let Some(reply) = unsupported_version_reply(&msg) {
+        return Some(reply);
+    }
     let method = msg
         .get("method")
         .and_then(Value::as_str)
         .unwrap_or_default();
     let reply = match method {
         "initialize" => Ok(initialize_result(parent_session_id, scope)),
+        "server/discover" => Ok(discover_result(parent_session_id, scope)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({
-            "tools": tool_definitions_for_session(scope, parent_session_id)
+            "resultType": "complete",
+            "tools": tool_definitions_for_session(scope, parent_session_id),
+            // The list changes with the app build, so nothing may reuse it.
+            "ttlMs": 0,
+            "cacheScope": "private",
         })),
         "tools/call" => {
             let params = msg.get("params").cloned().unwrap_or(Value::Null);
-            call_tool(&params, worktree_dir, scope, &mut dispatch)
+            match call_tool(&params, worktree_dir, scope, &mut dispatch) {
+                Ok(result) => return Some(tool_call_reply(id, result)),
+                Err(error) => Err(error),
+            }
         }
         other => Err((-32601, format!("method not found: {other}"))),
     };
@@ -274,8 +293,64 @@ fn handle_line_with_parent(
     })
 }
 
+/// The `UnsupportedProtocolVersion` error for a request whose `params._meta`
+/// names a version other than 2026-07-28, or None to serve it. A request
+/// without that key is legacy and follows its `initialize`.
+fn unsupported_version_reply(msg: &Value) -> Option<Value> {
+    let id = msg.get("id")?;
+    let requested = msg
+        .get("params")
+        .and_then(|params| params.get("_meta"))
+        .and_then(|meta| meta.get(PROTOCOL_VERSION_META))?;
+    if requested.as_str() == Some(MODERN_PROTOCOL_VERSION) {
+        return None;
+    }
+    Some(json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": -32022,
+            "message": "Unsupported protocol version",
+            "data": { "supported": [MODERN_PROTOCOL_VERSION], "requested": requested },
+        },
+    }))
+}
+
+/// A `tools/call` reply. `resultType` is required from 2026-07-28 on.
+fn tool_call_reply(id: Value, mut result: Value) -> Value {
+    if let Some(object) = result.as_object_mut() {
+        object.insert("resultType".into(), json!("complete"));
+    }
+    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+}
+
 fn initialize_result(parent_session_id: Option<&str>, scope: ToolScope) -> Value {
-    let instructions = match parent_session_id {
+    json!({
+        "protocolVersion": PROTOCOL_VERSION,
+        "capabilities": { "tools": {} },
+        "serverInfo": { "name": "alas", "version": env!("CARGO_PKG_VERSION") },
+        "instructions": server_instructions(parent_session_id, scope)
+    })
+}
+
+/// The 2026-07-28 counterpart of `initialize`. Nothing may cache it: an app
+/// update changes the instructions and tools behind the same server.
+fn discover_result(parent_session_id: Option<&str>, scope: ToolScope) -> Value {
+    json!({
+        "resultType": "complete",
+        "supportedVersions": [MODERN_PROTOCOL_VERSION],
+        "capabilities": { "tools": {} },
+        "_meta": {
+            "io.modelcontextprotocol/serverInfo": { "name": "alas", "version": env!("CARGO_PKG_VERSION") },
+        },
+        "instructions": server_instructions(parent_session_id, scope),
+        "ttlMs": 0,
+        "cacheScope": "private",
+    })
+}
+
+fn server_instructions(parent_session_id: Option<&str>, scope: ToolScope) -> &'static str {
+    match parent_session_id {
         _ if scope == ToolScope::Remote => {
             "Shows visuals to the user in Alas with visual_show, and opens pull requests with pr_create/pr_status. When an explanation has shape (how parts connect: architecture, data or control flow, state machines, sequences; options compared on several dimensions; before/after layouts or UI sketches; numbers that read better as a chart), draw it: put a ```visual fenced block of HTML in your reply, with an optional title after the tag, and Alas renders it inline in the user's theme; style it with the --alas-* CSS variables listed in visual_show's description. A chart on its own can be a ```chart fenced block of JSON data ({\"labels\":[...],\"series\":[{\"name\":\"...\",\"values\":[...]}]}) with its type and options after the tag (```chart line unit=ms label=\"Build time\"). Use visual_show instead to ask the user a question about a visual or to show a mockup in a titled card. Skip visuals for short answers, single facts, code edits, and status updates. Put long logs, full command output and side explanations in a <details> section with a <summary> line, which Alas shows collapsed. A visual_show visual may ask one optional question; the user's answer arrives as their next prompt, so end your turn after showing it. pr_create pushes this worktree's branch, opens its PR/MR, and has Alas watch it until it merges; offer it when you've finished a change the user will want reviewed, and call it only after the user agrees or asks. pr_status reports that PR/MR."
         }
@@ -297,13 +372,7 @@ fn initialize_result(parent_session_id: Option<&str>, scope: ToolScope) -> Value
         None => {
             "Tools that drive the user's Alas workspace UI: open files for the user to look at, manage linked worktrees, and open reviews. Root ACP sessions may delegate direct child sessions: call agent_list first to pick an available agent id (and see its remembered models), then session_new. When an explanation has shape (architecture, flows, multi-dimension comparisons, layouts, charts), draw it in a ```visual fenced block of HTML in your reply (or a ```chart block of JSON data for a chart); use visual_show to ask a question about a visual or show a mockup card."
         }
-    };
-    json!({
-        "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": { "tools": {} },
-        "serverInfo": { "name": "alas", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": instructions
-    })
+    }
 }
 
 fn error_reply(id: Value, code: i64, message: &str) -> Value {
@@ -3446,6 +3515,9 @@ fn tools_call_command(
     if msg.get("method").and_then(Value::as_str) != Some("tools/call") {
         return Ok(None);
     }
+    if let Some(reply) = unsupported_version_reply(msg) {
+        return Err(reply);
+    }
     let id = msg.get("id").cloned().unwrap_or(Value::Null);
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
     let name = match params.get("name").and_then(Value::as_str) {
@@ -3775,11 +3847,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                         Ok(resp) => tool_result(&command, resp),
                         Err(err) => transport_error_result(&command, &err),
                     };
-                    let _ = reply_tx.send(json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": result
-                    }));
+                    let _ = reply_tx.send(tool_call_reply(id, result));
                     continue;
                 }
                 let limit = if is_preview_cancel_command(&command) {
@@ -3822,11 +3890,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                             Ok(resp) => tool_result(&command, resp),
                             Err(err) => transport_error_result(&command, &err),
                         };
-                        let _ = worker_reply_tx.send(json!({
-                            "jsonrpc": "2.0",
-                            "id": id,
-                            "result": result
-                        }));
+                        let _ = worker_reply_tx.send(tool_call_reply(id, result));
                     });
                 if spawn.is_err() {
                     remove_pending_call(&runtime.pending, fallback_key.as_deref());
@@ -4117,15 +4181,16 @@ fn claim_http_hello() -> bool {
     !HTTP_HELLO_SENT.swap(true, Ordering::SeqCst)
 }
 
-/// True iff `body` parses as JSON whose `method` is `initialize`.
-fn is_initialize_message(body: &str) -> bool {
+/// True iff `body` parses as JSON whose `method` opens a client's use of the
+/// server: `initialize`, or `server/discover` for a 2026-07-28 client.
+fn is_handshake_message(body: &str) -> bool {
     serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|value| {
             value
                 .get("method")
                 .and_then(Value::as_str)
-                .map(|method| method == "initialize")
+                .map(|method| method == "initialize" || method == "server/discover")
         })
         .unwrap_or(false)
 }
@@ -4147,11 +4212,12 @@ fn build_http_response(
 
     // Announce on the first authenticated request of any method — a server
     // respawned on its old port serves an already-initialized client that may
-    // only ever send `tools/call` — and again on every `initialize`: the
+    // only ever send `tools/call` — and again on every `initialize` or
+    // `server/discover`, a 2026-07-28 client's first request: the
     // supervisor reuses the process across ACP reattaches while the app clears
     // its registration per attach, so a reconnecting harness must re-announce.
     let first_request = claim_http_hello();
-    if env.relay.is_none() && (first_request || is_initialize_message(&req.body)) {
+    if env.relay.is_none() && (first_request || is_handshake_message(&req.body)) {
         alas_client::send_hello(&env.socket, &env.session_id, "http");
     }
 
@@ -4213,7 +4279,7 @@ fn build_http_response(
                     Ok(resp) => tool_result(&command, resp),
                     Err(err) => transport_error_result(&command, &err),
                 };
-                let reply = json!({ "jsonrpc": "2.0", "id": id, "result": result });
+                let reply = tool_call_reply(id, result);
                 return http_response(200, "application/json", &reply.to_string());
             }
             Ok(Some(_)) => {}
@@ -4234,7 +4300,8 @@ fn build_http_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        CHILD_ONLY_TOOLS, HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, RelayScope, ToolScope,
+        CHILD_ONLY_TOOLS, HttpRequest, MODERN_PROTOCOL_VERSION, McpEnv, McpRuntime, PROTOCOL_VERSION,
+        RelayScope, ToolScope,
         build_http_response, cancellation_command_for_message, command_for_tool, dispatch,
         env_from, handle_env_line, handle_line, handle_line_with_parent, http_response, initialize_result, is_peer_child,
         parse_http_request, register_pending_call, runs_on_worker, session_wait_timed_out,
@@ -4545,6 +4612,77 @@ mod tests {
         assert_eq!(reply["result"]["serverInfo"]["name"], json!("alas"));
         assert!(reply["result"]["capabilities"]["tools"].is_object());
         assert!(reply["result"]["instructions"].is_string());
+    }
+
+    const MODERN_META: &str = r#""_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"c","version":"1"},"io.modelcontextprotocol/clientCapabilities":{}}"#;
+
+    #[test]
+    fn discover_describes_the_server_without_letting_it_be_cached() {
+        let line = format!(
+            r#"{{"jsonrpc":"2.0","id":"d","method":"server/discover","params":{{{MODERN_META}}}}}"#
+        );
+        let result = handle_line(&line, "/wt", |_| unreachable!()).unwrap()["result"].clone();
+        assert_eq!(result["resultType"], json!("complete"));
+        assert_eq!(
+            result["supportedVersions"],
+            json!([MODERN_PROTOCOL_VERSION])
+        );
+        assert!(result["capabilities"]["tools"].is_object());
+        assert_eq!(
+            result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+            json!("alas")
+        );
+        assert_eq!(
+            result["instructions"],
+            initialize_result(None, ToolScope::All)["instructions"]
+        );
+        assert_eq!(
+            (result["ttlMs"].clone(), result["cacheScope"].clone()),
+            (json!(0), json!("private"))
+        );
+    }
+
+    #[test]
+    fn modern_requests_get_complete_results_without_a_handshake() {
+        let list = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{{{MODERN_META}}}}}"#
+        );
+        let list = handle_line(&list, "/wt", |_| unreachable!()).unwrap()["result"].clone();
+        assert_eq!(list["resultType"], json!("complete"));
+        assert_eq!(
+            (list["ttlMs"].clone(), list["cacheScope"].clone()),
+            (json!(0), json!("private"))
+        );
+
+        let call = format!(
+            r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"vm_status","arguments":{{}},{MODERN_META}}}}}"#
+        );
+        let msg: Value = serde_json::from_str(&call).unwrap();
+        assert!(matches!(
+            tools_call_command(&msg, "/wt", ToolScope::All),
+            Ok(Some(_))
+        ));
+        let reply = handle_line(&call, "/wt", ok_dispatch).unwrap();
+        assert_eq!(reply["result"]["resultType"], json!("complete"));
+        assert_eq!(reply["result"]["isError"], json!(false));
+    }
+
+    #[test]
+    fn a_request_for_another_protocol_version_is_refused_before_it_runs() {
+        let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vm_status","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01"}}}"#;
+        let reply = handle_line(call, "/wt", |_| unreachable!()).unwrap();
+        assert_eq!(reply["id"], json!(3));
+        assert_eq!(reply["error"]["code"], json!(-32022));
+        assert_eq!(
+            reply["error"]["data"],
+            json!({ "supported": [MODERN_PROTOCOL_VERSION], "requested": "2099-01-01" })
+        );
+        // The worker path the stdio and HTTP servers take refuses it too.
+        let msg: Value = serde_json::from_str(call).unwrap();
+        assert_eq!(
+            tools_call_command(&msg, "/wt", ToolScope::All).unwrap_err(),
+            reply
+        );
     }
 
     #[test]
