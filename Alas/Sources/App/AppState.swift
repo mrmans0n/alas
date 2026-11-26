@@ -1165,7 +1165,8 @@ final class AppState {
     /// the computer name.
     var remoteDisplayName: String { config.remote.resolvedDisplayName }
 
-    /// Icon advertised beside the name: the configured icon, else a laptop.
+    /// Icon advertised beside the name: the configured icon, else the one
+    /// for this Mac's hardware, else a laptop.
     var remoteIcon: PeerIcon { config.remote.resolvedIcon(default: .laptop) }
 
     func remoteServerIdentity() -> RemoteServerIdentity {

@@ -55,9 +55,11 @@ extension AppConfig.Remote {
         return Host.current().localizedName ?? RemoteNetwork.machineHostName() ?? "Alas"
     }
 
-    /// Icon advertised beside the name: the configured icon, else `fallback`,
-    /// the default for the kind of host.
+    /// Icon advertised beside the name: the configured icon, else the one
+    /// for this Mac's hardware, else `fallback`, the default for the kind of
+    /// host.
     public func resolvedIcon(default fallback: PeerIcon) -> PeerIcon {
-        PeerIcon(wireValue: icon.trimmingCharacters(in: .whitespacesAndNewlines)) ?? fallback
+        PeerIcon(wireValue: icon.trimmingCharacters(in: .whitespacesAndNewlines))
+            ?? RemoteBonjourService.hardwareIcon ?? fallback
     }
 }
