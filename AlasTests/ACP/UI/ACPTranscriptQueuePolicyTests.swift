@@ -50,6 +50,15 @@ struct ACPTranscriptQueuePolicyTests {
         #expect(ACPTranscriptQueuePolicy.queueHeaderCount(queue: queue(statuses, delegatedAt: Set(delegated))) == expected)
     }
 
+    @Test("nextItemToSendNow picks the first visible FIFO row, skipping the sending head, delegated and scheduled items")
+    func nextItemToSendNowPicksFirstVisibleFifoRow() {
+        var items = queue([.sending, .pending, .pending, .pending], delegatedAt: [1])
+        items[2].scheduledAt = .distantFuture
+        #expect(ACPTranscriptQueuePolicy.nextItemToSendNow(queue: items)?.id == items[3].id)
+        items[3].scheduledAt = .distantFuture
+        #expect(ACPTranscriptQueuePolicy.nextItemToSendNow(queue: items) == nil)
+    }
+
     @Test("a failed delegated prompt gets a row, so its Retry and Remove stay reachable")
     func failedDelegatedPromptIsRendered() {
         var items = queue([.pending], delegatedAt: [0])

@@ -78,6 +78,9 @@ struct ACPInputField: NSViewRepresentable {
     var onCommandAction: (String, String) -> Void = { _, _ in }
     /// Opens a skill command's `SKILL.md`; nil where the host cannot.
     var onOpenSkill: ((ACPPromptSuggestion) -> Void)? = nil
+    /// ⌃⏎ in an empty composer: send the first queued item now (steering
+    /// a running turn). Returns false when there is nothing to send.
+    var onSendNextQueuedNow: () -> Bool = { false }
     @Environment(\.isEnabled) private var isEnabled
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -104,6 +107,7 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.configOptions = configOptions
         context.coordinator.onCommandAction = onCommandAction
         context.coordinator.onOpenSkill = onOpenSkill
+        context.coordinator.onSendNextQueuedNow = onSendNextQueuedNow
         context.coordinator.restoreInitialDraft(into: textView)
         context.coordinator.attachUpstreamReferences(upstreamReferences)
         configureNextPrompt(textView)
@@ -181,6 +185,7 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.configOptions = configOptions
         context.coordinator.onCommandAction = onCommandAction
         context.coordinator.onOpenSkill = onOpenSkill
+        context.coordinator.onSendNextQueuedNow = onSendNextQueuedNow
         if context.coordinator.upstreamReferences !== upstreamReferences {
             context.coordinator.attachUpstreamReferences(upstreamReferences)
         }
@@ -356,6 +361,7 @@ struct ACPInputField: NSViewRepresentable {
         var configOptions: [ACPConfigOption] = []
         var onCommandAction: (String, String) -> Void = { _, _ in }
         var onOpenSkill: ((ACPPromptSuggestion) -> Void)?
+        var onSendNextQueuedNow: () -> Bool = { false }
         var onSelectionChange: () -> Void = {}
         private(set) var upstreamReferences: ACPUpstreamReferenceStore?
         private var upstreamObservations: Set<AnyCancellable> = []
@@ -1820,6 +1826,15 @@ final class ACPNSTextView: PairedDelimiterTextView {
         if event.keyCode == 36 || event.keyCode == 76,
            event.modifierFlags.contains(.command) {
             coordinator?.submit(self, intent: .auto)
+            return
+        }
+
+        // ⌃⏎ in an empty composer sends the first queued item now, as in
+        // agent TUIs. With text in the composer it keeps its usual meaning.
+        if event.keyCode == 36 || event.keyCode == 76,
+           event.modifierFlags.intersection([.shift, .control, .option, .command]) == .control,
+           string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           coordinator?.onSendNextQueuedNow() == true {
             return
         }
 

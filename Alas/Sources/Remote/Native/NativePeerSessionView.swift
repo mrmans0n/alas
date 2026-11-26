@@ -608,7 +608,13 @@ private struct NativePeerComposer: View {
                 onDictationShortcut: { dictation.handleShortcut($0) },
                 upstreamReferences: client.upstreamReferences(for: transcript.sessionId, codeHost: config?.codeHost),
                 alasCommands: offersShip ? [ACPAlasSlashCommand.shipSuggestion] : [],
-                onOpenSkill: { client.openSkill($0) }
+                onOpenSkill: { client.openSkill($0) },
+                onSendNextQueuedNow: {
+                    let queue = transcript.queue.compactMap(NativePeerComposerState.queuedPrompt)
+                    guard let item = ACPTranscriptQueuePolicy.nextItemToSendNow(queue: queue) else { return false }
+                    client.queueForceSend(item.id.uuidString)
+                    return true
+                }
             )
             .disabled(!sessionOpen)
             .accessibilityLabel("Message peer session")
