@@ -62,6 +62,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     var promptCardContext: ACPPromptCardContext? = nil
     var visualAidActions: ACPVisualAidActions = .readOnly
     var failureIncidentActions: ACPFailureIncidentActions = .readOnly
+    var delegatedChildActions: ACPDelegatedChildActions?
     /// Opens a plan's file by its path on the session's host.
     var onOpenPlanFile: (String) -> Void = { _ in }
     /// Nil shows no "Reported changes" control.
@@ -1268,6 +1269,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 reviewedPlanId: reviewedPlanId(host: host, message: message),
                 visualAidActions: host.visualAidActions,
                 failureIncidentActions: host.failureIncidentActions,
+                delegatedChildActions: host.delegatedChildActions,
                 isExpanded: isExpanded,
                 onExpandedChange: onExpandedChange,
                 onOpenPlanFile: host.onOpenPlanFile,

@@ -1073,6 +1073,15 @@ private struct ACPSessionView: View {
                         agentID: session.agentId, owner: owner ?? .worktree(worktree.id), projectId: worktree.projectId)
                 }
             }),
+            delegatedChildActions: isMirror ? nil : ACPDelegatedChildActions(
+                revision: { state.delegationRevision },
+                summary: { childId in
+                    await state.delegatedSessionSummaries(for: sessionId)
+                        .first { $0.sessionId == childId && $0.relationship == "child" }
+                },
+                agentName: { state.agent(id: $0)?.displayName ?? $0 },
+                open: { summary in Task { await state.openDelegatedACPSession(summary) } }
+            ),
             onOpenPlanFile: { path in
                 // Read-only Markdown preview; a remote worktree's file opens
                 // through its virtual path (a local path is unchanged).
