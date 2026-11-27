@@ -14743,7 +14743,15 @@ final class AppState {
     }
 
     func openDelegatedACPSession(_ summary: ACPOrchestrationSessionSummary) async {
-        guard let worktree = worktree(withId: summary.worktreeId) else { return }
+        guard let worktree = worktree(withId: summary.worktreeId) else {
+            // A child on another Mac has no local worktree; open it in the peer view.
+            guard let parent = await delegatedParentSessionID(for: summary.sessionId),
+                  let child = await delegatedPeerChildren(ofParent: parent)
+                      .first(where: { $0.childSessionId == summary.sessionId })
+            else { return }
+            openPeerChild(child)
+            return
+        }
         focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         await openExistingACPSession(sessionId: summary.sessionId)
     }
