@@ -1,0 +1,28 @@
+name: Android snapshot reader
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/android-snapshot-reader.yml'
+      - 'Tools/AndroidSnapshotReader/**'
+      - 'Alas/Resources/AndroidSnapshotReader.jar'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-bundled-reader:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: '24.0.2'
+      - name: Install the Android build tools
+        run: sdkmanager --install 'platforms;android-36' 'build-tools;36.1.0'
+      - name: Rebuild and verify the bundled JAR
+        run: |
+          Tools/AndroidSnapshotReader/build.sh "$RUNNER_TEMP/AndroidSnapshotReader.jar"
+          cmp Alas/Resources/AndroidSnapshotReader.jar "$RUNNER_TEMP/AndroidSnapshotReader.jar"

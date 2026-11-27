@@ -1285,6 +1285,7 @@
 		A383F1C9B0B00B2805576209 /* ACPScrollDirectionClassifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D0190EE078ADB537982F7DC /* ACPScrollDirectionClassifierTests.swift */; };
 		A39D44E69D8BEF98C8934DF7 /* AppStateCLIRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08F7B16F39935718801DAA95 /* AppStateCLIRoutingTests.swift */; };
 		A3F27DE52BAC71EFFA69938A /* ACPTranscriptWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DCF803DF778CF9C06AC1579 /* ACPTranscriptWindowTests.swift */; };
+		A4322EE450294211FE70E04D /* AndroidSnapshotReader.jar in Resources */ = {isa = PBXBuildFile; fileRef = 8F0D0D43A9BE3013E9F85BCD /* AndroidSnapshotReader.jar */; };
 		A4416B64A5B334BF1C5A8159 /* RunScriptFailureViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85106E4F374F0CE2B164B662 /* RunScriptFailureViews.swift */; };
 		A4476A509577896F9DADE5CB /* ACPSessionVisibleQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA78FF7BA562DC4423AC35D /* ACPSessionVisibleQueueTests.swift */; };
 		A45A26B8B43E49BC8F952CD6 /* RemoteHostRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1854EA4072F4F45DA70854D0 /* RemoteHostRegistryTests.swift */; };
@@ -1444,6 +1445,7 @@
 		B92E46F97EDE821BFDC1C8C1 /* ACPContextBreakdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CECD85939E5FA4D21645DD2 /* ACPContextBreakdownTests.swift */; };
 		B94F61E5170AA8102AA2A022 /* DiffPaneLSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = B58BD62080F250E0F0DD057F /* DiffPaneLSP.swift */; };
 		B966D129022E68797918D90F /* MermaidAttachmentCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4C0622C1F5D9B46F429F896 /* MermaidAttachmentCoordinatorTests.swift */; };
+		B975CE1585BF180920E05B69 /* AndroidSnapshotReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC9EFD5F117031E62F794307 /* AndroidSnapshotReader.swift */; };
 		B97A7F7C15353D0393079872 /* ACPTranscriptRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0035C50B016AD13E9E79C2F5 /* ACPTranscriptRowView.swift */; };
 		B9859549D209A060D59E8EE9 /* DevicesAddPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6C579EF2D6F65A6F3B2A77 /* DevicesAddPanel.swift */; };
 		B98B8417274006AA31B843ED /* ACPTranscriptNativeRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = A45079EAAF39A1A3D00281FE /* ACPTranscriptNativeRows.swift */; };
@@ -1847,6 +1849,7 @@
 		E982387DB4C0EF18291C68FB /* ACPTranscriptScrollerReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81D94695C26A2270165EC820 /* ACPTranscriptScrollerReconciler.swift */; };
 		E9A1273129461BA88B5C3A5F /* RunScriptWritingHelpDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48DCA64C204884FE22083647 /* RunScriptWritingHelpDialog.swift */; };
 		E9DF2B1128C94FC380E1B12E /* WorkspaceEditUndoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A095504B554A16B1062C59C7 /* WorkspaceEditUndoTests.swift */; };
+		EA11803CE0C8CA02FBC3D967 /* AndroidSnapshotReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26059B942EE6EACA3E50CF02 /* AndroidSnapshotReaderTests.swift */; };
 		EA29EEAF0BC26649E0133FF9 /* WorktreeStatusParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 194E87B8BD70E01C3CA331D0 /* WorktreeStatusParserTests.swift */; };
 		EA6EFDDEAE3FF9D878824EDC /* ACPProcessLivenessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9797C4D8F5DCCC9563D79007 /* ACPProcessLivenessTests.swift */; };
 		EA9B2D81920F620209AB2C34 /* MasonSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97FBCF0F61C80FD8020B1ADD /* MasonSnapshotTests.swift */; };
@@ -2063,10 +2066,10 @@
 		2712E12EE8A4AD5B52367A67 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-host";
+			dstPath = "alas-vm-guest";
 			dstSubfolderSpec = 7;
 			files = (
-				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
+				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2084,10 +2087,10 @@
 		DF16EBE2557E441D41DDC075 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
+			dstPath = "alas-host";
 			dstSubfolderSpec = 7;
 			files = (
-				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
+				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2394,6 +2397,7 @@
 		25B1ED890A8A45244572D8A3 /* RightPaneStatePullTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneStatePullTests.swift; sourceTree = "<group>"; };
 		25CBAF6618B6D11EC3B9CC76 /* InstallNudgeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallNudgeResolver.swift; sourceTree = "<group>"; };
 		25DBE942154BD154F2D10B9D /* SidebarHeaderViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarHeaderViewTests.swift; sourceTree = "<group>"; };
+		26059B942EE6EACA3E50CF02 /* AndroidSnapshotReaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidSnapshotReaderTests.swift; sourceTree = "<group>"; };
 		262E0A51AAB203ABE7C03E6B /* AlasSimService.xpc */ = {isa = PBXFileReference; explicitFileType = "wrapper.xpc-service"; includeInIndex = 0; path = AlasSimService.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
 		2666B9B1943FB89565E651C1 /* PeerIconView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerIconView.swift; sourceTree = "<group>"; };
 		26BDAE2D9C420F635E81D9D3 /* MermaidTextAttachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidTextAttachment.swift; sourceTree = "<group>"; };
@@ -3210,6 +3214,7 @@
 		8ECDADFA5E3A41525BCC77CD /* WorkspaceSidebarTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSidebarTree.swift; sourceTree = "<group>"; };
 		8EDED937A8E8340D6E685A6E /* GitNameValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitNameValidatorTests.swift; sourceTree = "<group>"; };
 		8EF52FE71B7FB41328859734 /* MarkdownRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderer.swift; sourceTree = "<group>"; };
+		8F0D0D43A9BE3013E9F85BCD /* AndroidSnapshotReader.jar */ = {isa = PBXFileReference; lastKnownFileType = archive.jar; path = AndroidSnapshotReader.jar; sourceTree = "<group>"; };
 		8F4B03AAD531432F4C1DCC98 /* ACPPastedTextChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPastedTextChip.swift; sourceTree = "<group>"; };
 		8FC31E49E6E453B417479C95 /* WorkspaceWorkItemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceWorkItemTests.swift; sourceTree = "<group>"; };
 		8FE1850D429357003775FFDE /* LSPServerChipStripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPServerChipStripTests.swift; sourceTree = "<group>"; };
@@ -3409,6 +3414,7 @@
 		ABEFA645A3E38AB7BDF7F355 /* PluginWebTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginWebTests.swift; sourceTree = "<group>"; };
 		AC4556BB4983FEF2A4E4A12D /* ReviewSessionSelectionPersister.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewSessionSelectionPersister.swift; sourceTree = "<group>"; };
 		AC96C3C3BB39C7372DEEC3D5 /* RightPaneCardChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneCardChrome.swift; sourceTree = "<group>"; };
+		AC9EFD5F117031E62F794307 /* AndroidSnapshotReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidSnapshotReader.swift; sourceTree = "<group>"; };
 		ACA21FC597E6EC3ABEB2F7E2 /* WorkspaceCheckoutCreationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceCheckoutCreationModelTests.swift; sourceTree = "<group>"; };
 		ACAF0D9BAB4658B356FBBBAA /* RunScriptPaletteModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScriptPaletteModelTests.swift; sourceTree = "<group>"; };
 		ACCA6B39E2B172FADFD9E0E6 /* DiffPaneTextDocumentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPaneTextDocumentView.swift; sourceTree = "<group>"; };
@@ -4373,6 +4379,7 @@
 				83723FCAD41999E6E3723872 /* AlasGhosttyRuntimeCallbackTests.swift */,
 				69CE1F098A251F24BC352816 /* AlasGhosttySmokeTests.swift */,
 				A77AA40A1700F0AF21335876 /* AlasHookCommandTests.swift */,
+				26059B942EE6EACA3E50CF02 /* AndroidSnapshotReaderTests.swift */,
 				0F0A97237E4D08100BA2E4AD /* AndroidStreamConnectorTests.swift */,
 				A72E6086ED069AF65F890BBB /* AppConfigAgentsCodingTests.swift */,
 				333EA07C2BCA5E18F55E2613 /* AppConfigChangesTests.swift */,
@@ -5202,6 +5209,7 @@
 				4B67613262F84679154AA321 /* AndroidPaneModel.swift */,
 				07BEB9398D7472A496CB9454 /* AndroidScreenRecording.swift */,
 				CA5679D2AE8322196C978A4C /* AndroidScreenSession.swift */,
+				AC9EFD5F117031E62F794307 /* AndroidSnapshotReader.swift */,
 				E3681AB08B42D970C2E49A68 /* AndroidSocket.swift */,
 				FE7B9B6C8188A30C96FEA46A /* AndroidStreamClient.swift */,
 				F6CF5FD0C7165B1E492FE6CD /* H264Decoder.swift */,
@@ -7079,6 +7087,7 @@
 		E64B0D7392DAB820993B29F5 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				8F0D0D43A9BE3013E9F85BCD /* AndroidSnapshotReader.jar */,
 				5A8D3ACC11153C22EFA620DD /* AppLogos-LICENSE.txt */,
 				6DF51E6FAFBB47E2F31DA287 /* Assets.xcassets */,
 				DE25776D2D8B241F16366785 /* LocalTextModelLicenses.txt */,
@@ -7619,6 +7628,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A4322EE450294211FE70E04D /* AndroidSnapshotReader.jar in Resources */,
 				645AA1D2B38ECE64B852773B /* AppLogos-LICENSE.txt in Resources */,
 				3E9B50F3BA9D7273EBA50445 /* Assets.xcassets in Resources */,
 				629B98E07ED9A159A695707D /* JetBrainsMonoNerdFont-Regular.ttf in Resources */,
@@ -8067,6 +8077,7 @@
 				092489FC78AD039330903551 /* AndroidPaneModel.swift in Sources */,
 				20C7C12538764EB3F08998E6 /* AndroidScreenRecording.swift in Sources */,
 				B6E9E12226ED2847C580BA6D /* AndroidScreenSession.swift in Sources */,
+				B975CE1585BF180920E05B69 /* AndroidSnapshotReader.swift in Sources */,
 				5611CC0370DAAA4FCBB3E97B /* AndroidSocket.swift in Sources */,
 				04A23ECC02ACCB4A19B19C6A /* AndroidStreamClient.swift in Sources */,
 				534E1DFA40F7F467F82D900E /* AppKitDiffReviewPresentationState.swift in Sources */,
@@ -9027,6 +9038,7 @@
 				B7F78A0034B7EC38072C1116 /* AlasGhosttySmokeTests.swift in Sources */,
 				281C65FD7F2B509B963B74ED /* AlasHookCommandTests.swift in Sources */,
 				F134F6DD4EE36865522FF52A /* AlasMCPHTTPSupervisorTests.swift in Sources */,
+				EA11803CE0C8CA02FBC3D967 /* AndroidSnapshotReaderTests.swift in Sources */,
 				D0AAA970B164135A9C152AAB /* AndroidStreamConnectorTests.swift in Sources */,
 				CB6D9F5929D97FAB3A264F47 /* AppConfigAgentsCodingTests.swift in Sources */,
 				1DF096E0925EFA91B9033642 /* AppConfigChangesTests.swift in Sources */,

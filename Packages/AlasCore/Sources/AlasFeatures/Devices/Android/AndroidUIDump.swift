@@ -28,8 +28,7 @@ public enum AndroidUIDump {
         var elements: [DeviceElement] = []
         for node in nodes.dropFirst() {
             guard let frame = bounds(node["bounds"]), frame.width > 0, frame.height > 0 else { continue }
-            let password = node["password"] == "true"
-            let label = nonEmpty(password ? nil : node["text"]) ?? nonEmpty(node["content-desc"])
+            let label = node["password"] == "true" ? nil : nonEmpty(node["text"]) ?? nonEmpty(node["content-desc"])
             let id = nonEmpty(node["resource-id"])
             let isControl = node["clickable"] == "true" || node["checkable"] == "true"
                 || (node["class"] ?? "").hasSuffix("EditText")
