@@ -1466,6 +1466,10 @@ private struct ACPSessionView: View {
                       candidate.projectId == worktree.projectId
                 else { return nil }
                 return candidate
+            },
+            agents: { [state, worktree, sessionId] in
+                await ACPAgentMentionCandidate.candidates(from: state.acpOrchestration.mentionableAgents(
+                    origin: .init(sessionId: sessionId, projectId: worktree.projectId, worktreeId: worktree.id)))
             }
         )
     }

@@ -168,8 +168,11 @@ final class ACPFileMentionHoverController {
         let url = URL(string: uri)
         let isFile = url?.isFileURL == true
         let sessionId = ACPSessionReference.sessionId(fromURI: uri)
+        let agent = ACPAgentReference.target(fromURI: uri)
         let location: String = if let sessionId {
             "Agent session \(sessionId)"
+        } else if let agent {
+            "Delegate to \(agent.agentId)" + (agent.model.map { " · \($0)" } ?? "")
         } else {
             isFile ? (url?.path ?? uri) : uri
         }
@@ -177,7 +180,8 @@ final class ACPFileMentionHoverController {
             rootView: ACPFileMentionHoverCard(
                 name: name,
                 location: location,
-                systemImage: sessionId != nil ? "bubble.left.and.bubble.right" : isFile ? "doc.text" : "link"
+                systemImage: sessionId != nil ? "bubble.left.and.bubble.right"
+                    : agent != nil ? "person.2" : isFile ? "doc.text" : "link"
             ).environment(\.designScale, HostedDesignScale.current)
         )
         hosting.sizingOptions = [.preferredContentSize]

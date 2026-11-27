@@ -51,8 +51,9 @@ struct UserMessageRow: View {
                                     FileChip(
                                         path: a.name ?? a.uri,
                                         lines: nil,
-                                        iconSystemName: ACPSessionReference.sessionId(fromURI: a.uri) == nil
-                                            ? "at" : "bubble.left.and.bubble.right"
+                                        iconSystemName: ACPSessionReference.sessionId(fromURI: a.uri) != nil
+                                            ? "bubble.left.and.bubble.right"
+                                            : ACPAgentReference.target(fromURI: a.uri) != nil ? "person.2" : "at"
                                     )
                                 }
                             }
