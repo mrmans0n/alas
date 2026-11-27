@@ -223,8 +223,13 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
     public func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
         terminalResponses[id] = result
     }
-    public func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
+    /// False while `rejectsMCPResponses`, as a broker that lost its link would.
+    public var rejectsMCPResponses = false
+    @discardableResult
+    public func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>) async -> Bool {
+        guard !rejectsMCPResponses else { return false }
         mcpMessageResponses[id] = result
+        return true
     }
 
     public func script(method: String, _ handler: @escaping (ACPRequest) throws -> Data) {

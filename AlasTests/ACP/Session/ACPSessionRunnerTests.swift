@@ -3914,47 +3914,102 @@ struct ACPSessionRunnerTests {
         #expect(text.value == "before edit")
     }
 
-    @Test("mcp/message is answered through the router, and a tool call an earlier run left unanswered is not run again")
-    func mcpMessagesAndInterruptedToolCalls() async throws {
+    /// A runner for MCP-over-ACP tests whose server answers every call and
+    /// logs what reached it.
+    private func makeMCPRunner(
+        onUnclaimedCancelRequest: ((JSONRPCID) -> Void)? = nil
+    ) async throws -> (ACPSessionRunner, ACPMockClient, ACPSessionStore, MCPRequestLog) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
-        // The app quit while this call ran; the broker delivers it again.
-        #expect(try store.beginMCPToolCall(sessionId: "s", serverId: "alas-s", requestId: "interrupted"))
-
         let served = MCPRequestLog()
         let router = ACPMCPMessageRouter()
         await router.register(serverId: "alas-s") { body in
-            await served.append(body)
+            served.append(body)
             return Data(#"{"jsonrpc":"2.0","id":"x","result":{"content":[],"isError":false}}"#.utf8)
         }
         let mock = ACPMockClient()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         let runner = ACPSessionRunner(session: session, connection: ACPConnection(client: mock), store: store,
-                                      sessionId: "s", worktreePath: "/tmp", mcpMessageRouter: router)
-        runner.start()
-        defer { runner.stop() }
-        func toolCall(_ requestId: String) -> ACPMCPMessageParams {
-            .init(serverId: "alas-s", requestId: requestId, method: "tools/call",
-                  params: .object(["name": .string("pr_status"), "arguments": .object([:])]), sessionId: "s")
-        }
-        func response(_ id: JSONRPCID) throws -> NSDictionary {
-            let body = try #require(mock.mcpMessageResponses[id]).get()
-            return try #require(JSONSerialization.jsonObject(with: body) as? NSDictionary)
-        }
+                                      sessionId: "s", worktreePath: "/tmp",
+                                      onUnclaimedCancelRequest: onUnclaimedCancelRequest,
+                                      mcpMessageRouter: router)
+        return (runner, mock, store, served)
+    }
 
-        mock.emitMCPMessage(.init(id: .number(1), params: toolCall("fresh")))
-        mock.emitMCPMessage(.init(id: .number(2), params: toolCall("interrupted")))
+    private func mcpToolCall(_ requestId: String) -> ACPMCPMessageParams {
+        .init(serverId: "alas-s", requestId: requestId, method: "tools/call",
+              params: .object(["name": .string("pr_status"), "arguments": .object([:])]), sessionId: "s")
+    }
+
+    private func mcpResponse(_ mock: ACPMockClient, _ id: JSONRPCID) throws -> NSDictionary {
+        let body = try #require(mock.mcpMessageResponses[id]).get()
+        return try #require(JSONSerialization.jsonObject(with: body) as? NSDictionary)
+    }
+
+    @Test("mcp/message is answered before the session is set up, and a tool call an earlier run left unanswered is not run again")
+    func mcpMessagesAndInterruptedToolCalls() async throws {
+        let (runner, mock, store, served) = try await makeMCPRunner()
+        // The app quit while this call ran; the broker delivers it again.
+        #expect(try store.beginMCPToolCall(sessionId: "s", serverId: "alas-s", requestId: "interrupted"))
+        // What the manager starts before `session/new`, which an agent may
+        // hold until it has discovered the server's tools.
+        runner.startMCPMessageListening()
+        defer { runner.stop() }
+
+        mock.emitMCPMessage(.init(id: .number(1), params: mcpToolCall("fresh")))
+        mock.emitMCPMessage(.init(id: .number(2), params: mcpToolCall("interrupted")))
         try await waitUntil { mock.mcpMessageResponses[.number(1)] != nil && mock.mcpMessageResponses[.number(2)] != nil }
 
-        #expect(try response(.number(1)) == ["result": ["content": [], "isError": false]])
-        let interruptedResponse = try response(.number(2))
+        #expect(try mcpResponse(mock, .number(1)) == ["result": ["content": [], "isError": false]])
+        let interruptedResponse = try mcpResponse(mock, .number(2))
         let interrupted = try #require(interruptedResponse["result"] as? NSDictionary)
         #expect(interrupted["isError"] as? Bool == true)
-        #expect(await served.count == 1, "the interrupted call must not reach the server again")
+        #expect(served.count == 1, "the interrupted call must not reach the server again")
         try await waitUntil { (try? store.db.query("SELECT 1 FROM acp_mcp_started_tool_calls").isEmpty) == true }
+    }
+
+    @Test("a tool call whose answer the broker did not accept is not run again when delivered again")
+    func undeliveredMCPAnswerKeepsTheCallRecorded() async throws {
+        let (runner, mock, store, served) = try await makeMCPRunner()
+        runner.startMCPMessageListening()
+        defer { runner.stop() }
+
+        mock.rejectsMCPResponses = true
+        mock.emitMCPMessage(.init(id: .number(1), params: mcpToolCall("c")))
+        try await waitUntil { served.count == 1 }
+        mock.rejectsMCPResponses = false
+        // The broker still holds the request and delivers it again.
+        mock.emitMCPMessage(.init(id: .number(1), params: mcpToolCall("c")))
+        try await waitUntil { mock.mcpMessageResponses[.number(1)] != nil }
+
+        let response = try mcpResponse(mock, .number(1))
+        let result = try #require(response["result"] as? NSDictionary)
+        #expect(result["isError"] as? Bool == true)
+        #expect(served.count == 1)
+        try await waitUntil { (try? store.db.query("SELECT 1 FROM acp_mcp_started_tool_calls").isEmpty) == true }
+    }
+
+    @Test("a tool call the agent cancelled before it was dequeued never runs")
+    func cancelledBeforeDequeueMCPCallNeverRuns() async throws {
+        var unclaimed: [JSONRPCID] = []
+        let (runner, mock, _, served) = try await makeMCPRunner(onUnclaimedCancelRequest: { unclaimed.append($0) })
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emitCancelRequest(id: .number(5))
+        try await waitUntil { unclaimed == [.number(5)] }
+        mock.emitMCPMessage(.init(id: .number(5), params: mcpToolCall("c")))
+        try await waitUntil { mock.mcpMessageResponses[.number(5)] != nil }
+
+        guard case .failure(let error) = mock.mcpMessageResponses[.number(5)] else {
+            Issue.record("a cancelled call must be answered as cancelled")
+            return
+        }
+        #expect(error.code == -32800)
+        #expect(served.count == 0)
     }
 
     @Test("file writes stop when the runner is superseded during lease validation")
@@ -8566,8 +8621,9 @@ extension ACPSessionUpdate {
 }
 
 /// The bodies an MCP backend received, in order.
-private actor MCPRequestLog {
+private final class MCPRequestLog: @unchecked Sendable {
+    private let lock = NSLock()
     private var bodies: [Data] = []
-    var count: Int { bodies.count }
-    func append(_ body: Data) { bodies.append(body) }
+    var count: Int { lock.withLock { bodies.count } }
+    func append(_ body: Data) { lock.withLock { bodies.append(body) } }
 }

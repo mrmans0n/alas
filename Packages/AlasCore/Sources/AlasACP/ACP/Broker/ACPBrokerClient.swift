@@ -763,8 +763,19 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
         respondToRawResult(id: id, result: result)
     }
 
-    public func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
-        respondToRawResult(id: id, result: result)
+    @discardableResult
+    public func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>) async -> Bool {
+        do {
+            switch result {
+            case .success(let data):
+                try await respond(id: id, result: ACPBrokerJSONValue(data: data), error: nil)
+            case .failure(let error):
+                try await respond(id: id, result: nil, error: error)
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     public func hasPendingOutboundRequest(id: JSONRPCID) -> Bool {

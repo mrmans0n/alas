@@ -952,11 +952,12 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         }
     }
 
-    public func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
-        Task { [weak self] in
-            guard let self else { return }
-            self.respondFile(id: id, result: result)
-        }
+    /// Without a broker nothing delivers the request again, so writing the
+    /// answer is as far as acceptance goes.
+    @discardableResult
+    public func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>) async -> Bool {
+        respondFile(id: id, result: result)
+        return true
     }
 
     public func hasPendingOutboundRequest(id: JSONRPCID) -> Bool {

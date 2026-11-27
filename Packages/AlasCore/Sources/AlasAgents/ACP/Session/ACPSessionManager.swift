@@ -7327,6 +7327,7 @@ extension ACPSessionManager {
         func abandonEarlyListenerRunnerIfNeeded() async {
             guard let earlyListenerRunner, runners[sessionId] !== earlyListenerRunner else { return }
             await earlyListenerRunner.cancelAuthStatusListening()
+            earlyListenerRunner.cancelMCPMessageListening()
             await earlyListenerRunner.flushPersistence()
         }
         let elicitationCoordinator = ACPElicitationCoordinator(
@@ -8069,6 +8070,7 @@ extension ACPSessionManager {
             // being signed in. Listening from here makes the status track the
             // live agent no matter how that call ends.
             runner.startAuthStatusListening()
+            runner.startMCPMessageListening()
             // Swift does not allow `await` inside a `defer` body, so every
             // early-return between here and the runner's registration
             // (`runners[sessionId] = runner`, below) explicitly cancels and

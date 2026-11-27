@@ -122,10 +122,12 @@ public actor ACPMCPMessageRouter {
         return .failure(Self.backendFailure("the MCP server's reply has no outcome"))
     }
 
-    /// Asks the backend to stop the request the agent sent as `requestID`,
-    /// best effort. Its `mcp/message` still gets whatever the server answers.
-    public func cancel(requestID: JSONRPCID) async {
-        guard let key = active.first(where: { $0.value == requestID })?.key,
+    /// Asks the backend to stop the request the agent sent as `requestID`
+    /// for `serverId`, best effort. Its `mcp/message` still gets whatever the
+    /// server answers. JSON-RPC ids are per connection, so the server id
+    /// keeps one session's cancel from reaching another's call.
+    public func cancel(serverId: String, requestID: JSONRPCID) async {
+        guard let key = active.first(where: { $0.key.serverId == serverId && $0.value == requestID })?.key,
               let backend = backends[key.serverId]?.backend
         else { return }
         let notification: ACPBrokerJSONValue = .object([
