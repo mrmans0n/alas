@@ -4,6 +4,7 @@ import AlasFoundation
 /// Why a prompt was stopped before it left Alas. It reaches both send sites as
 /// an ordinary failure, and nothing about it says the agent saw the prompt.
 public enum ACPPromptRefusal: LocalizedError, Equatable, Sendable {
+    case imageCannotReachRemoteAgent
     case pdfNotSupportedByAgent(name: String)
     case pdfFromAnotherWorktree(name: String)
     case pdfMissing(name: String)
@@ -15,6 +16,8 @@ public enum ACPPromptRefusal: LocalizedError, Equatable, Sendable {
 
     public var errorDescription: String? {
         switch self {
+        case .imageCannotReachRemoteAgent:
+            "Couldn't send the attached image to this remote agent. Choose a chat that supports images or reattach the image."
         case .pdfNotSupportedByAgent(let name):
             "Couldn't send \(name): this agent can't read attached PDFs. Remove it and send again."
         case .pdfFromAnotherWorktree(let name):

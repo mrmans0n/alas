@@ -12,6 +12,20 @@ button, or closing it, puts the device back. **+ Add** in the toolbar boots a
 simulator or AVD, jumps to a running device, or opens a VM's tab, where it
 starts or is set up.
 
+## Send a device bug to an agent
+
+On a running iOS simulator or Android device, open the device's **⋯** menu
+and choose **Send to agent…**. Drag a rectangle on the frozen screenshot,
+write what went wrong, and pick an open agent chat in this worktree. Dragging
+here doesn't tap or swipe on the device.
+
+Review the full screenshot and the crop before sending. The report includes
+the device and the foreground app when Alas can identify it. If the selected
+region matches one accessibility element, the report also includes its role,
+label and ID when available. If the screen changed while Alas was reading it,
+or more than one element could be the target, the images still go through
+without an element guess.
+
 ## Simulators
 
 Simulators need Xcode with at least one iOS simulator runtime. Boot a

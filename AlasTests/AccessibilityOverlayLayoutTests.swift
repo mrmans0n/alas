@@ -66,6 +66,33 @@ struct AccessibilityOverlayLayoutTests {
         #expect(AccessibilityOverlayLayout.hovered(boxes, at: CGPoint(x: 100, y: 320))?.element.ref == "cell")
         #expect(AccessibilityOverlayLayout.hovered(boxes, at: CGPoint(x: 100, y: 10)) == nil)
     }
+
+    @Test func selectionClampsToTheFrozenScreenAndRejectsItsLetterbox() {
+        let pixels = CGSize(width: 300, height: 600)
+        let view = CGSize(width: 500, height: 400)
+        #expect(DeviceBugSelection.crop(
+            from: CGPoint(x: 280, y: 120), to: CGPoint(x: 400, y: 450), pixels: pixels, view: view
+        ) == CGRect(x: 195, y: 180, width: 105, height: 420))
+        #expect(DeviceBugSelection.crop(
+            from: CGPoint(x: 100, y: 120), to: CGPoint(x: 200, y: 240), pixels: pixels, view: view
+        ) == nil)
+    }
+
+    @Test func selectionDescribesAClippedControlButNotTwoPlausibleTargets() {
+        let size = CGSize(width: 200, height: 400)
+        let crop = CGRect(x: 0, y: 0, width: 100, height: 60)
+        let clipped = element("clipped", label: "Save", isControl: true, -50, 15, 100, 30)
+        let second = element("second", label: "Cancel", isControl: true, 55, 15, 30, 30)
+        #expect(DeviceBugSelection.target(
+            in: crop, pixels: size, snapshot: snapshot(width: 200, height: 400, [clipped])
+        )?.ref == "clipped")
+        #expect(DeviceBugSelection.target(
+            in: crop, pixels: size, snapshot: snapshot(width: 200, height: 400, [clipped, second])
+        ) == nil)
+        #expect(DeviceBugSelection.target(
+            in: crop, pixels: size, snapshot: snapshot(width: 400, height: 200, [clipped])
+        ) == nil)
+    }
 }
 
 /// The overlay's reads of the accessibility tree.

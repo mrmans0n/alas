@@ -40,6 +40,17 @@ struct ACPImageBlocksTests {
         })
     }
 
+    @Test("a remote prompt never falls back to an unreadable local image link")
+    func remoteAgentWithoutInlineImagesCannotReceiveAHostLocalLink() async throws {
+        await #expect(throws: ACPPromptRefusal.imageCannotReachRemoteAgent) {
+            _ = try await ACPSessionRunner.hydrate(
+                [.text("see this"), .image(data: nil, uri: "file:///tmp/shot.png", mimeType: "image/png")],
+                promptCapabilities: .init(image: false), worktreePath: "/work",
+                agentInfo: nil, attachmentsDirectory: Self.noAttachments, allowsLocalImageLinks: false
+            )
+        }
+    }
+
     @Test("attachments(of:) surfaces image blocks as image attachments")
     func attachmentsIncludeImages() {
         let atts = ACPSessionRunner.attachments(of: [
