@@ -3577,8 +3577,10 @@ extension ACPSessionRunner {
     }
 
     /// Replaces attached-session links with their context, resolved now so
-    /// a queued prompt carries the session as it is when it is sent.
+    /// a queued prompt carries the session as it is when it is sent, and
+    /// named-agent links with their delegation note.
     private func expandingSessionReferences(_ blocks: [ACPContentBlock]) async -> [ACPContentBlock] {
+        let blocks = ACPAgentReference.replacingReferences(in: blocks)
         let ids = ACPSessionReference.sessionIds(in: blocks)
         guard !ids.isEmpty else { return blocks }
         var contexts: [String: String] = [:]

@@ -1896,6 +1896,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             worktreeRoot: coord.worktreeRoot,
             filesProvider: coord.filesProvider,
             sessionsProvider: coord.sessionMentions?.candidates,
+            agentsProvider: coord.sessionMentions?.agents,
             symbolMentions: coord.symbolMentions,
             previewTheme: coord.theme,
             previewTypography: coord.typography,
@@ -1904,6 +1905,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
             },
             onPickSession: { [weak self] session in
                 self?.insertSessionMention(session)
+            },
+            onPickAgent: { [weak self] agent in
+                self?.insertAgentMention(agent)
             },
             onPickSymbol: { [weak self] symbol, includeCode in
                 self?.insertSymbolMention(symbol, includeCode: includeCode)
@@ -3243,6 +3247,13 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     @discardableResult
+    func insertAgentMention(_ agent: ACPAgentMentionCandidate) -> Bool {
+        insertMention(
+            displayName: agent.displayName,
+            uri: ACPAgentReference.uri(for: .init(agentId: agent.agentId, model: agent.modelId)))
+    }
+
+    @discardableResult
     func insertSymbolMention(_ entry: SymbolEntry, includeCode: Bool) -> Bool {
         let target = ACPSymbolReference.Target(entry: entry, includeCode: includeCode)
         let inserted = insertMention(displayName: target.displayName, uri: ACPSymbolReference.uri(for: target))
@@ -3403,11 +3414,13 @@ final class ACPMentionPanel: NSPanel {
     init(worktreeRoot: URL,
          filesProvider: (@Sendable () async -> [URL])?,
          sessionsProvider: (@MainActor () async -> [ACPSessionMentionCandidate])? = nil,
+         agentsProvider: (@MainActor () async -> [ACPAgentMentionCandidate])? = nil,
          symbolMentions: ACPSymbolMentionSource? = nil,
          previewTheme: Theme? = nil,
          previewTypography: ACPChatTypography = .default,
          onPick: @escaping (URL) -> Void,
          onPickSession: @escaping (ACPSessionMentionCandidate) -> Void = { _ in },
+         onPickAgent: @escaping (ACPAgentMentionCandidate) -> Void = { _ in },
          onPickSymbol: @escaping (SymbolEntry, Bool) -> Void = { _, _ in },
          onCancel: @escaping () -> Void = {}) {
         let symbolPreview = symbolMentions.map { _ in
@@ -3438,6 +3451,11 @@ final class ACPMentionPanel: NSPanel {
             onPickSession: { [weak self] session in
                 self?.close()
                 onPickSession(session)
+            },
+            agentsProvider: agentsProvider,
+            onPickAgent: { [weak self] agent in
+                self?.close()
+                onPickAgent(agent)
             },
             symbolMentions: symbolMentions,
             onPickSymbol: { [weak self] symbol, includeCode in
