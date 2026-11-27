@@ -70,6 +70,28 @@ struct ACPMCPMessageRouterTests {
         #expect(try Self.object(result) == ["result": ["resultType": "complete", "tools": []]])
     }
 
+    @Test("a tool call carries the agent's tool call id to the server, beside its own metadata")
+    func toolCallsNameTheirToolCall() async throws {
+        let server = Server(reply: Self.echoResult)
+        let router = ACPMCPMessageRouter()
+        await router.register(serverId: "alas:s1") { await server.receive($0) }
+        let params: ACPBrokerJSONValue = .object([
+            "name": .string("visual_show"),
+            "_meta": .object(["io.modelcontextprotocol/protocolVersion": .string("2026-07-28")]),
+        ])
+
+        _ = await router.handle(.init(id: .number(1), params: .init(
+            serverId: "alas:s1", requestId: "r1", method: "tools/call", params: params,
+            sessionId: "s1", toolCallId: "call-1"
+        )))
+
+        let sent = try Self.message(await server.received.first)
+        #expect((sent["params"] as? NSDictionary)?["_meta"] as? NSDictionary == [
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            ACPMCPMessageRouter.toolCallIdMetaKey: "call-1",
+        ])
+    }
+
     @Test("an MCP error is an outcome, carried rather than raised")
     func carriesMCPErrors() async throws {
         let router = ACPMCPMessageRouter()

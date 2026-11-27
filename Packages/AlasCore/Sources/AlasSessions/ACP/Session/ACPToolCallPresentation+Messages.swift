@@ -5,8 +5,9 @@ import AlasModel
 extension ACPToolCallPresentation {
     /// The `toolCallId`s of finished `visual_show` calls whose visual is embedded: the visual flows
     /// straight out of the prose, so their tool chip is not shown. The call does not carry the
-    /// presentation, so each visual row is linked to the nearest earlier `visual_show` call in its
-    /// turn (stopping at the user message) that no other visual has claimed. Card visuals claim their
+    /// presentation, so each visual row is linked to the call it names, or, for a visual that names
+    /// none, to the nearest earlier `visual_show` call in its turn (stopping at the user message)
+    /// that no other visual has claimed. Card visuals claim their
     /// call too but keep its chip, as do visuals stored before `presentation` existed (they decode as
     /// cards). A claimed call is hidden only while its latest snapshot here is `completed`, so an
     /// in-flight or failed call keeps its chip. Replayed duplicates of a visual claim nothing.
@@ -20,6 +21,10 @@ extension ACPToolCallPresentation {
             guard case .visualAid(let visual) = messages[index],
                   linkedVisuals.insert(visual.id).inserted
             else { continue }
+            if let named = visual.toolCallId {
+                if claimed.insert(named).inserted, visual.presentation == .embedded { embeddedCalls.insert(named) }
+                continue
+            }
             var cursor = index
             scan: while cursor != messages.startIndex {
                 cursor = messages.index(before: cursor)

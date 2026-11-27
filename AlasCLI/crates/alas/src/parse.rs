@@ -2991,6 +2991,7 @@ mod tests {
                 html: "<p>from file</p>".into(),
                 question: None,
                 presentation: Some("card".into()),
+                tool_call_id: None,
             }
         );
         assert_eq!(
@@ -3011,6 +3012,7 @@ mod tests {
                     allow_multiple: true,
                 }),
                 presentation: None,
+                tool_call_id: None,
             }
         );
         for bad in [

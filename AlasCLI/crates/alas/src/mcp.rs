@@ -20,6 +20,12 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 /// The handshake-free MCP version, which MCP-over-ACP servers must speak.
 pub const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
 const PROTOCOL_VERSION_META: &str = "io.modelcontextprotocol/protocolVersion";
+/// Where Alas puts the agent's tool call id when it forwards a `tools/call`
+/// the agent sent over ACP (`mcp/message`'s `toolCallId`).
+const TOOL_CALL_ID_META: &str = "io.nlopez.alas/toolCallId";
+/// Claude Code's own id for the tool use behind a `tools/call`, which its
+/// ACP adapter also uses as the tool call id.
+const CLAUDE_TOOL_USE_ID_META: &str = "claudecode/toolUseId";
 
 /// Injected by the app in the MCP server definition. Both values are
 /// required: `alas mcp` is launched by Alas itself and deliberately has no
@@ -2896,7 +2902,27 @@ fn visual_show_command(args: &Value) -> Result<Command, String> {
         Some(Value::String(value)) if value == "embedded" || value == "card" => Some(value.clone()),
         Some(_) => return Err("presentation must be \"embedded\" or \"card\"".into()),
     };
-    Ok(Command::VisualShow { title, html, question, presentation })
+    Ok(Command::VisualShow { title, html, question, presentation, tool_call_id: None })
+}
+
+/// The agent's id for the tool call a `tools/call` belongs to, read from its
+/// `_meta`: what Alas adds when it forwards the call, else Claude Code's.
+fn tool_call_id(params: &Value) -> Option<String> {
+    let meta = params.get("_meta")?;
+    [TOOL_CALL_ID_META, CLAUDE_TOOL_USE_ID_META]
+        .iter()
+        .find_map(|key| meta.get(*key).and_then(Value::as_str))
+        .filter(|id| !id.is_empty() && id.len() <= 256)
+        .map(String::from)
+}
+
+/// `command` with the id of the tool call behind it, for the commands whose
+/// transcript entry pairs with that call.
+fn with_tool_call_id(mut command: Command, params: &Value) -> Command {
+    if let Command::VisualShow { tool_call_id: id, .. } = &mut command {
+        *id = tool_call_id(params);
+    }
+    command
 }
 
 fn visual_question(value: &Value) -> Result<VisualQuestion, String> {
@@ -3384,7 +3410,9 @@ fn call_tool(
     if !scope.allows(name) {
         return Err(scope.rejection(name));
     }
-    let command = command_for_tool(name, &args, worktree_dir).map_err(|msg| (-32602, msg))?;
+    let command = command_for_tool(name, &args, worktree_dir)
+        .map(|command| with_tool_call_id(command, params))
+        .map_err(|msg| (-32602, msg))?;
     Ok(match dispatch(&command) {
         Ok(resp) => tool_result(&command, resp),
         Err(err) => transport_error_result(&command, &err),
@@ -3568,7 +3596,7 @@ fn tools_call_command(
         .cloned()
         .unwrap_or_else(|| json!({}));
     match command_for_tool(name, &args, worktree_dir) {
-        Ok(command) => Ok(Some((id, command))),
+        Ok(command) => Ok(Some((id, with_tool_call_id(command, &params)))),
         Err(message) => Err(error_reply(id, -32602, &message)),
     }
 }
@@ -4701,6 +4729,36 @@ mod tests {
     }
 
     #[test]
+    fn a_visual_names_the_tool_call_that_showed_it() {
+        let call = |meta: &str| {
+            let line = format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"visual_show","arguments":{{"title":"T","html":"<p>x</p>"}},"_meta":{{{meta}}}}}}}"#
+            );
+            let msg: Value = serde_json::from_str(&line).unwrap();
+            let Ok(Some((_, command))) = tools_call_command(&msg, "/wt", ToolScope::All) else {
+                panic!("expected a visual_show command");
+            };
+            let mut dispatched = None;
+            handle_line(&line, "/wt", |cmd| {
+                dispatched = Some(cmd.clone());
+                ok_dispatch(cmd)
+            });
+            assert_eq!(dispatched.as_ref(), Some(&command), "both server paths agree");
+            match command {
+                Command::VisualShow { tool_call_id, .. } => tool_call_id,
+                _ => unreachable!(),
+            }
+        };
+        assert_eq!(call(r#""io.nlopez.alas/toolCallId":"acp-1""#), Some("acp-1".into()));
+        assert_eq!(call(r#""claudecode/toolUseId":"toolu_1""#), Some("toolu_1".into()));
+        assert_eq!(
+            call(r#""io.nlopez.alas/toolCallId":"acp-1","claudecode/toolUseId":"toolu_1""#),
+            Some("acp-1".into())
+        );
+        assert_eq!(call(""), None);
+    }
+
+    #[test]
     fn a_request_for_another_protocol_version_is_refused_before_it_runs() {
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vm_status","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01"}}}"#;
         let reply = handle_line(call, "/wt", |_| unreachable!()).unwrap();
@@ -4806,6 +4864,7 @@ mod tests {
                     allow_multiple: true,
                 }),
                 presentation: Some("card".into()),
+                tool_call_id: None,
             }
         );
         let omitted = command_for_tool("visual_show", &json!({ "title": "T", "html": "<p>" }), "/wt").unwrap();
@@ -4852,6 +4911,7 @@ mod tests {
                 html: "<p>".into(),
                 question: None,
                 presentation: None,
+                tool_call_id: None,
             };
             let result = tool_result(
                 &cmd,

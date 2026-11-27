@@ -254,6 +254,9 @@ pub enum Command {
         question: Option<VisualQuestion>,
         /// `"embedded"` or `"card"`; the app picks the default when absent.
         presentation: Option<String>,
+        /// The agent's id for the tool call that showed it, when the
+        /// `tools/call` named one, so the transcript pairs the two exactly.
+        tool_call_id: Option<String>,
     },
     /// One page of a direct parent's, child's, or this session's fork transcript. The
     /// app applies its defaults to omitted bounds.
@@ -1154,7 +1157,7 @@ pub fn build_request(
             }));
             r
         }
-        Command::VisualShow { title, html, question, presentation } => {
+        Command::VisualShow { title, html, question, presentation, tool_call_id } => {
             let mut r = Request::new("visual_show");
             let mut params = serde_json::json!({ "title": title, "html": html });
             if let Some(question) = question {
@@ -1170,6 +1173,9 @@ pub fn build_request(
             }
             if let Some(presentation) = presentation {
                 params["presentation"] = serde_json::json!(presentation);
+            }
+            if let Some(tool_call_id) = tool_call_id {
+                params["tool_call_id"] = serde_json::json!(tool_call_id);
             }
             r.params = Some(params);
             r
@@ -2340,6 +2346,7 @@ mod tests {
                     html: "<p>".into(),
                     question: None,
                     presentation: presentation.map(String::from),
+                    tool_call_id: None,
                 },
                 None,
                 None,
@@ -2368,6 +2375,7 @@ mod tests {
                     allow_multiple: true,
                 }),
                 presentation: None,
+                tool_call_id: None,
             },
             Some("acp-1".into()),
             Some("/wt".into()),

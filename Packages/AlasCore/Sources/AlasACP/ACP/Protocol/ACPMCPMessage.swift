@@ -55,6 +55,10 @@ public actor ACPMCPMessageRouter {
     /// empty for a notification.
     public typealias Backend = @Sendable (Data) async throws -> Data
 
+    /// The `tools/call` `_meta` key carrying the agent's tool call id, which
+    /// `alas mcp` passes on with what the tool shows.
+    public static let toolCallIdMetaKey = "io.nlopez.alas/toolCallId"
+
     private struct Active: Hashable {
         let serverId: String
         let requestId: String
@@ -96,10 +100,16 @@ public actor ACPMCPMessageRouter {
             "method": .string(message.method),
         ]
         if let params = message.params, params != .null {
-            guard case .object = params else {
+            guard case .object(var object) = params else {
                 return .failure(.init(code: -32602, message: "MCP params must be an object", data: nil))
             }
-            envelope["params"] = params
+            // Lets the server pair what a tool shows with the agent's call.
+            if message.method == "tools/call", let toolCallId = message.toolCallId {
+                var meta: [String: ACPBrokerJSONValue] = if case .object(let meta)? = object["_meta"] { meta } else { [:] }
+                meta[Self.toolCallIdMetaKey] = .string(toolCallId)
+                object["_meta"] = .object(meta)
+            }
+            envelope["params"] = .object(object)
         }
         active[key] = request.id
         defer { active[key] = nil }
