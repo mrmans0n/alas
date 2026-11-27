@@ -11,7 +11,8 @@ final class AndroidBackend: DeviceBackend {
     var input: DeviceInput { streams }
     private let pane: AndroidPaneModel
     private let streams: AndroidStreamClient
-    private let fastSnapshots = UserDefaults.standard.bool(forKey: "AndroidFastSnapshots")
+    private let fastSnapshotsEnabled: () -> Bool
+    private var snapshotTurns: [String: SerialGate] = [:]
     private var snapshotReaders: [String: AndroidSnapshotReader] = [:]
     private static let snapshotHelper: (url: URL, digest: String)? = {
         guard let url = Bundle.main.url(forResource: "AndroidSnapshotReader", withExtension: "jar"),
@@ -26,9 +27,10 @@ final class AndroidBackend: DeviceBackend {
     /// The route each device follows, while it plays.
     private var routes: [String: (route: DeviceRoute, started: Date, task: Task<Void, Never>)] = [:]
 
-    init(pane: AndroidPaneModel, streams: AndroidStreamClient) {
+    init(pane: AndroidPaneModel, streams: AndroidStreamClient, fastSnapshotsEnabled: @escaping () -> Bool) {
         self.pane = pane
         self.streams = streams
+        self.fastSnapshotsEnabled = fastSnapshotsEnabled
     }
 
     private func control() throws -> AndroidControl {
@@ -91,10 +93,23 @@ final class AndroidBackend: DeviceBackend {
     }
 
     func snapshot(_ id: String, generation: Int) async throws -> DeviceSnapshot {
+        guard pane.devices?.contains(where: { $0.serial == id && $0.isEmulator && $0.release == "16" }) == true else {
+            return try await readSnapshot(id, generation: generation, fast: false)
+        }
+        // Both readers use the same Android automation slot, including across a settings change.
+        let turn = snapshotTurns[id] ?? SerialGate()
+        snapshotTurns[id] = turn
+        await turn.enter()
+        defer { turn.leave() }
+        try Task.checkCancellation()
+        return try await readSnapshot(id, generation: generation, fast: fastSnapshotsEnabled())
+    }
+
+    private func readSnapshot(_ id: String, generation: Int, fast: Bool) async throws -> DeviceSnapshot {
         let control = try control()
         let density = try await density(id, control: control)
         let displaySize = try await displaySize(id, control: control)
-        if let reader = fastReader(id, control: control) {
+        if fast, let reader = fastReader(id, control: control) {
             do {
                 let xml = try await reader.read()
                 return try AndroidUIDump.parse(xml, density: density, displaySize: displaySize, generation: generation)
@@ -108,6 +123,15 @@ final class AndroidBackend: DeviceBackend {
                 throw DeviceToolError(message: "device_unavailable: The fast Android reader couldn't describe the screen.")
             }
         }
+        if let reader = snapshotReaders[id] {
+            // The stock reader needs the same automation slot.
+            do {
+                try await reader.releaseAutomation()
+            } catch {
+                throw DeviceToolError(message: "device_unavailable: The fast Android reader didn't release UI Automation.")
+            }
+        }
+        try Task.checkCancellation()
         // uiautomator can't read a window still coming up; one retry covers an app that just launched.
         for attempt in 0..<2 {
             let dump = try await Process.runData(
@@ -123,9 +147,7 @@ final class AndroidBackend: DeviceBackend {
     }
 
     private func fastReader(_ id: String, control: AndroidControl) -> AndroidSnapshotReader? {
-        guard fastSnapshots,
-              pane.devices?.contains(where: { $0.serial == id && $0.isEmulator && $0.release == "16" }) == true,
-              let helper = Self.snapshotHelper else { return nil }
+        guard let helper = Self.snapshotHelper else { return nil }
         if let reader = snapshotReaders[id] { return reader }
         let path = "/data/local/tmp/alas-ax-\(helper.digest).jar"
         let staging = "\(path).\(UUID())"

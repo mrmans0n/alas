@@ -37,6 +37,20 @@ final class AndroidSnapshotReader: @unchecked Sendable {
         }
     }
 
+    /// Drain the helper before switching to a reader that needs the same Android automation slot.
+    func releaseAutomation() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async { [self] in
+                continuation.resume(with: Result {
+                    guard let session else { return }
+                    try session.finish(checkCancellation: {})
+                    if session.process.terminationStatus != 0 { prepared = false }
+                    self.session = nil
+                })
+            }
+        }
+    }
+
     func close() {
         closed.withLock { $0 = true }
         queue.async { [self] in session = nil }

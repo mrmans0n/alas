@@ -51,6 +51,14 @@ struct AppConfigDecodingTests {
         #expect(withApps.computerUse.alwaysAllowedApps == ["com.apple.Notes"])
     }
 
+    @Test func fastAndroidSnapshotsRequireOptInAndPersist() throws {
+        var config = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"deviceAgentsEnabled":true}"#.utf8))
+        #expect(!config.fastAndroidSnapshots)
+        config.fastAndroidSnapshots = true
+        let reloaded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(reloaded.fastAndroidSnapshots)
+    }
+
     @Test func legacySeeOnlyGrantsAreDropped() throws {
         let legacy = try JSONDecoder().decode(
             AppConfig.self,

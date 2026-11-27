@@ -60,6 +60,24 @@ struct AndroidSnapshotReaderTests {
         await #expect(throws: AndroidSnapshotReader.Failure.busy) { try await reader.read() }
     }
 
+    @Test func releasingAutomationWaitsForTheHelperToExit() async throws {
+        let directory = try FileManager.default.url(
+            for: .itemReplacementDirectory, in: .userDomainMask,
+            appropriateFor: FileManager.default.temporaryDirectory, create: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let marker = directory.appendingPathComponent("released")
+        let reader = AndroidSnapshotReader(executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", """
+        IFS= read -r request || exit 1
+        printf '%s\\n' '<hierarchy rotation="0"><node/></hierarchy>'
+        IFS= read -r next && exit 1
+        touch "$1"
+        """, "reader", marker.path])
+        _ = try await reader.read()
+        try await reader.releaseAutomation()
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+    }
+
     private func makeReader(_ script: String) -> AndroidSnapshotReader {
         AndroidSnapshotReader(executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", script])
     }

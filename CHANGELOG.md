@@ -14,7 +14,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Keep ACP transcript adapter updates running when you switch tabs, and show an in-app banner when a background update succeeds.
 - Fix a macOS hang when pressing Return to select a setting in the ACP composer.
 - Keep inline charts and their legends from overlapping the text or callouts below them.
-- Android 16 emulators can opt in to faster accessibility snapshots with `AndroidFastSnapshots`. Physical phones keep the standard reader.
+- Turn on **Fast Android screen reads** in **Settings → Computer Use** for faster accessibility snapshots on Android 16 emulators. Physical phones keep the standard reader.
 
 ## [0.24.10] - 2026-11-24
 

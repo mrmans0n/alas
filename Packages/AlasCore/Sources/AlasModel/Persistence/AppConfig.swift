@@ -108,6 +108,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var experimentalACP2Enabled: Bool = false
     /// Lets agents drive iOS simulators through the `device_*` tools.
     public var deviceAgentsEnabled: Bool = false
+    public var fastAndroidSnapshots: Bool = false
     public var recentProjectIds: [String] = []
     public var recentWorktreeIdsByProject: [String: [String]] = [:]
     public var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -964,6 +965,7 @@ extension AppConfig {
              pluginsEnabled,
              experimentalACP2Enabled,
              deviceAgentsEnabled,
+             fastAndroidSnapshots,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
@@ -1247,6 +1249,7 @@ extension AppConfig {
         pluginsEnabled = (try? c.decode(Bool.self, forKey: .pluginsEnabled)) ?? true
         experimentalACP2Enabled = (try? c.decode(Bool.self, forKey: .experimentalACP2Enabled)) ?? false
         deviceAgentsEnabled = (try? c.decode(Bool.self, forKey: .deviceAgentsEnabled)) ?? false
+        fastAndroidSnapshots = (try? c.decode(Bool.self, forKey: .fastAndroidSnapshots)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]

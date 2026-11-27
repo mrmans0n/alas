@@ -14,14 +14,33 @@ jobs:
   verify-bundled-reader:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      ANDROID_HOME: ${{ runner.temp }}/reader-sdk
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-java@v5
         with:
           distribution: zulu
           java-version: '24.0.2'
-      - name: Install the Android build tools
-        run: sdkmanager --install 'platforms;android-36' 'build-tools;36.1.0'
+      - name: Download pinned Android and Kotlin build tools
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl --fail --location --retry 3 --output platform.zip \
+            https://dl.google.com/android/repository/platform-36_r02.zip
+          curl --fail --location --retry 3 --output build-tools.zip \
+            https://dl.google.com/android/repository/build-tools_r36.1_linux.zip
+          curl --fail --location --retry 3 --output kotlin.zip \
+            https://github.com/JetBrains/kotlin/releases/download/v2.2.21/kotlin-compiler-2.2.21.zip
+          sha256sum --check <<'EOF'
+          37607369a28c5b640b3a7998868d45898ebcb777565a0e85f9acf36f29631d2e  platform.zip
+          a7b5889e4a79fcf3b0976bef40d401f4240fb1eed891d9d91169da1111e11d78  build-tools.zip
+          a623871f1cd9c938946948b70ef9170879f0758043885bbd30c32f024e511714  kotlin.zip
+          EOF
+          mkdir -p "$ANDROID_HOME/platforms/android-36" "$ANDROID_HOME/build-tools/36.1.0/lib"
+          unzip -jq platform.zip android-36/android.jar android-36/source.properties -d "$ANDROID_HOME/platforms/android-36"
+          unzip -jq build-tools.zip android-16/lib/d8.jar -d "$ANDROID_HOME/build-tools/36.1.0/lib"
+          unzip -q kotlin.zip
+          echo "$RUNNER_TEMP/kotlinc/bin" >> "$GITHUB_PATH"
       - name: Rebuild and verify the bundled JAR
         run: |
           Tools/AndroidSnapshotReader/build.sh "$RUNNER_TEMP/AndroidSnapshotReader.jar"

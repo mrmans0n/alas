@@ -142,12 +142,9 @@ the app's restarts, with a banner for each Java crash.
 The screen streams with scrcpy's server, which Alas bundles and copies to
 the device each time it shows the screen.
 
-Android 16 emulators can opt in to faster accessibility snapshots. Quit
-Alas, run `defaults write io.nlopez.alas AndroidFastSnapshots -bool true`,
-then reopen it. For Alas Dev, use `io.nlopez.alas.dev` instead. To turn the
-experiment off, delete `AndroidFastSnapshots` from the same defaults domain
-and restart Alas. Physical phones and other Android versions keep the
-standard reader.
+To opt in on Android 16 emulators, turn on **Fast Android screen reads**
+in **Settings → Computer Use**. Physical phones and other Android versions
+keep the standard reader.
 
 The fast reader uses Android's single UI Automation slot while reading and
 releases it after five idle seconds. Wait for it to release before starting

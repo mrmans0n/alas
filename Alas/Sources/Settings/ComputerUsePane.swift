@@ -39,6 +39,12 @@ struct ComputerUsePane: View {
                     ) {
                         AlasToggle(on: state.bind(\.deviceAgentsEnabled))
                     }
+                    SettingsRow(
+                        name: "Fast Android screen reads",
+                        desc: "Read the accessibility tree faster on Android 16 emulators. While reading, Alas uses Android’s UI Automation slot."
+                    ) {
+                        AlasToggle(on: state.bind(\.fastAndroidSnapshots))
+                    }
                 }
 
                 SettingsGroup(title: "macOS permissions") {
