@@ -1938,10 +1938,14 @@ public final class ACPSessionOrchestrationCoordinator {
 
     private func interruptLocalChild(_ target: ACPDelegationRecord) async -> AlasCLIResponse {
         let targetSessionId = target.childSessionId
-        // A child still starting has no turn to cancel yet; its start drops
-        // the first prompt instead. See `startPersistedChild`.
+        // A child still starting has no turn to cancel yet: its queued first
+        // prompt is dropped now, and its start drops one queued later. See
+        // `startPersistedChild`.
         if target.phase == .creatingWorktree || target.phase == .starting {
             stoppedWhileStarting.insert(targetSessionId)
+            if let manager = environment.sessionLocation(targetSessionId)?.manager {
+                await manager.queueClear(for: targetSessionId)
+            }
         }
         guard let location = environment.sessionLocation(targetSessionId),
               let session = location.manager.liveSession(for: targetSessionId),
@@ -2664,16 +2668,18 @@ public final class ACPSessionOrchestrationCoordinator {
                 selection, record: record, prompt: prompt, manager: manager
             ) else { return }
         }
-        // The parent was stopped meanwhile: the first prompt is dropped, or
-        // its turn cancelled if it already went out. The child stays open.
-        if stoppedWhileStarting.remove(childID) != nil {
-            await manager.queueClear(for: childID)
-            _ = await manager.interrupt(for: childID)
-        }
         try? await environment.persistence.clearPendingInitialPrompt(childSessionId: childID, updatedAt: environment.now())
         let markedReady = (try? await environment.persistence.updatePhase(
             childSessionId: childID, phase: .ready, failureMessage: nil, updatedAt: environment.now()
         )) != nil
+        // Stopped while starting: the first prompt is dropped, or its turn
+        // cancelled if it already went out. Checked after the last await
+        // before the hold is released, so a stop up to here is seen. The
+        // child stays open.
+        if stoppedWhileStarting.remove(childID) != nil {
+            await manager.queueClear(for: childID)
+            _ = await manager.interrupt(for: childID)
+        }
         // Unless `.ready` is durable, the child stays held: other instances
         // and the next launch still treat it as starting and reapply the
         // selection.
