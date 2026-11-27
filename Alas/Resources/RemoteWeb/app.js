@@ -5266,6 +5266,7 @@ function applyMentionCandidates(msg) {
 function mentionIcon(m) {
   if (m.kind === "session") return "💬";
   if (m.kind === "symbol") return "{ }";
+  if (m.kind === "agent") return "👥";
   return m.value.endsWith("/") ? "📁" : "📄";
 }
 

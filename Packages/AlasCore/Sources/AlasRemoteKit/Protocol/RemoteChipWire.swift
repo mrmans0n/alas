@@ -12,7 +12,7 @@ public struct RemoteSkillInfo: Codable, Equatable, Hashable, Sendable {
 
 /// A mention a sent prompt carried, as its row shows it.
 public struct RemoteUserMention: Codable, Equatable, Hashable, Sendable {
-    /// `RemoteMention.file`, `.session` or `.symbol`.
+    /// `RemoteMention.file`, `.session`, `.symbol` or `.agent`.
     public var kind: String
     /// The chip's label: a file or folder name, a session title, a symbol's display name.
     public var name: String
@@ -22,6 +22,23 @@ public struct RemoteUserMention: Codable, Equatable, Hashable, Sendable {
         self.kind = kind
         self.name = name
         self.symbol = symbol
+    }
+
+    /// The SF Symbol a sent chip of `kind` shows, on every native viewer.
+    public static func iconName(kind: String) -> String {
+        switch kind {
+        case RemoteMention.session: "bubble.left.and.bubble.right"
+        case RemoteMention.agent: "person.2"
+        default: "at"
+        }
+    }
+
+    public static func accessibilityNoun(kind: String) -> String {
+        switch kind {
+        case RemoteMention.session: "Session"
+        case RemoteMention.agent: "Agent"
+        default: "Mention"
+        }
     }
 }
 

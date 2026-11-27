@@ -684,7 +684,7 @@ private struct NativePeerRowView: View {
             ACPSymbolBadge(target: target, snapshot: symbol.snapshot, root: nil, typography: typography)
         } else {
             FileChip(path: mention.name, lines: nil,
-                     iconSystemName: mention.kind == RemoteMention.session ? "bubble.left.and.bubble.right" : "at")
+                     iconSystemName: RemoteUserMention.iconName(kind: mention.kind))
         }
     }
 

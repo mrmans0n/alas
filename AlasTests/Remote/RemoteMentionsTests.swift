@@ -18,6 +18,9 @@ struct RemoteMentionsTests {
         // `escape/` stands for a symlink out of the worktree.
         (RemoteMention.file, "escape/x.swift", nil),
         (RemoteMention.symbol, "alas-symbol://symbol?path=escape/x.swift&name=f&kind=function&start=0&end=1", nil),
+        // Re-encoded from the parsed target, so unknown fields are dropped.
+        (RemoteMention.agent, "alas-agent://codex?model=gpt-5&extra=1", "alas-agent://codex?model=gpt-5"),
+        (RemoteMention.agent, "alas-session://other", nil),
         ("terminal", "anything", nil),
     ] as [(String, String, String?)])
     @MainActor
@@ -39,7 +42,7 @@ struct RemoteMentionsTests {
         #expect(attachment.uri == ACPSymbolReference.uri(for: target))
     }
 
-    @Test func plainQueriesListSessionsThenFilesAndDrillDownsListOnlySymbols() {
+    @Test func plainQueriesListAgentsThenSessionsThenFilesAndDrillDownsListOnlySymbols() {
         let session = ACPSessionMentionCandidate(id: "s2", projectId: "p", title: "App cleanup",
                                                  agentName: "Codex", worktreeName: "main")
         let symbol = SymbolEntry(name: "run", kind: .function, container: "App", languageID: "swift",
@@ -47,8 +50,11 @@ struct RemoteMentionsTests {
                                  lineRange: 4...8)
         let plain = RemoteMentions.candidates(
             query: "app", root: root, filePaths: ["Alas/App.swift", "Deleted/App.swift", "README.md"],
-            sessions: [session], fileSymbols: [symbol], fileExists: { !$0.path.contains("Deleted") })
-        #expect(plain.map(\.kind) == [RemoteMention.session, RemoteMention.file])
+            sessions: [session], fileSymbols: [symbol],
+            agents: [ACPAgentMentionCandidate(agentId: "applet", agentName: "Applet")],
+            fileExists: { !$0.path.contains("Deleted") })
+        #expect(plain.map(\.kind) == [RemoteMention.agent, RemoteMention.session, RemoteMention.file])
+        #expect(plain.first?.value == "alas-agent://applet")
         #expect(plain.last == RemoteMention(kind: RemoteMention.file, value: "Alas/App.swift", name: "App.swift",
                                             detail: "Alas"))
 

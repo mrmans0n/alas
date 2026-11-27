@@ -155,6 +155,7 @@ struct MentionCard: View {
         switch kind {
         case RemoteMention.session: "bubble.left.and.text.bubble.right"
         case RemoteMention.symbol: "curlybraces"
+        case RemoteMention.agent: "person.2"
         default: name.hasSuffix("/") ? "folder" : "doc"
         }
     }

@@ -98,7 +98,7 @@ public enum MentionAgentRanking: Sendable {
     public static func rank(
         _ candidates: [ACPAgentMentionCandidate], query: String, limit: Int = maxDisplay
     ) -> [ACPAgentMentionCandidate] {
-        let tokens = query.lowercased().split { $0.isWhitespace || $0 == ":" }.map(String.init)
+        let tokens = tokens(of: query)
         guard tokens.joined().count >= minQueryLength else { return [] }
         let matches = candidates.filter { candidate in
             let fields = [candidate.agentId, candidate.agentName, candidate.modelId ?? "", candidate.modelName ?? ""]
@@ -106,6 +106,16 @@ public enum MentionAgentRanking: Sendable {
             return tokens.allSatisfy { token in fields.contains { startsWord($0, with: token) } }
         }
         return Array((matches.filter { $0.modelId == nil } + matches.filter { $0.modelId != nil }).prefix(limit))
+    }
+
+    /// Whether `query` is long enough to match any agent, so a caller can
+    /// skip discovering them for a shorter one.
+    public static func accepts(query: String) -> Bool {
+        tokens(of: query).joined().count >= minQueryLength
+    }
+
+    private static func tokens(of query: String) -> [String] {
+        query.lowercased().split { $0.isWhitespace || $0 == ":" }.map(String.init)
     }
 
     /// Whether `token` starts `field` or the part after any

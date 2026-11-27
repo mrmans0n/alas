@@ -1582,7 +1582,9 @@ public final class RemoteSessionGateway {
                     path: target.path, name: target.name, kind: target.kind.rawValue, container: target.container,
                     lineRange: target.lineRange, includesCode: target.includeCode, snapshot: attachment.symbol))
         }
-        let kind = ACPSessionReference.sessionId(fromURI: attachment.uri) == nil ? RemoteMention.file : RemoteMention.session
+        let kind = ACPSessionReference.sessionId(fromURI: attachment.uri) != nil ? RemoteMention.session
+            : ACPAgentReference.target(fromURI: attachment.uri) != nil ? RemoteMention.agent
+            : RemoteMention.file
         return RemoteUserMention(kind: kind, name: attachment.name ?? "Resource")
     }
 

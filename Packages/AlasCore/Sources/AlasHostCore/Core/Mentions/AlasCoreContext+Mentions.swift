@@ -43,11 +43,17 @@ extension AlasCoreContext {
         } else {
             sessions = []
         }
+        // Discovery is skipped for queries too short to match an agent.
+        var agents: [ACPAgentMentionCandidate] = []
+        if case .worktree(let worktree) = sessionRoot, MentionAgentRanking.accepts(query: query) {
+            agents = await ACPAgentMentionCandidate.candidates(from: orchestration.mentionableAgents(
+                origin: .init(sessionId: sessionId, projectId: worktree.projectId, worktreeId: worktree.id)))
+        }
         // An SSH worktree's files can't be checked without a round trip per
         // file; a missing one still fails safely, as a dangling link.
         let mentions = RemoteMentions.candidates(
             query: query, root: root, filePaths: paths, sessions: sessions, fileSymbols: fileSymbols,
-            fileExists: { root.isRemoteAlasPath || FileManager.default.fileExists(atPath: $0.path) })
+            agents: agents, fileExists: { root.isRemoteAlasPath || FileManager.default.fileExists(atPath: $0.path) })
         return (mentions, sessions)
     }
 

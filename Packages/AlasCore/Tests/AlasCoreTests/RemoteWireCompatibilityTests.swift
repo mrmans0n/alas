@@ -608,6 +608,7 @@ import Testing
                 .init(uri: ACPSymbolReference.uri(for: target), name: "Runner.run()", symbol: snapshot),
                 .init(uri: "alas-session://abc", name: "Other chat"),
                 .init(uri: "file:///repo/Sources", name: "Sources/"),
+                .init(uri: "alas-agent://codex?model=gpt-5", name: "Codex · GPT-5"),
             ],
             pastedSpans: spans)
         let wire = RemoteSessionGateway.toWire(message, index: 0)
@@ -618,6 +619,7 @@ import Testing
                 lineRange: 3...9, includesCode: true, snapshot: snapshot)),
             RemoteUserMention(kind: RemoteMention.session, name: "Other chat"),
             RemoteUserMention(kind: RemoteMention.file, name: "Sources/"),
+            RemoteUserMention(kind: RemoteMention.agent, name: "Codex · GPT-5"),
         ])
         guard case .user(let shown, _, _, _, let mentions, let rowSpans) = RemoteTranscriptRow(message: wire) else {
             Issue.record("expected a user row")
