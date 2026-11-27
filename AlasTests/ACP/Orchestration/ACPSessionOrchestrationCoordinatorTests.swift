@@ -1600,6 +1600,43 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(fixture.manager.liveSession(for: "child")?.autoRunEnabled == autoRun)
     }
 
+    /// A parent stopped while its child is still starting: the child's first
+    /// prompt is dropped, or cancelled if it already went out, and the child
+    /// still comes up for `session_send`.
+    @Test func stoppingAParentWhileItsChildStartsStopsTheFirstPrompt() async throws {
+        let admission = GenerationGate()
+        let promptGate = GenerationGate()
+        let client = makeSelectionClient()
+        client.scriptAsync(method: "session/prompt") { _ in
+            await promptGate.wait()
+            return Data(#"{"stopReason":"cancelled"}"#.utf8)
+        }
+        let fixture = try makeModelSelectionFixture(client: client, admitChild: { _, _ in
+            await admission.wait()
+            return nil
+        })
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        let persistence = fixture.persistence
+        func isReady() async -> Bool { (try? await persistence.delegation(childSessionId: "child"))??.phase == .ready }
+        func cancelled() -> Bool { client.sent.contains { $0.method == "session/cancel" } }
+
+        _ = await fixture.coordinator.create(
+            origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+            request: .init(prompt: "Review the parser.", agentId: nil, worktree: .current))
+        await admission.waitUntilStarted()
+        await fixture.coordinator.interruptChildren(of: "parent")
+        await admission.release()
+        try await waitUntil {
+            if cancelled() { return true }
+            return await isReady()
+        }
+        await promptGate.release()
+        try await waitUntil { await isReady() }
+
+        #expect(!childRequests(client).contains("prompt:Review the parser.") || cancelled())
+        #expect(fixture.manager.liveSession(for: "child")?.queue.isEmpty == true)
+    }
+
     /// Auto-run comes from the peer's request, not this Mac's default.
     @Test(arguments: [true, false])
     func startForPeerRecordsSentinelParentAndStartsChild(autoRun: Bool) async throws {

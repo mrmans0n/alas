@@ -88,6 +88,8 @@ public final class ACPPermissionPolicy {
         }
         if session.autoRunEnabled, let allow = options.first(where: { $0.kind.hasPrefix("allow") }),
            await autoRunAllowed() {
+            // A `$/cancel_request` may have landed while the check was suspended.
+            if cancelledBeforeParked { return .init(outcome: .cancelled) }
             return .init(outcome: .selected(optionId: allow.optionId))
         }
         var logged = deliveredDecisions[scopeKey]

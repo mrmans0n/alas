@@ -1925,10 +1925,17 @@ public final class ACPSessionOrchestrationCoordinator {
             if child.peerServerId != nil {
                 _ = await interruptOnPeer(child)
             } else {
+                // A child still starting has no turn to cancel yet; its start
+                // drops the first prompt instead. See `startPersistedChild`.
+                if child.phase != .ready { stoppedWhileStarting.insert(child.childSessionId) }
                 _ = await interruptLocalChild(child.childSessionId)
             }
         }
     }
+
+    /// Local children whose parent was stopped while they were starting.
+    // ponytail: in memory, so a stop just before a relaunch does not reach a recovered start.
+    private var stoppedWhileStarting: Set<String> = []
 
     private func interruptLocalChild(_ targetSessionId: String) async -> AlasCLIResponse {
         guard let location = environment.sessionLocation(targetSessionId),
@@ -2651,6 +2658,12 @@ public final class ACPSessionOrchestrationCoordinator {
             guard await queueInitialPromptAfterModelSelection(
                 selection, record: record, prompt: prompt, manager: manager
             ) else { return }
+        }
+        // The parent was stopped meanwhile: the first prompt is dropped, or
+        // its turn cancelled if it already went out. The child stays open.
+        if stoppedWhileStarting.remove(childID) != nil {
+            await manager.queueClear(for: childID)
+            _ = await manager.interrupt(for: childID)
         }
         try? await environment.persistence.clearPendingInitialPrompt(childSessionId: childID, updatedAt: environment.now())
         let markedReady = (try? await environment.persistence.updatePhase(
