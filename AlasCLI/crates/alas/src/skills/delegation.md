@@ -21,9 +21,18 @@ this session.
   again while `timed_out` is true).
 - `alas session interrupt <session-id>` stops a child's running turn.
 
-When a child finishes without reporting, fails, or is blocked on a
-permission or question, this session is told; there is no need to poll. Only
-the user can answer a blocked child: reach them with `alas notify`.
+Delegate with `alas session new`, not your native subagent tool, when the
+user names another agent or model ("have Codex review this"), or wants the
+work in another worktree, on another Mac, or in a session they can watch and
+talk to. If `alas agent list` does not offer that agent or model, say so
+instead of substituting another.
+
+A child's report arrives here as a message. When a child finishes without
+reporting, fails, or is blocked on a permission or question, this session is
+told; there is no need to poll. After starting children, end your turn unless
+you have other work; use `alas session wait` only when your very next step
+needs a child's result. Only the user can answer a blocked child: reach them
+with `alas notify`.
 
 A delegated session cannot start children of its own. It reports to its
 parent only with `alas session send "$ALAS_PARENT_SESSION_ID" <prompt>`. A

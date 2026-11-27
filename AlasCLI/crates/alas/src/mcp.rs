@@ -536,7 +536,7 @@ fn all_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "session_new",
-            "description": "Asynchronously ask Alas to create a direct child ACP session. The child may use the current worktree, an existing project worktree, or a new linked worktree. The prompt is text-only and Alas does not automatically focus the child.",
+            "description": "Asynchronously ask Alas to create a direct child ACP session. The child may use the current worktree, an existing project worktree, or a new linked worktree. The prompt is text-only and the child sees nothing of this conversation, so make it self-contained. Alas does not automatically focus the child. Use it, not your native subagent tool, when the user names another agent or model, another worktree or Mac, or a session they can watch. The child's report arrives as a message to this session, so end your turn instead of waiting unless your next step needs the result.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -601,7 +601,7 @@ fn all_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "session_wait",
-            "description": "Wait until every listed direct child has no turn running or queued, or the timeout passes, then return each child's state and latest agent text together. A child blocked on a permission or question counts as settled (state awaiting_input): only the user can answer it. Call again if timed_out is true.",
+            "description": "Wait until every listed direct child has no turn running or queued, or the timeout passes, then return each child's state and latest agent text together. A child blocked on a permission or question counts as settled (state awaiting_input): only the user can answer it. Call again if timed_out is true. Only for when your very next step needs a child's result: otherwise end your turn, and the child's report or a system message wakes you.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

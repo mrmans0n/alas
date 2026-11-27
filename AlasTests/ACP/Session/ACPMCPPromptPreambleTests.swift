@@ -491,21 +491,24 @@ struct ACPMCPPromptPreambleTests {
         #expect(cli.contains(expected))
     }
 
-    @Test("root preamble tells parents they will be notified about delegated children")
-    func rootMentionsOutcomeNotifications() throws {
+    @Test("root preamble routes cross-agent work to Alas children and says not to poll")
+    func rootMentionsRoutingAndOutcomeNotifications() throws {
         let mcp = try #require(ACPMCPPromptPreamble.text(
             builtInTools: .full, isDelegated: false, userServerNames: [], mode: .mcp))
+        #expect(mcp.contains("use session_new rather than your native subagent tool"))
         #expect(mcp.contains("you do not need to poll session_list"))
         let cli = try #require(ACPMCPPromptPreamble.text(
             builtInTools: .full, isDelegated: false, userServerNames: [],
             mode: .cli(serverAvailability: .notInstalled)))
+        #expect(cli.contains("use `alas session new` rather than your native subagent tool"))
         #expect(cli.contains("you do not need to poll `alas session list`"))
     }
 
-    @Test("delegated preamble does not mention outcome notifications")
-    func delegatedOmitsOutcomeNotifications() throws {
+    @Test("delegated preamble neither routes delegation nor mentions outcome notifications")
+    func delegatedOmitsRoutingAndOutcomeNotifications() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
             builtInTools: .full, isDelegated: true, userServerNames: []))
+        #expect(!text.contains("rather than your native subagent tool"))
         #expect(!text.contains("you do not need to poll"))
     }
 
