@@ -214,6 +214,9 @@ public final class ACPSessionManager: ChangeTracking {
     /// delegated Claude child never gets the tools that message other Claude
     /// Code sessions. Set post-init, mirroring `alasCLIEnvProvider`.
     public var delegatedChildProvider: (@MainActor (_ sessionId: String) async -> Bool)?
+    /// Whether a session's auto-run may approve right now, beyond its own
+    /// toggle (see `ACPPermissionPolicy.autoRunAllowed`). Nil allows it.
+    public var autoRunAllowedProvider: (@MainActor (_ sessionId: String) async -> Bool)?
     @Tracked public private(set) var sessions: [ACPSession.ID: ACPSession] = [:] {
         willSet {
             for (id, session) in sessions where newValue[id] !== session {
@@ -8041,6 +8044,10 @@ extension ACPSessionManager {
                                               await self?.confirmedWriterLease(for: sessionId) == true
                                           },
                                           leaseFenceProvider: { runnerLeaseFence })
+            // Read live, so a provider installed after the runner still applies.
+            runner.policy.autoRunAllowed = { [weak self] in
+                await self?.autoRunAllowedProvider?(sessionId) ?? true
+            }
             runner.onUnexpectedDisconnect = { [weak self] in
                 self?.invalidateHookReview(sessionId: sessionId, ownerID: runnerConnectionOwnerID)
                 Task { @MainActor in

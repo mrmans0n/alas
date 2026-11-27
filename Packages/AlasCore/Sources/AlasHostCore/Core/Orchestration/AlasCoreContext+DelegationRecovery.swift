@@ -48,6 +48,31 @@ extension AlasCoreContext {
         (try? environment.sessionManager(for: worktree, in: self)) ?? sessionManagers[.worktree(worktree.id)]
     }
 
+    /// Whether `sessionId`'s auto-run may approve: a delegated child's only
+    /// while its parent's auto-run is on. See
+    /// `ACPSessionOrchestrationPolicy.childAutoRunAllowed`.
+    func delegatedAutoRunAllowed(_ sessionId: String) async -> Bool {
+        let record: ACPDelegationRecord?
+        do {
+            record = try await orchestrationPersistence.parent(childSessionId: sessionId)
+        } catch {
+            return false
+        }
+        var parentAutoRun: Bool?
+        if let record, ACPPeerParent.serverId(from: record.parentSessionId) == nil,
+           let manager = worktree(withId: record.parentWorktreeId).flatMap(orchestrationManager(for:)) {
+            if let parent = manager.liveSession(for: record.parentSessionId) {
+                parentAutoRun = parent.autoRunEnabled
+            } else {
+                parentAutoRun = await manager.persistedSessionRow(id: record.parentSessionId)?.autoRun
+            }
+        }
+        return ACPSessionOrchestrationPolicy.childAutoRunAllowed(
+            isChild: record != nil,
+            parentOnAnotherMac: record.map { ACPPeerParent.serverId(from: $0.parentSessionId) != nil } ?? false,
+            parentAutoRun: parentAutoRun)
+    }
+
     func worktree(withId id: String) -> Worktree? {
         projectAndWorktree(withWorktreeId: id)?.worktree
     }

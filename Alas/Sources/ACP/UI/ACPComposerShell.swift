@@ -247,6 +247,8 @@ struct ACPComposer: View {
     let onStackHeightChange: (CGFloat) -> Void
     /// Opens a skill command's `SKILL.md`; nil where the host cannot.
     let openSkill: ((ACPPromptSuggestion) -> Void)?
+    /// After the user stops the turn, so the session's delegated children stop too.
+    let onStop: () -> Void
 
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
@@ -284,6 +286,7 @@ struct ACPComposer: View {
         tailSpacerHeight: CGFloat = ACPComposerMetrics.restingTailSpacerHeight,
         onStackHeightChange: @escaping (CGFloat) -> Void = { _ in },
         openSkill: ((ACPPromptSuggestion) -> Void)? = nil,
+        onStop: @escaping () -> Void = {},
         onSubmit: @escaping ACPComposerSubmitHandler
     ) {
         self.tailSpacerHeight = tailSpacerHeight
@@ -316,6 +319,7 @@ struct ACPComposer: View {
         self.contextProviders = contextProviders
         self.recapCoordinator = recapCoordinator
         self.openSkill = openSkill
+        self.onStop = onStop
     }
 
     var body: some View {
@@ -979,6 +983,7 @@ struct ACPComposer: View {
 
     private func stopTapped() {
         let sid = session.id
+        onStop()
         Task { @MainActor in
             if let runner = manager.runners[sid] {
                 await runner.userCancel()

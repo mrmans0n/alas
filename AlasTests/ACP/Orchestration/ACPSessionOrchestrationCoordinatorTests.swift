@@ -1584,6 +1584,22 @@ struct ACPSessionOrchestrationCoordinatorTests {
         .worktree(path: manager.worktreePath)
     }
 
+    /// A local child starts with its parent's auto-run, not this Mac's default.
+    @Test(arguments: [true, false])
+    func localChildStartsWithItsParentsAutoRun(autoRun: Bool) async throws {
+        let client = makeSelectionClient()
+        let fixture = try makeModelSelectionFixture(client: client, autoRunDefault: !autoRun)
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        fixture.manager.liveSession(for: "parent")?.autoRunEnabled = autoRun
+
+        _ = await fixture.coordinator.create(
+            origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+            request: .init(prompt: "Review the parser.", agentId: nil, worktree: .current))
+
+        try await waitUntil { childRequests(client) == ["prompt:Review the parser."] }
+        #expect(fixture.manager.liveSession(for: "child")?.autoRunEnabled == autoRun)
+    }
+
     /// Auto-run comes from the peer's request, not this Mac's default.
     @Test(arguments: [true, false])
     func startForPeerRecordsSentinelParentAndStartsChild(autoRun: Bool) async throws {
@@ -3289,6 +3305,22 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let readCall = try #require(peers.readCalls.first)
         #expect(readCall.offset == 2 && readCall.limit == 3 && readCall.maxChars == 4)
         #expect(interrupted.cancelRequested && peers.interruptCalls == ["child"])
+    }
+
+    /// Stopping a parent interrupts each child still in play, and no other
+    /// session's children.
+    @Test func stoppingAParentInterruptsItsChildrenStillInPlay() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, id: "ready")
+        try await insertRemoteChild(fixture.persistence, id: "starting", phase: .starting)
+        try await insertRemoteChild(fixture.persistence, id: "failed", phase: .failed)
+        try await insertRemoteChild(fixture.persistence, id: "closed", phase: .closed)
+        try await insertRemoteChild(fixture.persistence, id: "other", parent: "other-parent")
+
+        await fixture.coordinator.interruptChildren(of: "parent")
+
+        #expect(Set(peers.interruptCalls) == ["ready", "starting"])
     }
 
     @Test func actionsOnAPeerThatCannotBeReachedNameIt() async throws {

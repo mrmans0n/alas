@@ -74,6 +74,22 @@ struct ACPPermissionPolicyTests {
         #expect(await decision.outcome == .cancelled)
     }
 
+    @Test("auto-run withheld by its limit asks instead of approving")
+    func autoRunWithheldByItsLimitAsks() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.autoRunEnabled = true
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: try makeStore()))
+        policy.autoRunAllowed = { false }
+        let opts: [ACPPermissionOption] = [
+            .init(optionId: "allow", name: "Allow", kind: "allow_once"),
+            .init(optionId: "deny", name: "Deny", kind: "reject_once")
+        ]
+        async let decision = policy.evaluate(scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(1))
+        await waitForPendingPermission(session)
+        policy.userCancelled()
+        #expect(await decision.outcome == .cancelled)
+    }
+
     @Test("auto-run never approves a plan review")
     func planReviewNeverAutoRuns() async throws {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")

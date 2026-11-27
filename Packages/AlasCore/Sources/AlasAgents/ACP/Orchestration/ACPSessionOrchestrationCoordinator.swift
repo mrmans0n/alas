@@ -1270,6 +1270,7 @@ public final class ACPSessionOrchestrationCoordinator {
                 worktree: worktree,
                 request: .current(worktreeId: worktree.id),
                 phase: .starting,
+                autoRun: parentSession.autoRunEnabled,
                 now: now
             ))
         case .existing(let id):
@@ -1302,6 +1303,7 @@ public final class ACPSessionOrchestrationCoordinator {
                 worktree: worktree,
                 request: .existing(worktreeId: worktree.id),
                 phase: .starting,
+                autoRun: parentSession.autoRunEnabled,
                 now: now
             ))
         case .new(let branch, let base):
@@ -1343,6 +1345,7 @@ public final class ACPSessionOrchestrationCoordinator {
                 branch: branch,
                 base: base,
                 destination: destination,
+                autoRun: parentSession.autoRunEnabled,
                 now: now
             ) { recordDestination in
                 await self.environment.createWorktree(origin.projectId, branch, base, recordDestination)
@@ -1909,6 +1912,25 @@ public final class ACPSessionOrchestrationCoordinator {
         } catch {
             return .error("Could not verify session delegation.")
         }
+        return await interruptLocalChild(targetSessionId)
+    }
+
+    /// The user stopped `parentSessionId`: each of its children still in
+    /// play is interrupted as `session_interrupt` would, so delegated work
+    /// stops with the parent. The children stay open for `session_send`.
+    /// Children cannot delegate, so this is one level deep.
+    public func interruptChildren(of parentSessionId: String) async {
+        guard let children = try? await environment.persistence.children(parentSessionId: parentSessionId) else { return }
+        for child in children where child.phase != .failed && child.phase != .closed {
+            if child.peerServerId != nil {
+                _ = await interruptOnPeer(child)
+            } else {
+                _ = await interruptLocalChild(child.childSessionId)
+            }
+        }
+    }
+
+    private func interruptLocalChild(_ targetSessionId: String) async -> AlasCLIResponse {
         guard let location = environment.sessionLocation(targetSessionId),
               let session = location.manager.liveSession(for: targetSessionId),
               Self.runtimeState(session) != .idle

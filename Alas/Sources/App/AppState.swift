@@ -15646,8 +15646,14 @@ extension AppState {
     }
 
     func stop(for id: String, worktreeID: String) async {
+        stopDelegatedChildren(of: id)
         guard let manager = acpManager(forWorktreeId: worktreeID) else { return }
         await manager.interrupt(for: id)
+    }
+
+    /// The user stopped `sessionId`; its delegated children stop with it.
+    func stopDelegatedChildren(of sessionId: String) {
+        Task { await core.orchestration.interruptChildren(of: sessionId) }
     }
 
     func sessionCreated(_ id: String, worktreeID: String) {

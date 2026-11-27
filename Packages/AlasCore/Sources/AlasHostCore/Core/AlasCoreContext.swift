@@ -598,6 +598,9 @@ public final class AlasCoreContext {
             guard let self else { return false }
             return projects.admitsNewWork(worktreeId: worktreeId) && !isHeldByCheckpointRestore(owner)
         }
+        manager.autoRunAllowedProvider = { [weak self] sessionId in
+            await self?.delegatedAutoRunAllowed(sessionId) ?? false
+        }
         sessionManagers[owner] = manager
         return manager
     }
