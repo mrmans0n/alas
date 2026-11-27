@@ -1210,9 +1210,11 @@ public final class ACPSessionRunner {
         authStatusTask = nil
         authStatusQueryTask = nil
         task?.cancel()
+        // Not awaited: a query the agent never answers would hold the attach's
+        // failure handling. Cancelled here on the main actor, it applies
+        // nothing when an answer does come (see the check in the query task).
         query?.cancel()
         await task?.value
-        await query?.value
     }
 
     /// Persists an `available_commands_update` list (slash commands and

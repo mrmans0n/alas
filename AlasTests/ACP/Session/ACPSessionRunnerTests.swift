@@ -6192,7 +6192,8 @@ struct ACPSessionRunnerTests {
         }
     }
 
-    @Test("an auth/status answer that comes after the listener was torn down is not applied")
+    @Test("tearing the auth listener down does not wait for auth/status, and a later answer is not applied",
+          .timeLimit(.minutes(1)))
     func lateAuthStatusAnswerAfterTeardown() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-auth-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -6222,9 +6223,9 @@ struct ACPSessionRunnerTests {
         // What an attach does before setup, and undoes when setup fails.
         runner.startAuthStatusListening()
         await asked.wait()
-        let teardown = Task { await runner.cancelAuthStatusListening() }
+        // A failed attach must not wait on a query the agent may never answer.
+        await runner.cancelAuthStatusListening()
         await answer.open()
-        await teardown.value
         // Let an answer that outlived the teardown reach the session, if it can.
         try await waitUntil { answered.count == 1 }
         for _ in 0..<20 { await Task.yield() }
