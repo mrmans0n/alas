@@ -8,9 +8,13 @@ struct ACPSessionMentionSource {
     /// Async: it can read stores of worktrees not opened in this run.
     let candidates: @MainActor () async -> [ACPSessionMentionCandidate]
     let candidate: @MainActor (_ sessionId: String) async -> ACPSessionMentionCandidate?
+    /// Agents and models the user can name for delegation (see
+    /// `ACPAgentReference`); nil offers none.
+    var agents: (@MainActor () async -> [ACPAgentMentionCandidate])? = nil
 }
 
 enum MentionPickerItem: Hashable {
+    case agent(ACPAgentMentionCandidate)
     case session(ACPSessionMentionCandidate)
     case symbol(SymbolEntry)
     case file(URL)
@@ -25,6 +29,8 @@ struct ACPMentionPickerView: View {
     var sessionsProvider: (@MainActor () async -> [ACPSessionMentionCandidate])? = nil
     let onPick: (URL) -> Void
     var onPickSession: (ACPSessionMentionCandidate) -> Void = { _ in }
+    var agentsProvider: (@MainActor () async -> [ACPAgentMentionCandidate])? = nil
+    var onPickAgent: (ACPAgentMentionCandidate) -> Void = { _ in }
     var symbolMentions: ACPSymbolMentionSource? = nil
     var onPickSymbol: (SymbolEntry, Bool) -> Void = { _, _ in }
     let onCancel: () -> Void
@@ -44,6 +50,7 @@ struct ACPMentionPickerView: View {
     @FocusState private var searchFocused: Bool
     @State private var allFiles: [URL] = []
     @State private var sessions: [ACPSessionMentionCandidate] = []
+    @State private var agents: [ACPAgentMentionCandidate] = []
     @State private var ranked: [MentionPickerItem] = []
     @State private var isIndexing: Bool = true
     @State private var rankTask: Task<Void, Never>?
@@ -287,6 +294,7 @@ struct ACPMentionPickerView: View {
                                         .padding(.horizontal, scale.space[2]).padding(.top, idx == 0 ? 2 : 8)
                                 }
                                 switch item {
+                                case .agent(let agent): row(idx: idx, agent: agent)
                                 case .file(let file): row(idx: idx, file: file)
                                 case .session(let session): row(idx: idx, session: session)
                                 case .symbol(let symbol): row(idx: idx, symbol: symbol)
@@ -314,6 +322,7 @@ struct ACPMentionPickerView: View {
     private func groupHeader(at index: Int) -> String? {
         func group(_ item: MentionPickerItem) -> String {
             switch item {
+            case .agent: "AGENTS"
             case .session: "SESSIONS"
             case .symbol: "SYMBOLS"
             case .file: "FILES"
@@ -370,6 +379,39 @@ struct ACPMentionPickerView: View {
                     }
                 }
             }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            if hovering {
+                scrollOnHighlightChange = false
+                highlight.choose(idx)
+            }
+        }
+    }
+
+    private func row(idx: Int, agent: ACPAgentMentionCandidate) -> some View {
+        let isOn = idx == highlight.index
+        return Button { onPickAgent(agent) } label: {
+            HStack(spacing: scale.space[2]) {
+                Image(systemName: "person.2")
+                    .font(scale.caption.font(weight: .regular))
+                    .foregroundStyle(isOn ? theme.color("accent") : theme.color("fg-faint"))
+                    .frame(width: 14)
+                Text(agent.modelName ?? agent.agentName)
+                    .font(scale.meta.font(weight: .medium))
+                    .foregroundStyle(theme.color("fg"))
+                    .lineLimit(1)
+                Text(agent.modelId.map { "\(agent.agentName) · \($0)" } ?? "Delegate to a new session")
+                    .font(scale.metaFont)
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
+            .background(isOn ? theme.color("accent").opacity(0.18) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -529,6 +571,7 @@ struct ACPMentionPickerView: View {
         case .insert(let includeCode):
             guard ranked.indices.contains(highlight.index) else { return }
             switch ranked[highlight.index] {
+            case .agent(let agent): onPickAgent(agent)
             case .session(let session): onPickSession(session)
             case .symbol(let symbol): onPickSymbol(symbol, includeCode)
             case .file(let file): onPick(file)
@@ -559,10 +602,17 @@ struct ACPMentionPickerView: View {
 
     /// Sessions load on their own, so they show up while files still index.
     private func populateSessions() {
-        guard let sessionsProvider else { return }
-        Task { @MainActor in
-            sessions = await sessionsProvider()
-            rescheduleRank()
+        if let sessionsProvider {
+            Task { @MainActor in
+                sessions = await sessionsProvider()
+                rescheduleRank()
+            }
+        }
+        if let agentsProvider {
+            Task { @MainActor in
+                agents = await agentsProvider()
+                rescheduleRank()
+            }
         }
     }
 
@@ -618,6 +668,10 @@ struct ACPMentionPickerView: View {
         let sessionItems = plan.sessions
             ? MentionSessionRanking.rank(sessions, query: q).map(MentionPickerItem.session)
             : []
+        // Only in All: an agent is neither a session, a symbol nor a file.
+        let agentItems = plan.sessions && scope == .all
+            ? MentionAgentRanking.rank(agents, query: q).map(MentionPickerItem.agent)
+            : []
         let fileSymbols = symbolMentions?.fileSymbols
         rankTask = Task.detached(priority: .userInitiated) {
             try? await Task.sleep(nanoseconds: 16_000_000)
@@ -652,7 +706,7 @@ struct ACPMentionPickerView: View {
                 }
             }
             if Task.isCancelled { return }
-            let items = sessionItems + symbolItems.map(MentionPickerItem.symbol) + fileItems.map(MentionPickerItem.file)
+            let items = agentItems + sessionItems + symbolItems.map(MentionPickerItem.symbol) + fileItems.map(MentionPickerItem.file)
             let resolvedPath = pathMatch
             await MainActor.run {
                 guard rankGeneration == gen else { return }

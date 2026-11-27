@@ -329,6 +329,19 @@ public final class ACPSessionOrchestrationCoordinator {
         }
     }
 
+    /// The agents the user can name in this session's composer: what
+    /// `discoverAgents` reports for its worktree. Empty for a delegated
+    /// child, which cannot create sessions, or when that cannot be verified.
+    public func mentionableAgents(origin: ACPOrchestrationSessionOrigin) async -> [ACPDelegationAgentSummary] {
+        guard let worktree = environment.worktree(origin.worktreeId) else { return [] }
+        do {
+            guard try await environment.persistence.parent(childSessionId: origin.sessionId) == nil else { return [] }
+        } catch {
+            return []
+        }
+        return await environment.delegationAgents(origin, worktree)
+    }
+
     /// Read-only: never starts a session, a model request, or a focus change.
     /// `worktreeSelector` mirrors `session_new`'s existing-worktree target:
     /// install state can differ per worktree, so a caller planning to spawn
