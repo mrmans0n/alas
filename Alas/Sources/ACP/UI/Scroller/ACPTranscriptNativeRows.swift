@@ -88,7 +88,8 @@ enum ACPTranscriptNativeRows {
                   call.assets.isEmpty, call.terminalIds.isEmpty,
                   ACPContextCompaction(toolCall: call) == nil,
                   ACPBackgroundTask(toolCall: call) == nil,
-                  ACPSubagentRowDescriptor(toolCall: call) == nil
+                  ACPSubagentRowDescriptor(toolCall: call) == nil,
+                  ACPToolCallPresentation.delegatedChildSessionId(call) == nil
             else { return nil }
             let presentation = ACPToolCallPresentation.resolve(call)
             return .toolCall(

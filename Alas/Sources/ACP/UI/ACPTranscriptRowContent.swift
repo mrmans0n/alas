@@ -92,6 +92,9 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     var visualAidActions: ACPVisualAidActions = .readOnly
     /// Not compared, for the same reason: the card re-reads its context live.
     var failureIncidentActions: ACPFailureIncidentActions = .readOnly
+    /// Not compared, for the same reason. Nil (a mirror) shows `session_new`
+    /// calls as plain tool cards.
+    var delegatedChildActions: ACPDelegatedChildActions?
     /// Seeds a tool card's or thought's disclosure, which then keeps its own
     /// state; `onExpandedChange` reports toggles back to the scroller's
     /// `ACPTranscriptRowExpansionStore`. Compared: a subagent row reads the
@@ -375,6 +378,11 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     // exactly like the ordinary tool-call path below.
                     .environment(\.acpTerminalHost, session.terminalHost)
                     .environment(\.acpTrustedImageRoot, trustedImageRoot)
+            } else if let delegatedChildActions,
+                      let childId = ACPToolCallPresentation.delegatedChildSessionId(tc) {
+                ACPDelegatedChildCard(toolCall: tc, childSessionId: childId, actions: delegatedChildActions) {
+                    toolCallCard(tc)
+                }
             } else if let delegationAction, let onRevealDelegation {
                 VStack(alignment: .leading, spacing: 4) {
                     toolCallCard(tc)

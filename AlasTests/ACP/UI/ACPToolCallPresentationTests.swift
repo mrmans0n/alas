@@ -216,6 +216,23 @@ struct ACPToolCallPresentationTests {
         #expect(ACPToolCallPresentation.resolve(titled).label != "Visual aid")
     }
 
+    @Test("a completed session_new call names the child it started", arguments: [
+        // title, name, status, content, child
+        ("mcp__alas__session_new", "mcp__alas__session_new", "completed", #"{"sessionId":"c1","state":"starting"}"#, "c1"),
+        ("alas.session_new({\"prompt\":\"hi\"})", nil, "completed", "note\n{\"sessionId\":\"c2\"}", "c2"),
+        ("alas session new --agent codex \"hi\"", "Bash", "completed", #"{"sessionId":"c3"}"#, "c3"),
+        ("mcp__alas__session_new", nil, "failed", #"{"sessionId":"c4"}"#, nil),
+        ("mcp__alas__session_new", nil, "completed", "Agent is not enabled", nil),
+        ("mcp__alas__session_list", nil, "completed", #"{"sessionId":"c5"}"#, nil),
+        ("cat session_new.json", "Bash", "completed", #"{"sessionId":"c6"}"#, nil),
+    ] as [(String, String?, String, String, String?)])
+    func delegatedChildSessionId(title: String, name: String?, status: String, content: String, child: String?) {
+        var call = toolCall(title: title, name: name)
+        call.status = status
+        call.content = content
+        #expect(ACPToolCallPresentation.delegatedChildSessionId(call) == child)
+    }
+
     @Test("guardian review title maps to review presentation")
     func guardianReviewPresentation() {
         let presentation = ACPToolCallPresentation.resolve(toolCall(

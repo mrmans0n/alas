@@ -39,6 +39,7 @@ extension ACPTranscriptFoldItem {
                     && !hiddenToolCallIds.contains(toolCall.toolCallId)
                     && ACPContextCompaction(toolCall: toolCall) == nil
                     && ACPSubagentRowDescriptor(toolCall: toolCall) == nil
+                    && ACPToolCallPresentation.delegatedChildSessionId(toolCall) == nil
                     && ACPBackgroundTask(toolCall: toolCall) == nil,
                 verb: foldOnly
                     ? .other

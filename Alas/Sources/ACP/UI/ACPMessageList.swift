@@ -55,6 +55,7 @@ struct ACPMessageList: View {
     var promptCardContext: ACPPromptCardContext? = nil
     var visualAidActions: ACPVisualAidActions = .readOnly
     var failureIncidentActions: ACPFailureIncidentActions = .readOnly
+    var delegatedChildActions: ACPDelegatedChildActions?
     /// Opens a plan's file by its path on the session's host.
     var onOpenPlanFile: (String) -> Void = { _ in }
     var reportedChangesActions: ACPReportedChangesActions? = nil
@@ -117,6 +118,7 @@ struct ACPMessageList: View {
                 promptCardContext: promptCardContext,
                 visualAidActions: visualAidActions,
                 failureIncidentActions: failureIncidentActions,
+                delegatedChildActions: delegatedChildActions,
                 onOpenPlanFile: onOpenPlanFile,
                 reportedChangesActions: reportedChangesActions,
                 composerSpacerHeight: composerSpacerHeight,

@@ -26,45 +26,66 @@ public struct ACPToolCallPresentation: Equatable, Sendable {
     /// ordinary call whose title merely mentions `visual_show` (`rg visual_show
     /// Alas/`) is not mistaken for the visual tool.
     public static func isVisualShow(name: String?, title: String?) -> Bool {
+        namesAlasTool("visual_show", name: name, title: title)
+    }
+
+    /// The child session a completed Alas `session_new` call started, MCP tool
+    /// or `alas session new` CLI: the `sessionId` of the JSON line Alas
+    /// replied with. Nil for any other call, or one that did not start a child.
+    public static func delegatedChildSessionId(_ toolCall: ACPToolCall) -> String? {
+        guard toolCall.status == "completed",
+              namesAlasTool("session_new", name: toolCall.nonEmptyName, title: toolCall.title)
+              || toolCall.title.contains("alas session new")
+        else { return nil }
+        for line in toolCall.content.split(whereSeparator: \.isNewline) where line.hasPrefix("{") {
+            if let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+               let id = object["sessionId"] as? String, !id.isEmpty {
+                return id
+            }
+        }
+        return nil
+    }
+
+    private static func namesAlasTool(_ tool: String, name: String?, title: String?) -> Bool {
         // Every match contains the tool name. Checking that first skips
         // tokenizing long shell-command titles on every transcript update.
         func mentionsTool(_ text: String?) -> Bool {
-            text?.range(of: "visual_show", options: .caseInsensitive) != nil
+            text?.range(of: tool, options: .caseInsensitive) != nil
         }
         guard mentionsTool(name) || mentionsTool(title) else { return false }
         let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedName.isEmpty { return namesVisualShowTool(trimmedName) }
-        return titleLeadsWithVisualShowTool(title ?? "")
+        if !trimmedName.isEmpty { return namesTool(tool, in: trimmedName) }
+        return titleLeadsWithTool(tool, title ?? "")
     }
 
     private static func isToolNameCharacter(_ character: Character) -> Bool {
         character.isASCII && (character.isLetter || character.isNumber || character == "_")
     }
 
-    private static func isToolNameComponent(_ component: Substring) -> Bool {
-        component == "visual_show" || component.hasSuffix("__visual_show")
+    private static func isToolNameComponent(_ component: Substring, tool: String) -> Bool {
+        component == tool || component.hasSuffix("__" + tool)
     }
 
-    /// True when a token of `text` is exactly `visual_show` or an MCP-qualified
-    /// `…__visual_show`. Tokens split on every character outside `[a-z0-9_]`, so
+    /// True when a token of `text` is exactly `tool` or an MCP-qualified
+    /// `…__tool`. Tokens split on every character outside `[a-z0-9_]`, so
     /// `alas.visual_show` matches while `visual_showcase` and `visual_show_backup` do not.
-    private static func namesVisualShowTool(_ text: String) -> Bool {
+    private static func namesTool(_ tool: String, in text: String) -> Bool {
         text.lowercased()
             .split(whereSeparator: { !isToolNameCharacter($0) })
-            .contains(where: isToolNameComponent)
+            .contains { isToolNameComponent($0, tool: tool) }
     }
 
-    /// True when the title's first word is a qualified visual tool name, with
-    /// or without trailing call syntax: `alas.visual_show`, `mcp__alas__visual_show`,
+    /// True when the title's first word is a qualified tool name, with or
+    /// without trailing call syntax: `alas.visual_show`, `mcp__alas__visual_show`,
     /// `alas.visual_show({…})`. The qualifier may be separated by `.`, `/`, `:` or `-`.
-    private static func titleLeadsWithVisualShowTool(_ title: String) -> Bool {
+    private static func titleLeadsWithTool(_ tool: String, _ title: String) -> Bool {
         let word = title.trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
             .split(whereSeparator: \.isWhitespace)
             .first ?? ""
         let qualified = word.prefix { isToolNameCharacter($0) || ".:/-".contains($0) }
         guard let last = qualified.split(whereSeparator: { ".:/-".contains($0) }).last else { return false }
-        return isToolNameComponent(last)
+        return isToolNameComponent(last, tool: tool)
     }
 
     public static func resolve(_ toolCall: ACPToolCall) -> ACPToolCallPresentation {
