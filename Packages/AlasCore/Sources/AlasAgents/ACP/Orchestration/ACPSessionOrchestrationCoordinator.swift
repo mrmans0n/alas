@@ -1923,13 +1923,16 @@ public final class ACPSessionOrchestrationCoordinator {
     /// Children cannot delegate, so this is one level deep.
     public func interruptChildren(of parentSessionId: String) async {
         guard let children = try? await environment.persistence.children(parentSessionId: parentSessionId) else { return }
-        for child in children where child.phase != .failed && child.phase != .closed {
-            if child.peerServerId != nil {
-                _ = await interruptOnPeer(child)
-            } else {
-                _ = await interruptLocalChild(child)
-            }
+        let inPlay = children.filter { $0.phase != .failed && $0.phase != .closed }
+        // Local children first, then every peer at once: an unresponsive
+        // Mac must not hold up stopping the others.
+        for child in inPlay where child.peerServerId == nil {
+            _ = await interruptLocalChild(child)
         }
+        let peerStops = inPlay.filter { $0.peerServerId != nil }.map { child in
+            Task { _ = await self.interruptOnPeer(child) }
+        }
+        for stop in peerStops { await stop.value }
     }
 
     /// Local children whose parent was stopped while they were starting.

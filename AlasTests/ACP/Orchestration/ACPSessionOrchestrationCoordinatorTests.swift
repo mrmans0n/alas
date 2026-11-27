@@ -2473,8 +2473,11 @@ struct ACPSessionOrchestrationCoordinatorTests {
             if let statusGate { for await _ in statusGate { break } }
             return statusAnswer(serverId, sessionIDs)
         }
+        /// An interrupt of this session waits here until released.
+        var stalledInterrupt: (sessionID: String, gate: GenerationGate)?
         func interrupt(serverId: String, sessionID: String) async -> Result<Bool, ACPPeerError> {
             interruptCalls.append(sessionID)
+            if let stalledInterrupt, stalledInterrupt.sessionID == sessionID { await stalledInterrupt.gate.wait() }
             return interruptResult
         }
         /// Answers `outbox`. Suspended on `outboxGate` first while one is set.
@@ -3366,6 +3369,21 @@ struct ACPSessionOrchestrationCoordinatorTests {
         await fixture.coordinator.interruptChildren(of: "parent")
 
         #expect(Set(peers.interruptCalls) == ["ready", "starting"])
+    }
+
+    /// One unresponsive Mac does not hold up stopping the other children.
+    @Test func aStalledPeerDoesNotDelayStoppingTheOtherChildren() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let gate = GenerationGate()
+        peers.stalledInterrupt = ("stalled", gate)
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, id: "stalled")
+        try await insertRemoteChild(fixture.persistence, id: "responsive")
+
+        let stopping = Task { await fixture.coordinator.interruptChildren(of: "parent") }
+        try await waitUntil { Set(peers.interruptCalls) == ["stalled", "responsive"] }
+        await gate.release()
+        await stopping.value
     }
 
     @Test func actionsOnAPeerThatCannotBeReachedNameIt() async throws {
