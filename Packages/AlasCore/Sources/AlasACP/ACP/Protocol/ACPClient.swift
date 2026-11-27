@@ -147,7 +147,10 @@ public protocol ACPClient: AnyObject {
     /// owner must call `respondToMCPMessage(id:result:)` exactly once per
     /// request, with the binding's result or error.
     var mcpMessageRequests: AsyncStream<ACPMCPMessageRequest> { get }
-    func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>)
+    /// True once the answer is accepted: written to the agent, or held by
+    /// its broker, which would otherwise deliver the request again.
+    @discardableResult
+    func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>) async -> Bool
 
     func hasPendingOutboundRequest(id: JSONRPCID) -> Bool
 
@@ -173,7 +176,8 @@ extension ACPClient {
         AsyncStream { $0.finish() }
     }
 
-    public func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>) {}
+    @discardableResult
+    public func respondToMCPMessage(id: JSONRPCID, result: Result<Data, JSONRPCError>) async -> Bool { false }
 
     public var incomingV2Updates: AsyncStream<ACPV2SessionUpdateDelivery> {
         AsyncStream { $0.finish() }

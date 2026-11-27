@@ -156,7 +156,10 @@ struct ACPMCPMessageRouterTests {
 
         let call = Task { await router.handle(Self.request("r1", id: 7)) }
         try await eventually { await server.received.count == 1 }
-        await router.cancel(requestID: .number(7))
+        // Another session's agent may use the same JSON-RPC id.
+        await router.cancel(serverId: "alas:other", requestID: .number(7))
+        #expect(await server.received.count == 1)
+        await router.cancel(serverId: "alas:s1", requestID: .number(7))
 
         let cancel = try Self.message(await server.received.last)
         #expect(cancel["method"] as? String == "notifications/cancelled")

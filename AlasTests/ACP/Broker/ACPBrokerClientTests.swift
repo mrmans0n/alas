@@ -586,7 +586,7 @@ struct ACPBrokerClientTests {
         let request = try #require(await iterator.next())
         #expect(request.id == .string("mcp-1"))
         #expect(request.params == .init(serverId: "alas:s1", requestId: "r1", method: "tools/list", sessionId: "s1"))
-        client.respondToMCPMessage(id: request.id, result: .success(Data(#"{"result":{"tools":[]}}"#.utf8)))
+        await client.respondToMCPMessage(id: request.id, result: .success(Data(#"{"result":{"tools":[]}}"#.utf8)))
 
         try await waitUntil { await service.responded.count == 1 }
         let response = try await #require(service.responded.first)

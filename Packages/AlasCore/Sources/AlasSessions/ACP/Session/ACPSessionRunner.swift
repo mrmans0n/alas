@@ -53,9 +53,9 @@ public final class ACPSessionRunner {
     /// Answers `mcp/message` for the servers Alas serves over this ACP
     /// connection. Without one, every message names an unavailable server.
     private let mcpMessageRouter: ACPMCPMessageRouter?
-    /// `mcp/message` requests the router has not answered yet, so a
-    /// `$/cancel_request` for one reaches its server.
-    private var inFlightMCPMessageIDs: Set<JSONRPCID> = []
+    /// `mcp/message` requests the router has not answered yet, with the
+    /// server each names, so a `$/cancel_request` for one reaches its server.
+    private var inFlightMCPMessages: [JSONRPCID: String] = [:]
     /// The MCP outcome of a `tools/call` an earlier app run started and never
     /// answered: a tool error, so the agent checks before calling it again.
     static let interruptedMCPToolCallOutcome = Data("""
@@ -774,58 +774,9 @@ public final class ACPSessionRunner {
             }
         }
 
-        cancelRequestsTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            for await id in self.connection.client.cancelRequests {
-                guard self.isConnectionCurrent() else { continue }
-                if self.inFlightMCPMessageIDs.contains(id) {
-                    let router = self.mcpMessageRouter
-                    Task { await router?.cancel(requestID: id) }
-                    continue
-                }
-                if self.onCancelRequest?(id) == true { continue }
-                if self.policy.cancelRequest(id: id) { continue }
-                self.pendingCancelledRequestIDs.insert(id)
-                self.onUnclaimedCancelRequest?(id)
-            }
-        }
-
+        startCancelRequestListening()
         startAuthStatusListening()
-
-        mcpMessagesTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            let client = self.connection.client
-            for await request in client.mcpMessageRequests {
-                guard self.isConnectionCurrent() else { continue }
-                guard let router = self.mcpMessageRouter else {
-                    client.respondToMCPMessage(id: request.id, result: .failure(.init(
-                        code: -33001, message: "MCP server registration unavailable", data: nil)))
-                    continue
-                }
-                let message = request.params
-                let persistence = self.persistence
-                let guardsToolCall = message.method == "tools/call"
-                // A store that cannot record the call does not hold it back.
-                if guardsToolCall, (try? await persistence.beginMCPToolCall(
-                    sessionId: self.sessionId, serverId: message.serverId, requestId: message.requestId
-                )) == false {
-                    client.respondToMCPMessage(id: request.id, result: .success(Self.interruptedMCPToolCallOutcome))
-                    try? await persistence.endMCPToolCall(serverId: message.serverId, requestId: message.requestId)
-                    continue
-                }
-                // Each message runs on its own: tool calls may take minutes
-                // and the agent may issue several at once.
-                self.inFlightMCPMessageIDs.insert(request.id)
-                Task { @MainActor [weak self] in
-                    let result = await router.handle(request)
-                    self?.inFlightMCPMessageIDs.remove(request.id)
-                    client.respondToMCPMessage(id: request.id, result: result)
-                    if guardsToolCall {
-                        try? await persistence.endMCPToolCall(serverId: message.serverId, requestId: message.requestId)
-                    }
-                }
-            }
-        }
+        startMCPMessageListening()
 
         // Agent-spawned terminals must see the exact env the agent
         // itself was launched with — same augmented PATH (npm / cargo
@@ -1108,6 +1059,98 @@ public final class ACPSessionRunner {
     /// Idempotent, because `start()` calls it too and `authStatusUpdates` has
     /// a single consumer: a second iteration would split the events between
     /// two loops rather than replace the first.
+    /// Consumes `$/cancel_request`. Started with the early MCP listener too:
+    /// a call answered during setup may be cancelled during setup.
+    private func startCancelRequestListening() {
+        guard cancelRequestsTask == nil else { return }
+        cancelRequestsTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await id in self.connection.client.cancelRequests {
+                guard self.isConnectionCurrent() else { continue }
+                if let serverId = self.inFlightMCPMessages[id] {
+                    let router = self.mcpMessageRouter
+                    Task { await router?.cancel(serverId: serverId, requestID: id) }
+                    continue
+                }
+                if self.onCancelRequest?(id) == true { continue }
+                if self.policy.cancelRequest(id: id) { continue }
+                self.pendingCancelledRequestIDs.insert(id)
+                self.onUnclaimedCancelRequest?(id)
+            }
+        }
+    }
+
+    /// Answers `mcp/message`. Started before the session is set up, like
+    /// `startAuthStatusListening()`: an agent may discover the tools of a
+    /// server served over ACP before its `session/new` returns, and would
+    /// wait on that discovery forever if nothing answered it until then.
+    public func startMCPMessageListening() {
+        startCancelRequestListening()
+        guard mcpMessagesTask == nil else { return }
+        mcpMessagesTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let client = self.connection.client
+            for await request in client.mcpMessageRequests {
+                guard self.isConnectionCurrent() else { continue }
+                guard let router = self.mcpMessageRouter else {
+                    await client.respondToMCPMessage(id: request.id, result: .failure(.init(
+                        code: -33001, message: "MCP server registration unavailable", data: nil)))
+                    continue
+                }
+                let message = request.params
+                let persistence = self.persistence
+                let guardsToolCall = message.method == "tools/call"
+                func forgetToolCall() async {
+                    guard guardsToolCall else { return }
+                    try? await persistence.endMCPToolCall(serverId: message.serverId, requestId: message.requestId)
+                }
+                // A store that cannot record the call does not hold it back.
+                let started = guardsToolCall ? (try? await persistence.beginMCPToolCall(
+                    sessionId: self.sessionId, serverId: message.serverId, requestId: message.requestId
+                )) ?? true : true
+                // Answered before running: an earlier app run started it, or
+                // the agent withdrew it before it was dequeued (or while it
+                // was being recorded). The record goes only once the answer
+                // is accepted, so a redelivery is never run either.
+                let answerInstead: Result<Data, JSONRPCError>? = if !started {
+                    .success(Self.interruptedMCPToolCallOutcome)
+                } else if self.pendingCancelledRequestIDs.remove(request.id) != nil {
+                    .failure(.init(code: -32800, message: "Request cancelled", data: nil))
+                } else {
+                    nil
+                }
+                if let answerInstead {
+                    if await client.respondToMCPMessage(id: request.id, result: answerInstead) {
+                        await forgetToolCall()
+                    }
+                    continue
+                }
+                // Each message runs on its own: tool calls may take minutes
+                // and the agent may issue several at once.
+                self.inFlightMCPMessages[request.id] = message.serverId
+                let connection = self.connection
+                Task { @MainActor [weak self] in
+                    let result = await router.handle(request)
+                    self?.inFlightMCPMessages[request.id] = nil
+                    // Kept while the answer is undelivered: the broker would
+                    // deliver the call again, and it must not run twice.
+                    if await connection.client.respondToMCPMessage(id: request.id, result: result) {
+                        await forgetToolCall()
+                    }
+                }
+            }
+        }
+    }
+
+    /// Stops the listener `startMCPMessageListening()` started on an attach
+    /// that never committed this runner.
+    public func cancelMCPMessageListening() {
+        mcpMessagesTask?.cancel()
+        mcpMessagesTask = nil
+        cancelRequestsTask?.cancel()
+        cancelRequestsTask = nil
+    }
+
     public func startAuthStatusListening() {
         guard authStatusTask == nil else { return }
         authStatusTask = Task { @MainActor [weak self] in
