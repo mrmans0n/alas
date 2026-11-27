@@ -62,6 +62,8 @@ final class ReviewDocument {
     var composing: ReviewComposing?
     /// The pull request as its diff was read: its head, account and capabilities.
     private(set) var pullRequest: RemoteProviderReview?
+    /// Counts refreshes, so an older one's late reply is dropped.
+    @ObservationIgnored private var refreshes = 0
     /// Its threads, re-read after a reply or a resolve.
     private(set) var threads: [RemoteProviderThread] = []
     private(set) var listLoaded = false
@@ -97,14 +99,15 @@ final class ReviewDocument {
     func start() async {
         guard !listLoaded else { return }
         if let cached = cachedFiles() {
-            replace(with: cached.entries, truncated: cached.truncated)
+            replace(with: cached)
             await loadComments()
         } else {
             await refresh()
         }
     }
 
-    private typealias FileList = (entries: [ReviewEntry], truncated: Bool)
+    /// `hashes`: each entry's `ReviewViewedMarks.hash`, when its diff came with the list.
+    private typealias FileList = (entries: [ReviewEntry], truncated: Bool, hashes: [ReviewEntryID: String])
 
     private func cachedFiles() -> FileList? {
         switch source {
@@ -112,31 +115,50 @@ final class ReviewDocument {
             if case .loaded(let reply) = workspace.changes { return files(from: reply) }
         case .commit(let sha):
             if let open = workspace.commit, open.commit.revision == sha, case .loaded(let reply) = open.1 {
-                return (entries(from: reply.files, namespace: "commit"), reply.truncated)
+                return (entries(from: reply.files, namespace: "commit"), reply.truncated, [:])
             }
         case .pullRequest: break
         }
         return nil
     }
 
-    private func fetchFiles() async -> Result<FileList, RemoteGitFailure> {
+    /// Nil once a later refresh started: its reply is the one to show.
+    private func fetchFiles(_ generation: Int) async -> Result<FileList, RemoteGitFailure>? {
         switch source {
-        case .localChanges, .branchChanges: await workspace.loadChanges().map(files(from:))
-        case .commit(let sha): await workspace.loadCommitFiles(sha).map { (entries(from: $0.files, namespace: "commit"), $0.truncated) }
+        case .localChanges, .branchChanges:
+            return await workspace.loadChanges().map(files(from:))
+        case .commit(let sha):
+            return await workspace.loadCommitFiles(sha).map { (entries(from: $0.files, namespace: "commit"), $0.truncated, [:]) }
         case .pullRequest(let session):
-            await workspace.pullRequestReview(session, withDiff: true).map { pr in
-                pullRequest = pr
-                threads = pr.threads
-                let namespace = PullRequestDiff.namespace(provider: pr.provider)
-                return (PullRequestDiff.entries(raw: pr.diff ?? "", namespace: namespace, truncated: pr.diffTruncated), pr.diffTruncated)
+            let pr: RemoteProviderReview
+            switch await workspace.pullRequestReview(session, withDiff: true) {
+            case .failure(let failure): return .failure(failure)
+            case .success(let read): pr = read
             }
+            let list = await Self.parse(pr)
+            // Published with its diff, so a submission never pins a head the screen isn't showing.
+            guard generation == refreshes else { return nil }
+            pullRequest = pr
+            threads = pr.threads
+            return .success(list)
         }
+    }
+
+    /// Off the main actor: a large pull request's diff takes long enough to parse and hash to stall scrolling.
+    private nonisolated static func parse(_ pr: RemoteProviderReview) async -> FileList {
+        await Task.detached(priority: .userInitiated) {
+            let namespace = PullRequestDiff.namespace(provider: pr.provider)
+            let entries = PullRequestDiff.entries(raw: pr.diff ?? "", namespace: namespace, truncated: pr.diffTruncated)
+            let hashes = Dictionary(entries.map { ($0.id, ReviewViewedMarks.hash(of: hunks($0.content))) },
+                                    uniquingKeysWith: { a, _ in a })
+            return (entries, pr.diffTruncated, hashes)
+        }.value
     }
 
     private func files(from reply: ChangeListReply) -> FileList {
         let entries = source == .branchChanges ? entries(from: reply.files, namespace: "branch")
             : entries(from: reply.staged, namespace: "staged") + entries(from: reply.unstaged, namespace: "unstaged")
-        return (entries, reply.truncated)
+        return (entries, reply.truncated, [:])
     }
 
     private func entries(from files: [RemoteChangedFile], namespace: String) -> [ReviewEntry] {
@@ -149,18 +171,22 @@ final class ReviewDocument {
     /// Re-reads the file list, keeping what each surviving entry showed, and fetches again every
     /// loaded or viewed entry, so a viewed file whose diff changed loses its mark.
     func refresh() async {
-        switch await fetchFiles() {
+        refreshes += 1
+        let generation = refreshes
+        guard let result = await fetchFiles(generation), generation == refreshes else { return }
+        switch result {
         case .failure(let failure):
             if !listLoaded { listError = failure.message } else if case .pullRequest = source { error = failure.message }
         case .success(let fresh):
-            replace(with: fresh.entries, truncated: fresh.truncated)
+            replace(with: fresh)
         }
         await loadComments()
     }
 
     /// Takes `fresh` in the host's order, which keeps the order of the paths both lists hold.
-    private func replace(with fresh: [ReviewEntry], truncated: Bool) {
-        listTruncated = truncated
+    private func replace(with list: FileList) {
+        let fresh = list.entries
+        listTruncated = list.truncated
         let old = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let refetch = fresh.map(\.id).filter { id in
             if case .hunks = old[id]?.content { return true }
@@ -184,7 +210,7 @@ final class ReviewDocument {
         listLoaded = true
         listError = nil
         if case .pullRequest = source {
-            for entry in fresh { land(entry.id, entry.content, failed: false) }
+            for entry in fresh { land(entry.id, entry.content, failed: false, hash: list.hashes[entry.id]) }
         } else {
             for id in refetch { Task { await fetch(id) } }
         }
@@ -223,9 +249,9 @@ final class ReviewDocument {
     }
 
     /// Shows the entry's diff, checking its viewed mark and the selection against it.
-    private func land(_ id: ReviewEntryID, _ content: ReviewEntryContent, failed: Bool) {
+    private func land(_ id: ReviewEntryID, _ content: ReviewEntryContent, failed: Bool, hash: String? = nil) {
         guard let i = index(id) else { return }
-        let hash = ReviewViewedMarks.hash(of: Self.hunks(content))
+        let hash = hash ?? ReviewViewedMarks.hash(of: Self.hunks(content))
         hashes[id] = hash
         // Its line indexes point into the old diff.
         if selection?.entry == id, entries[i].content != content { selection = nil }
@@ -243,7 +269,7 @@ final class ReviewDocument {
         tokenize(entries[i])
     }
 
-    private static func hunks(_ content: ReviewEntryContent) -> [RemoteDiffHunk] {
+    private nonisolated static func hunks(_ content: ReviewEntryContent) -> [RemoteDiffHunk] {
         if case .hunks(let hunks, _) = content { return hunks }
         return []
     }
