@@ -402,6 +402,13 @@ struct ACPSessionOrchestrationPolicyTests {
             runtime: .idle,
             archived: true
         ) == .closed)
+        // A report shows only while the child is idle: a running turn is new work.
+        #expect(ACPSessionOrchestrationPolicy.publicState(
+            phase: .ready, runtime: .idle, archived: false, finalReport: .done) == .reported)
+        #expect(ACPSessionOrchestrationPolicy.publicState(
+            phase: .ready, runtime: nil, archived: false, finalReport: .failed) == .reportedFailed)
+        #expect(ACPSessionOrchestrationPolicy.publicState(
+            phase: .ready, runtime: .running, archived: false, finalReport: .done) == .running)
     }
 
     @Test("only a direct parent in the same project may wait on or interrupt a child", arguments: [

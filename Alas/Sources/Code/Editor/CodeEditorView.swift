@@ -6,6 +6,10 @@ import AppKit
 /// scrolling for long lines.
 final class CodeEditorLeadingClipView: NSClipView {
     private var preservesNextExplicitZeroOrigin = false
+    /// True from `willStartLiveScroll` to `didEndLiveScroll`, which spans the
+    /// trackpad gesture, its momentum, and the elastic bounce-back.
+    private var isLiveScrolling = false
+    private var liveScrollObservers: [any NSObjectProtocol] = []
 
     override func scroll(to newOrigin: NSPoint) {
         defer { preservesNextExplicitZeroOrigin = false }
@@ -15,6 +19,23 @@ final class CodeEditorLeadingClipView: NSClipView {
     override func setBoundsOrigin(_ newOrigin: NSPoint) {
         defer { preservesNextExplicitZeroOrigin = false }
         super.setBoundsOrigin(pinnedOrigin(for: newOrigin))
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        let center = NotificationCenter.default
+        liveScrollObservers.forEach(center.removeObserver)
+        liveScrollObservers = []
+        isLiveScrolling = false
+        guard let scrollView = superview as? NSScrollView else { return }
+        liveScrollObservers = [
+            center.addMainActorObserver(forName: NSScrollView.willStartLiveScrollNotification, object: scrollView) { [weak self] in
+                self?.isLiveScrolling = true
+            },
+            center.addMainActorObserver(forName: NSScrollView.didEndLiveScrollNotification, object: scrollView) { [weak self] in
+                self?.isLiveScrolling = false
+            },
+        ]
     }
 
     override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
@@ -43,6 +64,12 @@ final class CodeEditorLeadingClipView: NSClipView {
             preservesNextExplicitZeroOrigin = true
             return origin
         }
+        // During a live scroll AppKit has already constrained the origin, except
+        // for elastic overscroll and its bounce-back, which it sends past the
+        // leading edge on purpose with `constrainBoundsRect` disabled. Pinning
+        // that origin makes each animation step start from the edge again, so
+        // the content wobbles while it settles.
+        guard !isLiveScrolling else { return origin }
         // Only enforce the leading edge here; `constrainBoundsRect` (which
         // `super.scroll`/`setBoundsOrigin` funnel through) applies the upper
         // bound and the gutter-reset handling.

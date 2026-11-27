@@ -437,10 +437,13 @@ public enum ACPSessionOrchestrationPolicy: Sendable {
         }
     }
 
+    /// `finalReport` is the child's current `session_report`, which an idle
+    /// child shows instead of `idle`.
     public static func publicState(
         phase: ACPDelegationPhase,
         runtime: ACPOrchestrationRuntimeState?,
-        archived: Bool
+        archived: Bool,
+        finalReport: ACPDelegatedReportOutcome? = nil
     ) -> ACPOrchestrationPublicState {
         switch phase {
         case .creatingWorktree:
@@ -459,7 +462,11 @@ public enum ACPSessionOrchestrationPolicy: Sendable {
             case .awaitingInput:
                 return .awaitingInput
             case .idle, .none:
-                return .idle
+                switch finalReport {
+                case .done: return .reported
+                case .failed: return .reportedFailed
+                case nil: return .idle
+                }
             case .closed:
                 return .closed
             }

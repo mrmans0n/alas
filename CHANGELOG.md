@@ -15,6 +15,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fix a macOS hang when pressing Return to select a setting in the ACP composer.
 - Keep inline charts and their legends from overlapping the text or callouts below them.
 - Turn on **Fast Android screen reads** in **Settings → Computer Use** for faster accessibility snapshots on Android 16 emulators. Physical phones keep the standard reader.
+- Settle a horizontal fling past the code editor's left edge with one smooth bounce instead of a wobble.
 
 ## [0.24.10] - 2026-11-24
 

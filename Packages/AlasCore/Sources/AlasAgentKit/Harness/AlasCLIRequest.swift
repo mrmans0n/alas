@@ -432,6 +432,11 @@ public struct AlasCLIRequest: Equatable, Sendable {
         return guest
     }
 
+    private struct SessionReportParams: Decodable {
+        var result: String
+        var outcome: String?
+    }
+
     private struct SessionInterruptParams: Decodable {
         var session_id: String
 
@@ -776,6 +781,13 @@ public struct AlasCLIRequest: Equatable, Sendable {
                     default: ACPDelegatedSessionWaitRequest.maxTimeoutMillis
                 )
             )))
+        case "session_report":
+            let params = try Self.decodeParams(SessionReportParams.self, from: data)
+            guard let outcome = ACPDelegatedReportOutcome(rawValue: params.outcome ?? "done") else {
+                throw AlasCLIRequestError.malformed
+            }
+            command = .sessionAction(.report(ACPDelegatedSessionReportRequest(
+                result: try requiredNonEmpty(params.result), outcome: outcome)))
         case "session_interrupt":
             let params = try Self.decodeParams(SessionInterruptParams.self, from: data)
             command = .sessionAction(.interrupt(targetSessionId: try requiredNonEmpty(params.session_id)))

@@ -14721,7 +14721,8 @@ final class AppState {
                 state: ACPSessionOrchestrationPolicy.publicState(
                     phase: record.phase,
                     runtime: runtime,
-                    archived: archived
+                    archived: archived,
+                    finalReport: record.finalReportOutcome
                 ).rawValue,
                 failure: record.failureMessage,
                 createdAt: record.createdAt,

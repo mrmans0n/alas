@@ -2278,6 +2278,25 @@ struct EditorBufferTests {
         #expect(trailingConstrained.origin.x == 500)
     }
 
+    /// AppKit's elastic overscroll and bounce-back send origins past the
+    /// leading edge through `scroll(to:)` while a live scroll is running.
+    /// Pinning them restarts every animation step from the edge, which made
+    /// a horizontal fling wobble while it settled.
+    @Test func codeEditorLeadingClipViewLeavesLiveScrollOverscrollToAppKit() {
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 400))
+        scroll.contentView = CodeEditorLeadingClipView(frame: .zero)
+        scroll.hasHorizontalScroller = true
+        scroll.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 1000, height: 300))
+
+        NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        scroll.contentView.scroll(to: NSPoint(x: -12, y: 0))
+        #expect(scroll.contentView.bounds.origin.x == -12)
+
+        NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+        scroll.contentView.scroll(to: NSPoint(x: -12, y: 0))
+        #expect(scroll.contentView.bounds.origin.x == 0)
+    }
+
     @Test func coordinatorPathChangeUsesTheNewBuffersUndoStack() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.swift", "let a = 1\n")

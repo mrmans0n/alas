@@ -810,8 +810,7 @@ struct ACPOrchestrationStoreTests {
         }
 
         let store = try ACPOrchestrationStore(path: path)
-        #expect(ACPOrchestrationStore.targetSchemaVersion == 6)
-        #expect(try store.currentSchemaVersion() == 6)
+        #expect(try store.currentSchemaVersion() == ACPOrchestrationStore.targetSchemaVersion)
         let record = try #require(try store.delegation(childSessionId: "child"))
         #expect(record.peerServerId == nil)
         #expect(record.peerAwaiting == false)

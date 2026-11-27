@@ -215,6 +215,8 @@ struct AlasCLIRequestTests {
          .wait(.init(targetSessionIds: ["a", "b"], timeoutMillis: 500))),
         (#"{"session_ids":["a"]}"#, "session_wait", .wait(.init(targetSessionIds: ["a"]))),
         (#"{"session_id":"child"}"#, "session_interrupt", .interrupt(targetSessionId: "child")),
+        (#"{"result":"Fixed."}"#, "session_report", .report(.init(result: "Fixed.", outcome: .done))),
+        (#"{"result":"Blocked.","outcome":"failed"}"#, "session_report", .report(.init(result: "Blocked.", outcome: .failed))),
     ])
     func decodesSessionActionRequests(params: String, command: String, expected: ACPDelegatedSessionAction) throws {
         let json = #"{"v":1,"kind":"cli","command":"\#(command)","session_id":"s1","params":\#(params)}"#
@@ -261,6 +263,8 @@ struct AlasCLIRequestTests {
             #"{"v":1,"kind":"cli","command":"session_wait","session_id":"s1","params":{"session_ids":[" "]}}"#,
             #"{"v":1,"kind":"cli","command":"session_wait","session_id":"s1","params":{"session_ids":["a"],"timeout_ms":20001}}"#,
             #"{"v":1,"kind":"cli","command":"session_interrupt","session_id":"s1","params":{}}"#,
+            #"{"v":1,"kind":"cli","command":"session_report","session_id":"s1","params":{"result":" "}}"#,
+            #"{"v":1,"kind":"cli","command":"session_report","session_id":"s1","params":{"result":"x","outcome":"maybe"}}"#,
         ] {
             #expect(throws: AlasCLIRequestError.malformed, "should reject: \(invalid)") {
                 try AlasCLIRequest.decode(from: Data(invalid.utf8))
