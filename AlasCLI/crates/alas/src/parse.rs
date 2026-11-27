@@ -29,6 +29,7 @@ usage: alas agent list [--worktree <name-or-branch>] [--peer <name-or-server-id>
 usage: alas session list
 usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]] [--peer <name-or-server-id> [--project <id-or-name>]]
 usage: alas session send <session-id> <prompt>
+usage: alas session report [--failed] <result>
 usage: alas session read <session-id> [--offset <n>] [--limit <1...100>] [--max-chars <1...100000>]
 usage: alas session search <query> [--limit <1...100>]
 usage: alas session wait <session-id> [session-id...] [--timeout-ms <1...20000>]
@@ -824,6 +825,20 @@ fn parse_session(args: &[&str]) -> Result<Command, String> {
                 session_id: args[1].to_string(),
                 prompt: args[2].to_string(),
             })
+        }
+        Some("report") => {
+            const USAGE: &str = "usage: alas session report [--failed] <result>";
+            let (failed, rest) = match args.get(1).copied() {
+                Some("--failed") => (true, &args[2..]),
+                _ => (false, &args[1..]),
+            };
+            match rest {
+                [result] if !result.trim().is_empty() => Ok(Command::SessionReport {
+                    result: (*result).to_string(),
+                    failed,
+                }),
+                _ => Err(USAGE.into()),
+            }
         }
         Some("read") => parse_session_read(&args[1..]),
         Some("search") => parse_session_search(&args[1..]),
@@ -2572,7 +2587,22 @@ mod tests {
                 session_id: "child".into()
             }
         );
+        assert_eq!(
+            parse(
+                &s(&["session", "report", "--failed", "Tests fail"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::SessionReport {
+                result: "Tests fail".into(),
+                failed: true,
+            }
+        );
         for invalid in [
+            ["session", "report"].as_slice(),
+            ["session", "report", "--failed"].as_slice(),
+            ["session", "report", " "].as_slice(),
+            ["session", "report", "a", "b"].as_slice(),
             ["session", "read"].as_slice(),
             ["session", "read", "child", "--limit", "0"].as_slice(),
             ["session", "read", "child", "--limit", "5", "--limit", "6"].as_slice(),

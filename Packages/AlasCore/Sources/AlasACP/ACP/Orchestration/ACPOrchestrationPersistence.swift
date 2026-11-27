@@ -119,6 +119,14 @@ public actor ACPOrchestrationPersistence {
         try openedStore().markParentReport(childSessionId: childSessionId, at: reportedAt)
     }
 
+    public func markFinalReport(childSessionId: String, at reportedAt: Int64, outcome: ACPDelegatedReportOutcome) throws {
+        try openedStore().markFinalReport(childSessionId: childSessionId, at: reportedAt, outcome: outcome)
+    }
+
+    public func clearFinalReport(childSessionId: String, reportedAt: Int64) throws {
+        try openedStore().clearFinalReport(childSessionId: childSessionId, reportedAt: reportedAt)
+    }
+
     public func enqueue(_ message: ACPDelegatedMessage) throws {
         try openedStore().enqueue(message)
     }

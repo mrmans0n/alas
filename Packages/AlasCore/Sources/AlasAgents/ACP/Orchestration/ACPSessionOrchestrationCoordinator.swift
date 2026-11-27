@@ -320,7 +320,8 @@ public final class ACPSessionOrchestrationCoordinator {
                     phase: record.phase,
                     failure: record.failureMessage,
                     createdAt: record.createdAt,
-                    role: record.role
+                    role: record.role,
+                    finalReport: record.finalReportOutcome
                 ))
             }
             return json(ACPOrchestrationListResponse(sessions: summaries))
@@ -1547,11 +1548,42 @@ public final class ACPSessionOrchestrationCoordinator {
         origin: ACPOrchestrationSessionOrigin,
         request: ACPDelegatedSessionMessageRequest
     ) async -> AlasCLIResponse {
+        await send(origin: origin, request: request, finalReport: nil)
+    }
+
+    /// `session_report`: the caller's final result, sent to its parent like a
+    /// `session_send` but framed as the result, and remembered so the child
+    /// shows as reported until its next turn.
+    public func report(
+        origin: ACPOrchestrationSessionOrigin,
+        request: ACPDelegatedSessionReportRequest
+    ) async -> AlasCLIResponse {
+        let parent: ACPDelegationRecord?
+        do {
+            parent = try await environment.persistence.parent(childSessionId: origin.sessionId)
+        } catch {
+            return .error("Could not verify session delegation.")
+        }
+        guard let parent else {
+            return .error("Only a delegated session can report: this session has no parent.")
+        }
+        return await send(
+            origin: origin,
+            request: ACPDelegatedSessionMessageRequest(targetSessionId: parent.parentSessionId, prompt: request.result),
+            finalReport: request.outcome
+        )
+    }
+
+    private func send(
+        origin: ACPOrchestrationSessionOrigin,
+        request: ACPDelegatedSessionMessageRequest,
+        finalReport: ACPDelegatedReportOutcome?
+    ) async -> AlasCLIResponse {
         let prompt: String
         do {
             prompt = try ACPSessionOrchestrationPolicy.validatedPrompt(request.prompt)
         } catch {
-            return .error("prompt must not be blank")
+            return .error(finalReport == nil ? "prompt must not be blank" : "result must not be blank")
         }
         let callerParent: ACPDelegationRecord?
         let targetParent: ACPDelegationRecord?
@@ -1606,9 +1638,10 @@ public final class ACPSessionOrchestrationCoordinator {
         // delivery path (and an older build sharing the store) hands the
         // parent the same text.
         let deliveredPrompt = callerParent.flatMap { record in
-            record.parentSessionId == request.targetSessionId
-                ? ACPDelegatedOutcomeText.childReport(outcomeContext(for: record), message: prompt)
-                : nil
+            guard record.parentSessionId == request.targetSessionId else { return nil }
+            let context = outcomeContext(for: record)
+            return finalReport.map { ACPDelegatedOutcomeText.childFinalReport(context, outcome: $0, message: prompt) }
+                ?? ACPDelegatedOutcomeText.childReport(context, message: prompt)
         } ?? prompt
         let message = ACPDelegatedMessage(
             id: environment.makeID(),
@@ -1633,10 +1666,20 @@ public final class ACPSessionOrchestrationCoordinator {
             // against `ACPTurnCompletion.startedAt`, also milliseconds, in
             // `outcomeDisposition` — whole-second precision let a report near
             // the end of one turn be mistaken for covering the next.
-            try? await environment.persistence.markParentReport(
-                childSessionId: origin.sessionId,
-                at: environment.nowMillis()
-            )
+            if let finalReport {
+                try? await environment.persistence.markFinalReport(
+                    childSessionId: origin.sessionId, at: environment.nowMillis(), outcome: finalReport)
+            } else {
+                try? await environment.persistence.markParentReport(
+                    childSessionId: origin.sessionId,
+                    at: environment.nowMillis()
+                )
+            }
+        } else if let targetParent, targetParent.parentSessionId == origin.sessionId,
+                  let reportedAt = targetParent.finalReportAt {
+            // New work for the child: its report no longer describes it.
+            try? await environment.persistence.clearFinalReport(
+                childSessionId: request.targetSessionId, reportedAt: reportedAt)
         }
         environment.notifyChanged()
         deliveryScheduled = true
@@ -1653,6 +1696,7 @@ public final class ACPSessionOrchestrationCoordinator {
 
     public func perform(origin: ACPOrchestrationSessionOrigin, _ action: ACPDelegatedSessionAction) async -> AlasCLIResponse {
         switch action {
+        case .report(let request): await report(origin: origin, request: request)
         case .read(let request): await read(origin: origin, request: request)
         case .search(let request): await search(origin: origin, request: request)
         case .wait(let request): await wait(origin: origin, request: request)
@@ -2026,7 +2070,8 @@ public final class ACPSessionOrchestrationCoordinator {
         }
         return .init(
             sessionId: sessionId,
-            state: ACPSessionOrchestrationPolicy.publicState(phase: phase, runtime: runtime, archived: archived).rawValue,
+            state: ACPSessionOrchestrationPolicy.publicState(
+                phase: phase, runtime: runtime, archived: archived, finalReport: record?.finalReportOutcome).rawValue,
             settled: settled,
             lastAgentText: transcriptSession.flatMap { ACPSessionTranscriptReader.lastAgentText($0.transcript.messages) },
             // A turn's failure is rewritten only when a turn ends, so until the
@@ -2159,6 +2204,11 @@ public final class ACPSessionOrchestrationCoordinator {
     }
 
     private func enqueueTurnOutcome(_ completion: ACPTurnCompletion, record: ACPDelegationRecord) async {
+        if let reportedAt = record.finalReportAt, reportedAt < completion.startedAt {
+            // This turn started after the report and made none of its own.
+            try? await environment.persistence.clearFinalReport(
+                childSessionId: record.childSessionId, reportedAt: reportedAt)
+        }
         let disposition = ACPSessionOrchestrationPolicy.outcomeDisposition(
             result: completion.result,
             lastParentReportAt: record.lastParentReportAt,
@@ -2853,7 +2903,8 @@ public final class ACPSessionOrchestrationCoordinator {
         phase: ACPDelegationPhase,
         failure: String?,
         createdAt: Int64,
-        role: String? = nil
+        role: String? = nil,
+        finalReport: ACPDelegatedReportOutcome? = nil
     ) async -> ACPOrchestrationSessionSummary {
         let location = environment.sessionLocation(sessionId)
         let runtime = location?.manager.liveSession(for: sessionId).map(Self.runtimeState)
@@ -2867,7 +2918,8 @@ public final class ACPSessionOrchestrationCoordinator {
         } else {
             archived = true
         }
-        let state = ACPSessionOrchestrationPolicy.publicState(phase: phase, runtime: runtime, archived: archived)
+        let state = ACPSessionOrchestrationPolicy.publicState(
+            phase: phase, runtime: runtime, archived: archived, finalReport: finalReport)
         return .init(
             sessionId: sessionId,
             relationship: relationship,

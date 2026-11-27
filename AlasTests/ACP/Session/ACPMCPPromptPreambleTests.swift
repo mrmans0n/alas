@@ -186,8 +186,8 @@ struct ACPMCPPromptPreambleTests {
         #expect(!text.contains("session_wait"))
         #expect(!text.contains("session_interrupt"))
         #expect(text.contains("delegated by a parent session"))
-        #expect(text.contains("only with the session_send tool of the \"alas\" MCP server"))
-        #expect(text.contains("do not use SendMessage, ListAgents, or any other messaging or agent tool"))
+        #expect(text.contains("call the session_report tool of the \"alas\" MCP server once with your result"))
+        #expect(text.contains("Do not use SendMessage, ListAgents, or any other messaging or agent tool"))
     }
 
     @Test(
@@ -370,9 +370,9 @@ struct ACPMCPPromptPreambleTests {
         let text = try #require(ACPMCPPromptPreamble.text(
             builtInTools: .full, isDelegated: true, userServerNames: [],
             mode: .cli(serverAvailability: .notInstalled)))
-        #expect(text.contains("only with `alas session send <parent-session-id> <prompt>`"))
-        #expect(text.contains("$ALAS_PARENT_SESSION_ID"))
-        #expect(text.contains("do not use any other messaging or agent tool"))
+        #expect(text.contains("call `alas session report <result>` once with your result"))
+        #expect(text.contains("`alas session send \"$ALAS_PARENT_SESSION_ID\" <prompt>`"))
+        #expect(text.contains("Do not use any other messaging or agent tool"))
         #expect(!text.contains("alas session new"))
         #expect(text.contains("delegated by a parent session"))
     }

@@ -361,10 +361,10 @@ fn server_instructions(parent_session_id: Option<&str>, scope: ToolScope) -> &'s
             "Tools that drive the user's Alas host. This session was delegated from another machine: it cannot create descendants. Your final message is your report to the parent. It cannot be messaged in any other way. Do not use SendMessage, ListAgents, or any other messaging or agent tool for that."
         }
         Some(_) if scope == ToolScope::Headless => {
-            "Tools that drive the user's Alas host. This session was delegated by a parent session: it cannot create descendants. Report results and questions to the parent only with this server's session_send tool; do not use SendMessage, ListAgents, or any other messaging or agent tool for that."
+            "Tools that drive the user's Alas host. This session was delegated by a parent session: it cannot create descendants. When you finish, send your result to the parent once with this server's session_report tool; send questions or progress with its session_send tool. Do not use SendMessage, ListAgents, or any other messaging or agent tool for either."
         }
         Some(_) => {
-            "Tools that drive the user's Alas workspace UI. This session was delegated by a parent session: it cannot create descendants. Report results and questions to the parent only with this server's session_send tool; do not use SendMessage, ListAgents, or any other messaging or agent tool for that."
+            "Tools that drive the user's Alas workspace UI. This session was delegated by a parent session: it cannot create descendants. When you finish, send your result to the parent once with this server's session_report tool; send questions or progress with its session_send tool. Do not use SendMessage, ListAgents, or any other messaging or agent tool for either."
         }
         None if scope == ToolScope::Headless => {
             "Tools that drive the user's Alas host: manage linked worktrees and reviews. Root ACP sessions may delegate direct child sessions: call agent_list first to pick an available agent id (and see its remembered models), then session_new. When an explanation has shape (architecture, flows, multi-dimension comparisons, layouts, charts), draw it in a ```visual fenced block of HTML in your reply (or a ```chart block of JSON data for a chart); use visual_show to ask a question about a visual or show a mockup card."
@@ -406,10 +406,15 @@ fn tool_definitions_for_mode(scope: ToolScope) -> Vec<Value> {
 /// Tools that only act on a session's own children.
 const CHILD_ONLY_TOOLS: [&str; 3] = ["session_new", "session_wait", "session_interrupt"];
 
+/// Tools only a delegated child uses: a root session has no parent.
+const DELEGATED_ONLY_TOOLS: [&str; 1] = ["session_report"];
+
 /// What a child delegated from another Mac never gets: the machine and the
-/// workspace belong to the person at the delegating Mac. Mirrors
-/// `AlasCLICommandRouter.peerChildRemovedTools`, which refuses direct calls.
-const PEER_CHILD_REMOVED_TOOLS: [&str; 4] = ["open", "worktree_new", "worktree_delete", "worktree_switch"];
+/// workspace belong to the person at the delegating Mac, and its final message
+/// is its report. Mirrors `AlasCLICommandRouter.peerChildRemovedTools`, which
+/// refuses direct calls.
+const PEER_CHILD_REMOVED_TOOLS: [&str; 5] =
+    ["open", "worktree_new", "worktree_delete", "worktree_switch", "session_report"];
 const PEER_CHILD_REMOVED_PREFIXES: [&str; 5] = ["computer_", "vm_", "device_", "preview_", "workspace_"];
 
 /// The parent value Alas gives a child started for a paired Mac: `peer:` and
@@ -427,7 +432,14 @@ fn is_peer_child(parent: Option<&str>) -> bool {
 fn tool_definitions_for_session(scope: ToolScope, parent_session_id: Option<&str>) -> Vec<Value> {
     let tools = tool_definitions_for_mode(scope);
     if parent_session_id.is_none() {
-        return tools;
+        return tools
+            .into_iter()
+            .filter(|tool| {
+                tool.get("name")
+                    .and_then(Value::as_str)
+                    .is_none_or(|name| !DELEGATED_ONLY_TOOLS.contains(&name))
+            })
+            .collect();
     }
     let peer = is_peer_child(parent_session_id);
     tools
@@ -571,6 +583,18 @@ fn all_tool_definitions() -> Vec<Value> {
                     "prompt": { "type": "string", "description": "Text-only prompt to queue." }
                 },
                 "required": ["session_id", "prompt"]
+            }
+        }),
+        json!({
+            "name": "session_report",
+            "description": "Delegated sessions only: send your parent your final result, once, when you finish the task you were given. Include what you changed, the evidence that it works, and open problems. Use session_send instead for questions or progress updates.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "result": { "type": "string", "description": "Your final result, as text." },
+                    "outcome": { "type": "string", "enum": ["done", "failed"], "description": "failed if you could not do the task. Default: done." }
+                },
+                "required": ["result"]
             }
         }),
         json!({
@@ -1849,6 +1873,14 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
         "session_send" => Ok(Command::SessionSend {
             session_id: required_string(args, "session_id")?,
             prompt: required_string(args, "prompt")?,
+        }),
+        "session_report" => Ok(Command::SessionReport {
+            result: required_string(args, "result")?,
+            failed: match args.get("outcome").and_then(Value::as_str) {
+                None | Some("done") => false,
+                Some("failed") => true,
+                Some(_) => return Err("session_report 'outcome' must be done or failed".into()),
+            },
         }),
         "session_read" => Ok(Command::SessionRead {
             session_id: required_non_blank_string(args, "session_id")?,
@@ -3437,6 +3469,7 @@ pub(crate) fn success_message(command: &Command) -> String {
         Command::SessionList => "No delegated sessions found.".into(),
         Command::SessionNew { .. } => "Delegated session creation accepted.".into(),
         Command::SessionSend { .. } => "Delegated prompt queued.".into(),
+        Command::SessionReport { .. } => "Result reported to the parent session.".into(),
         Command::VisualShow { .. } => "Visual shown.".into(),
         Command::SessionRead { .. }
         | Command::SessionSearch { .. }
@@ -4686,13 +4719,13 @@ mod tests {
     }
 
     #[test]
-    fn delegated_initialize_instructions_route_reports_through_session_send_only() {
+    fn delegated_initialize_instructions_route_results_through_session_report() {
         let instructions = initialize_result(Some("parent"), ToolScope::All)["instructions"]
             .as_str()
             .unwrap()
             .to_string();
-        assert!(instructions.contains("only with this server's session_send tool"));
-        assert!(instructions.contains("do not use SendMessage, ListAgents"));
+        assert!(instructions.contains("once with this server's session_report tool"));
+        assert!(instructions.contains("Do not use SendMessage, ListAgents"));
         let root = initialize_result(None, ToolScope::All)["instructions"]
             .as_str()
             .unwrap()
@@ -5293,13 +5326,19 @@ mod tests {
         let child = tool_names(Some("parent-session"));
         assert!(root.iter().any(|name| name == "session_new"));
         assert!(!child.iter().any(|name| name == "session_new"));
+        assert!(!root.iter().any(|name| name == "session_report"));
         assert_eq!(
-            child,
+            child
+                .iter()
+                .filter(|name| *name != "session_report")
+                .cloned()
+                .collect::<Vec<_>>(),
             root.iter()
                 .filter(|name| !CHILD_ONLY_TOOLS.contains(&name.as_str()))
                 .cloned()
                 .collect::<Vec<_>>()
         );
+        assert!(child.iter().any(|name| name == "session_report"));
         assert!(child.iter().any(|name| name == "session_read"));
 
         // Authorization stays server-side: a forged call is forwarded to
@@ -6769,6 +6808,24 @@ mod tests {
                 prompt: "Follow up".into()
             }
         );
+        assert_eq!(
+            command_for_tool(
+                "session_report",
+                &json!({ "result": "Done", "outcome": "failed" }),
+                "/wt"
+            )
+            .unwrap(),
+            alas_client::Command::SessionReport {
+                result: "Done".into(),
+                failed: true
+            }
+        );
+        assert!(command_for_tool(
+            "session_report",
+            &json!({ "result": "Done", "outcome": "maybe" }),
+            "/wt"
+        )
+        .is_err());
         assert!(command_for_tool(
             "session_new",
             &json!({ "prompt": "Task", "worktree": "main", "new_worktree": { "branch": "child" } }),

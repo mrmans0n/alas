@@ -163,6 +163,10 @@ public struct ACPDelegationRecord: Equatable, Sendable {
     /// seconds are too coarse to distinguish a report from the tail of one
     /// turn from the start of the next.
     public var lastParentReportAt: Int64? = nil
+    /// The child's latest `session_report`, in milliseconds, kept until a
+    /// turn that started after it ends or its parent sends it a new prompt.
+    public var finalReportAt: Int64? = nil
+    public var finalReportOutcome: ACPDelegatedReportOutcome? = nil
     /// Persisted so a delayed start (new worktree) and startup recovery apply
     /// the same selection before the pending initial prompt.
     public var modelSelection: ACPDelegatedModelSelection? = nil
@@ -181,7 +185,9 @@ public struct ACPDelegationRecord: Equatable, Sendable {
     /// fewer can say nothing about a turn one of them started.
     public var peerSends: Int64 = 0
 
-    public init(childSessionId: String, parentSessionId: String, projectId: String, parentWorktreeId: String, childWorktreeId: String? = nil, agentId: String, worktreeRequest: ACPDelegatedWorktreeRequest, pendingInitialPrompt: String? = nil, phase: ACPDelegationPhase, failureMessage: String? = nil, createdAt: Int64, updatedAt: Int64, lastParentReportAt: Int64? = nil, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil, peerServerId: String? = nil, peerAwaiting: Bool = false, peerAwaitingSince: Int64? = nil, peerSends: Int64 = 0) {
+    public init(childSessionId: String, parentSessionId: String, projectId: String, parentWorktreeId: String, childWorktreeId: String? = nil, agentId: String, worktreeRequest: ACPDelegatedWorktreeRequest, pendingInitialPrompt: String? = nil, phase: ACPDelegationPhase, failureMessage: String? = nil, createdAt: Int64, updatedAt: Int64, lastParentReportAt: Int64? = nil, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil, peerServerId: String? = nil, peerAwaiting: Bool = false, peerAwaitingSince: Int64? = nil, peerSends: Int64 = 0, finalReportAt: Int64? = nil, finalReportOutcome: ACPDelegatedReportOutcome? = nil) {
+        self.finalReportAt = finalReportAt
+        self.finalReportOutcome = finalReportOutcome
         self.childSessionId = childSessionId
         self.parentSessionId = parentSessionId
         self.projectId = projectId
@@ -523,7 +529,25 @@ public struct ACPOrchestrationSendResponse: Codable, Equatable, Sendable {
 
 /// The session tools that look at or stop another session's turns, routed
 /// through one entry point (`ACPSessionOrchestrationCoordinator.perform`).
+/// What a child's `session_report` says of its task.
+public enum ACPDelegatedReportOutcome: String, Codable, Equatable, Sendable {
+    case done
+    case failed
+}
+
+/// `session_report`: a delegated child's final result for its parent.
+public struct ACPDelegatedSessionReportRequest: Equatable, Sendable {
+    public let result: String
+    public let outcome: ACPDelegatedReportOutcome
+
+    public init(result: String, outcome: ACPDelegatedReportOutcome) {
+        self.result = result
+        self.outcome = outcome
+    }
+}
+
 public enum ACPDelegatedSessionAction: Equatable, Sendable {
+    case report(ACPDelegatedSessionReportRequest)
     case read(ACPDelegatedSessionReadRequest)
     case search(ACPDelegatedSessionSearchRequest)
     case wait(ACPDelegatedSessionWaitRequest)
