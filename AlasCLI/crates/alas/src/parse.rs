@@ -828,15 +828,16 @@ fn parse_session(args: &[&str]) -> Result<Command, String> {
         }
         Some("report") => {
             const USAGE: &str = "usage: alas session report [--failed] <result>";
-            let (failed, rest) = match args.get(1).copied() {
-                Some("--failed") => (true, &args[2..]),
-                _ => (false, &args[1..]),
-            };
-            match rest {
-                [result] if !result.trim().is_empty() => Ok(Command::SessionReport {
-                    result: (*result).to_string(),
-                    failed,
-                }),
+            // `--failed` may come before or after the result.
+            let rest: Vec<&str> = args[1..].iter().copied().filter(|arg| *arg != "--failed").collect();
+            let failed = rest.len() < args.len() - 1;
+            match rest.as_slice() {
+                [result] if !result.trim().is_empty() && args.len() - 1 - rest.len() <= 1 => {
+                    Ok(Command::SessionReport {
+                        result: (*result).to_string(),
+                        failed,
+                    })
+                }
                 _ => Err(USAGE.into()),
             }
         }
@@ -2587,22 +2588,24 @@ mod tests {
                 session_id: "child".into()
             }
         );
-        assert_eq!(
-            parse(
-                &s(&["session", "report", "--failed", "Tests fail"]),
-                Path::new("/b")
-            )
-            .unwrap(),
-            Command::SessionReport {
-                result: "Tests fail".into(),
-                failed: true,
-            }
-        );
+        for args in [
+            ["session", "report", "--failed", "Tests fail"],
+            ["session", "report", "Tests fail", "--failed"],
+        ] {
+            assert_eq!(
+                parse(&s(&args), Path::new("/b")).unwrap(),
+                Command::SessionReport {
+                    result: "Tests fail".into(),
+                    failed: true,
+                }
+            );
+        }
         for invalid in [
             ["session", "report"].as_slice(),
             ["session", "report", "--failed"].as_slice(),
             ["session", "report", " "].as_slice(),
             ["session", "report", "a", "b"].as_slice(),
+            ["session", "report", "--failed", "a", "--failed"].as_slice(),
             ["session", "read"].as_slice(),
             ["session", "read", "child", "--limit", "0"].as_slice(),
             ["session", "read", "child", "--limit", "5", "--limit", "6"].as_slice(),

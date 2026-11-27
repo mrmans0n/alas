@@ -512,7 +512,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                 line += " This session was delegated by a parent session: it cannot "
                     + "create descendants. " + childReportGuidance(
                         report: "`alas session report <result>`",
-                        failed: "add `--failed`",
+                        failed: "add `--failed` before the result",
                         send: "`alas session send \"$ALAS_PARENT_SESSION_ID\" <prompt>`")
                     + " Do not use any other messaging or agent tool for either."
             } else {
