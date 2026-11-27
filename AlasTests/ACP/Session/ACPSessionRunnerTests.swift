@@ -3992,11 +3992,12 @@ struct ACPSessionRunnerTests {
         try await waitUntil { (try? store.db.query("SELECT 1 FROM acp_mcp_started_tool_calls").isEmpty) == true }
     }
 
-    @Test("a tool call the agent cancelled before it was dequeued never runs")
+    @Test("a tool call the agent cancelled during setup, before it was dequeued, never runs")
     func cancelledBeforeDequeueMCPCallNeverRuns() async throws {
         var unclaimed: [JSONRPCID] = []
         let (runner, mock, _, served) = try await makeMCPRunner(onUnclaimedCancelRequest: { unclaimed.append($0) })
-        runner.start()
+        // Only what the manager starts before `session/new`.
+        runner.startMCPMessageListening()
         defer { runner.stop() }
 
         mock.emitCancelRequest(id: .number(5))

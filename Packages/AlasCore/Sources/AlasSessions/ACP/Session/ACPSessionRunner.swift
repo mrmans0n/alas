@@ -774,22 +774,7 @@ public final class ACPSessionRunner {
             }
         }
 
-        cancelRequestsTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            for await id in self.connection.client.cancelRequests {
-                guard self.isConnectionCurrent() else { continue }
-                if let serverId = self.inFlightMCPMessages[id] {
-                    let router = self.mcpMessageRouter
-                    Task { await router?.cancel(serverId: serverId, requestID: id) }
-                    continue
-                }
-                if self.onCancelRequest?(id) == true { continue }
-                if self.policy.cancelRequest(id: id) { continue }
-                self.pendingCancelledRequestIDs.insert(id)
-                self.onUnclaimedCancelRequest?(id)
-            }
-        }
-
+        startCancelRequestListening()
         startAuthStatusListening()
         startMCPMessageListening()
 
@@ -1074,11 +1059,33 @@ public final class ACPSessionRunner {
     /// Idempotent, because `start()` calls it too and `authStatusUpdates` has
     /// a single consumer: a second iteration would split the events between
     /// two loops rather than replace the first.
+    /// Consumes `$/cancel_request`. Started with the early MCP listener too:
+    /// a call answered during setup may be cancelled during setup.
+    private func startCancelRequestListening() {
+        guard cancelRequestsTask == nil else { return }
+        cancelRequestsTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await id in self.connection.client.cancelRequests {
+                guard self.isConnectionCurrent() else { continue }
+                if let serverId = self.inFlightMCPMessages[id] {
+                    let router = self.mcpMessageRouter
+                    Task { await router?.cancel(serverId: serverId, requestID: id) }
+                    continue
+                }
+                if self.onCancelRequest?(id) == true { continue }
+                if self.policy.cancelRequest(id: id) { continue }
+                self.pendingCancelledRequestIDs.insert(id)
+                self.onUnclaimedCancelRequest?(id)
+            }
+        }
+    }
+
     /// Answers `mcp/message`. Started before the session is set up, like
     /// `startAuthStatusListening()`: an agent may discover the tools of a
     /// server served over ACP before its `session/new` returns, and would
     /// wait on that discovery forever if nothing answered it until then.
     public func startMCPMessageListening() {
+        startCancelRequestListening()
         guard mcpMessagesTask == nil else { return }
         mcpMessagesTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1140,6 +1147,8 @@ public final class ACPSessionRunner {
     public func cancelMCPMessageListening() {
         mcpMessagesTask?.cancel()
         mcpMessagesTask = nil
+        cancelRequestsTask?.cancel()
+        cancelRequestsTask = nil
     }
 
     public func startAuthStatusListening() {
