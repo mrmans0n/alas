@@ -247,8 +247,12 @@ private struct DropdownPanel: View {
                 keyboardScrollTick &+= 1
                 return .handled
             case .return:
-                if filtered.indices.contains(highlight) {
-                    onSelect(filtered[highlight])
+                let items = filtered
+                if items.indices.contains(highlight) {
+                    let item = items[highlight]
+                    // SwiftUI handles Return during a view update. The selection
+                    // can publish session changes, so commit after the key event.
+                    DispatchQueue.main.async { onSelect(item) }
                 }
                 return .handled
             default:
