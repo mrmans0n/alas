@@ -13,6 +13,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A turn's changed files fold into one line under its answer with a Review changes button, and its recorded diffs open in the review diff view with your code font.
 - Keep ACP transcript adapter updates running when you switch tabs, and show an in-app banner when a background update succeeds.
 - Keep inline charts and their legends from overlapping the text or callouts below them.
+- Settle a horizontal fling past the code editor's left edge with one smooth bounce instead of a wobble.
 
 ## [0.24.10] - 2026-11-24
 
