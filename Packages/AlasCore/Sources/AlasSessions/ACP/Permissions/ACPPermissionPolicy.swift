@@ -297,6 +297,9 @@ public final class ACPPermissionPolicy {
         session.settleWaitingState()
         let cont = pendingContinuation
         pendingContinuation = nil
+        // An evaluation not parked yet (in the auto-run check, say) sees it
+        // when it resumes. Each evaluation starts with it cleared.
+        if cont == nil { cancelledBeforeParked = true }
         cont?.resume(returning: .init(outcome: .cancelled))
     }
 

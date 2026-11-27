@@ -239,6 +239,8 @@ public final class ACPSessionOrchestrationCoordinator {
     /// What a peer child's start asked for, until the peer took it. Held in
     /// memory only: the record has nowhere to keep the target.
     private var pendingPeerStarts: [String: ACPPeerChildStartRequest] = [:]
+    /// Peer children whose parent was stopped while their start was in flight.
+    private var stoppedPeerStarts: Set<String> = []
     private var peerStartsInFlight: Set<String> = []
     private var peerStatusRounds: [String: [[String]: PeerStatusRound]] = [:]
     private var peerOutboxSignals: [String: Int] = [:]
@@ -636,9 +638,14 @@ public final class ACPSessionOrchestrationCoordinator {
         switch await peers.start(serverId: peerInfo.serverId, start) {
         case .success(let reply):
             await markPeerChildReady(childID, serverId: peerInfo.serverId, keepingForRetry: start)
+            await interruptPeerStartIfStopped(childID, serverId: peerInfo.serverId, peers: peers)
             environment.peerNeedsCollecting(peerInfo.serverId)
             return json(ACPOrchestrationNewResponse(sessionId: childID, state: reply.state, worktreeId: nil, peer: peerInfo.name))
         case .failure(.unreachable(let name)):
+            if stoppedPeerStarts.remove(childID) != nil {
+                await failStoppedPeerStart(childID)
+                return .error(Self.stoppedBeforeStartMessage)
+            }
             pendingPeerStarts[childID] = start
             // A live link that lost one answer sends no availability signal.
             if peers.peers.first(where: { $0.serverId == peerInfo.serverId })?.state == .online {
@@ -684,6 +691,38 @@ public final class ACPSessionOrchestrationCoordinator {
         environment.notifyChanged()
     }
 
+    /// The parent of peer child `child` was stopped before the child started.
+    /// A start waiting for its retry is dropped and the child fails; one in
+    /// flight is settled when its answer comes back.
+    private func withdrawPeerStart(_ child: ACPDelegationRecord) async {
+        let childID = child.childSessionId
+        if peerStartsInFlight.contains(childID) {
+            stoppedPeerStarts.insert(childID)
+        } else if pendingPeerStarts.removeValue(forKey: childID) != nil {
+            await failStoppedPeerStart(childID)
+        }
+    }
+
+    /// Fails a peer child withdrawn before it started. No wake: the parent
+    /// was just stopped by its user.
+    private func failStoppedPeerStart(_ childID: String) async {
+        pendingPeerStarts[childID] = nil
+        try? await environment.persistence.updatePhase(
+            childSessionId: childID, phase: .failed, failureMessage: Self.stoppedBeforeStartMessage,
+            updatedAt: environment.now())
+        environment.notifyChanged()
+    }
+
+    /// A start the peer took after the parent was stopped: the child is
+    /// interrupted there, and the peer drops its first prompt if it is still
+    /// starting.
+    private func interruptPeerStartIfStopped(_ childID: String, serverId: String, peers: ACPDelegationPeers) async {
+        guard stoppedPeerStarts.remove(childID) != nil else { return }
+        _ = await peers.interrupt(serverId: serverId, sessionID: childID)
+    }
+
+    public static let stoppedBeforeStartMessage = "Stopped with its parent before it started."
+
     /// Gives each child still starting on the peer `serverId` its one further
     /// attempt. Only proof fails a child, with a wake since the parent has
     /// moved on: the peer answering no, or `status` finding nothing there. No
@@ -710,8 +749,10 @@ public final class ACPSessionOrchestrationCoordinator {
                 switch await peers.start(serverId: serverId, start) {
                 case .success:
                     await markPeerChildReady(childID, serverId: serverId, keepingForRetry: start)
+                    await interruptPeerStartIfStopped(childID, serverId: serverId, peers: peers)
                 case .failure(.unreachable):
                     pendingPeerStarts[childID] = nil
+                    if stoppedPeerStarts.remove(childID) != nil { await failStoppedPeerStart(childID) }
                 case .failure(let error):
                     pendingPeerStarts[childID] = nil
                     await markChildFailed(childSessionId: childID, message: Self.message(for: error))
@@ -1928,6 +1969,9 @@ public final class ACPSessionOrchestrationCoordinator {
         // Mac must not hold up stopping the others.
         for child in inPlay where child.peerServerId == nil {
             _ = await interruptLocalChild(child)
+        }
+        for child in inPlay where child.peerServerId != nil && child.phase == .starting {
+            await withdrawPeerStart(child)
         }
         let peerStops = inPlay.filter { $0.peerServerId != nil }.map { child in
             Task { _ = await self.interruptOnPeer(child) }

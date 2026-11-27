@@ -3161,6 +3161,38 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(peers.startCalls.count == 1)
     }
 
+    /// A start waiting for its retry is withdrawn when the parent is stopped,
+    /// without waking it, so a reconnect cannot launch it.
+    @Test func stoppingTheParentWithdrawsAPeerStartAwaitingRetry() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.startResults = [.failure(.unreachable(peer: "mini"))]
+        let fixture = try remoteFixture(peers: peers)
+        _ = await peerCreate(fixture)
+
+        await fixture.coordinator.interruptChildren(of: "parent")
+        await fixture.coordinator.retryPeerStarts(serverId: "srv-1")
+
+        let record = try #require(try await fixture.persistence.delegation(childSessionId: "child"))
+        #expect(record.phase == .failed
+            && record.failureMessage == ACPSessionOrchestrationCoordinator.stoppedBeforeStartMessage)
+        #expect(peers.startCalls.count == 1)
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+    }
+
+    /// A start in flight when the parent is stopped is interrupted once the
+    /// peer has taken it.
+    @Test func aPeerStartInFlightWhenTheParentStopsIsInterruptedOnceTaken() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        let coordinator = fixture.coordinator
+        peers.onStart = { _ in await coordinator.interruptChildren(of: "parent") }
+
+        _ = await peerCreate(fixture)
+
+        // The stop's own interrupt reaches nothing yet; the second follows the start.
+        #expect(peers.interruptCalls == ["child", "child"])
+    }
+
     @Test func lostStartAnswerIsRetriedOnceWithSameID() async throws {
         let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
         peers.startResults = [.failure(.unreachable(peer: "mini"))]

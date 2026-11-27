@@ -90,13 +90,14 @@ struct ACPPermissionPolicyTests {
         #expect(await decision.outcome == .cancelled)
     }
 
-    @Test("a request cancelled while auto-run's limit is checked is not approved")
-    func cancelDuringAutoRunCheckWins() async throws {
+    /// By the agent's `$/cancel_request`, or by the user stopping the turn.
+    @Test("a request cancelled while auto-run's limit is checked is not approved", arguments: [false, true])
+    func cancelDuringAutoRunCheckWins(byUser: Bool) async throws {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         session.autoRunEnabled = true
         let policy = ACPPermissionPolicy(session: session, log: .init(store: try makeStore()))
         policy.autoRunAllowed = { [weak policy] in
-            _ = policy?.cancelRequest(id: .number(1))
+            if byUser { policy?.userCancelled() } else { _ = policy?.cancelRequest(id: .number(1)) }
             return true
         }
         let opts: [ACPPermissionOption] = [.init(optionId: "allow", name: "Allow", kind: "allow_once")]
