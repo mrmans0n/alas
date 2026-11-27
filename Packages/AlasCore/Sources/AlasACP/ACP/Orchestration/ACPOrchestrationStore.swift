@@ -730,10 +730,9 @@ public final class ACPOrchestrationStore {
             if current < 4 { try db.exec("ALTER TABLE delegations ADD COLUMN role TEXT") }
             if current < 5 { try migrateToV5() }
             if current < 6 { try migrateToV6() }
-            if current < 7 {
-                try db.exec("ALTER TABLE delegations ADD COLUMN final_report_at INTEGER")
-                try db.exec("ALTER TABLE delegations ADD COLUMN final_report_outcome TEXT")
-            }
+            // Idempotent: a store marked older than its columns (an earlier
+            // build's version) may already have them.
+            if current < 7 { try addFinalReportColumnsIfMissing() }
             // Builds of this version before the column existed wrote stores at 5.
             try addPeerAwaitingColumnIfMissing()
             if current == 0 {
@@ -834,6 +833,18 @@ public final class ACPOrchestrationStore {
             bindings: [UUID().uuidString]
         )
         try db.exec("ALTER TABLE peer_delegation_cursors ADD COLUMN store_id TEXT")
+    }
+
+    private func addFinalReportColumnsIfMissing() throws {
+        let columns = try db.query(
+            "SELECT name FROM pragma_table_info('delegations') WHERE name IN ('final_report_at', 'final_report_outcome')"
+        ).compactMap { $0["name"] as? String }
+        if !columns.contains("final_report_at") {
+            try db.exec("ALTER TABLE delegations ADD COLUMN final_report_at INTEGER")
+        }
+        if !columns.contains("final_report_outcome") {
+            try db.exec("ALTER TABLE delegations ADD COLUMN final_report_outcome TEXT")
+        }
     }
 
     private func addPeerAwaitingColumnIfMissing() throws {
