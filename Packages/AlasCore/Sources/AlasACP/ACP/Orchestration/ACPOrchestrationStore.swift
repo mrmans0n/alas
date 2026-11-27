@@ -12,7 +12,7 @@ public final class ACPOrchestrationStore {
         case missingStoreIdentity
     }
 
-    public static let targetSchemaVersion = 6
+    public static let targetSchemaVersion = 7
 
     public let path: String
     public let db: SQLiteDatabase
@@ -226,6 +226,25 @@ public final class ACPOrchestrationStore {
         SET last_parent_report_at = ?, updated_at = ?
         WHERE child_session_id = ?
         """, bindings: [reportedAt, reportedAt, childSessionId])
+    }
+
+    /// A `session_report` is also a parent report: its turn needs no wake.
+    public func markFinalReport(childSessionId: String, at reportedAt: Int64, outcome: ACPDelegatedReportOutcome) throws {
+        try db.exec("""
+        UPDATE delegations
+        SET final_report_at = ?, final_report_outcome = ?, last_parent_report_at = ?, updated_at = ?
+        WHERE child_session_id = ?
+        """, bindings: [reportedAt, outcome.rawValue, reportedAt, reportedAt, childSessionId])
+    }
+
+    /// Clears the final report only if it is still the one from `reportedAt`,
+    /// so a report made meanwhile survives.
+    public func clearFinalReport(childSessionId: String, reportedAt: Int64) throws {
+        try db.exec("""
+        UPDATE delegations
+        SET final_report_at = NULL, final_report_outcome = NULL
+        WHERE child_session_id = ? AND final_report_at = ?
+        """, bindings: [childSessionId, reportedAt])
     }
 
     /// Queues a message for its target. A target that is a paired peer's
@@ -711,6 +730,9 @@ public final class ACPOrchestrationStore {
             if current < 4 { try db.exec("ALTER TABLE delegations ADD COLUMN role TEXT") }
             if current < 5 { try migrateToV5() }
             if current < 6 { try migrateToV6() }
+            // Idempotent: a store marked older than its columns (an earlier
+            // build's version) may already have them.
+            if current < 7 { try addFinalReportColumnsIfMissing() }
             // Builds of this version before the column existed wrote stores at 5.
             try addPeerAwaitingColumnIfMissing()
             if current == 0 {
@@ -813,6 +835,18 @@ public final class ACPOrchestrationStore {
         try db.exec("ALTER TABLE peer_delegation_cursors ADD COLUMN store_id TEXT")
     }
 
+    private func addFinalReportColumnsIfMissing() throws {
+        let columns = try db.query(
+            "SELECT name FROM pragma_table_info('delegations') WHERE name IN ('final_report_at', 'final_report_outcome')"
+        ).compactMap { $0["name"] as? String }
+        if !columns.contains("final_report_at") {
+            try db.exec("ALTER TABLE delegations ADD COLUMN final_report_at INTEGER")
+        }
+        if !columns.contains("final_report_outcome") {
+            try db.exec("ALTER TABLE delegations ADD COLUMN final_report_outcome TEXT")
+        }
+    }
+
     private func addPeerAwaitingColumnIfMissing() throws {
         let columns = try db.query("SELECT name FROM pragma_table_info('delegations') WHERE name LIKE 'peer_awaiting%'")
             .compactMap { $0["name"] as? String }
@@ -861,7 +895,9 @@ public final class ACPOrchestrationStore {
             peerServerId: row["peer_server_id"] as? String,
             peerAwaiting: (row["peer_awaiting"] as? Int64 ?? 0) != 0,
             peerAwaitingSince: row["peer_awaiting_since"] as? Int64,
-            peerSends: row["peer_sends"] as? Int64 ?? 0
+            peerSends: row["peer_sends"] as? Int64 ?? 0,
+            finalReportAt: row["final_report_at"] as? Int64,
+            finalReportOutcome: (row["final_report_outcome"] as? String).flatMap(ACPDelegatedReportOutcome.init(rawValue:))
         )
     }
 

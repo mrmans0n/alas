@@ -117,6 +117,15 @@ public enum ACPDelegatedOutcomeText: Sendable {
         "[alas system] Report from delegated session \(label(context)) via session_send:\n\(message)"
     }
 
+    /// A child's `session_report`: its final result, framed like
+    /// `childReport` but saying it is the result and how the task went.
+    public static func childFinalReport(
+        _ context: Context, outcome: ACPDelegatedReportOutcome, message: String
+    ) -> String {
+        let how = outcome == .failed ? "reported that its task failed" : "reported its result"
+        return "[alas system] Delegated session \(label(context)) \(how) via session_report:\n\(message)"
+    }
+
     public static func notice(_ context: Context) -> String {
         "Delegated session \(label(context)) finished its turn."
     }

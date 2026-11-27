@@ -7,6 +7,8 @@ enum ACPDelegatedSessionsPolicy {
         case "starting": return "Starting"
         case "running": return "Working"
         case "awaiting_input": return "Needs input"
+        case "reported": return "Done"
+        case "reported_failed": return "Failed (reported)"
         case "on_peer": return "On another Mac"
         case "failed": return "Failed"
         case "closed": return "Closed"

@@ -242,6 +242,11 @@ pub enum Command {
         session_id: String,
         prompt: String,
     },
+    /// A delegated child's final result for its parent.
+    SessionReport {
+        result: String,
+        failed: bool,
+    },
     /// Show an HTML visual aid in the calling ACP session's transcript.
     VisualShow {
         title: String,
@@ -1139,6 +1144,14 @@ pub fn build_request(
         Command::SessionSend { session_id, prompt } => {
             let mut r = Request::new("session_send");
             r.params = Some(serde_json::json!({ "session_id": session_id, "prompt": prompt }));
+            r
+        }
+        Command::SessionReport { result, failed } => {
+            let mut r = Request::new("session_report");
+            r.params = Some(serde_json::json!({
+                "result": result,
+                "outcome": if *failed { "failed" } else { "done" },
+            }));
             r
         }
         Command::VisualShow { title, html, question, presentation } => {

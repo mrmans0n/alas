@@ -1493,6 +1493,58 @@ struct ACPSessionOrchestrationCoordinatorTests {
         ])
     }
 
+    @Test("a child's session_report reaches its parent as its result and shows the child as reported",
+          arguments: [ACPDelegatedReportOutcome.done, .failed])
+    func reportMarksChildReported(_ outcome: ACPDelegatedReportOutcome) async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        let response = await fixture.coordinator.perform(
+            origin: .init(sessionId: "child", projectId: "project", worktreeId: "worktree"),
+            .report(.init(result: "Parser fixed; tests pass.", outcome: outcome))
+        )
+
+        guard case .text = response else {
+            Issue.record("Expected a queued response, got \(response)")
+            return
+        }
+        let record = try #require(try await fixture.persistence.delegation(childSessionId: "child"))
+        #expect(record.finalReportOutcome == outcome)
+        // It also counts as a parent report, so the turn ending does not wake the parent.
+        #expect(record.lastParentReportAt == 900)
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.prompt) == [ACPDelegatedOutcomeText.childFinalReport(
+            .init(childSessionId: "child", agentId: "codex", worktreeName: "feature-x"),
+            outcome: outcome, message: "Parser fixed; tests pass.")])
+    }
+
+    @Test("a root session cannot report: it has no parent")
+    func rootCannotReport() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        let response = await fixture.coordinator.perform(
+            origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+            .report(.init(result: "Done.", outcome: .done))
+        )
+
+        #expect(response == .error("Only a delegated session can report: this session has no parent."))
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+    }
+
+    @Test("a report outlives the turn that made it, and clears when a later turn ends without one")
+    func reportClearsAfterALaterTurn() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        try await fixture.persistence.markFinalReport(childSessionId: "child", at: 600, outcome: .done)
+
+        await fixture.coordinator.childTurnCompleted(completion(startedAt: 500))
+        #expect(try await fixture.persistence.delegation(childSessionId: "child")?.finalReportOutcome == .done)
+
+        await fixture.coordinator.childTurnCompleted(completion(startedAt: 700))
+        #expect(try await fixture.persistence.delegation(childSessionId: "child")?.finalReportOutcome == nil)
+    }
+
     // MARK: - Starting a child for a paired Mac
 
     private func peerProject(path: String = "/tmp/worktree", host: String? = nil, kind: ProjectKind = .git) -> ProjectConfig {

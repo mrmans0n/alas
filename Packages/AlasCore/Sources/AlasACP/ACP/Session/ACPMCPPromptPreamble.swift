@@ -203,7 +203,8 @@ public enum ACPMCPPromptPreamble: Sendable {
     /// child's report is queued here as a prompt, and Alas sends a system
     /// message when one finishes without reporting or fails.
     private static func rootDelegationGuidance(
-        newSession: String, agentList: String, sessionList: String, wait: String
+        newSession: String, agentList: String, sessionList: String, wait: String, report: String,
+        send: String
     ) -> String {
         " When the user names another agent or model for a task (for example \"have Codex review this\"), "
             + "or wants it in another worktree, on another Mac, or as a session they can watch and talk to, "
@@ -211,10 +212,19 @@ public enum ACPMCPPromptPreamble: Sendable {
             + "agent or model, say so instead of substituting another. A child sees nothing of this "
             + "conversation, so its prompt must stand on its own: the goal, constraints, what it may edit, "
             + "and what to report back."
-            + " A child's report arrives here as a message, and when one finishes without reporting back, "
+            + " A child's final result arrives here as a message from \(report); a message it sends with "
+            + "\(send) is a question or progress update. When a child finishes without reporting back, "
             + "or fails, you will receive a system message; you do not need to poll \(sessionList). "
             + "After starting children, end your turn unless you have other work, and call \(wait) only "
             + "when your very next step needs a child's result."
+    }
+
+    /// How a local delegated child ends its task and talks to its parent in
+    /// between. A child of another Mac reports with its final message instead.
+    private static func childReportGuidance(report: String, failed: String, send: String) -> String {
+        "When you finish, call \(report) once with your result: what you changed, the evidence that it "
+            + "works, and open problems; \(failed) if you could not do the task. "
+            + "Send questions or progress to the parent with \(send)."
     }
 
     /// Steers delegation when the session's native subagent tool is off.
@@ -314,7 +324,7 @@ public enum ACPMCPPromptPreamble: Sendable {
             let sessionTools = isPeerChild
                 ? "session_list/session_read/session_search"
                 : isDelegated
-                ? "session_list/session_send/session_read/session_search"
+                ? "session_list/session_report/session_send/session_read/session_search"
                 : "agent_list/session_list/session_new/session_send (delegate direct child agent sessions; "
                     + "call agent_list first and pass an available agent id to session_new), "
                     + "session_read (read a child's or this session's fork transcript), session_search (search children), "
@@ -337,14 +347,16 @@ public enum ACPMCPPromptPreamble: Sendable {
                 line += " " + peerChildReportSentence + " It cannot create descendants."
             } else if isDelegated {
                 line += " This session was delegated by a parent session: it "
-                    + "cannot create descendants. Report results and questions to "
-                    + "the parent only with the session_send tool of the \"\(builtInServerName)\" "
-                    + "MCP server; do not use SendMessage, ListAgents, or any other "
-                    + "messaging or agent tool for that."
+                    + "cannot create descendants. " + childReportGuidance(
+                        report: "the session_report tool of the \"\(builtInServerName)\" MCP server",
+                        failed: "set outcome \"failed\"",
+                        send: "its session_send tool")
+                    + " Do not use SendMessage, ListAgents, or any other messaging or agent tool for either."
             } else {
                 line += rootDelegationGuidance(
                     newSession: "session_new", agentList: "agent_list",
-                    sessionList: "session_list", wait: "session_wait")
+                    sessionList: "session_list", wait: "session_wait", report: "session_report",
+                    send: "session_send")
                 line += " If a delegated session is blocked on a permission, question, or plan, "
                     + "you will be told; you cannot answer it for the user, so use notify to "
                     + "reach them."
@@ -476,7 +488,7 @@ public enum ACPMCPPromptPreamble: Sendable {
             let sessionCLI = isPeerChild
                 ? "alas session list | alas session read <session-id> | alas session search <query>"
                 : isDelegated
-                ? "alas session send <session-id> <prompt> | alas session read <session-id> | alas session search <query>"
+                ? "alas session report <result> [--failed] | alas session send <session-id> <prompt> | alas session read <session-id> | alas session search <query>"
                 : "alas agent list | alas session list | alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] | alas session send <session-id> <prompt> | alas session read <session-id> | alas session search <query> | alas session wait <session-id>... | alas session interrupt <session-id>"
             var line = "Use the `alas` CLI via your shell tool to drive the Alas UI: "
                 + (isPeerChild
@@ -498,14 +510,16 @@ public enum ACPMCPPromptPreamble: Sendable {
                 line += " " + peerChildReportSentence + " It cannot create descendants."
             } else if isDelegated {
                 line += " This session was delegated by a parent session: it cannot "
-                    + "create descendants. Report results and questions to the parent "
-                    + "only with `alas session send <parent-session-id> <prompt>` "
-                    + "(the parent's id is in $ALAS_PARENT_SESSION_ID); do not use "
-                    + "any other messaging or agent tool for that."
+                    + "create descendants. " + childReportGuidance(
+                        report: "`alas session report <result>`",
+                        failed: "add `--failed` before the result",
+                        send: "`alas session send \"$ALAS_PARENT_SESSION_ID\" <prompt>`")
+                    + " Do not use any other messaging or agent tool for either."
             } else {
                 line += rootDelegationGuidance(
                     newSession: "`alas session new`", agentList: "`alas agent list`",
-                    sessionList: "`alas session list`", wait: "`alas session wait`")
+                    sessionList: "`alas session list`", wait: "`alas session wait`",
+                    report: "`alas session report`", send: "`alas session send`")
                 line += " If a delegated session is blocked on a permission, question, or plan, "
                     + "you will be told; you cannot answer it for the user, so use `alas notify` to "
                     + "reach them."

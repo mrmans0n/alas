@@ -117,6 +117,8 @@ struct ACPDelegatedOutcomeTextTests {
     static let deliveries: [Delivery] = [
         fromChild(ACPDelegatedOutcomeText.childReport(childContext, message: "Done."),
                   label: "Report from Codex child · c4f1a2b3"),
+        fromChild(ACPDelegatedOutcomeText.childFinalReport(childContext, outcome: .failed, message: "Tests fail."),
+                  label: "Report from Codex child · c4f1a2b3"),
         // A report whose body imitates Alas's notice copy is still a report.
         fromChild(ACPDelegatedOutcomeText.childReport(
             childContext, message: ACPDelegatedOutcomeText.failure(childContext, message: "boom")

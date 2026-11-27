@@ -389,6 +389,7 @@ public struct AlasCLICommandRouter {
     static func peerChildRemovedTool(_ command: AlasCLIRequest.Command) -> String? {
         switch command {
         case .sessionNew: "session_new"
+        case .sessionAction(.report): "session_report"
         case .sessionAction(.wait): "session_wait"
         case .sessionAction(.interrupt): "session_interrupt"
         case .computer(let command): "computer_\(command.action.rawValue)"
