@@ -177,14 +177,14 @@ public struct AlasCLICommandRouter {
             return await deviceCommand(command, sessionID)
         case .workspace(let command):
             return await workspaceCommand(command, caller)
-        case .visualShow(let title, let html, let question, let presentation):
+        case .visualShow(let title, let html, let question, let presentation, let toolCallId):
             guard let sessionId = request.sessionId, callers.acpOrigin(ofSession: sessionId) != nil else {
                 return .error("visual_show is only available to ACP agent sessions")
             }
             let resolved = ACPVisualAid.resolvePresentation(requested: presentation, hasQuestion: question != nil)
             let visual = ACPVisualAid(
                 id: UUID(), title: title, html: html, question: question,
-                presentation: resolved, answer: nil, createdAt: Date()
+                presentation: resolved, answer: nil, createdAt: Date(), toolCallId: toolCallId
             )
             do {
                 try await host.sessions.showVisualAid(visual, in: sessionId, caller: caller)

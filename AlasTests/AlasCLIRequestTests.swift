@@ -433,6 +433,20 @@ struct AlasCLIRequestTests {
         #expect(request.command == .visualShow(title: "T", html: "<p>x</p>", question: nil, presentation: expected))
     }
 
+    @Test("visual_show keeps the tool call id it names, unless it is empty", arguments: [
+        (#","tool_call_id":"toolu_1""#, "toolu_1"),
+        (#","tool_call_id":"""#, nil),
+        ("", nil),
+    ] as [(String, String?)])
+    func visualShowCarriesItsToolCallId(extra: String, expected: String?) throws {
+        let json = ##"{"v":1,"kind":"cli","command":"visual_show","session_id":"acp-1","params":{"title":"T","html":"<p>x</p>"\##(extra)}}"##
+
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+
+        #expect(request.command == .visualShow(
+            title: "T", html: "<p>x</p>", question: nil, presentation: nil, toolCallId: expected))
+    }
+
     @Test func visualShowTrimsTextFieldsButKeepsHTMLVerbatim() throws {
         let json = #"{"v":1,"kind":"cli","command":"visual_show","session_id":"acp-1","params":{"title":"  T \n","html":"\n <p>x</p> \n","question":{"prompt":" Q ","options":[{"id":"a","label":" One "},{"id":"b","label":"Two\n"}]}}}"#
 

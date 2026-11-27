@@ -139,6 +139,8 @@ struct ACPToolCallPresentationTests {
         case user, bash
         case call(String, String)
         case visual(ACPVisualAid.Presentation)
+        /// A visual naming the tool call that showed it.
+        case namedVisual(String, ACPVisualAid.Presentation)
         case legacyVisual
     }
 
@@ -154,6 +156,9 @@ struct ACPToolCallPresentationTests {
         // A repeated call id is judged by its latest snapshot.
         ([.call("a", "in_progress"), .visual(.embedded), .call("a", "completed")], ["a"]),
         ([.call("a", "completed"), .visual(.embedded), .call("a", "failed")], []),
+        // Two calls in flight at once: a visual naming its call pairs with
+        // it, not with the nearest one.
+        ([.call("a", "completed"), .call("b", "completed"), .namedVisual("a", .embedded), .namedVisual("b", .card)], ["a"]),
     ] as [([Step], Set<String>)])
     func hiddenVisualShowToolCallIds(steps: [Step], hidden: Set<String>) throws {
         let messages: [ACPMessage] = try steps.map { step -> ACPMessage in
@@ -170,6 +175,10 @@ struct ACPToolCallPresentationTests {
                 return .visualAid(ACPVisualAid(
                     id: UUID(), title: "T", html: "<p>", question: nil, presentation: presentation,
                     createdAt: Date()))
+            case .namedVisual(let toolCallId, let presentation):
+                return .visualAid(ACPVisualAid(
+                    id: UUID(), title: "T", html: "<p>", question: nil, presentation: presentation,
+                    createdAt: Date(), toolCallId: toolCallId))
             case .legacyVisual:
                 // Stored before `presentation` existed: decodes as a card.
                 let json = #"{"id":"\#(UUID().uuidString)","title":"T","html":"<p>","createdAt":0}"#

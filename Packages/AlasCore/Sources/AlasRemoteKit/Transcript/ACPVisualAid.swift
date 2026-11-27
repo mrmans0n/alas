@@ -11,6 +11,9 @@ public struct ACPVisualAid: Codable, Equatable, Sendable {
     public let presentation: Presentation
     public var answer: Answer?
     public let createdAt: Date
+    /// The agent's id for the `visual_show` tool call that showed it, when
+    /// the call named one. Older visuals pair with the nearest earlier call.
+    public let toolCallId: String?
 
     /// How the visual is shown in the transcript: borderless inline content, or
     /// a bordered card. A visual with a question is always a card.
@@ -118,7 +121,7 @@ public struct ACPVisualAid: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, html, question, presentation, answer, createdAt
+        case id, title, html, question, presentation, answer, createdAt, toolCallId
     }
 
     /// Visuals stored before `presentation` existed read back as cards.
@@ -131,11 +134,13 @@ public struct ACPVisualAid: Codable, Equatable, Sendable {
         presentation = try c.decodeIfPresent(Presentation.self, forKey: .presentation) ?? .card
         answer = try c.decodeIfPresent(Answer.self, forKey: .answer)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
+        toolCallId = try c.decodeIfPresent(String.self, forKey: .toolCallId)
     }
 
     public init(
         id: UUID, title: String, html: String, question: Question?,
-        presentation: Presentation = .card, answer: Answer? = nil, createdAt: Date
+        presentation: Presentation = .card, answer: Answer? = nil, createdAt: Date,
+        toolCallId: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -144,5 +149,6 @@ public struct ACPVisualAid: Codable, Equatable, Sendable {
         self.presentation = presentation
         self.answer = answer
         self.createdAt = createdAt
+        self.toolCallId = toolCallId
     }
 }

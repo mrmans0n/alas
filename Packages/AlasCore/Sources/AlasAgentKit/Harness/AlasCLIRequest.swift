@@ -32,7 +32,10 @@ public struct AlasCLIRequest: Equatable, Sendable {
         )
         case sessionSend(sessionID: String, prompt: String)
         /// MCP-only: show a visual aid in the calling ACP session.
-        case visualShow(title: String, html: String, question: ACPVisualAid.Question?, presentation: ACPVisualAid.Presentation?)
+        case visualShow(
+            title: String, html: String, question: ACPVisualAid.Question?, presentation: ACPVisualAid.Presentation?,
+            toolCallId: String? = nil
+        )
         /// `session_read`, `session_search`, `session_wait`, `session_interrupt`.
         case sessionAction(ACPDelegatedSessionAction)
         /// MCP-only: push this worktree's branch, open its PR/MR (or adopt the
@@ -359,6 +362,7 @@ public struct AlasCLIRequest: Equatable, Sendable {
 
     private struct VisualShowParams: Decodable {
         var presentation: String?
+        var tool_call_id: String?
         struct Option: Decodable {
             var id: String
             var label: String
@@ -744,7 +748,10 @@ public struct AlasCLIRequest: Equatable, Sendable {
             } else {
                 presentation = nil
             }
-            command = .visualShow(title: title, html: params.html, question: question, presentation: presentation)
+            command = .visualShow(
+                title: title, html: params.html, question: question, presentation: presentation,
+                toolCallId: params.tool_call_id.flatMap { $0.isEmpty || $0.utf8.count > 256 ? nil : $0 }
+            )
         case "session_read":
             let params = try Self.decodeParams(SessionReadParams.self, from: data)
             if let offset = params.offset, offset < 0 { throw AlasCLIRequestError.malformed }
