@@ -266,6 +266,27 @@ extension VisualAidWebPolicyTests {
         #expect(found as? Int == count)
     }
 
+    @MainActor
+    @Test("a chart and its legend stay above the next block even with an inline CSS height")
+    func chartDoesNotOverlapFollowingContent() async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(), html: """
+                <alas-chart type="hbar" height="100" style="height: 100px"
+                  data='{"labels":["A","B"],"series":[{"name":"Count","values":[1,2]}]}'></alas-chart>
+                <div class="callout">After the chart</div>
+                """,
+            theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false, presentation: .embedded)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        let gap = try await page.webView.evaluateJavaScript("""
+            document.querySelector('.callout').getBoundingClientRect().top -
+            document.querySelector('alas-chart > svg').getBoundingClientRect().bottom
+            """, in: nil, contentWorld: .page)
+        let spacing = try #require(gap as? Double)
+        #expect(spacing >= 0)
+    }
+
     /// `@MainActor`: WKWebView needs the main thread.
     @MainActor
     @Test("chart tooltips keep small values apart and round large ones", arguments: [
