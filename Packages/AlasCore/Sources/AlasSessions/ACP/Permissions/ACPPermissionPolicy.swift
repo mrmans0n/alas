@@ -86,8 +86,9 @@ public final class ACPPermissionPolicy {
             if cancelledBeforeParked { return .init(outcome: .cancelled) }
             return await awaitUserDecision(scopeKey: scopeKey, params: params)
         }
+        // The toggle is read again after the await: it may be turned off meanwhile.
         if session.autoRunEnabled, let allow = options.first(where: { $0.kind.hasPrefix("allow") }),
-           await autoRunAllowed() {
+           await autoRunAllowed(), session.autoRunEnabled {
             // A `$/cancel_request` may have landed while the check was suspended.
             if cancelledBeforeParked { return .init(outcome: .cancelled) }
             return .init(outcome: .selected(optionId: allow.optionId))

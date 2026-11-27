@@ -1940,12 +1940,13 @@ public final class ACPSessionOrchestrationCoordinator {
         let targetSessionId = target.childSessionId
         // A child still starting has no turn to cancel yet: its queued first
         // prompt is dropped now, and its start drops one queued later. See
-        // `startPersistedChild`.
-        if target.phase == .creatingWorktree || target.phase == .starting {
+        // `startPersistedChild`. One already `.ready` whose prompt is still
+        // held behind its model selection has not released it yet either.
+        let manager = environment.sessionLocation(targetSessionId)?.manager
+        if target.phase == .creatingWorktree || target.phase == .starting
+            || manager?.liveSession(for: targetSessionId)?.holdsPromptsForDelegatedSelection == true {
             stoppedWhileStarting.insert(targetSessionId)
-            if let manager = environment.sessionLocation(targetSessionId)?.manager {
-                await manager.queueClear(for: targetSessionId)
-            }
+            await manager?.queueClear(for: targetSessionId)
         }
         guard let location = environment.sessionLocation(targetSessionId),
               let session = location.manager.liveSession(for: targetSessionId),
