@@ -62,6 +62,8 @@ final class ReviewDocument {
     var composing: ReviewComposing?
     /// The pull request as its diff was read: its head, account and capabilities.
     private(set) var pullRequest: RemoteProviderReview?
+    /// Counts refreshes, so an older one's late reply is dropped.
+    @ObservationIgnored private var refreshes = 0
     /// Its threads, re-read after a reply or a resolve.
     private(set) var threads: [RemoteProviderThread] = []
     private(set) var listLoaded = false
@@ -120,7 +122,8 @@ final class ReviewDocument {
         return nil
     }
 
-    private func fetchFiles() async -> Result<FileList, RemoteGitFailure> {
+    /// Nil once a later refresh started: its reply is the one to show.
+    private func fetchFiles(_ generation: Int) async -> Result<FileList, RemoteGitFailure>? {
         switch source {
         case .localChanges, .branchChanges:
             return await workspace.loadChanges().map(files(from:))
@@ -132,9 +135,12 @@ final class ReviewDocument {
             case .failure(let failure): return .failure(failure)
             case .success(let read): pr = read
             }
+            let list = await Self.parse(pr)
+            // Published with its diff, so a submission never pins a head the screen isn't showing.
+            guard generation == refreshes else { return nil }
             pullRequest = pr
             threads = pr.threads
-            return .success(await Self.parse(pr))
+            return .success(list)
         }
     }
 
@@ -165,7 +171,10 @@ final class ReviewDocument {
     /// Re-reads the file list, keeping what each surviving entry showed, and fetches again every
     /// loaded or viewed entry, so a viewed file whose diff changed loses its mark.
     func refresh() async {
-        switch await fetchFiles() {
+        refreshes += 1
+        let generation = refreshes
+        guard let result = await fetchFiles(generation), generation == refreshes else { return }
+        switch result {
         case .failure(let failure):
             if !listLoaded { listError = failure.message } else if case .pullRequest = source { error = failure.message }
         case .success(let fresh):
