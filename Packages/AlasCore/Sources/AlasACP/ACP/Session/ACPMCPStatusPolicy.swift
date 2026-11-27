@@ -55,6 +55,10 @@ public struct ACPMCPStatusState: Equatable, Sendable {
     public let builtInWarning: BuiltInMCPWarning
     public let hasBuiltInWarning: Bool
     public let showsSwitchToHTTPAction: Bool
+    /// A reconnect re-runs the attachment plan: it applies changed settings,
+    /// retries a built-in server that did not start, and asks an SSH host's
+    /// helper for a relay route again.
+    public let showsReconnectAction: Bool
 
     /// Nil `currentServers` skips the stale check, for a reader without the project's configuration.
     public init?(
@@ -97,6 +101,9 @@ public struct ACPMCPStatusState: Equatable, Sendable {
             summary.configurationFingerprint != MCPAttachmentPlanner.configurationFingerprint(for: $0)
         } ?? false
         rows = summary.statuses.map { Self.row($0) }
+        showsReconnectAction = isStale || hasBuiltInWarning || summary.statuses.contains {
+            if case .skipped(.remoteRelayUnavailable) = $0.disposition { true } else { false }
+        }
 
         if preamblePending {
             preambleDetail = "Context preamble pending — sent with the next prompt"
