@@ -14,6 +14,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Keep ACP transcript adapter updates running when you switch tabs, and show an in-app banner when a background update succeeds.
 - Fix a macOS hang when pressing Return to select a setting in the ACP composer.
 - Keep inline charts and their legends from overlapping the text or callouts below them.
+- Settle a horizontal fling past the code editor's left edge with one smooth bounce instead of a wobble.
 
 ## [0.24.10] - 2026-11-24
 
