@@ -81,10 +81,13 @@ public struct RemoteMention: Codable, Equatable, Hashable, Sendable {
     public static let file = "file"
     public static let session = "session"
     public static let symbol = "symbol"
+    /// An agent, or one of its models, to delegate to (`ACPAgentReference`).
+    public static let agent = "agent"
 
-    /// `file`, `session` or `symbol`.
+    /// `file`, `session`, `symbol` or `agent`.
     public let kind: String
-    /// A worktree-relative path, a session id, or an `alas-symbol` URI.
+    /// A worktree-relative path, a session id, an `alas-symbol` URI, or an
+    /// `alas-agent` URI.
     public let value: String
     /// What the composer shows after the `@`.
     public let name: String

@@ -106,6 +106,7 @@ enum NativePeerComposerState {
         switch mention.kind {
         case RemoteMention.session: "bubble.left.and.text.bubble.right"
         case RemoteMention.symbol: "curlybraces"
+        case RemoteMention.agent: "person.2"
         default: mention.value.hasSuffix("/") ? "folder" : "doc"
         }
     }

@@ -17,18 +17,26 @@ public enum RemoteMentions: Sendable {
     /// Longer names are cut, so a crafted mention can't bloat the prompt.
     public static let maxNameLength = 200
 
-    /// Sessions above files for a plain query. A `File.swift#name` query
-    /// drills into that file's symbols alone, which the caller looks up and
-    /// passes as `fileSymbols`.
+    /// Agents above sessions above files for a plain query, as the local
+    /// picker's All scope lists them. A `File.swift#name` query drills into
+    /// that file's symbols alone, which the caller looks up and passes as
+    /// `fileSymbols`.
     /// `fileExists` drops listed files missing from the working tree, such
     /// as tracked files deleted since the last commit.
     public static func candidates(
         query: String, root: URL, filePaths: [String], sessions: [ACPSessionMentionCandidate],
-        fileSymbols: [SymbolEntry], fileExists: (URL) -> Bool = { _ in true }
+        fileSymbols: [SymbolEntry], agents: [ACPAgentMentionCandidate] = [],
+        fileExists: (URL) -> Bool = { _ in true }
     ) -> [RemoteMention] {
         let query = query.trimmingCharacters(in: .whitespaces)
         if case .file(_, let symbol) = MentionSymbolQuery.parse(query) {
             return MentionSymbolRanking.rank(fileSymbols, query: symbol, limit: symbolLimit).map(mention)
+        }
+        let agentRows = MentionAgentRanking.rank(agents, query: query).map {
+            RemoteMention(kind: RemoteMention.agent,
+                          value: ACPAgentReference.uri(for: .init(agentId: $0.agentId, model: $0.modelId)),
+                          name: $0.displayName,
+                          detail: $0.modelId.map { "\($0) · delegate to a new session" } ?? "Delegate to a new session")
         }
         let sessionRows = MentionSessionRanking.rank(sessions, query: query).map {
             RemoteMention(kind: RemoteMention.session, value: $0.id, name: $0.title,
@@ -51,7 +59,7 @@ public enum RemoteMentions: Sendable {
                                      name: url.lastPathComponent,
                                      detail: parent.isEmpty ? nil : parent)
             }
-        return sessionRows + fileRows
+        return agentRows + sessionRows + fileRows
     }
 
     public static func mention(_ entry: SymbolEntry) -> RemoteMention {
@@ -64,7 +72,8 @@ public enum RemoteMentions: Sendable {
     /// The attachment for one mention, or nil when it names nothing inside
     /// the session's project: a path `isContainedFile` rejects, the session
     /// itself, a session `isProjectSession` doesn't confirm, or a malformed
-    /// symbol link.
+    /// symbol or agent link. An agent is not checked here: `session_new`
+    /// refuses one this session cannot start.
     @MainActor
     public static func attachment(
         for mention: RemoteMention, worktreeRoot: URL, sessionId: String,
@@ -91,6 +100,10 @@ public enum RemoteMentions: Sendable {
                   await isContainedFile(path)
             else { return nil }
             return .init(uri: ACPSymbolReference.uri(for: target), name: name, mimeType: nil)
+        case RemoteMention.agent:
+            // Re-encoded, like a symbol, so only the parsed fields reach the runner.
+            guard let target = ACPAgentReference.target(fromURI: mention.value) else { return nil }
+            return .init(uri: ACPAgentReference.uri(for: target), name: name, mimeType: nil)
         default:
             return nil
         }

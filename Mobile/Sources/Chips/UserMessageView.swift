@@ -379,7 +379,7 @@ private struct MentionBadge: View {
                 if let symbol = mention.symbol {
                     SymbolKindBadge(kind: SymbolKind(rawValue: symbol.kind), side: 14)
                 } else {
-                    Image(systemName: mention.kind == RemoteMention.session ? "bubble.left.and.bubble.right" : "at")
+                    Image(systemName: RemoteUserMention.iconName(kind: mention.kind))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -393,7 +393,7 @@ private struct MentionBadge: View {
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 4))
             .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(Color(.separator), lineWidth: 0.5) }
         }
-        .accessibilityLabel("\(mention.kind == RemoteMention.session ? "Session" : "Mention") \(mention.name)")
+        .accessibilityLabel("\(RemoteUserMention.accessibilityNoun(kind: mention.kind)) \(mention.name)")
     }
 }
 
