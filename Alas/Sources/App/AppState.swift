@@ -770,7 +770,9 @@ final class AppState {
                 logs: LiveSimulatorLogs { [weak self] udid in await self?.foregroundApp(udid: udid) },
                 pasteboard: devicePasteboard
             ),
-            AndroidBackend(pane: androidPane, streams: androidStreams),
+            AndroidBackend(pane: androidPane, streams: androidStreams) { [weak self] in
+                self?.config.fastAndroidSnapshots ?? false
+            },
         ],
         recorder: deviceRecorder
     )

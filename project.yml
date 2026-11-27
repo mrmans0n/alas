@@ -71,6 +71,8 @@ targets:
         optional: true
       - path: Alas/Resources/mason-lsps.json
         buildPhase: resources
+      - path: Alas/Resources/AndroidSnapshotReader.jar
+        buildPhase: resources
       - path: Alas/Resources/Lottie
         buildPhase: resources
       - path: Alas/Resources/MCPLogo-LICENSE.txt
@@ -293,6 +295,7 @@ targets:
   # the archive holds AlasCore's objects too, and forcing them in duplicates symbols.
   AlasComputerUseKit:
     type: framework.static
+    requiresObjCLinking: false
     platform: macOS
     sources:
       - path: Alas/Sources/ComputerUseKit

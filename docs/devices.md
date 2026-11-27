@@ -142,6 +142,16 @@ the app's restarts, with a banner for each Java crash.
 The screen streams with scrcpy's server, which Alas bundles and copies to
 the device each time it shows the screen.
 
+To opt in on Android 16 emulators, turn on **Fast Android screen reads**
+in **Settings → Computer Use**. Physical phones and other Android versions
+keep the standard reader.
+
+The fast reader uses Android's single UI Automation slot while reading and
+releases it after five idle seconds. Wait for it to release before starting
+Espresso or UI Automator. If another tool already owns the slot, Alas
+reports the conflict rather than stopping that tool. Video and touch still
+use scrcpy.
+
 ### Watch or drive a USB Android device from another machine
 
 On the Mac connected to Android, turn on **Settings › Remote › Enable remote

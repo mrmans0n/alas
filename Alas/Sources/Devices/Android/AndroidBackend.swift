@@ -1,5 +1,6 @@
 import AlasCore
 import AlasPlatform
+import CryptoKit
 import Foundation
 
 /// Android emulators and phones for the `device_*` tools: adb for the device
@@ -10,6 +11,15 @@ final class AndroidBackend: DeviceBackend {
     var input: DeviceInput { streams }
     private let pane: AndroidPaneModel
     private let streams: AndroidStreamClient
+    private let fastSnapshotsEnabled: () -> Bool
+    private var snapshotTurns: [String: SerialGate] = [:]
+    private var snapshotReaders: [String: AndroidSnapshotReader] = [:]
+    private static let snapshotHelper: (url: URL, digest: String)? = {
+        guard let url = Bundle.main.url(forResource: "AndroidSnapshotReader", withExtension: "jar"),
+              let bytes = try? Data(contentsOf: url) else { return nil }
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        return (url, digest)
+    }()
     /// `wm density` by serial; it doesn't change while a device runs.
     private var densities: [String: Double] = [:]
     /// `wm size` by serial: the display's natural size in pixels.
@@ -17,9 +27,10 @@ final class AndroidBackend: DeviceBackend {
     /// The route each device follows, while it plays.
     private var routes: [String: (route: DeviceRoute, started: Date, task: Task<Void, Never>)] = [:]
 
-    init(pane: AndroidPaneModel, streams: AndroidStreamClient) {
+    init(pane: AndroidPaneModel, streams: AndroidStreamClient, fastSnapshotsEnabled: @escaping () -> Bool) {
         self.pane = pane
         self.streams = streams
+        self.fastSnapshotsEnabled = fastSnapshotsEnabled
     }
 
     private func control() throws -> AndroidControl {
@@ -33,6 +44,11 @@ final class AndroidBackend: DeviceBackend {
         // A failed refresh leaves the last list in place, which may not be true any more.
         if let error = pane.listError { throw DeviceToolError(message: "device_unavailable: adb failed: \(error)") }
         let devices = pane.devices ?? []
+        for id in snapshotReaders.keys where !devices.contains(where: { $0.serial == id && $0.state == .ready }) {
+            snapshotReaders.removeValue(forKey: id)?.close()
+            densities[id] = nil
+            displaySizes[id] = nil
+        }
         let running = Set(devices.compactMap(\.avdName))
         let connected = devices.map { device in
             let state = switch device.state {
@@ -77,9 +93,45 @@ final class AndroidBackend: DeviceBackend {
     }
 
     func snapshot(_ id: String, generation: Int) async throws -> DeviceSnapshot {
+        guard pane.devices?.contains(where: { $0.serial == id && $0.isEmulator && $0.release == "16" }) == true else {
+            return try await readSnapshot(id, generation: generation, fast: false)
+        }
+        // Both readers use the same Android automation slot, including across a settings change.
+        let turn = snapshotTurns[id] ?? SerialGate()
+        snapshotTurns[id] = turn
+        await turn.enter()
+        defer { turn.leave() }
+        try Task.checkCancellation()
+        return try await readSnapshot(id, generation: generation, fast: fastSnapshotsEnabled())
+    }
+
+    private func readSnapshot(_ id: String, generation: Int, fast: Bool) async throws -> DeviceSnapshot {
         let control = try control()
         let density = try await density(id, control: control)
         let displaySize = try await displaySize(id, control: control)
+        if fast, let reader = fastReader(id, control: control) {
+            do {
+                let xml = try await reader.read()
+                return try AndroidUIDump.parse(xml, density: density, displaySize: displaySize, generation: generation)
+            } catch AndroidSnapshotReader.Failure.unsupported {
+                // The helper exited without acquiring Android's automation slot.
+            } catch AndroidSnapshotReader.Failure.busy {
+                throw DeviceToolError(message: "device_automation_busy: Another tool is using Android UI Automation. Stop it before reading the screen.")
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw DeviceToolError(message: "device_unavailable: The fast Android reader couldn't describe the screen.")
+            }
+        }
+        if let reader = snapshotReaders[id] {
+            // The stock reader needs the same automation slot.
+            do {
+                try await reader.releaseAutomation()
+            } catch {
+                throw DeviceToolError(message: "device_unavailable: The fast Android reader didn't release UI Automation.")
+            }
+        }
+        try Task.checkCancellation()
         // uiautomator can't read a window still coming up; one retry covers an app that just launched.
         for attempt in 0..<2 {
             let dump = try await Process.runData(
@@ -92,6 +144,24 @@ final class AndroidBackend: DeviceBackend {
             if attempt == 0 { try? await Task.sleep(for: .milliseconds(500)) }
         }
         throw DeviceToolError(message: "device_unavailable: Android didn't describe its screen. Try again in a moment.")
+    }
+
+    private func fastReader(_ id: String, control: AndroidControl) -> AndroidSnapshotReader? {
+        guard let helper = Self.snapshotHelper else { return nil }
+        if let reader = snapshotReaders[id] { return reader }
+        let path = "/data/local/tmp/alas-ax-\(helper.digest).jar"
+        let staging = "\(path).\(UUID())"
+        let adb = ["-s", id]
+        let reader = AndroidSnapshotReader(
+            executable: URL(fileURLWithPath: control.sdk.adb),
+            arguments: adb + ["shell", "-T", "exec env CLASSPATH=\(path) app_process /system/bin io.nlopez.alas.android.ReadTree"],
+            preparation: [
+                adb + ["push", helper.url.path, staging],
+                adb + ["shell", "chmod 444 \(staging) && mv -f \(staging) \(path)"],
+            ]
+        )
+        snapshotReaders[id] = reader
+        return reader
     }
 
     private func displaySize(_ id: String, control: AndroidControl) async throws -> (width: Double, height: Double)? {

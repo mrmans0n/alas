@@ -99,7 +99,7 @@ struct AndroidControlTests {
     <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="p" content-desc="" checkable="false" clickable="false" enabled="true" password="false" bounds="[0,0][1080,2400]">
     <node index="0" text="Network &amp; internet" resource-id="android:id/title" class="android.widget.TextView" package="p" content-desc="" checkable="false" clickable="false" enabled="true" password="false" bounds="[189,420][651,483]" />
     <node index="1" text="" resource-id="p:id/save" class="android.widget.Button" package="p" content-desc="Save" checkable="false" clickable="true" enabled="false" password="false" bounds="[0,525][1080,630]" />
-    <node index="2" text="hunter2" resource-id="p:id/pw" class="android.widget.EditText" package="p" content-desc="" checkable="false" clickable="true" enabled="true" password="true" bounds="[42,700][1038,826]" />
+    <node index="2" text="hunter2" resource-id="p:id/pw" class="android.widget.EditText" package="p" content-desc="secret-copy" checkable="false" clickable="true" enabled="true" password="true" bounds="[42,700][1038,826]" />
     <node index="3" text="" resource-id="" class="android.widget.ImageButton" package="p" content-desc="" checkable="false" clickable="true" enabled="true" password="false" bounds="[0,900][126,1026]" />
     </node></hierarchy>UI hierchary dumped to: /dev/tty
     """#.utf8)
@@ -126,9 +126,11 @@ struct AndroidControlTests {
         #expect(try AndroidUIDump.parse(xml, density: 420, generation: 1).elements.isEmpty)
     }
 
-    @Test func aPasswordFieldsTextIsLeftOut() throws {
+    @Test func aPasswordFieldDoesNotExposeTextOrDescription() throws {
         let snapshot = try AndroidUIDump.parse(Self.dump, density: 420, generation: 1)
-        #expect(!snapshot.json(query: nil, limit: 200).contains("hunter2"))
+        let password = try #require(snapshot.elements.first { $0.id == "p:id/pw" })
+        #expect(password.label == nil)
+        #expect(password.value == nil)
     }
 
     @Test(arguments: [("1.0", SimulatorReadBack.value(SimulatorTextSize.large)), ("2.0", .value(.accessibilityExtraExtraExtraLarge)),
