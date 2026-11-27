@@ -1899,20 +1899,22 @@ public final class ACPSessionOrchestrationCoordinator {
         origin: ACPOrchestrationSessionOrigin,
         targetSessionId: String
     ) async -> AlasCLIResponse {
+        let target: ACPDelegationRecord?
         do {
-            let target = try await environment.persistence.delegation(childSessionId: targetSessionId)
-            guard case .success = ACPSessionOrchestrationPolicy.authorizeChildControl(
-                callerSessionId: origin.sessionId,
-                callerProjectId: origin.projectId,
-                target: target
-            ) else {
-                return .error("Only a direct child session can be interrupted.")
-            }
-            if let target, target.peerServerId != nil { return await interruptOnPeer(target) }
+            target = try await environment.persistence.delegation(childSessionId: targetSessionId)
         } catch {
             return .error("Could not verify session delegation.")
         }
-        return await interruptLocalChild(targetSessionId)
+        guard case .success = ACPSessionOrchestrationPolicy.authorizeChildControl(
+            callerSessionId: origin.sessionId,
+            callerProjectId: origin.projectId,
+            target: target
+        ), let target else {
+            return .error("Only a direct child session can be interrupted.")
+        }
+        // A paired Mac's stop of a child it delegated here arrives this way too.
+        if target.peerServerId != nil { return await interruptOnPeer(target) }
+        return await interruptLocalChild(target)
     }
 
     /// The user stopped `parentSessionId`: each of its children still in
@@ -1925,10 +1927,7 @@ public final class ACPSessionOrchestrationCoordinator {
             if child.peerServerId != nil {
                 _ = await interruptOnPeer(child)
             } else {
-                // A child still starting has no turn to cancel yet; its start
-                // drops the first prompt instead. See `startPersistedChild`.
-                if child.phase != .ready { stoppedWhileStarting.insert(child.childSessionId) }
-                _ = await interruptLocalChild(child.childSessionId)
+                _ = await interruptLocalChild(child)
             }
         }
     }
@@ -1937,7 +1936,13 @@ public final class ACPSessionOrchestrationCoordinator {
     // ponytail: in memory, so a stop just before a relaunch does not reach a recovered start.
     private var stoppedWhileStarting: Set<String> = []
 
-    private func interruptLocalChild(_ targetSessionId: String) async -> AlasCLIResponse {
+    private func interruptLocalChild(_ target: ACPDelegationRecord) async -> AlasCLIResponse {
+        let targetSessionId = target.childSessionId
+        // A child still starting has no turn to cancel yet; its start drops
+        // the first prompt instead. See `startPersistedChild`.
+        if target.phase == .creatingWorktree || target.phase == .starting {
+            stoppedWhileStarting.insert(targetSessionId)
+        }
         guard let location = environment.sessionLocation(targetSessionId),
               let session = location.manager.liveSession(for: targetSessionId),
               Self.runtimeState(session) != .idle

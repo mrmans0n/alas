@@ -1600,10 +1600,12 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(fixture.manager.liveSession(for: "child")?.autoRunEnabled == autoRun)
     }
 
-    /// A parent stopped while its child is still starting: the child's first
+    /// A child stopped while it is still starting, by its parent's stop or by
+    /// `session_interrupt` (the path a paired Mac's stop takes too): its first
     /// prompt is dropped, or cancelled if it already went out, and the child
     /// still comes up for `session_send`.
-    @Test func stoppingAParentWhileItsChildStartsStopsTheFirstPrompt() async throws {
+    @Test(arguments: [false, true])
+    func stoppingAChildWhileItStartsStopsTheFirstPrompt(viaSessionInterrupt: Bool) async throws {
         let admission = GenerationGate()
         let promptGate = GenerationGate()
         let client = makeSelectionClient()
@@ -1624,7 +1626,13 @@ struct ACPSessionOrchestrationCoordinatorTests {
             origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
             request: .init(prompt: "Review the parser.", agentId: nil, worktree: .current))
         await admission.waitUntilStarted()
-        await fixture.coordinator.interruptChildren(of: "parent")
+        if viaSessionInterrupt {
+            _ = await fixture.coordinator.interrupt(
+                origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+                targetSessionId: "child")
+        } else {
+            await fixture.coordinator.interruptChildren(of: "parent")
+        }
         await admission.release()
         try await waitUntil {
             if cancelled() { return true }

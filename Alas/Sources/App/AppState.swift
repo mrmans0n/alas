@@ -13652,6 +13652,10 @@ final class AppState {
         }
         let worktreeId = worktree.id
         mgr.admitsNewWork = { [weak self] in self?.projectsManager.admitsNewWork(worktreeId: worktreeId) ?? false }
+        // As the core installs it on its own managers.
+        mgr.autoRunAllowedProvider = { [weak self] sessionId in
+            await self?.core.delegatedAutoRunAllowed(sessionId) ?? false
+        }
         mgr.onSessionRuntimeEnded = { [weak self] sessionID in
             self?.computerUseSessionEnded(sessionID: sessionID, owner: owner)
         }

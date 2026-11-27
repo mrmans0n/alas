@@ -51,7 +51,7 @@ extension AlasCoreContext {
     /// Whether `sessionId`'s auto-run may approve: a delegated child's only
     /// while its parent's auto-run is on. See
     /// `ACPSessionOrchestrationPolicy.childAutoRunAllowed`.
-    func delegatedAutoRunAllowed(_ sessionId: String) async -> Bool {
+    @_spi(AppHost) public func delegatedAutoRunAllowed(_ sessionId: String) async -> Bool {
         let record: ACPDelegationRecord?
         do {
             record = try await orchestrationPersistence.parent(childSessionId: sessionId)
