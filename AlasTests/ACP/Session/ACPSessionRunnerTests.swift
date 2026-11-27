@@ -6192,6 +6192,47 @@ struct ACPSessionRunnerTests {
         }
     }
 
+    @Test("an auth/status answer that comes after the listener was torn down is not applied")
+    func lateAuthStatusAnswerAfterTeardown() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-auth-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data(#"{"protocolVersion":1,"agentCapabilities":{"auth":{"status":{}}}}"#.utf8)
+        }
+        let asked = AsyncGate()
+        let answer = AsyncGate()
+        let answered = MCPRequestLog()
+        mock.scriptAsync(method: "auth/status") { _ in
+            await asked.open()
+            await answer.wait()
+            answered.append(Data())
+            return Data(#"{"state":"authenticated"}"#.utf8)
+        }
+        let connection = ACPConnection(client: mock)
+        _ = try await connection.initialize()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.setupState = .needsAuth(methods: [], reason: nil)
+        let runner = ACPSessionRunner(session: session, connection: connection, store: store,
+                                      sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path)
+
+        // What an attach does before setup, and undoes when setup fails.
+        runner.startAuthStatusListening()
+        await asked.wait()
+        let teardown = Task { await runner.cancelAuthStatusListening() }
+        await answer.open()
+        await teardown.value
+        // Let an answer that outlived the teardown reach the session, if it can.
+        try await waitUntil { answered.count == 1 }
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(session.authStatus == nil)
+        #expect(session.setupState == .needsAuth(methods: [], reason: nil))
+    }
+
     @Test("a signed-in status while not showing the banner just updates the stored status")
     func authStatusSignedInWithoutBannerJustStoresStatus() async throws {
         let (runner, session, mock) = try makeRunnerWithSession()

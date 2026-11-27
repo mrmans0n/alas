@@ -195,6 +195,8 @@ public final class ACPSessionRunner {
     /// A live auth status update arrived, so a slower `auth/status` answer
     /// must not replace it.
     private var receivedAuthStatusUpdate = false
+    /// The `auth/status` query of the standard form, torn down with the listener.
+    private var authStatusQueryTask: Task<Void, Never>?
     /// `$/cancel_request` ids (OpenCode v2) that haven't yet matched a
     /// dequeued permission or file request. A cancellation can arrive
     /// before the request it targets — buffered broker replay, or both
@@ -1178,9 +1180,9 @@ public final class ACPSessionRunner {
         // The extension pushes a status right after `initialize`; the
         // standard form has to be asked for.
         guard usesStandardAuthStatus else { return }
-        Task { @MainActor [weak self] in
+        authStatusQueryTask = Task { @MainActor [weak self] in
             guard let status = try? await self?.connection.queryAuthStatus(),
-                  let self, !self.receivedAuthStatusUpdate
+                  !Task.isCancelled, let self, !self.receivedAuthStatusUpdate
             else { return }
             self.applyAuthStatus(status)
         }
@@ -1204,9 +1206,13 @@ public final class ACPSessionRunner {
     /// the flush already returned.
     public func cancelAuthStatusListening() async {
         let task = authStatusTask
+        let query = authStatusQueryTask
         authStatusTask = nil
+        authStatusQueryTask = nil
         task?.cancel()
+        query?.cancel()
         await task?.value
+        await query?.value
     }
 
     /// Persists an `available_commands_update` list (slash commands and
@@ -2308,6 +2314,7 @@ public final class ACPSessionRunner {
         terminalsTask?.cancel()
         mcpMessagesTask?.cancel()
         authStatusTask?.cancel()
+        authStatusQueryTask?.cancel()
         // A detach/takeover can land while a permission prompt is parked.
         // userCancel() already resolves it; stop() must too, or the policy's
         // continuation is stranded when we tear the connection down.
