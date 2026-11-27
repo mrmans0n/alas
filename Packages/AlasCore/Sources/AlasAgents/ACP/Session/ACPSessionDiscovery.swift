@@ -39,6 +39,9 @@ public final class ACPSessionDiscoveryModel {
     public private(set) var remotelyDeletedSessionIds: Set<String> = []
     /// The client-neutral session index of the agent, once started.
     public private(set) var sessionIndex: ACPSessionIndexSupport?
+    /// Rows can be renamed on the agent: through the session index, or the
+    /// standard `session/set_title`.
+    public var canRename: Bool { sessionIndex?.rename == true || capabilities?.canSetTitle == true }
     /// The filter the user picked; the chips show it.
     public private(set) var filter = ACPSessionBrowserFilter()
     /// The filter `sessions` was listed with. It becomes `filter` only when

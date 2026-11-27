@@ -185,10 +185,12 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
     public func emitMCPMessage(_ req: ACPMCPMessageRequest) { mcpMessagesCont.yield(req) }
     public func emitAuthStatus(
         _ status: ACPAuthStatus,
+        isStandard: Bool = false,
         durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil
     ) {
         authStatusCont.yield(.init(
             status: status,
+            isStandard: isStandard,
             durableConsumptionAcknowledgement: durableConsumptionAcknowledgement
         ))
     }

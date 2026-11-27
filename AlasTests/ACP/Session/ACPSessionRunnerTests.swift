@@ -6146,6 +6146,52 @@ struct ACPSessionRunnerTests {
         #expect(session.authStatus?.label == "Claude Max")
     }
 
+    @Test("the standard auth status is asked for and followed only by an agent without the extension",
+          arguments: [false, true])
+    func standardAuthStatus(agentHasExtension: Bool) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-auth-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let mock = ACPMockClient()
+        let meta = agentHasExtension ? #","_meta":{"authStatus":{}}"# : ""
+        mock.script(method: "initialize") { _ in
+            Data(#"{"protocolVersion":1,"agentCapabilities":{"auth":{"status":{}}\#(meta)}}"#.utf8)
+        }
+        mock.script(method: "auth/status") { _ in
+            Data(#"{"state":"authenticated","accounts":[{"label":"Claude Ultra","active":true}]}"#.utf8)
+        }
+        let connection = ACPConnection(client: mock)
+        _ = try await connection.initialize()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.setupState = .ready
+        let runner = ACPSessionRunner(session: session, connection: connection, store: store,
+                                      sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path)
+        runner.start()
+        defer { runner.stop() }
+
+        if agentHasExtension {
+            mock.emitAuthStatus(.init(kind: .apiKey, label: "Anthropic API key"))
+            try await waitUntil { session.authStatus?.kind == .apiKey }
+            // Acknowledged either way; applied, it would have replaced the status first.
+            let acknowledged = MCPRequestLog()
+            mock.emitAuthStatus(.init(kind: .none, label: "Signed out"), isStandard: true,
+                                durableConsumptionAcknowledgement: { acknowledged.append(Data()) })
+            try await waitUntil { acknowledged.count == 1 }
+            #expect(session.authStatus?.kind == .apiKey, "the poorer standard update must not win")
+            #expect(session.setupState == .ready)
+            #expect(!mock.sent.contains { $0.method == "auth/status" })
+        } else {
+            try await waitUntil { session.authStatus?.label == "Claude Ultra" }
+            mock.emitAuthStatus(.init(kind: .none, label: "Signed out"), isStandard: true)
+            try await waitUntil {
+                if case .needsAuth = session.setupState { return true }
+                return false
+            }
+        }
+    }
+
     @Test("a signed-in status while not showing the banner just updates the stored status")
     func authStatusSignedInWithoutBannerJustStoresStatus() async throws {
         let (runner, session, mock) = try makeRunnerWithSession()

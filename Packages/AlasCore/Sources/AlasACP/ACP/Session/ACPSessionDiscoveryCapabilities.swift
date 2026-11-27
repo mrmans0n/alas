@@ -11,14 +11,17 @@ public struct ACPSessionDiscoveryCapabilities: Equatable, Sendable {
     public let canResume: Bool
     public let canFork: Bool
     public let canDelete: Bool
+    /// The agent serves the standard `session/set_title`.
+    public let canSetTitle: Bool
 
     public var canOpenRemoteSession: Bool { canLoad || canResume }
 
-    public init(canLoad: Bool, canResume: Bool, canFork: Bool, canDelete: Bool) {
+    public init(canLoad: Bool, canResume: Bool, canFork: Bool, canDelete: Bool, canSetTitle: Bool = false) {
         self.canLoad = canLoad
         self.canResume = canResume
         self.canFork = canFork
         self.canDelete = canDelete
+        self.canSetTitle = canSetTitle
     }
 }
 

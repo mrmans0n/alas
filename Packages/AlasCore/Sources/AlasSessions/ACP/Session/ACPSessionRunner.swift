@@ -192,6 +192,9 @@ public final class ACPSessionRunner {
     private var filesTask: Task<Void, Never>?
     private var terminalsTask: Task<Void, Never>?
     private var mcpMessagesTask: Task<Void, Never>?
+    /// A live auth status update arrived, so a slower `auth/status` answer
+    /// must not replace it.
+    private var receivedAuthStatusUpdate = false
     /// `$/cancel_request` ids (OpenCode v2) that haven't yet matched a
     /// dequeued permission or file request. A cancellation can arrive
     /// before the request it targets — buffered broker replay, or both
@@ -1153,15 +1156,33 @@ public final class ACPSessionRunner {
 
     public func startAuthStatusListening() {
         guard authStatusTask == nil else { return }
+        let usesStandardAuthStatus = connection.negotiatedAuthStatus == .standard
         authStatusTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await event in self.connection.client.authStatusUpdates {
                 guard self.isConnectionCurrent() else { continue }
+                // An agent with the extension sends the standard update too,
+                // which cannot tell an API key from an account: it would
+                // overwrite the richer status.
+                guard !event.isStandard || usesStandardAuthStatus else {
+                    event.durableConsumptionAcknowledgement?()
+                    continue
+                }
+                self.receivedAuthStatusUpdate = true
                 self.applyAuthStatus(
                     event.status,
                     acknowledging: event.durableConsumptionAcknowledgement
                 )
             }
+        }
+        // The extension pushes a status right after `initialize`; the
+        // standard form has to be asked for.
+        guard usesStandardAuthStatus else { return }
+        Task { @MainActor [weak self] in
+            guard let status = try? await self?.connection.queryAuthStatus(),
+                  let self, !self.receivedAuthStatusUpdate
+            else { return }
+            self.applyAuthStatus(status)
         }
     }
 

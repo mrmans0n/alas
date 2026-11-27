@@ -4449,7 +4449,8 @@ public final class ACPSessionManager: ChangeTracking {
                     canLoad: initialized.loadSession,
                     canResume: initialized.sessionCapabilities.supportsResume,
                     canFork: initialized.sessionCapabilities.supportsFork,
-                    canDelete: initialized.sessionCapabilities.supportsDelete
+                    canDelete: initialized.sessionCapabilities.supportsDelete,
+                    canSetTitle: initialized.sessionCapabilities.supportsTitle
                 ),
                 sessionIndex: initialized.sessionIndex,
                 worktreeResolver: worktreeResolver,

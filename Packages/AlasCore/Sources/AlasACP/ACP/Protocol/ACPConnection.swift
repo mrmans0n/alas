@@ -214,6 +214,8 @@ public final class ACPConnection: @unchecked Sendable {
     public var mcpStartupAwaitTimeoutMs: Int?
     /// The session index the agent advertised on `initialize`, if any.
     public private(set) var negotiatedSessionIndex: ACPSessionIndexSupport?
+    /// Where this connection's auth status comes from, after `initialize`.
+    public private(set) var negotiatedAuthStatus: ACPAuthStatusSource = .none
     /// Whether the agent advertised `_meta.sessionFailure` on `initialize`.
     public private(set) var negotiatedSessionFailure = false
     /// Set after `initialize` from `ACPSessionInstructionsPolicy`. Sent as
@@ -409,6 +411,10 @@ public final class ACPConnection: @unchecked Sendable {
             && ACPCodexHooksCapability.supports(agentInfo: result.agentInfo)
             && result.meta?.codexHooks?.isSupported == true
         negotiatedSessionIndex = result.meta?.sessionIndex?.support
+        negotiatedAuthStatus = .negotiated(
+            advertisesExtension: capabilities?.advertisesAuthStatus ?? false,
+            supportsStandardQuery: capabilities?.supportsAuthStatusQuery ?? false
+        )
         // The extension is ACP v1 only.
         let sessionFailure = negotiatedProtocolVersion == .v1 ? result.meta?.sessionFailure?.capability : nil
         negotiatedSessionFailure = sessionFailure != nil
@@ -553,6 +559,19 @@ public final class ACPConnection: @unchecked Sendable {
 
     public func renameSession(sessionId: String, title: String) async throws {
         try await sendIgnoringResult(method: "_session/rename", params: ACPSessionRenameParams(sessionId: sessionId, title: title))
+    }
+
+    /// The standard `auth/status` query: the agent's last observation, or nil
+    /// while it does not know yet.
+    public func queryAuthStatus() async throws -> ACPAuthStatus? {
+        let resp = try await client.send(ACPRequest(method: "auth/status", params: EmptyObject()))
+        defer { resp.acknowledgeDurableConsumption() }
+        return try JSONDecoder().decode(ACPAuthState.self, from: resp.body).status
+    }
+
+    /// Standard `session/set_title`, for an agent without the session index.
+    public func setSessionTitle(sessionId: String, title: String) async throws {
+        try await sendIgnoringResult(method: "session/set_title", params: ACPSessionRenameParams(sessionId: sessionId, title: title))
     }
 
     public func archiveSession(sessionId: String) async throws {
