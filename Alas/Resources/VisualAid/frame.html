@@ -40,7 +40,8 @@
   .mock-input { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--alas-line, #8884); background: transparent; color: inherit; }
   .placeholder { display: grid; place-items: center; min-height: 80px; border: 1px dashed var(--alas-line, #8884); border-radius: 6px; color: var(--alas-dim, GrayText); }
   /* Data components, mirrored in RemoteWeb/visual-aid.js. */
-  alas-chart { display: block; margin: 4px 0 12px; }
+  /* Size the plot with the height attribute; the host must also fit the legend. */
+  alas-chart { display: block; height: auto !important; margin: 4px 0 12px; }
   .alas-chart-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; color: var(--alas-dim, GrayText); margin-bottom: 6px; }
   .alas-chart-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
   .alas-chart-text { font-size: 11px; fill: var(--alas-dim, GrayText); font-variant-numeric: tabular-nums; }
