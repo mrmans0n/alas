@@ -305,12 +305,12 @@ public enum RemoteNetwork: Sendable {
         return nil
     }
 
-    private static func isTailnetIPv4(_ host: String) -> Bool {
+    static func isTailnetIPv4(_ host: String) -> Bool {
         guard let parts = ipv4Octets(host) else { return false }
         return parts[0] == 100 && (64...127).contains(parts[1])
     }
 
-    private static func isTailnetIPv6(_ host: String) -> Bool {
+    static func isTailnetIPv6(_ host: String) -> Bool {
         guard let bytes = ipv6Bytes(host) else { return false }
         return bytes.starts(with: [0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe0])
     }
