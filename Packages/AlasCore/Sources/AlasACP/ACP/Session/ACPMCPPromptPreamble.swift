@@ -329,6 +329,10 @@ public enum ACPMCPPromptPreamble: Sendable {
                 line += " If a delegated session is blocked on a permission, question, or plan, "
                     + "you will be told; you cannot answer it for the user, so use notify to "
                     + "reach them."
+                line += " When work belongs in a different worktree than this session's, do not "
+                    + "create that worktree and keep working here: start a session there with "
+                    + "session_new (new_worktree or worktree) and a self-contained brief, then "
+                    + "worktree_switch to it so the user can take over."
             }
             line += isPeerChild
                 ? " Prefer these tools when the user asks to run or respond to reviews, "
@@ -486,6 +490,10 @@ public enum ACPMCPPromptPreamble: Sendable {
                 line += " If a delegated session is blocked on a permission, question, or plan, "
                     + "you will be told; you cannot answer it for the user, so use `alas notify` to "
                     + "reach them."
+                line += " When work belongs in a different worktree than this session's, do not "
+                    + "create that worktree and keep working here: start a session there with "
+                    + "`alas session new --new-worktree <branch>` (or `--worktree <name>`) and a "
+                    + "self-contained brief, then `alas wt switch` to it so the user can take over."
             }
             line += isPeerChild
                 ? " Prefer these commands when the user asks to run or respond to reviews, "
