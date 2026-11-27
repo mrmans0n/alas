@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// What the parent's transcript needs to show the children its `session_new`
@@ -8,6 +9,9 @@ struct ACPDelegatedChildActions {
     var revision: () -> Int
     /// The child's summary; nil when the id is not a child of this session.
     var summary: (String) async -> ACPOrchestrationSessionSummary?
+    /// Fires when the child's runtime state changes, which the revision
+    /// misses: a permission prompt shown or answered.
+    var runtimeChanges: (ACPOrchestrationSessionSummary) -> AnyPublisher<Void, Never>
     var agentName: (String) -> String
     var open: (ACPOrchestrationSessionSummary) -> Void
 }
@@ -24,12 +28,22 @@ struct ACPDelegatedChildCard<Fallback: View>: View {
     @ViewBuilder let fallback: () -> Fallback
     @State private var summary: ACPOrchestrationSessionSummary?
     @State private var loaded = false
+    @State private var runtimeTick = 0
 
     var body: some View {
+        let revision = actions.revision()
         content
-            .task(id: actions.revision()) {
+            .task(id: "\(revision)-\(runtimeTick)") {
                 summary = await actions.summary(childSessionId)
                 loaded = true
+            }
+            // Resubscribed on a delegation change, which may bring the child's
+            // live session up.
+            .task(id: "\(revision)-\(summary?.worktreeId ?? "")") {
+                guard let summary else { return }
+                for await _ in actions.runtimeChanges(summary).values {
+                    runtimeTick &+= 1
+                }
             }
     }
 

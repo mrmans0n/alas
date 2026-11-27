@@ -1079,6 +1079,7 @@ private struct ACPSessionView: View {
                     await state.delegatedSessionSummaries(for: sessionId)
                         .first { $0.sessionId == childId && $0.relationship == "child" }
                 },
+                runtimeChanges: { state.delegatedRuntimeChanges($0) },
                 agentName: { state.agent(id: $0)?.displayName ?? $0 },
                 open: { summary in Task { await state.openDelegatedACPSession(summary) } }
             ),

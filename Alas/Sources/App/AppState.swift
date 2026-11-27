@@ -1,6 +1,7 @@
 @_spi(AppHost) import AlasCore
 import AlasComputerUseKit
 import AppKit
+import Combine
 import Foundation
 import Observation
 import os
@@ -14696,13 +14697,7 @@ final class AppState {
                 .flatMap { worktree(withId: $0) }
                 .flatMap { acpManager(for: $0) }
             let runtime = manager?.liveSession(for: record.childSessionId)
-                .map { session -> ACPOrchestrationRuntimeState in
-                    switch session.transcript.streamingState {
-                    case .idle: return .idle
-                    case .sending, .streaming: return .running
-                    case .awaitingPermission, .awaitingInput: return .awaitingInput
-                    }
-                }
+                .map { Self.delegatedRuntime($0.transcript.streamingState) }
             let archived: Bool
             if let manager, let row = await manager.persistedSessionRow(id: record.childSessionId) {
                 archived = row.archived
@@ -14740,6 +14735,31 @@ final class AppState {
             ))
         }
         return ACPDelegatedSessionsPolicy.ordered(summaries)
+    }
+
+    static func delegatedRuntime(_ streaming: ACPSession.StreamingState) -> ACPOrchestrationRuntimeState {
+        switch streaming {
+        case .idle: .idle
+        case .sending, .streaming: .running
+        case .awaitingPermission, .awaitingInput: .awaitingInput
+        }
+    }
+
+    /// Fires when a local child's runtime state (the part its summary reads)
+    /// changes; never for a child with no live session here.
+    func delegatedRuntimeChanges(_ summary: ACPOrchestrationSessionSummary) -> AnyPublisher<Void, Never> {
+        guard let session = worktree(withId: summary.worktreeId)
+            .flatMap({ acpManager(for: $0) })?
+            .liveSession(for: summary.sessionId)
+        else { return Empty().eraseToAnyPublisher() }
+        return session.transcript.$streamingState
+            .map(Self.delegatedRuntime)
+            .removeDuplicates()
+            .dropFirst()
+            .map { _ in () }
+            // The signal fires before the new value is stored.
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher()
     }
 
     func openDelegatedACPSession(_ summary: ACPOrchestrationSessionSummary) async {
