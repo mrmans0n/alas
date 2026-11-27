@@ -7634,6 +7634,11 @@ final class AppState {
         // to call here: it reads live managers lazily, so no session state is
         // required at this point.
         syncRemoteServer()
+
+        // Writes to the user's global skills dirs, like the sweep above.
+        if !AlasProfile.current.isIsolated {
+            Task { await updateOutdatedAlasSkills() }
+        }
     }
 
     @MainActor
@@ -14149,6 +14154,14 @@ final class AppState {
     /// Installs (or updates) the Alas agent skills. True when the CLI exits 0.
     func installAlasSkills() async -> Bool {
         await runAlasSkillCommand(["install"]) != nil
+    }
+
+    /// Rewrites the skills when an older Alas installed them, so a stub change
+    /// reaches agents without a trip to Settings. Leaves them alone when the
+    /// user never installed them, removed them, or has a conflicting skill.
+    func updateOutdatedAlasSkills() async {
+        guard await alasSkillsState() == .outdated else { return }
+        _ = await installAlasSkills()
     }
 
     /// Removes the Alas agent skills, leaving anyone else's alone.
