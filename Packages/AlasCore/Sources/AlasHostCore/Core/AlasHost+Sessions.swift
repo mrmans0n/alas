@@ -446,6 +446,8 @@ extension SessionsAPI {
     public func stop(_ sessionID: String, caller: HostCaller) async throws {
         caller.log("sessions.stop", sessionID)
         try await liveManager(for: sessionID).interruptBypassingLease(for: sessionID)
+        // Its delegated children stop with it.
+        await core.orchestration.interruptChildren(of: sessionID)
     }
 
     /// Renames the session's row, as the app does from its tab.

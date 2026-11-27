@@ -1584,6 +1584,67 @@ struct ACPSessionOrchestrationCoordinatorTests {
         .worktree(path: manager.worktreePath)
     }
 
+    /// A local child starts with its parent's auto-run, not this Mac's default.
+    @Test(arguments: [true, false])
+    func localChildStartsWithItsParentsAutoRun(autoRun: Bool) async throws {
+        let client = makeSelectionClient()
+        let fixture = try makeModelSelectionFixture(client: client, autoRunDefault: !autoRun)
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        fixture.manager.liveSession(for: "parent")?.autoRunEnabled = autoRun
+
+        _ = await fixture.coordinator.create(
+            origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+            request: .init(prompt: "Review the parser.", agentId: nil, worktree: .current))
+
+        try await waitUntil { childRequests(client) == ["prompt:Review the parser."] }
+        #expect(fixture.manager.liveSession(for: "child")?.autoRunEnabled == autoRun)
+    }
+
+    /// A child stopped while it is still starting, by its parent's stop or by
+    /// `session_interrupt` (the path a paired Mac's stop takes too): its first
+    /// prompt is dropped, or cancelled if it already went out, and the child
+    /// still comes up for `session_send`.
+    @Test(arguments: [false, true])
+    func stoppingAChildWhileItStartsStopsTheFirstPrompt(viaSessionInterrupt: Bool) async throws {
+        let admission = GenerationGate()
+        let promptGate = GenerationGate()
+        let client = makeSelectionClient()
+        client.scriptAsync(method: "session/prompt") { _ in
+            await promptGate.wait()
+            return Data(#"{"stopReason":"cancelled"}"#.utf8)
+        }
+        let fixture = try makeModelSelectionFixture(client: client, admitChild: { _, _ in
+            await admission.wait()
+            return nil
+        })
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        let persistence = fixture.persistence
+        func isReady() async -> Bool { (try? await persistence.delegation(childSessionId: "child"))??.phase == .ready }
+        func cancelled() -> Bool { client.sent.contains { $0.method == "session/cancel" } }
+
+        _ = await fixture.coordinator.create(
+            origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+            request: .init(prompt: "Review the parser.", agentId: nil, worktree: .current))
+        await admission.waitUntilStarted()
+        if viaSessionInterrupt {
+            _ = await fixture.coordinator.interrupt(
+                origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+                targetSessionId: "child")
+        } else {
+            await fixture.coordinator.interruptChildren(of: "parent")
+        }
+        await admission.release()
+        try await waitUntil {
+            if cancelled() { return true }
+            return await isReady()
+        }
+        await promptGate.release()
+        try await waitUntil { await isReady() }
+
+        #expect(!childRequests(client).contains("prompt:Review the parser.") || cancelled())
+        #expect(fixture.manager.liveSession(for: "child")?.queue.isEmpty == true)
+    }
+
     /// Auto-run comes from the peer's request, not this Mac's default.
     @Test(arguments: [true, false])
     func startForPeerRecordsSentinelParentAndStartsChild(autoRun: Bool) async throws {
@@ -2412,8 +2473,11 @@ struct ACPSessionOrchestrationCoordinatorTests {
             if let statusGate { for await _ in statusGate { break } }
             return statusAnswer(serverId, sessionIDs)
         }
+        /// An interrupt of this session waits here until released.
+        var stalledInterrupt: (sessionID: String, gate: GenerationGate)?
         func interrupt(serverId: String, sessionID: String) async -> Result<Bool, ACPPeerError> {
             interruptCalls.append(sessionID)
+            if let stalledInterrupt, stalledInterrupt.sessionID == sessionID { await stalledInterrupt.gate.wait() }
             return interruptResult
         }
         /// Answers `outbox`. Suspended on `outboxGate` first while one is set.
@@ -3097,6 +3161,38 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(peers.startCalls.count == 1)
     }
 
+    /// A start waiting for its retry is withdrawn when the parent is stopped,
+    /// without waking it, so a reconnect cannot launch it.
+    @Test func stoppingTheParentWithdrawsAPeerStartAwaitingRetry() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.startResults = [.failure(.unreachable(peer: "mini"))]
+        let fixture = try remoteFixture(peers: peers)
+        _ = await peerCreate(fixture)
+
+        await fixture.coordinator.interruptChildren(of: "parent")
+        await fixture.coordinator.retryPeerStarts(serverId: "srv-1")
+
+        let record = try #require(try await fixture.persistence.delegation(childSessionId: "child"))
+        #expect(record.phase == .failed
+            && record.failureMessage == ACPSessionOrchestrationCoordinator.stoppedBeforeStartMessage)
+        #expect(peers.startCalls.count == 1)
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+    }
+
+    /// A start in flight when the parent is stopped is interrupted once the
+    /// peer has taken it.
+    @Test func aPeerStartInFlightWhenTheParentStopsIsInterruptedOnceTaken() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        let coordinator = fixture.coordinator
+        peers.onStart = { _ in await coordinator.interruptChildren(of: "parent") }
+
+        _ = await peerCreate(fixture)
+
+        // The stop's own interrupt reaches nothing yet; the second follows the start.
+        #expect(peers.interruptCalls == ["child", "child"])
+    }
+
     @Test func lostStartAnswerIsRetriedOnceWithSameID() async throws {
         let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
         peers.startResults = [.failure(.unreachable(peer: "mini"))]
@@ -3289,6 +3385,37 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let readCall = try #require(peers.readCalls.first)
         #expect(readCall.offset == 2 && readCall.limit == 3 && readCall.maxChars == 4)
         #expect(interrupted.cancelRequested && peers.interruptCalls == ["child"])
+    }
+
+    /// Stopping a parent interrupts each child still in play, and no other
+    /// session's children.
+    @Test func stoppingAParentInterruptsItsChildrenStillInPlay() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, id: "ready")
+        try await insertRemoteChild(fixture.persistence, id: "starting", phase: .starting)
+        try await insertRemoteChild(fixture.persistence, id: "failed", phase: .failed)
+        try await insertRemoteChild(fixture.persistence, id: "closed", phase: .closed)
+        try await insertRemoteChild(fixture.persistence, id: "other", parent: "other-parent")
+
+        await fixture.coordinator.interruptChildren(of: "parent")
+
+        #expect(Set(peers.interruptCalls) == ["ready", "starting"])
+    }
+
+    /// One unresponsive Mac does not hold up stopping the other children.
+    @Test func aStalledPeerDoesNotDelayStoppingTheOtherChildren() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let gate = GenerationGate()
+        peers.stalledInterrupt = ("stalled", gate)
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, id: "stalled")
+        try await insertRemoteChild(fixture.persistence, id: "responsive")
+
+        let stopping = Task { await fixture.coordinator.interruptChildren(of: "parent") }
+        try await waitUntil { Set(peers.interruptCalls) == ["stalled", "responsive"] }
+        await gate.release()
+        await stopping.value
     }
 
     @Test func actionsOnAPeerThatCannotBeReachedNameIt() async throws {

@@ -13652,6 +13652,10 @@ final class AppState {
         }
         let worktreeId = worktree.id
         mgr.admitsNewWork = { [weak self] in self?.projectsManager.admitsNewWork(worktreeId: worktreeId) ?? false }
+        // As the core installs it on its own managers.
+        mgr.autoRunAllowedProvider = { [weak self] sessionId in
+            await self?.core.delegatedAutoRunAllowed(sessionId) ?? false
+        }
         mgr.onSessionRuntimeEnded = { [weak self] sessionID in
             self?.computerUseSessionEnded(sessionID: sessionID, owner: owner)
         }
@@ -15646,8 +15650,14 @@ extension AppState {
     }
 
     func stop(for id: String, worktreeID: String) async {
+        stopDelegatedChildren(of: id)
         guard let manager = acpManager(forWorktreeId: worktreeID) else { return }
         await manager.interrupt(for: id)
+    }
+
+    /// The user stopped `sessionId`; its delegated children stop with it.
+    func stopDelegatedChildren(of sessionId: String) {
+        Task { await core.orchestration.interruptChildren(of: sessionId) }
     }
 
     func sessionCreated(_ id: String, worktreeID: String) {

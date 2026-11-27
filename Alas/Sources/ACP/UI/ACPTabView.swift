@@ -432,6 +432,7 @@ private struct ACPSessionView: View {
               || session.transcript.hasBlockingUserInput
               || session.hasCancellableBackgroundWork
         else { return }
+        state.stopDelegatedChildren(of: sessionId)
         Task {
             if let runner = manager.runners[sessionId] {
                 await runner.userCancel()
@@ -1305,7 +1306,8 @@ private struct ACPSessionView: View {
             onStackHeightChange: { height in
                 if composerStackHeight != height { composerStackHeight = height }
             },
-            openSkill: { openSkillFile($0) }
+            openSkill: { openSkillFile($0) },
+            onStop: { [state, sessionId] in state.stopDelegatedChildren(of: sessionId) }
         ) { text, attachments, intent, draft, onPromptFinished -> Bool in
             // `intent` is already resolved by the composer for keyboard
             // submits; the toolbar send button bypasses the keyboard

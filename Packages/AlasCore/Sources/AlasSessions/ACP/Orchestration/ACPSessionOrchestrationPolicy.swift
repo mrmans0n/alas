@@ -14,6 +14,17 @@ public enum ACPDeferredChildOutcomeStep: Equatable, Sendable {
 }
 
 public enum ACPSessionOrchestrationPolicy: Sendable {
+    /// Whether a session's auto-run may approve on top of its own toggle. A
+    /// root always may. A child may only while its parent's auto-run is on,
+    /// so turning the parent's off stops its children auto-approving too; a
+    /// parent that cannot be read (`parentAutoRun` nil) counts as off. A
+    /// parent on another Mac is not readable here: such a child copied its
+    /// parent's setting when it started and keeps its own toggle.
+    public static func childAutoRunAllowed(isChild: Bool, parentOnAnotherMac: Bool, parentAutoRun: Bool?) -> Bool {
+        guard isChild, !parentOnAnotherMac else { return true }
+        return parentAutoRun ?? false
+    }
+
     public enum Error: Swift.Error, Equatable, Sendable {
         case delegatedSessionCannotCreateChild
         case crossProjectTarget

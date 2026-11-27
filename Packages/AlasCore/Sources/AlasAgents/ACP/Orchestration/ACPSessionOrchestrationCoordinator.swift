@@ -239,6 +239,8 @@ public final class ACPSessionOrchestrationCoordinator {
     /// What a peer child's start asked for, until the peer took it. Held in
     /// memory only: the record has nowhere to keep the target.
     private var pendingPeerStarts: [String: ACPPeerChildStartRequest] = [:]
+    /// Peer children whose parent was stopped while their start was in flight.
+    private var stoppedPeerStarts: Set<String> = []
     private var peerStartsInFlight: Set<String> = []
     private var peerStatusRounds: [String: [[String]: PeerStatusRound]] = [:]
     private var peerOutboxSignals: [String: Int] = [:]
@@ -636,9 +638,14 @@ public final class ACPSessionOrchestrationCoordinator {
         switch await peers.start(serverId: peerInfo.serverId, start) {
         case .success(let reply):
             await markPeerChildReady(childID, serverId: peerInfo.serverId, keepingForRetry: start)
+            await interruptPeerStartIfStopped(childID, serverId: peerInfo.serverId, peers: peers)
             environment.peerNeedsCollecting(peerInfo.serverId)
             return json(ACPOrchestrationNewResponse(sessionId: childID, state: reply.state, worktreeId: nil, peer: peerInfo.name))
         case .failure(.unreachable(let name)):
+            if stoppedPeerStarts.remove(childID) != nil {
+                await failStoppedPeerStart(childID)
+                return .error(Self.stoppedBeforeStartMessage)
+            }
             pendingPeerStarts[childID] = start
             // A live link that lost one answer sends no availability signal.
             if peers.peers.first(where: { $0.serverId == peerInfo.serverId })?.state == .online {
@@ -684,6 +691,38 @@ public final class ACPSessionOrchestrationCoordinator {
         environment.notifyChanged()
     }
 
+    /// The parent of peer child `child` was stopped before the child started.
+    /// A start waiting for its retry is dropped and the child fails; one in
+    /// flight is settled when its answer comes back.
+    private func withdrawPeerStart(_ child: ACPDelegationRecord) async {
+        let childID = child.childSessionId
+        if peerStartsInFlight.contains(childID) {
+            stoppedPeerStarts.insert(childID)
+        } else if pendingPeerStarts.removeValue(forKey: childID) != nil {
+            await failStoppedPeerStart(childID)
+        }
+    }
+
+    /// Fails a peer child withdrawn before it started. No wake: the parent
+    /// was just stopped by its user.
+    private func failStoppedPeerStart(_ childID: String) async {
+        pendingPeerStarts[childID] = nil
+        try? await environment.persistence.updatePhase(
+            childSessionId: childID, phase: .failed, failureMessage: Self.stoppedBeforeStartMessage,
+            updatedAt: environment.now())
+        environment.notifyChanged()
+    }
+
+    /// A start the peer took after the parent was stopped: the child is
+    /// interrupted there, and the peer drops its first prompt if it is still
+    /// starting.
+    private func interruptPeerStartIfStopped(_ childID: String, serverId: String, peers: ACPDelegationPeers) async {
+        guard stoppedPeerStarts.remove(childID) != nil else { return }
+        _ = await peers.interrupt(serverId: serverId, sessionID: childID)
+    }
+
+    public static let stoppedBeforeStartMessage = "Stopped with its parent before it started."
+
     /// Gives each child still starting on the peer `serverId` its one further
     /// attempt. Only proof fails a child, with a wake since the parent has
     /// moved on: the peer answering no, or `status` finding nothing there. No
@@ -710,8 +749,10 @@ public final class ACPSessionOrchestrationCoordinator {
                 switch await peers.start(serverId: serverId, start) {
                 case .success:
                     await markPeerChildReady(childID, serverId: serverId, keepingForRetry: start)
+                    await interruptPeerStartIfStopped(childID, serverId: serverId, peers: peers)
                 case .failure(.unreachable):
                     pendingPeerStarts[childID] = nil
+                    if stoppedPeerStarts.remove(childID) != nil { await failStoppedPeerStart(childID) }
                 case .failure(let error):
                     pendingPeerStarts[childID] = nil
                     await markChildFailed(childSessionId: childID, message: Self.message(for: error))
@@ -1270,6 +1311,7 @@ public final class ACPSessionOrchestrationCoordinator {
                 worktree: worktree,
                 request: .current(worktreeId: worktree.id),
                 phase: .starting,
+                autoRun: parentSession.autoRunEnabled,
                 now: now
             ))
         case .existing(let id):
@@ -1302,6 +1344,7 @@ public final class ACPSessionOrchestrationCoordinator {
                 worktree: worktree,
                 request: .existing(worktreeId: worktree.id),
                 phase: .starting,
+                autoRun: parentSession.autoRunEnabled,
                 now: now
             ))
         case .new(let branch, let base):
@@ -1343,6 +1386,7 @@ public final class ACPSessionOrchestrationCoordinator {
                 branch: branch,
                 base: base,
                 destination: destination,
+                autoRun: parentSession.autoRunEnabled,
                 now: now
             ) { recordDestination in
                 await self.environment.createWorktree(origin.projectId, branch, base, recordDestination)
@@ -1896,18 +1940,60 @@ public final class ACPSessionOrchestrationCoordinator {
         origin: ACPOrchestrationSessionOrigin,
         targetSessionId: String
     ) async -> AlasCLIResponse {
+        let target: ACPDelegationRecord?
         do {
-            let target = try await environment.persistence.delegation(childSessionId: targetSessionId)
-            guard case .success = ACPSessionOrchestrationPolicy.authorizeChildControl(
-                callerSessionId: origin.sessionId,
-                callerProjectId: origin.projectId,
-                target: target
-            ) else {
-                return .error("Only a direct child session can be interrupted.")
-            }
-            if let target, target.peerServerId != nil { return await interruptOnPeer(target) }
+            target = try await environment.persistence.delegation(childSessionId: targetSessionId)
         } catch {
             return .error("Could not verify session delegation.")
+        }
+        guard case .success = ACPSessionOrchestrationPolicy.authorizeChildControl(
+            callerSessionId: origin.sessionId,
+            callerProjectId: origin.projectId,
+            target: target
+        ), let target else {
+            return .error("Only a direct child session can be interrupted.")
+        }
+        // A paired Mac's stop of a child it delegated here arrives this way too.
+        if target.peerServerId != nil { return await interruptOnPeer(target) }
+        return await interruptLocalChild(target)
+    }
+
+    /// The user stopped `parentSessionId`: each of its children still in
+    /// play is interrupted as `session_interrupt` would, so delegated work
+    /// stops with the parent. The children stay open for `session_send`.
+    /// Children cannot delegate, so this is one level deep.
+    public func interruptChildren(of parentSessionId: String) async {
+        guard let children = try? await environment.persistence.children(parentSessionId: parentSessionId) else { return }
+        let inPlay = children.filter { $0.phase != .failed && $0.phase != .closed }
+        // Local children first, then every peer at once: an unresponsive
+        // Mac must not hold up stopping the others.
+        for child in inPlay where child.peerServerId == nil {
+            _ = await interruptLocalChild(child)
+        }
+        for child in inPlay where child.peerServerId != nil && child.phase == .starting {
+            await withdrawPeerStart(child)
+        }
+        let peerStops = inPlay.filter { $0.peerServerId != nil }.map { child in
+            Task { _ = await self.interruptOnPeer(child) }
+        }
+        for stop in peerStops { await stop.value }
+    }
+
+    /// Local children whose parent was stopped while they were starting.
+    // ponytail: in memory, so a stop just before a relaunch does not reach a recovered start.
+    private var stoppedWhileStarting: Set<String> = []
+
+    private func interruptLocalChild(_ target: ACPDelegationRecord) async -> AlasCLIResponse {
+        let targetSessionId = target.childSessionId
+        // A child still starting has no turn to cancel yet: its queued first
+        // prompt is dropped now, and its start drops one queued later. See
+        // `startPersistedChild`. One already `.ready` whose prompt is still
+        // held behind its model selection has not released it yet either.
+        let manager = environment.sessionLocation(targetSessionId)?.manager
+        if target.phase == .creatingWorktree || target.phase == .starting
+            || manager?.liveSession(for: targetSessionId)?.holdsPromptsForDelegatedSelection == true {
+            stoppedWhileStarting.insert(targetSessionId)
+            await manager?.queueClear(for: targetSessionId)
         }
         guard let location = environment.sessionLocation(targetSessionId),
               let session = location.manager.liveSession(for: targetSessionId),
@@ -2634,6 +2720,14 @@ public final class ACPSessionOrchestrationCoordinator {
         let markedReady = (try? await environment.persistence.updatePhase(
             childSessionId: childID, phase: .ready, failureMessage: nil, updatedAt: environment.now()
         )) != nil
+        // Stopped while starting: the first prompt is dropped, or its turn
+        // cancelled if it already went out. Checked after the last await
+        // before the hold is released, so a stop up to here is seen. The
+        // child stays open.
+        if stoppedWhileStarting.remove(childID) != nil {
+            await manager.queueClear(for: childID)
+            _ = await manager.interrupt(for: childID)
+        }
         // Unless `.ready` is durable, the child stays held: other instances
         // and the next launch still treat it as starting and reapply the
         // selection.

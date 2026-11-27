@@ -119,6 +119,19 @@ struct ACPSessionOrchestrationPolicyTests {
         #expect(!ACPSessionOrchestrationPolicy.holdsPromptDispatch(target: unselected))
     }
 
+    @Test("a child's auto-run approves only while its parent's is on", arguments: [
+        // isChild, parentOnAnotherMac, parentAutoRun, allowed
+        (false, false, nil, true),
+        (true, false, true, true),
+        (true, false, false, false),
+        (true, false, nil, false),
+        (true, true, nil, true),
+    ] as [(Bool, Bool, Bool?, Bool)])
+    func childAutoRunCappedByParent(isChild: Bool, parentOnAnotherMac: Bool, parentAutoRun: Bool?, allowed: Bool) {
+        #expect(ACPSessionOrchestrationPolicy.childAutoRunAllowed(
+            isChild: isChild, parentOnAnotherMac: parentOnAnotherMac, parentAutoRun: parentAutoRun) == allowed)
+    }
+
     @Test("list visibility contains only self and direct relatives")
     func visibility() {
         let sibling = ACPDelegationRecord(

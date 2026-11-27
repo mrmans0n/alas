@@ -14,6 +14,9 @@ public final class ACPPermissionPolicy {
     /// a permission actually blocks. Auto-run and remembered decisions return
     /// earlier in `evaluate` and deliberately never reach this.
     private let onBlocked: (JSONRPCID, ACPPermissionRequestParams) -> Void
+    /// Whether auto-run may approve for this session right now, on top of its
+    /// own toggle: a delegated child's is capped by its parent's.
+    public var autoRunAllowed: @MainActor () async -> Bool = { true }
 
     public init(
         session: ACPSession,
@@ -83,7 +86,11 @@ public final class ACPPermissionPolicy {
             if cancelledBeforeParked { return .init(outcome: .cancelled) }
             return await awaitUserDecision(scopeKey: scopeKey, params: params)
         }
-        if session.autoRunEnabled, let allow = options.first(where: { $0.kind.hasPrefix("allow") }) {
+        // The toggle is read again after the await: it may be turned off meanwhile.
+        if session.autoRunEnabled, let allow = options.first(where: { $0.kind.hasPrefix("allow") }),
+           await autoRunAllowed(), session.autoRunEnabled {
+            // A `$/cancel_request` may have landed while the check was suspended.
+            if cancelledBeforeParked { return .init(outcome: .cancelled) }
             return .init(outcome: .selected(optionId: allow.optionId))
         }
         var logged = deliveredDecisions[scopeKey]
@@ -290,6 +297,9 @@ public final class ACPPermissionPolicy {
         session.settleWaitingState()
         let cont = pendingContinuation
         pendingContinuation = nil
+        // An evaluation not parked yet (in the auto-run check, say) sees it
+        // when it resumes. Each evaluation starts with it cleared.
+        if cont == nil { cancelledBeforeParked = true }
         cont?.resume(returning: .init(outcome: .cancelled))
     }
 

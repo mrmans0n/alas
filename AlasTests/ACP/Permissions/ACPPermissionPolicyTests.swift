@@ -74,6 +74,53 @@ struct ACPPermissionPolicyTests {
         #expect(await decision.outcome == .cancelled)
     }
 
+    @Test("auto-run withheld by its limit asks instead of approving")
+    func autoRunWithheldByItsLimitAsks() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.autoRunEnabled = true
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: try makeStore()))
+        policy.autoRunAllowed = { false }
+        let opts: [ACPPermissionOption] = [
+            .init(optionId: "allow", name: "Allow", kind: "allow_once"),
+            .init(optionId: "deny", name: "Deny", kind: "reject_once")
+        ]
+        async let decision = policy.evaluate(scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(1))
+        await waitForPendingPermission(session)
+        policy.userCancelled()
+        #expect(await decision.outcome == .cancelled)
+    }
+
+    /// By the agent's `$/cancel_request`, or by the user stopping the turn.
+    @Test("a request cancelled while auto-run's limit is checked is not approved", arguments: [false, true])
+    func cancelDuringAutoRunCheckWins(byUser: Bool) async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.autoRunEnabled = true
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: try makeStore()))
+        policy.autoRunAllowed = { [weak policy] in
+            if byUser { policy?.userCancelled() } else { _ = policy?.cancelRequest(id: .number(1)) }
+            return true
+        }
+        let opts: [ACPPermissionOption] = [.init(optionId: "allow", name: "Allow", kind: "allow_once")]
+        let resp = await policy.evaluate(scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(1))
+        #expect(resp.outcome == .cancelled)
+    }
+
+    @Test("auto-run turned off while its limit is checked asks instead of approving")
+    func autoRunDisabledDuringItsCheckAsks() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.autoRunEnabled = true
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: try makeStore()))
+        policy.autoRunAllowed = {
+            session.autoRunEnabled = false
+            return true
+        }
+        let opts: [ACPPermissionOption] = [.init(optionId: "allow", name: "Allow", kind: "allow_once")]
+        async let decision = policy.evaluate(scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(1))
+        await waitForPendingPermission(session)
+        policy.userCancelled()
+        #expect(await decision.outcome == .cancelled)
+    }
+
     @Test("auto-run never approves a plan review")
     func planReviewNeverAutoRuns() async throws {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
