@@ -15457,7 +15457,10 @@ extension AppState {
               let manager = localACPManagerForPreview()
         else { return }
         previewedACPAgentOptions.insert(agentID)
-        await manager.previewSessionOptions(agentId: agentID)
+        // Owned here, not by the picker's task: closing the picker or picking
+        // another agent mid-preview would cancel the setup check, and the agent
+        // would stay counted as asked with nothing learned.
+        await Task { @MainActor in await manager.previewSessionOptions(agentId: agentID) }.value
     }
 
     /// A manager of a worktree on this Mac: the selected one when it is local.
