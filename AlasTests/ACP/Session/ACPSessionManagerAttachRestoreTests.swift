@@ -4902,6 +4902,47 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadInitialConfigOptions(sessionId: "local") == params.configOptions)
     }
 
+    @Test("a delegated child's model and reasoning go with session/new where the agent lists them", arguments: [
+        ("high", true),    // listed: sent at setup
+        ("ultra", false),  // only another model's level: left for the live session to set
+    ])
+    func delegatedSelectionGoesWithSessionNew(reasoning: String, sentAtSetup: Bool) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        func setup(sessionId: String, model: String) throws -> Data {
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: sessionId, availableModels: [], availableModes: [], currentModel: nil,
+                currentMode: nil, promptSuggestions: [], configOptions: [
+                    ACPConfigOption(id: "model", name: "Model", category: "model", currentValue: model,
+                                    options: [.init(id: "opus", name: "Opus"), .init(id: "sonnet", name: "Sonnet")]),
+                    ACPConfigOption(id: "effort", name: "Thinking", currentValue: "medium",
+                                    options: [.init(id: "medium", name: "Medium"), .init(id: "high", name: "High")]),
+                ]))
+        }
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(sessionCapabilities: .init(options: .init())),
+                authMethods: []))
+        }
+        client.script(method: "session/options") { _ in try setup(sessionId: "", model: "opus") }
+        client.script(method: "session/new") { _ in try setup(sessionId: "remote-new", model: "sonnet") }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.holdPromptsForDelegatedSelection(
+            session.id, selection: ACPDelegatedModelSelection(model: "sonnet", reasoning: reasoning))
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        try await waitUntil { session.agentState == .ready }
+        #expect(client.sent.map(\.method) == ["initialize", "session/options", "session/new"])
+        let params = try #require(client.sent.last?.params as? ACPSessionNewParams)
+        #expect(params.configOptions == [.init(configId: "model", value: .string("sonnet"))]
+            + (sentAtSetup ? [.init(configId: "effort", value: .string(reasoning))] : []))
+    }
+
     @Test("a session stopped before its agent id was saved resends the startup settings it stored")
     func restartedStartupResendsStoredInitialConfigOptions() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

@@ -840,6 +840,9 @@ public final class ACPSessionManager: ChangeTracking {
     /// The `configOptions` each session's `session/new` carries, once decided.
     /// See `startupConfigOptions(for:cwd:using:sessionCapabilities:)`.
     private var decidedStartupConfigOptions: [ACPSession.ID: [ACPInitialConfigOption]] = [:]
+    /// A delegated child's requested model and reasoning, offered to its
+    /// first `session/new`. See `holdPromptsForDelegatedSelection`.
+    private var delegatedStartupSelections: [ACPSession.ID: ACPDelegatedModelSelection] = [:]
     private struct DeferredConfigOptionUpdate {
         let configId: String
         let value: ACPConfigValue
@@ -3318,6 +3321,7 @@ public final class ACPSessionManager: ChangeTracking {
         pendingMode.removeValue(forKey: id)
         pendingConfigOptionValues.removeValue(forKey: id)
         decidedStartupConfigOptions.removeValue(forKey: id)
+        delegatedStartupSelections.removeValue(forKey: id)
         discardDeferredConfigOptionUpdates(for: id)
         discardDeferredModelModeUpdates(for: id)
         onSessionRuntimeEnded?(id)
@@ -3393,6 +3397,7 @@ public final class ACPSessionManager: ChangeTracking {
         pendingMode.removeValue(forKey: id)
         pendingConfigOptionValues.removeValue(forKey: id)
         decidedStartupConfigOptions.removeValue(forKey: id)
+        delegatedStartupSelections.removeValue(forKey: id)
         discardDeferredConfigOptionUpdates(for: id)
         discardDeferredModelModeUpdates(for: id)
 
@@ -10117,8 +10122,12 @@ extension ACPSessionManager {
     /// submits, until `releaseDelegatedSelectionHold`. The coordinator calls
     /// this for a child it is starting; restored sessions get it from
     /// `delegatedSelectionHoldResolver` at attach.
-    public func holdPromptsForDelegatedSelection(_ id: ACPSession.ID) {
+    /// `selection` also goes with the session's first `session/new` where
+    /// the agent can take it there; `applyDelegatedModelSelection` still
+    /// checks it afterwards and sets whatever did not apply.
+    public func holdPromptsForDelegatedSelection(_ id: ACPSession.ID, selection: ACPDelegatedModelSelection? = nil) {
         sessions[id]?.holdPromptsForDelegatedSelection()
+        if let selection { delegatedStartupSelections[id] = selection }
     }
 
     /// Lifts the hold once the child is ready on its selection, or durably
@@ -10928,11 +10937,20 @@ extension ACPSessionManager {
         if let stored = try? await persistence.loadInitialConfigOptions(sessionId: sessionId) {
             entries = stored
         } else if decide, sessionCapabilities.supportsOptions,
-                  pendingModel[sessionId] != nil || pendingConfigOptionValues[sessionId]?.isEmpty == false,
+                  pendingModel[sessionId] != nil || pendingConfigOptionValues[sessionId]?.isEmpty == false
+                      || delegatedStartupSelections[sessionId] != nil,
                   let preview = try? await connection.sessionOptions(cwd: cwd) {
+            var values = pendingConfigOptionValues[sessionId] ?? [:]
+            if let selection = delegatedStartupSelections[sessionId],
+               let agentId = sessions[sessionId]?.agentId {
+                values.merge(
+                    ACPSessionOrchestrationPolicy.startupConfigValues(
+                        for: selection, agentId: agentId, preview: preview),
+                    uniquingKeysWith: { _, delegated in delegated })
+            }
             let chosen = ACPInitialConfigOption.entries(
                 model: pendingModel[sessionId],
-                values: pendingConfigOptionValues[sessionId] ?? [:],
+                values: values,
                 preview: preview.configOptions)
             if !chosen.isEmpty,
                let stored = try? await persistence.saveInitialConfigOptions(

@@ -2690,7 +2690,7 @@ public final class ACPSessionOrchestrationCoordinator {
         // queued only after the selection is acknowledged, and the session
         // holds every prompt (a human's in the open tab too) until then.
         if record.modelSelection != nil {
-            manager.holdPromptsForDelegatedSelection(childID)
+            manager.holdPromptsForDelegatedSelection(childID, selection: record.modelSelection)
         } else {
             guard await manager.enqueueDelegatedPrompt(
                 text: prompt,
