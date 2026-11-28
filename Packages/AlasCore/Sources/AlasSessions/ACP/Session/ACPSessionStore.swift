@@ -546,13 +546,20 @@ extension ACPSessionStore {
 }
 
 extension ACPSessionStore {
+    /// `initialConfigOptions` are the fork's startup settings, stored with
+    /// it so its first `session/fork` (or `session/new`) sends them; see
+    /// `saveInitialConfigOptions`.
     public func createFork(
         session: ACPSessionRow,
         messages: [ACPStoredMessage],
-        record: ACPSessionForkRecord
+        record: ACPSessionForkRecord,
+        initialConfigOptions: [ACPInitialConfigOption] = []
     ) throws {
         try db.transaction {
             try upsertSession(session)
+            if !initialConfigOptions.isEmpty {
+                _ = try saveInitialConfigOptions(sessionId: session.id, initialConfigOptions)
+            }
             for message in messages {
                 try appendMessage(
                     sessionId: message.sessionId,

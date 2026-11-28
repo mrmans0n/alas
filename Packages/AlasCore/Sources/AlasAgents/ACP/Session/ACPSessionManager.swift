@@ -2385,10 +2385,21 @@ public final class ACPSessionManager: ChangeTracking {
                     : min(remoteHistoryStart, copiedMessages.count)
             )
 
+            // The adapters start a fork on their defaults, not on its
+            // source's settings (though `session/options` previews the
+            // source's), so a same-agent fork asks for the source's values.
+            let forkConfigOptions = targetAgentID == source.agentId
+                && source.sessionCapabilities?.supportsOptions == true
+                ? ACPInitialConfigOption.entries(
+                    model: nil,
+                    values: source.configOptionValuesForPersistence(),
+                    preview: source.availableConfigOptions)
+                : []
             try await persistence.createFork(
                 session: targetRow,
                 messages: copiedMessages,
-                record: forkRecord
+                record: forkRecord,
+                initialConfigOptions: forkConfigOptions
             )
 
             let target = ACPSession(
@@ -5238,6 +5249,9 @@ public final class ACPSessionManager: ChangeTracking {
            !sourceRemoteSessionID.isEmpty,
            sourceBoundaryMatches {
             let result: ACPSessionNewResult
+            let startupConfigOptions = await startupConfigOptions(
+                for: session.id, cwd: worktreePath, using: connection,
+                sessionCapabilities: initialized.sessionCapabilities)
             do {
                 result = try await performRemoteSessionCreation(
                     for: attempt,
@@ -5249,6 +5263,7 @@ public final class ACPSessionManager: ChangeTracking {
                         sessionId: sourceRemoteSessionID,
                         mcpServers: wireMCPServers,
                         forkPoint: forkPoint?.target,
+                        configOptions: startupConfigOptions,
                         brokerOperationKey: Self.brokerStartupOperationKey(
                             sessionId: session.id,
                             method: "session/fork",
@@ -5271,6 +5286,7 @@ public final class ACPSessionManager: ChangeTracking {
                             cwd: worktreePath,
                             sessionId: forked.sessionId,
                             mcpServers: wireMCPServers,
+                            configOptions: startupConfigOptions,
                             brokerOperationKey: Self.brokerStartupOperationKey(
                                 sessionId: session.id,
                                 method: "session/resume",

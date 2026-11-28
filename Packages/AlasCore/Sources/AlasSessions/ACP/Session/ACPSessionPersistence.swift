@@ -149,9 +149,11 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
     public func createFork(
         session: ACPSessionRow,
         messages: [ACPStoredMessage],
-        record: ACPSessionForkRecord
+        record: ACPSessionForkRecord,
+        initialConfigOptions: [ACPInitialConfigOption] = []
     ) throws {
-        try openedStore().createFork(session: session, messages: messages, record: record)
+        try openedStore().createFork(
+            session: session, messages: messages, record: record, initialConfigOptions: initialConfigOptions)
     }
 
     public func loadFork(targetSessionID: String) throws -> ACPSessionForkRecord? {
