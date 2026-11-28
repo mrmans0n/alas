@@ -513,6 +513,7 @@ function handle(msg) {
       if (isActiveDiff(msg.path, msg.stage || null)) {
         clearDiff();
         $("diff-rows").append(el("p", "placeholder-card", fileAccessMessage(msg.reason, null)));
+        showFileCommentList($("diff-rows"), msg.path, msg.stage || null);
       }
       break;
     case "fileTree": {
@@ -1285,6 +1286,7 @@ let diffRender = 0;    // bumped whenever #diff-rows changes, so a late load kno
 function clearDiff() {
   diffRender += 1;
   diffContext = null;
+  diffCommentList = null;
   reviewDraft = null;
   if (diffView) diffView.cleanUp();
   diffView = null;
@@ -1314,6 +1316,7 @@ async function renderDiff(path, stage, hunks, truncated, metadataNote) {
   const metadataNotice = RemoteChangesView.metadataOnlyNotice(hunks, metadataNote);
   if (metadataNotice) {
     container.append(el("p", "placeholder-card", metadataNotice));
+    showFileCommentList(container, path, stage);
     return;
   }
   const current = diffRender;
@@ -1340,6 +1343,7 @@ async function renderDiff(path, stage, hunks, truncated, metadataNote) {
     if (current !== diffRender) return;
     console.warn("Showing a plain diff:", error);
     clearDiff();
+    showFileCommentList(container, path, stage);
     renderPlainDiff(container, hunks);
   }
   if (notice) container.append(el("p", "placeholder-card", notice));
@@ -1407,6 +1411,7 @@ function hostFailure(result) {
 let reviewState = { sessionId: null, comments: [], sent: {}, readError: "" };
 let reviewDraft = null;    // { anchor, error } while a comment is being written in the open diff
 let diffContext = null;    // { path, stage, hunks } of the diff showing in #diff-rows
+let diffCommentList = null;   // { path, stage, box } when that diff lists its comments instead of annotating
 let reviewSending = null;  // { targets, error } while Send to agent picks a chat; targets null while they load
 const reviewSendsInFlight = new Set();   // review session ids being sent, so a second send waits for the first
 
@@ -1467,7 +1472,26 @@ function diffAnnotations() {
 
 // Not while a comment is being written: redrawing the annotations would drop what was typed.
 function refreshDiffAnnotations() {
+  renderFileCommentList();
   if (!reviewDraft) showDiffAnnotations();
+}
+
+// A diff with no lines to annotate (binary, metadata only, failed, or the plain fallback) lists the
+// file's open comments above it instead, so they can still be read and resolved.
+function showFileCommentList(container, path, stage) {
+  const box = el("div", "review-file-comments");
+  container.prepend(box);
+  diffCommentList = { path, stage, box };
+  renderFileCommentList();
+}
+
+function renderFileCommentList() {
+  if (!diffCommentList) return;
+  const { path, stage, box } = diffCommentList;
+  box.innerHTML = "";
+  for (const comment of RemoteChangesView.fileComments(reviewState.comments, stage, path)) {
+    box.append(renderCommentCard(comment, comment.anchor && comment.anchor.line));
+  }
 }
 
 function showDiffAnnotations() {
@@ -1510,6 +1534,7 @@ function renderCommentComposer(draft) {
     const body = input.value.trim();
     if (!body || !diffContext) return;
     submit.disabled = true;
+    input.readOnly = true;   // what's sent is what stays: no edits the save would then drop
     const { path, stage } = diffContext;
     const failure = await changeReview({ add: {
       fileID: { namespace: stage, path }, path,
@@ -1518,6 +1543,7 @@ function renderCommentComposer(draft) {
     if (reviewDraft !== draft) return;
     if (failure) {
       submit.disabled = false;
+      input.readOnly = false;
       error.textContent = draft.error = failure;
       error.classList.remove("hidden");
       return;

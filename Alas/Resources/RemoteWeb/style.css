@@ -808,3 +808,5 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 .review-unlisted-title { margin: 4px 0 0; color: var(--fg-faint); font-size: 11.5px; }
 .review-unlisted .review-comment { margin: 6px 0 0; }
 .review-comment-file { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-muted); overflow-wrap: anywhere; }
+.review-file-comments .review-comment { margin: 6px 0; }
+.review-composer textarea[readonly] { opacity: .7; }
