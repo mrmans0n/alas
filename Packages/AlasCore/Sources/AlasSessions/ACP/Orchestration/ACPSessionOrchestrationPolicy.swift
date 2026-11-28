@@ -280,6 +280,34 @@ public enum ACPSessionOrchestrationPolicy: Sendable {
         return nil
     }
 
+    /// The config option values that carry a delegated `selection` in a
+    /// session's first `session/new`, keyed by option id, from the agent's
+    /// `session/options` preview. Only a model or reasoning level the
+    /// preview's option lists is included: anything else (a model set with
+    /// `session/set_model`, thinking encoded as a mode, a level only another
+    /// model offers) is left for the live session to set and validate.
+    public static func startupConfigValues(
+        for selection: ACPDelegatedModelSelection,
+        agentId: String,
+        preview: ACPSessionNewResult
+    ) -> [String: ACPConfigValue] {
+        let chips = ACPChipState.normalize(
+            agentId: agentId,
+            availableModels: preview.availableModels,
+            currentModel: preview.currentModel,
+            availableModes: preview.availableModes,
+            currentMode: preview.currentMode,
+            configOptions: preview.configOptions)
+        var values: [String: ACPConfigValue] = [:]
+        for (value, chip) in [(selection.model, chips.models), (selection.reasoning, chips.thinking)] {
+            guard let value, let chip, case .configOption(let id) = chip.source,
+                  chip.options.contains(where: { $0.id == value })
+            else { continue }
+            values[id] = .string(value)
+        }
+        return values
+    }
+
     /// How to apply a requested model on a live session, from what the agent
     /// advertised in `session/new`. Nil means it is already selected.
     public static func liveModelStep(
