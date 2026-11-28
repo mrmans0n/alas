@@ -11,6 +11,8 @@ enum ReviewDraftCommentPlacement {
         let image: [ReviewDraftComment]
         let byRowAnchor: [RowKey: [ReviewDraftComment]]
         let groupIDByCommentID: [String: String]
+        /// The lines each comment whose quoted code moved now sits on.
+        var movedLines: [String: ClosedRange<Int>] = [:]
     }
 
     static func position(
@@ -23,6 +25,8 @@ enum ReviewDraftCommentPlacement {
         var image: [ReviewDraftComment] = []
         var byRowAnchor: [RowKey: [ReviewDraftComment]] = [:]
         var groupIDByCommentID: [String: String] = [:]
+        var movedLines: [String: ClosedRange<Int>] = [:]
+        let (oldLines, newLines) = quotedLines(in: groups)
 
         for comment in comments where comment.state != .dismissed {
             if case .image = comment.anchor {
@@ -33,7 +37,21 @@ enum ReviewDraftCommentPlacement {
                 fileLevel.append(comment)
                 continue
             }
-            let key = RowKey(side: comment.side, line: lineRange.upperBound)
+            // A comment that quotes its lines follows them when the code above it moves, as on the phone.
+            var line = lineRange.upperBound
+            if comment.side == .old || comment.side == .new {
+                let lines = comment.side == .new ? newLines : oldLines
+                switch lines.locate(start: lineRange.lowerBound, end: lineRange.upperBound, quoted: comment.selectedText) {
+                case .byNumber, .atAnchor: break
+                case .moved(let moved):
+                    line = moved.upperBound
+                    movedLines[comment.id] = moved
+                case .lost:
+                    fileLevel.append(comment)
+                    continue
+                }
+            }
+            let key = RowKey(side: comment.side, line: line)
             if visibleKeys.contains(key) {
                 byRowAnchor[key, default: []].append(comment)
                 if let groupID = groupIDByKey[key] {
@@ -48,8 +66,23 @@ enum ReviewDraftCommentPlacement {
             fileLevel: sorted(fileLevel),
             image: sorted(image),
             byRowAnchor: byRowAnchor.mapValues(sorted),
-            groupIDByCommentID: groupIDByCommentID
+            groupIDByCommentID: groupIDByCommentID,
+            movedLines: movedLines
         )
+    }
+
+    /// Each side's numbered lines, collapsed ones included, in diff order.
+    private static func quotedLines(in groups: [DiffDisplayGroup]) -> (old: ReviewQuotedLines, new: ReviewQuotedLines) {
+        var old = ReviewQuotedLines(), new = ReviewQuotedLines()
+        func add(_ rows: [DiffDisplayRow]) {
+            for row in rows {
+                if let line = row.old, let number = line.lineNumber { old.append(number: number, text: line.text) }
+                if let line = row.new, let number = line.lineNumber { new.append(number: number, text: line.text) }
+                add(row.collapsedRows)
+            }
+        }
+        for group in groups { add(group.rows) }
+        return (old, new)
     }
 
     private static func firstGroupIDByRowKey(in groups: [DiffDisplayGroup]) -> [RowKey: String] {

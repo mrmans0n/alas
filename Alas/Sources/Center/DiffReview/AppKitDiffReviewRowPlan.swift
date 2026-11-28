@@ -308,7 +308,11 @@ struct AppKitDiffReviewRowInput {
     }
 
     private var currentDisplayGroups: [DiffDisplayGroup] {
-        guard let displayModel = file.displayModel else { return [] }
+        currentReviewContext?.groups.map(\.displayGroup) ?? []
+    }
+
+    private var currentReviewContext: DiffReviewRenderContext? {
+        guard let displayModel = file.displayModel else { return nil }
         return state.renderContextCache.reviewContext(
             fileID: file.id, displayModel: displayModel,
             contextSnapshot: state.contextSnapshot,
@@ -318,7 +322,7 @@ struct AppKitDiffReviewRowInput {
             pendingDraftAnchor: state.pendingDraftAnchor,
             canCreateDraftComment: allowsDraftCommentCreation,
             threads: threads, annotations: annotations
-        ).groups.map(\.displayGroup)
+        )
     }
 
     private var contextStateSignature: DiffReviewContextStateSignature {
@@ -350,7 +354,8 @@ struct AppKitDiffReviewRowInput {
         case .draft(let id):
             guard let comment = draftComments.first(where: { $0.id == id }),
                   comment.state != .dismissed,
-                  let lineRange = comment.normalizedLineRange else { return nil }
+                  let lineRange = currentReviewContext?.draftPlacement.movedLines[id] ?? comment.normalizedLineRange
+            else { return nil }
             return .init(path: comment.path, side: comment.side, lineRange: lineRange)
         case .inlineFeedback(let id):
             guard let item = inlineFeedback.first(where: { $0.id == id }), let line = item.anchor.line else { return nil }
