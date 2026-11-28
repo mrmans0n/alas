@@ -75,6 +75,18 @@ struct ACPAuthStatusTests {
         #expect(status.vendor != nil)
     }
 
+    @Test("a standard auth state shows as a status once the agent knows it", arguments: [
+        (#"{"state":"authenticated","accounts":[{"label":"Old"},{"label":"ChatGPT Pro","active":true,"email":"a@b.c"}]}"#,
+         ACPAuthStatus(kind: .account, label: "ChatGPT Pro", account: .init(email: "a@b.c", organization: nil, plan: nil))),
+        (#"{"state":"authenticated"}"#, ACPAuthStatus(kind: .account, label: "Signed in")),
+        (#"{"state":"unauthenticated"}"#, ACPAuthStatus(kind: .none, label: "Signed out")),
+        (#"{"state":"not_required"}"#, ACPAuthStatus(kind: .external, label: "No sign-in required")),
+        (#"{"state":"unknown"}"#, nil),
+    ] as [(String, ACPAuthStatus?)])
+    func standardAuthState(wire: String, expected: ACPAuthStatus?) throws {
+        #expect(try JSONDecoder().decode(ACPAuthState.self, from: Data(wire.utf8)).status == expected)
+    }
+
     @Test("decodes the _auth/status_update notification params")
     func decodesUpdateParams() throws {
         let data = Data("""

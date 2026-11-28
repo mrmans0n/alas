@@ -699,7 +699,7 @@ struct AgentLauncherDialog: View {
                         onTap: { openDiscoveredSession(item) }
                     )
                     .contextMenu {
-                        if discoveryModel?.sessionIndex?.rename == true {
+                        if discoveryModel?.canRename == true {
                             Button("Rename…") {
                                 renameDraft = item.title
                                 renameTarget = item

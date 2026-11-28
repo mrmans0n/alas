@@ -1034,7 +1034,8 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
     private static let durableAdapterNotificationMethods: Set<String> = [
         "session/update",
         ACPOpenCodeChildUpdate.method,
-        "_auth/status_update"
+        "_auth/status_update",
+        "auth/status_update"
     ]
 
     /// Marks the event as dispatched AND claims its durable-cursor
@@ -1221,6 +1222,18 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
             }
             authStatusCont.yield(.init(
                 status: decoded.authStatus,
+                durableConsumptionAcknowledgement: { [weak self] in
+                    self?.ackDurableEvent(cursor: cursor)
+                }
+            ))
+        case "auth/status_update":
+            guard let status = (try? JSONDecoder().decode(ACPAuthState.self, from: params.data))?.status else {
+                releaseUnconsumedDurableCursor(cursor)
+                return
+            }
+            authStatusCont.yield(.init(
+                status: status,
+                isStandard: true,
                 durableConsumptionAcknowledgement: { [weak self] in
                     self?.ackDurableEvent(cursor: cursor)
                 }

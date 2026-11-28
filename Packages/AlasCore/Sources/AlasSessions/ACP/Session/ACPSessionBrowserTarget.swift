@@ -212,9 +212,17 @@ public final class ACPSessionDiscoveryHandle {
         try await connection.deleteSession(sessionId: remoteSessionId)
     }
 
+    /// The session index's rename, else the standard `session/set_title`.
+    nonisolated public var canRename: Bool { sessionIndex?.rename == true || capabilities.canSetTitle }
+
     public func renameSession(remoteSessionId: String, title: String) async throws {
-        guard sessionIndex?.rename == true else { throw ACPSessionDiscoveryError.renameUnsupported }
-        try await connection.renameSession(sessionId: remoteSessionId, title: title)
+        if sessionIndex?.rename == true {
+            try await connection.renameSession(sessionId: remoteSessionId, title: title)
+        } else if capabilities.canSetTitle {
+            try await connection.setSessionTitle(sessionId: remoteSessionId, title: title)
+        } else {
+            throw ACPSessionDiscoveryError.renameUnsupported
+        }
     }
 
     public func setArchived(_ archived: Bool, remoteSessionId: String) async throws {

@@ -97,6 +97,73 @@ extension ACPAuthStatus.Kind: Codable {
     }
 }
 
+/// The standard ACP auth state (Agent Authentication State Query RFD): the
+/// `auth/status` result and `auth/status_update` params.
+public struct ACPAuthState: Codable, Equatable, Sendable {
+    public struct Account: Codable, Equatable, Sendable {
+        public let label: String?
+        public let active: Bool?
+        public let email: String?
+        public let organization: String?
+        public let description: String?
+
+        public init(label: String?, active: Bool? = nil, email: String? = nil,
+                    organization: String? = nil, description: String? = nil) {
+            self.label = label
+            self.active = active
+            self.email = email
+            self.organization = organization
+            self.description = description
+        }
+    }
+
+    public let state: String
+    public let accounts: [Account]?
+
+    public init(state: String, accounts: [Account]? = nil) {
+        self.state = state
+        self.accounts = accounts
+    }
+
+    /// The status this state shows, or nil while the agent does not know it
+    /// yet (`unknown`, or a state this client does not know).
+    public var status: ACPAuthStatus? {
+        switch state {
+        case "authenticated":
+            let account = accounts?.first { $0.active == true } ?? accounts?.first
+            let details = account.flatMap { $0.email == nil && $0.organization == nil ? nil : $0 }
+            return ACPAuthStatus(
+                kind: .account,
+                label: account?.label ?? "Signed in",
+                detail: account?.description,
+                account: details.map { .init(email: $0.email, organization: $0.organization, plan: nil) }
+            )
+        case "unauthenticated":
+            return ACPAuthStatus(kind: .none, label: "Signed out")
+        case "not_required":
+            return ACPAuthStatus(kind: .external, label: "No sign-in required")
+        default:
+            return nil
+        }
+    }
+}
+
+/// Where a connection takes its auth status from.
+public enum ACPAuthStatusSource: Equatable, Sendable {
+    /// The agent sends none.
+    case none
+    /// The shared `_auth/status_update` extension, which tells an API key from
+    /// an account and gives the plan.
+    case `extension`
+    /// The standard `auth/status` query and `auth/status_update`, for an
+    /// agent without the extension.
+    case standard
+
+    public static func negotiated(advertisesExtension: Bool, supportsStandardQuery: Bool) -> Self {
+        advertisesExtension ? .extension : supportsStandardQuery ? .standard : .none
+    }
+}
+
 /// Wire params for the `_auth/status_update` notification.
 public struct ACPAuthStatusUpdateParams: Codable, Equatable, Sendable {
     public let authStatus: ACPAuthStatus
@@ -114,10 +181,17 @@ public struct ACPAuthStatusUpdateParams: Codable, Equatable, Sendable {
 /// silently drop the notification for the next process's replay.
 public struct ACPAuthStatusEvent: Sendable {
     public let status: ACPAuthStatus
+    /// Sent as the standard `auth/status_update` rather than the extension.
+    public let isStandard: Bool
     public let durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement?
 
-    public init(status: ACPAuthStatus, durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil) {
+    public init(
+        status: ACPAuthStatus,
+        isStandard: Bool = false,
+        durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
         self.status = status
+        self.isStandard = isStandard
         self.durableConsumptionAcknowledgement = durableConsumptionAcknowledgement
     }
 }

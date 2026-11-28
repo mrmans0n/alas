@@ -560,6 +560,9 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         /// `true` when `_meta.authStatus` was present on `initialize`, i.e.
         /// the agent will push `_auth/status_update` notifications.
         public let advertisesAuthStatus: Bool
+        /// `auth.status`: the standard `auth/status` query and
+        /// `auth/status_update` notification.
+        public let supportsAuthStatusQuery: Bool
 
         public init(
             promptCapabilities: ACPPromptCapabilities? = nil,
@@ -568,7 +571,8 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             mcpCapabilities: ACPMCPServerCapabilities = .init(),
             providerCapabilities: EmptyObject? = nil,
             meta: Meta = .init(),
-            advertisesAuthStatus: Bool = false
+            advertisesAuthStatus: Bool = false,
+            supportsAuthStatusQuery: Bool = false
         ) {
             self.promptCapabilities = promptCapabilities
             self.loadSession = loadSession
@@ -577,16 +581,21 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             self.providerCapabilities = providerCapabilities
             self.meta = meta
             self.advertisesAuthStatus = advertisesAuthStatus
+            self.supportsAuthStatusQuery = supportsAuthStatusQuery
         }
 
         public enum CodingKeys: String, CodingKey, Sendable {
-            case promptCapabilities, loadSession, sessionCapabilities, mcpCapabilities
+            case promptCapabilities, loadSession, sessionCapabilities, mcpCapabilities, auth
             case providerCapabilities = "providers"
             case meta = "_meta"
         }
 
         private enum MetaCodingKeys: String, CodingKey {
             case authStatus
+        }
+
+        private enum AuthCodingKeys: String, CodingKey {
+            case status
         }
 
         public init(from decoder: Decoder) throws {
@@ -605,6 +614,11 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
                     EmptyObject.self, forKey: .authStatus)) != nil
             } else {
                 advertisesAuthStatus = false
+            }
+            if let auth = try? c.nestedContainer(keyedBy: AuthCodingKeys.self, forKey: .auth) {
+                supportsAuthStatusQuery = (try? auth.decodeIfPresent(EmptyObject.self, forKey: .status)) != nil
+            } else {
+                supportsAuthStatusQuery = false
             }
         }
 
@@ -649,6 +663,8 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public let close: EmptyObject?
         /// `session/options`, and initial `configOptions` on the setup requests.
         public let options: EmptyObject?
+        /// `session/set_title` (unstable ACP).
+        public let title: EmptyObject?
 
         public init(
             list: EmptyObject? = nil,
@@ -656,7 +672,8 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             fork: EmptyObject? = nil,
             delete: EmptyObject? = nil,
             close: EmptyObject? = nil,
-            options: EmptyObject? = nil
+            options: EmptyObject? = nil,
+            title: EmptyObject? = nil
         ) {
             self.list = list
             self.resume = resume
@@ -664,6 +681,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             self.delete = delete
             self.close = close
             self.options = options
+            self.title = title
         }
 
         public var supportsList: Bool { list != nil }
@@ -672,6 +690,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public var supportsDelete: Bool { delete != nil }
         public var supportsClose: Bool { close != nil }
         public var supportsOptions: Bool { options != nil }
+        public var supportsTitle: Bool { title != nil }
     }
     public struct ACPPromptCapabilities: Codable, Equatable, Sendable {
         public let image: Bool

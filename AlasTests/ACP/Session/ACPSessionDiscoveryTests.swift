@@ -666,6 +666,37 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("without the session index, a rename uses the standard session/set_title", arguments: [true, false])
+    func renameFallsBackToSetTitle(agentSetsTitles: Bool) async throws {
+        let store = try temporaryStore()
+        let client = ACPMockClient()
+        let title = agentSetsTitles ? #","title":{}"# : ""
+        client.script(method: "initialize") { _ in
+            Data(#"{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"list":{}\#(title)}}}"#.utf8)
+        }
+        client.script(method: "session/list") { _ in
+            try JSONEncoder().encode(ACPSessionListResult(sessions: [.init(sessionId: "remote-1", cwd: "/tmp/wt", title: "Remote")]))
+        }
+        client.script(method: "session/set_title") { _ in Data(#"{"title":"Renamed"}"#.utf8) }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        defer { Task { await model.stop() } }
+
+        #expect(model.canRename == agentSetsTitles)
+        let first = try #require(model.sessions.first)
+        if agentSetsTitles {
+            try await model.rename(first, to: "Renamed") { _, _ in nil }
+            #expect(client.sent.first { $0.method == "session/set_title" }?.params as? ACPSessionRenameParams
+                == .init(sessionId: "remote-1", title: "Renamed"))
+        } else {
+            await #expect(throws: ACPSessionDiscoveryError.renameUnsupported) {
+                try await model.rename(first, to: "Renamed") { _, _ in nil }
+            }
+        }
+        #expect(!client.sent.contains { $0.method == "_session/rename" })
+    }
+
+    @MainActor
     @Test("rename and archive go to the agent; archive leaves the Alas session and a failure keeps the row")
     func renameAndArchive() async throws {
         let store = try temporaryStore()

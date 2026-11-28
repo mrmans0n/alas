@@ -432,6 +432,16 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
                     durableConsumptionAcknowledgement: onConsumed
                 ))
             }
+        case "auth/status_update":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPAuthState>.self, from: data),
+               let status = env.params?.status {
+                acknowledgeAfterDispatch = false
+                authStatusCont.yield(.init(
+                    status: status,
+                    isStandard: true,
+                    durableConsumptionAcknowledgement: onConsumed
+                ))
+            }
         case "_session/list/changes":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPSessionListChanges>.self, from: data),
                let p = env.params {
