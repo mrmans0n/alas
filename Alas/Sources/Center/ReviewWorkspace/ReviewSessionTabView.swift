@@ -969,6 +969,8 @@ struct ReviewSessionTabView: View {
             sessionID: tabState.sessionID,
             recordHandoff: { handoff in
                 recordSessionHandoff(handoff, originRecordID: handoffOriginRecordID)
+                // Paired Macs and phones following this worktree show which comments were sent.
+                if persistsState { appState?.host.reviews.didChange(worktreeID: tabState.worktreeId) }
             },
             recordSendFailure: { error in
                 recordSessionSendFailure(error, originRecordID: handoffOriginRecordID)

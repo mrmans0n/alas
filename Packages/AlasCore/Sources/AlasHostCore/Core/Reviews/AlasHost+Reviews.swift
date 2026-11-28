@@ -55,7 +55,7 @@ public struct ReviewsAPI {
 
     /// Tells the views showing `worktreeID`'s reviews, and the paired Macs
     /// following it, that they changed.
-    func didChange(worktreeID: String) {
+    public func didChange(worktreeID: String) {
         core.reviewCommentsDidChange()
         changed([.reviewsChanged(worktreeID: worktreeID)])
     }
