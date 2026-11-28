@@ -1085,6 +1085,44 @@ struct ACPSessionForkAttachTests {
         #expect(target.forkRecord?.forkPoint?.outcome == (targeted ? .matched(Self.claudeEcho) : nil))
     }
 
+    @Test("a native fork asks for its source's settings, since the adapters start a fork on their defaults",
+          arguments: [true, false])
+    func nativeForkSendsTheSourceSettings(agentTakesOptions: Bool) async throws {
+        let store = try seededForkStore(seedsFork: false)
+        let sourceClient = ACPMockClient()
+        scriptInitialize(sourceClient, supportsFork: true, supportsOptions: agentTakesOptions)
+        sourceClient.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "source-remote", availableModels: [], availableModes: [], currentModel: nil,
+                currentMode: nil, promptSuggestions: [], configOptions: [
+                    ACPConfigOption(id: "model", name: "Model", category: "model", currentValue: "opus",
+                                    options: [.init(id: "default", name: "Default"), .init(id: "opus", name: "Opus")]),
+                    ACPConfigOption(id: "effort", name: "Thinking", currentValue: "low",
+                                    options: [.init(id: "low", name: "Low"), .init(id: "high", name: "High")]),
+                ]))
+        }
+        let targetClient = durableMockClient()
+        scriptInitialize(targetClient, supportsFork: true, supportsOptions: agentTakesOptions)
+        scriptSessionResult(targetClient, method: "session/fork", sessionId: "forked-remote")
+        let (manager, source, _) = try await makeManagerWithDetachedSource(
+            store: store, clients: [sourceClient, targetClient]
+        )
+
+        let target = try await manager.createFork(
+            sourceSessionID: source.id, boundary: try forkBoundary(of: source, at: 0),
+            targetAgentID: "claude", autoRunDefault: false
+        )
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        #expect(targetClient.sent.map(\.method) == ["initialize", "session/fork"])
+        let params = try #require(targetClient.sent.last?.params as? ACPSessionForkParams)
+        #expect(params.configOptions == (agentTakesOptions ? [
+            .init(configId: "model", value: .string("opus")),
+            .init(configId: "effort", value: .string("low")),
+        ] : nil))
+        #expect(target.forkRecord?.mechanism == .nativeACP)
+    }
+
     enum DetachedSourceAttach: String, CaseIterable, Sendable {
         case launchFails
         case agentLostSession
@@ -1423,6 +1461,7 @@ struct ACPSessionForkAttachTests {
         supportsResume: Bool = false,
         supportsClose: Bool = false,
         loadSession: Bool = false,
+        supportsOptions: Bool = false,
         authMethods: [ACPInitializeResult.ACPAuthMethod] = [],
         forkPoint: String? = nil
     ) {
@@ -1434,7 +1473,8 @@ struct ACPSessionForkAttachTests {
                     sessionCapabilities: .init(
                         resume: supportsResume ? .init() : nil,
                         fork: supportsFork ? .init() : nil,
-                        close: supportsClose ? .init() : nil
+                        close: supportsClose ? .init() : nil,
+                        options: supportsOptions ? .init() : nil
                     )
                 ),
                 authMethods: authMethods
