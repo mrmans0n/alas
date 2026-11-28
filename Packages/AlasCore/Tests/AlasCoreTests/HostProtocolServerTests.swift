@@ -2646,7 +2646,10 @@ struct HostProtocolServerTests {
             send: { worktreeID, sessionID, target in sent.withLock { $0.append([worktreeID, sessionID, target.id]) } }
         )
         #expect(await request(targets) == .reviewAgentTargets(targets: [.newChat(agentID: "codex", title: "New chat \(worktree.id)")]))
+        let subscription = fixture.host.subscribe()
         #expect(await request(send) == .reviewSentToAgent)
+        // Paired Macs following the worktree reload its reviews to show the sent marks.
+        #expect(await fixture.events(of: subscription).contains(.reviewsChanged(worktreeID: worktree.id)))
         #expect(fixture.host.servedCapabilities.contains(HostProtocolCapability.reviewsAgentPhoneV1))
         #expect(sent.withLock { $0 } == [[worktree.id, sessionID, target.id]])
         #expect(await request(.sendReviewToAgent(worktree: ref, sessionID: "other", target: target))
