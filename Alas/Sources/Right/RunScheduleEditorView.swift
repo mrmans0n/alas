@@ -546,6 +546,7 @@ struct RunScheduleEditorView: View {
                             helpText(RunSchedulePresentation.modelCatalogEmptyHint)
                         }
                     }
+                    .task(id: agentID) { await state.previewACPAgentOptions(agentID: agentID) }
                 }
             }
             DialogField(label: "Prompt") {

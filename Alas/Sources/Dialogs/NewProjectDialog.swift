@@ -1196,7 +1196,8 @@ private struct ProjectDialog: View {
                             from: state.enabledAgents(forProjectId: project.id)
                         ),
                         modelCatalog: state.acpModelCatalog,
-                        picksReviewer: true
+                        picksReviewer: true,
+                        previewOptions: { await state.previewACPAgentOptions(agentID: $0) }
                     )
                 }
                 VStack(alignment: .leading, spacing: 8) {

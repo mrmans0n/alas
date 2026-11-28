@@ -15,6 +15,9 @@ struct AgentModelPicker: View {
     let agents: [AgentDefinition]
     let modelCatalog: ACPAgentModelCatalog
     var picksReviewer = false
+    /// Asks the selected agent for its real models before any session of it
+    /// has run; see `AppState.previewACPAgentOptions`.
+    var previewOptions: ((String) async -> Void)? = nil
 
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
@@ -28,6 +31,9 @@ struct AgentModelPicker: View {
             if let selectedAgentID {
                 modelChip(agentID: selectedAgentID)
             }
+        }
+        .task(id: selectedAgentID) {
+            if let selectedAgentID { await previewOptions?(selectedAgentID) }
         }
     }
 

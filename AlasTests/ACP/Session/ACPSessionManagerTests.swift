@@ -37,6 +37,37 @@ struct ACPSessionManagerTests {
         }
     }
 
+    @Test("a session-options preview reports the agent's models without starting a session",
+          arguments: [true, false])
+    func previewSessionOptionsReportsChips(agentPreviews: Bool) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("preview-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let client = ACPMockClient()
+        let options = agentPreviews ? #","sessionCapabilities":{"options":{}}"# : ""
+        client.script(method: "initialize") { _ in
+            Data(#"{"protocolVersion":1,"agentCapabilities":{"loadSession":true\#(options)}}"#.utf8)
+        }
+        client.script(method: "session/options") { _ in
+            Data(#"{"configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"sonnet","options":[{"value":"sonnet","name":"Sonnet"},{"value":"opus","name":"Opus"}]}]}"#.utf8)
+        }
+        var reported: [(agent: String, models: [String])] = []
+        let manager = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) },
+            onChipsObserved: { agent, _, chips in reported.append((agent, chips.models?.options.map(\.id) ?? [])) }
+        )
+
+        #expect(await manager.previewSessionOptions(agentId: "claude") == agentPreviews)
+
+        #expect(reported.map(\.agent) == (agentPreviews ? ["claude"] : []))
+        #expect(reported.first?.models == (agentPreviews ? ["sonnet", "opus"] : nil))
+        #expect(client.sent.contains { $0.method == "session/options" } == agentPreviews)
+        #expect(!client.sent.contains { $0.method == "session/new" })
+        #expect(client.shutdownCount == 1)
+    }
+
     @Test(.timeLimit(.minutes(1)), arguments: [false, true])
     func replacementReadsWaitForPreviousManagerWrites(afterFlush: Bool) async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rebind-writes-\(UUID()).sqlite")
