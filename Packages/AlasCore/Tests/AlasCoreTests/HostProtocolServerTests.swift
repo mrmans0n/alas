@@ -2781,6 +2781,28 @@ struct HostProtocolServerTests {
         #expect(provider.threadMutations.count == 1)
     }
 
+    /// A client builds the local-changes id from the worktree path it was
+    /// shown, which can reach the stored one through a symlink: it still
+    /// names the host's own review.
+    @Test func aLocalChangesIdBuiltFromAnotherPathToTheWorktreeNamesTheHostsReview() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, _) = try await fixture.mainWorktree()
+        try "changed\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let shown = URL(fileURLWithPath: "/private" + worktree.path.path)
+        let clients = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: shown, scope: .all).rawValue
+        let hosts = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all).rawValue
+        #expect(clients != hosts)
+
+        try await fixture.host.reviews.mutate(.add(
+            fileID: DiffReviewFileID(namespace: "unstaged", path: "a.txt"), path: "a.txt", originalPath: nil, anchor: .file, body: "Why?"
+        ), sessionID: clients, in: worktree, caller: .app)
+
+        #expect(try fixture.host.reviews.read(clients, in: worktree).comments.map(\.bodyMarkdown) == ["Why?"])
+        #expect(try fixture.host.reviews.read(hosts, in: worktree).comments.map(\.bodyMarkdown) == ["Why?"])
+    }
+
     /// Saves draft `id` on line `line` of a.txt in review `session`.
     private static func saveDraft(_ id: String, line: Int, in session: ReviewDraftSessionID, to fixture: RepoFixture) throws {
         try fixture.core.reviewDrafts.save(ReviewDraftComment(

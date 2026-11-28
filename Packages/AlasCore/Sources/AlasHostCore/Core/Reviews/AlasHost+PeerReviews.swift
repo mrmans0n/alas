@@ -41,10 +41,21 @@ extension ReviewsAPI {
         noticeOpened(in: worktree, label: "local changes", sessionID: session.rawValue)
     }
 
+    /// `sessionID` as this host files it. A client builds the local-changes
+    /// id from the worktree path it was shown, which may reach the stored one
+    /// through a symlink (`/private/tmp` for `/tmp`), so any id of the
+    /// worktree's whole local changes names the host's own.
+    public func hostSessionID(_ sessionID: String, in worktree: Worktree) -> String {
+        guard let parsed = ReviewDraftSessionID(rawValue: sessionID), parsed.sourceKind == .localChanges,
+              parsed.isFor(worktreeID: worktree.id), parsed.localChangesScope == .all else { return sessionID }
+        return ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all).rawValue
+    }
+
     /// Review `sessionID` of the worktree with every comment, those on files
     /// that no longer differ included. The local-changes review reads before
     /// it is listed, with no comments and nothing saved, so a Mac may start it.
     public func read(_ sessionID: String, in worktree: Worktree) throws -> HostReview {
+        let sessionID = hostSessionID(sessionID, in: worktree)
         guard let parsed = ReviewDraftSessionID(rawValue: sessionID), parsed.isFor(worktreeID: worktree.id) else {
             throw HostError.notFound(what: "review \(sessionID)")
         }
@@ -63,6 +74,7 @@ extension ReviewsAPI {
     /// the user, as the review pane makes it locally.
     public func mutate(_ mutation: HostReviewMutation, sessionID: String, in worktree: Worktree, caller: HostCaller) async throws {
         caller.log("reviews.mutate", sessionID)
+        let sessionID = hostSessionID(sessionID, in: worktree)
         let localChanges = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
         guard let session = ReviewDraftSessionID(rawValue: sessionID), session.isFor(worktreeID: worktree.id) else {
             throw HostError.notFound(what: "review \(sessionID)")

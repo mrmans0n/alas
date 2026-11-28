@@ -512,7 +512,7 @@ public final class HostProtocolConnection {
         case .sendReviewToAgent(let ref, let sessionID, let target):
             let (seam, listed) = try reviewAgentWorktree(ref, sessionID: sessionID)
             caller.log("reviews.sendToAgent", "\(sessionID) \(target.id)")
-            try await seam.send(listed.id, sessionID, target)
+            try await seam.send(listed.id, host.reviews.hostSessionID(sessionID, in: listed), target)
             // The send records which comments went to the agent.
             host.reviews.didChange(worktreeID: listed.id)
             return .reviewSentToAgent
