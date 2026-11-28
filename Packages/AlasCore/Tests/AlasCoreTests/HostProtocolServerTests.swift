@@ -2610,6 +2610,41 @@ struct HostProtocolServerTests {
         }
     }
 
+    /// An app host serves draft reviews to the user's own clients, the phone
+    /// and a full-scope browser, and to nothing else.
+    @Test(arguments: [
+        (RemoteDeviceKind.phone, RemoteDeviceScope.full, true),
+        (.browser, .full, true),
+        (.browser, .delegation, false),
+        (.alasInstance, .full, false),
+    ])
+    func anAppHostServesDraftReviewsToTheUsersOwnClients(kind: RemoteDeviceKind, scope: RemoteDeviceScope, served: Bool) async throws {
+        let fixture = try await RepoFixture(environment: RecordingRunEnvironment())
+        defer { fixture.tearDown() }
+        let (_, ref) = try await fixture.mainWorktree()
+        let server = HostProtocolServer(host: fixture.host)
+        server.delegationPairing = RemotePairingService(store: MemoryDeviceStore(devices: [RemoteDevice(
+            id: "d1", name: "d1", tokenHash: "d1", createdAt: .distantPast, lastSeenAt: nil, kind: kind, scope: scope
+        )]))
+        let client = Client()
+        let connection = server.connect(caller: .remotePeer(deviceID: "d1"), send: client.receive)
+
+        await connection.receive(HostClientMessage(id: 1, request: .listReviews(worktree: ref)))
+
+        guard case .response(1, let result) = client.messages.last else {
+            Issue.record("no response")
+            return
+        }
+        if served {
+            guard case .reviews = result else {
+                Issue.record("\(result)")
+                return
+            }
+        } else {
+            #expect(result == .failure(error: .invalidRequest(reason: "This host does not serve reviews.")))
+        }
+    }
+
     /// The phone lists where a review can go and sends it through the app's
     /// seam; a host without one refuses both.
     @Test func thePhoneSendsAReviewToAnAgentThroughTheApp() async throws {
@@ -2744,6 +2779,29 @@ struct HostProtocolServerTests {
             worktree: ref, sessionID: foreign, threadID: "t1", kind: .resolve, body: nil
         )) == .failure(error: .notFound(what: "review \(foreign)")))
         #expect(provider.threadMutations.count == 1)
+    }
+
+    /// A client builds the local-changes id from the worktree path it was
+    /// shown, which can reach the stored one through a symlink: it still
+    /// names the host's own review.
+    @Test func aLocalChangesIdBuiltFromAnotherPathToTheWorktreeNamesTheHostsReview() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, _) = try await fixture.mainWorktree()
+        try "changed\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        // Not "/private": Linux Foundation's standardizedFileURL strips that prefix back off.
+        let shown = URL(fileURLWithPath: "/mnt/link" + worktree.path.path)
+        let clients = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: shown, scope: .all).rawValue
+        let hosts = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all).rawValue
+        #expect(clients != hosts)
+
+        try await fixture.host.reviews.mutate(.add(
+            fileID: DiffReviewFileID(namespace: "unstaged", path: "a.txt"), path: "a.txt", originalPath: nil, anchor: .file, body: "Why?"
+        ), sessionID: clients, in: worktree, caller: .app)
+
+        #expect(try fixture.host.reviews.read(clients, in: worktree).comments.map(\.bodyMarkdown) == ["Why?"])
+        #expect(try fixture.host.reviews.read(hosts, in: worktree).comments.map(\.bodyMarkdown) == ["Why?"])
     }
 
     /// Saves draft `id` on line `line` of a.txt in review `session`.

@@ -512,7 +512,7 @@ public final class HostProtocolConnection {
         case .sendReviewToAgent(let ref, let sessionID, let target):
             let (seam, listed) = try reviewAgentWorktree(ref, sessionID: sessionID)
             caller.log("reviews.sendToAgent", "\(sessionID) \(target.id)")
-            try await seam.send(listed.id, sessionID, target)
+            try await seam.send(listed.id, host.reviews.hostSessionID(sessionID, in: listed), target)
             // The send records which comments went to the agent.
             host.reviews.didChange(worktreeID: listed.id)
             return .reviewSentToAgent
@@ -734,10 +734,17 @@ public final class HostProtocolConnection {
         try servedWorktree(ref, capability: HostProtocolCapability.worktreesCheckpointsV1)
     }
 
+    /// A device paired with full scope as the native phone app or a browser:
+    /// the user's own client, which reviews as the user does at the Mac.
+    private var callerIsUserClient: Bool {
+        guard case .remotePeer(let deviceID) = caller, let device = delegationPairing()?.device(id: deviceID) else { return false }
+        return device.scope == .full && (device.kind == .phone || device.kind == .browser)
+    }
+
     /// A visible worktree, on a host that serves reviews. An app host still
-    /// serves the user's own phone its draft reviews.
+    /// serves the user's own phone or browser its draft reviews.
     private func reviewWorktree(_ ref: WorktreeRef) throws -> Worktree {
-        guard host.servedCapabilities.contains(HostProtocolCapability.reviewsV1) || callerIsPhone else {
+        guard host.servedCapabilities.contains(HostProtocolCapability.reviewsV1) || callerIsUserClient else {
             throw HostError.invalidRequest(reason: "This host does not serve reviews.")
         }
         return try visibleWorktree(ref)

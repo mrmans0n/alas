@@ -166,6 +166,129 @@ function unifiedPatch(path, hunks) {
   return out.join("\n") + "\n";
 }
 
+// --- Draft review comments (host.reviews.*) -----------------------------------
+// The web files diff comments where the phone does: the worktree's local-changes review, under the
+// diff's stage. That review takes only staged and unstaged files, so the branch diff takes no comments,
+// as on the phone.
+
+// ReviewDraftSessionID.localChanges(worktreeID:worktreePath:scope: .all), as RemoteReviewRequest builds it.
+// ponytail: trims trailing slashes but doesn't resolve "." or ".."; host paths come already standardized.
+function localChangesReviewID(worktreeId, worktreePath) {
+  const path = String(worktreePath).replace(/\/+$/, "") || "/";
+  return ["local-changes", String(worktreeId), path, "all"]
+    .map(field => field.replace(/\\/g, "\\\\").replace(/\u001f/g, "\\u001f"))
+    .join("\u001f");
+}
+
+// The comment anchor for a gutter selection ({ start, side, end, endSide }, sides "additions" or
+// "deletions"): one side, as the Mac anchors lines, with the quoted lines a comment follows when its
+// code moves. A range over both added and removed lines anchors to the new side.
+function commentAnchor(hunks, range) {
+  if (!range) return null;
+  const rows = diffRows(hunks).filter(row => row.type === "line");
+  const index = (side, line) => rows.findIndex(row => (side === "deletions" ? row.oldNumber : row.newNumber) === line);
+  let from = index(range.side, range.start);
+  let to = index(range.endSide || range.side, range.end);
+  if (from < 0 || to < 0) return null;
+  if (from > to) [from, to] = [to, from];
+  const slice = rows.slice(from, to + 1);
+  const oldOnly = range.side === "deletions" && (range.endSide || range.side) === "deletions";
+  const useNew = !oldOnly && slice.some(row => row.newNumber !== null);
+  const picked = slice.filter(row => (useNew ? row.newNumber : row.oldNumber) !== null);
+  const numbers = picked.map(row => (useNew ? row.newNumber : row.oldNumber));
+  // A drag from one hunk into the next skips lines the diff doesn't show, which the quote can't hold.
+  if (numbers.some((number, i) => i > 0 && number !== numbers[i - 1] + 1)) return null;
+  return {
+    side: useNew ? "new" : "old",
+    startLine: Math.min(...numbers),
+    endLine: Math.max(...numbers),
+    selectedText: picked.map(row => row.text).join("\n")
+  };
+}
+
+function openComments(comments) {
+  return (comments || []).filter(comment => comment && comment.state === "active");
+}
+
+function fileComments(comments, namespace, path) {
+  return openComments(comments).filter(comment => comment.fileID && comment.fileID.namespace === namespace && comment.fileID.path === path);
+}
+
+// A file's open comments as diff annotations, under the last line they sit on; line 0 (above the first
+// hunk) when they can't be placed; `metadata.placed` is { startLine, endLine } where one sits, else null. A port of ReviewCommentPlacement.place, so the web and the phone put a
+// comment in the same spot: one that quotes its lines stays at its anchor while the lines there still read
+// the same, else moves to the one run of lines on that side that does; with none, or several, it goes to
+// line 0. One without a usable quote (none, or not spanning its anchor) places by line numbers.
+function commentAnnotations(hunks, comments, namespace, path) {
+  const rows = diffRows(hunks).filter(row => row.type === "line");
+  const trimEnd = text => String(text).replace(/\s+$/, "");
+  const sides = { new: [], old: [] };
+  for (const row of rows) {
+    if (row.newNumber !== null) sides.new.push({ number: row.newNumber, text: trimEnd(row.text) });
+    if (row.oldNumber !== null) sides.old.push({ number: row.oldNumber, text: trimEnd(row.text) });
+  }
+  const place = line => {
+    if (!line || (line.side !== "new" && line.side !== "old")) return null;
+    const all = sides[line.side];
+    const start = line.startLine;
+    const end = line.endLine || start;
+    const at = number => all.findIndex(entry => entry.number === number);
+    const range = (from, to) => ({ startLine: from, endLine: to });
+    const byNumber = at(end) >= 0 ? range(start, end) : null;
+    if (typeof line.selectedText !== "string") return byNumber;
+    const span = end - start + 1;
+    const quoted = line.selectedText.split("\n");
+    // A blank last line counts while the quote spans its lines; past that it's the newline the Mac trims.
+    while (quoted.length > span && quoted[quoted.length - 1] === "") quoted.pop();
+    const wanted = quoted.map(trimEnd);
+    if (wanted.length !== span || !wanted.some(text => text !== "")) return byNumber;
+    const reads = i => i + wanted.length <= all.length
+      && wanted.every((text, k) => all[i + k].text === text && all[i + k].number === all[i].number + k);
+    const here = at(start);
+    if (here >= 0 && reads(here)) return range(start, end);
+    const runs = all.map((_, i) => i).filter(reads);
+    return runs.length === 1 ? range(all[runs[0]].number, all[runs[0] + wanted.length - 1].number) : null;
+  };
+  return fileComments(comments, namespace, path).map(comment => {
+    const line = comment.anchor && comment.anchor.line;
+    const placed = place(line);
+    return { side: line && line.side === "old" ? "deletions" : "additions", lineNumber: placed ? placed.endLine : 0, metadata: { comment, placed } };
+  });
+}
+
+// Open comments on files the loaded changes list doesn't show any more (staged, reverted or committed
+// since), which the review bar lists so they can still be read and resolved.
+function unlistedComments(comments, state) {
+  if (!state || !state.loaded) return [];
+  const listed = new Set();
+  for (const stage of ["staged", "unstaged"]) {
+    for (const file of state[stage] || []) listed.add(stage + "\u0000" + file.path);
+  }
+  return openComments(comments).filter(comment => !comment.fileID || !listed.has(comment.fileID.namespace + "\u0000" + comment.fileID.path));
+}
+
+// Whether the user wrote it, by its encoded author, not a name an agent could share. No author is the
+// user's, as ReviewDraftComment.effectiveAuthor reads it: the Mac saves its own comments without one.
+function isUserComment(comment) {
+  return !!comment && (!comment.author || !!comment.author.user);
+}
+
+// "You" for the user, else the agent's name, as the Mac names comment authors.
+function commentAuthor(comment) {
+  const agent = comment && comment.author && comment.author.agent;
+  return agent ? agent.name || "Agent" : "You";
+}
+
+// "Line 5" or "Lines 5–6" where a comment sits; given no `placed` range, where it was written
+// ("Was line 2"), since its lines aren't in the diff now.
+function commentLines(comment, placed) {
+  const line = comment && comment.anchor && comment.anchor.line;
+  if (!line) return "File";
+  const { startLine, endLine } = placed || { startLine: line.startLine, endLine: line.endLine || line.startLine };
+  const label = endLine > startLine ? "ines " + startLine + "–" + endLine : "ine " + startLine;
+  return (placed ? "L" : "Was l") + label;
+}
+
 globalThis.RemoteChangesView = {
   sortFiles,
   splitPath,
@@ -178,5 +301,14 @@ globalThis.RemoteChangesView = {
   truncationNotice,
   metadataOnlyNotice,
   toolDiffText,
-  unifiedPatch
+  unifiedPatch,
+  localChangesReviewID,
+  commentAnchor,
+  openComments,
+  fileComments,
+  unlistedComments,
+  isUserComment,
+  commentAnnotations,
+  commentAuthor,
+  commentLines
 };

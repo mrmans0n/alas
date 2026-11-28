@@ -1870,6 +1870,11 @@ public enum HostProtocolCapability: Sendable {
     /// Hosts that serve `listReviews`, `readReview` and `mutateReview`:
     /// only a headless host.
     public static let reviewsV1 = "host.reviews.v1"
+    /// Hosts that serve `listReviews`, `readReview` and `mutateReview`, and
+    /// with `reviewsAgentPhoneV1` also `reviewAgentTargets` and
+    /// `sendReviewToAgent`, to a browser paired with full scope, an app host
+    /// included.
+    public static let reviewsBrowserV1 = "host.reviews.browser.v1"
     /// Hosts that serve `readProviderReview`, `mutateReviewThread` and
     /// `publishReview` to a device paired as the native phone app, an app
     /// host included.
