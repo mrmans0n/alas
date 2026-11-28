@@ -2610,6 +2610,41 @@ struct HostProtocolServerTests {
         }
     }
 
+    /// An app host serves draft reviews to the user's own clients, the phone
+    /// and a full-scope browser, and to nothing else.
+    @Test(arguments: [
+        (RemoteDeviceKind.phone, RemoteDeviceScope.full, true),
+        (.browser, .full, true),
+        (.browser, .delegation, false),
+        (.alasInstance, .full, false),
+    ])
+    func anAppHostServesDraftReviewsToTheUsersOwnClients(kind: RemoteDeviceKind, scope: RemoteDeviceScope, served: Bool) async throws {
+        let fixture = try await RepoFixture(environment: RecordingRunEnvironment())
+        defer { fixture.tearDown() }
+        let (_, ref) = try await fixture.mainWorktree()
+        let server = HostProtocolServer(host: fixture.host)
+        server.delegationPairing = RemotePairingService(store: MemoryDeviceStore(devices: [RemoteDevice(
+            id: "d1", name: "d1", tokenHash: "d1", createdAt: .distantPast, lastSeenAt: nil, kind: kind, scope: scope
+        )]))
+        let client = Client()
+        let connection = server.connect(caller: .remotePeer(deviceID: "d1"), send: client.receive)
+
+        await connection.receive(HostClientMessage(id: 1, request: .listReviews(worktree: ref)))
+
+        guard case .response(1, let result) = client.messages.last else {
+            Issue.record("no response")
+            return
+        }
+        if served {
+            guard case .reviews = result else {
+                Issue.record("\(result)")
+                return
+            }
+        } else {
+            #expect(result == .failure(error: .invalidRequest(reason: "This host does not serve reviews.")))
+        }
+    }
+
     /// The phone lists where a review can go and sends it through the app's
     /// seam; a host without one refuses both.
     @Test func thePhoneSendsAReviewToAnAgentThroughTheApp() async throws {
