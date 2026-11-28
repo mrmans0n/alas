@@ -64,6 +64,8 @@ final class ReviewDocument {
     private(set) var pullRequest: RemoteProviderReview?
     /// Counts refreshes, so an older one's late reply is dropped.
     @ObservationIgnored private var refreshes = 0
+    /// Counts comment reads, so an older one's late reply is dropped.
+    @ObservationIgnored private var commentReads = 0
     /// Its threads, re-read after a reply or a resolve.
     private(set) var threads: [RemoteProviderThread] = []
     private(set) var listLoaded = false
@@ -358,10 +360,21 @@ final class ReviewDocument {
 
     func loadComments() async {
         guard let session = reviewSessionID else { return }
+        commentReads += 1
+        let read = commentReads
         // ponytail: a failed read keeps the comments shown; the next refresh tries again.
-        if case .success(let review) = await workspace.review(session) {
-            comments = review.comments
-            sent = review.sent
+        // A later read started after a change this one may predate: only the latest lands.
+        guard case .success(let review) = await workspace.review(session), read == commentReads else { return }
+        if comments != review.comments { comments = review.comments }
+        if sent != review.sent { sent = review.sent }
+    }
+
+    /// The host doesn't tell the phone when the Mac changes a review, such as sending its comments to
+    /// an agent, so an open review reads its comments again every few seconds.
+    func followComments() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(10))
+            if !Task.isCancelled { await loadComments() }
         }
     }
 

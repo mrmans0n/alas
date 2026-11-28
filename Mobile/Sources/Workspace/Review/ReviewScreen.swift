@@ -48,7 +48,10 @@ struct ReviewScreen: View {
                     .disabled(document.entries.isEmpty)
                 }
             }
-            .task { await document.start() }
+            .task {
+                await document.start()
+                await document.followComments()
+            }
             .onChange(of: workspace.reconnects) { Task { await document.refresh() } }
             .sheet(item: Binding { document.composing } set: { document.composing = $0 }) { composing in
                 sheet(composing)
