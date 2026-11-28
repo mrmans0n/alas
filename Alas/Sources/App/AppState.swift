@@ -15450,10 +15450,13 @@ extension AppState {
     /// Asked once per agent and launch: an agent without `session/options`
     /// would otherwise start an adapter every time a picker appears.
     func previewACPAgentOptions(agentID: String) async {
+        // A manager first: with no local worktree yet nothing is asked, so a
+        // later picker, after a project is added, may still ask.
         guard acpModelCatalog.launchReport(for: agentID) == .notObserved,
-              previewedACPAgentOptions.insert(agentID).inserted,
+              !previewedACPAgentOptions.contains(agentID),
               let manager = localACPManagerForPreview()
         else { return }
+        previewedACPAgentOptions.insert(agentID)
         await manager.previewSessionOptions(agentId: agentID)
     }
 
