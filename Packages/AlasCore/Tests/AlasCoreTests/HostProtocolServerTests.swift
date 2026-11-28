@@ -2790,7 +2790,8 @@ struct HostProtocolServerTests {
         let (repo, _) = try await fixture.mainWorktree()
         try "changed\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
-        let shown = URL(fileURLWithPath: "/private" + worktree.path.path)
+        // Not "/private": Linux Foundation's standardizedFileURL strips that prefix back off.
+        let shown = URL(fileURLWithPath: "/mnt/link" + worktree.path.path)
         let clients = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: shown, scope: .all).rawValue
         let hosts = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all).rawValue
         #expect(clients != hosts)
