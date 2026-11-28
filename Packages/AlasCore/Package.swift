@@ -27,7 +27,7 @@ let package = Package(
         // Keep in step with the app's pin in project.yml.
         .package(url: "https://github.com/tree-sitter/swift-tree-sitter", exact: "0.25.0"),
         // swift-transformers currently caps the app graph below 5; the standalone package resolves 5.1.1.
-        .package(url: "https://github.com/apple/swift-crypto.git", "4.5.2"..<"6.0.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", "4.5.2"..<"5.2.0"),
     ],
     targets: [
         // The modules AlasCore is split into, bottom to top; see
