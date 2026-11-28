@@ -330,6 +330,40 @@ struct HostSessionsTests {
 
     /// A listed session whose stored transcript cannot be read back, here
     /// because another instance deleted it, is not loaded.
+    /// A rewind cuts the transcript back to before a user message. Followers
+    /// (the phone, peers) only take rows by index from a plain delta, so the
+    /// cut must reach them as a reset that no longer holds the removed rows.
+    @Test func aRewoundTranscriptReachesFollowersAsAReset() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        try await eventually { await sessions.list().first { $0.id == id }?.isWriter == true }
+        let manager = try #require(fixture.core.sessionManagers.values.first)
+        let session = try #require(manager.liveSession(for: id))
+        let kept = UUID(), removed = UUID()
+        session.transcript.messages.append(.user(id: kept, messageId: nil, text: "first", attachments: []))
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "answer one"))
+        session.transcript.messages.append(.user(id: removed, messageId: nil, text: "second", attachments: []))
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "answer two"))
+
+        let subscription = fixture.host.subscribe()
+        let received = Collected(subscription)
+        try subscription.follow(id)
+        try await eventually { await received.deltas(of: id).first?.reset == true }
+        let before = try #require(received.deltas(of: id).last)
+
+        #expect(session.truncateTranscript(fromUserMessage: removed) == before.messageCount - 2)
+
+        try await eventually { await received.deltas(of: id).count > 1 }
+        let cut = try #require(received.deltas(of: id).last)
+        #expect(cut.reset)
+        #expect(cut.messageCount == before.messageCount - 2)
+        #expect(cut.messages.contains { $0.payload.contains("answer one") })
+        #expect(!cut.messages.contains { $0.payload.contains("second") || $0.payload.contains("answer two") })
+        subscription.cancel()
+    }
+
     @Test func aSessionThatCannotBeReadBackIsNotLoaded() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
