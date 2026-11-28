@@ -833,6 +833,20 @@ public final class ACPSession: ChangeTracking, Identifiable {
         cursors.isEmpty ? nil : cursors.cursor(beforeUserRow: id, in: cursorRows())
     }
 
+    /// The fork cursor the agent announced before the next user message
+    /// after the fork boundary `boundary`, if any: forking there holds the
+    /// conversation through the boundary's turn.
+    public func forkCursor(after boundary: ACPForkMessageBoundary) -> ACPSessionCursor? {
+        let messages = transcript.messages
+        guard !cursors.isEmpty,
+              let index = messages.firstIndex(where: { $0.stableId == boundary.stableID && $0.forkBoundaryKind == boundary.kind }),
+              let next = messages[(index + 1)...].first(where: { if case .user = $0 { true } else { false } }),
+              case .user(let id, _, _, _, _, _) = next,
+              let cursor = cursor(beforeUserMessage: id), cursor.canFork
+        else { return nil }
+        return cursor
+    }
+
     /// Removes the user message `id` and every row after it: the agent
     /// rewound its conversation to the cursor before that message. Returns the
     /// transcript index of the first removed row, counted from the start of

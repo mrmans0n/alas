@@ -79,6 +79,9 @@ public struct ACPForkPointTarget: Codable, Equatable, Sendable {
 public enum ACPForkPointMatchedBy: String, Codable, Equatable, Sendable {
     case id
     case fingerprint
+    /// Forked at a session cursor the agent announced, which it places
+    /// itself: no `forkPoint` echo is sent or needed.
+    case cursor
 }
 
 /// `_meta.forkPoint` of a `session/fork` result: where the adapter cut.
@@ -118,7 +121,9 @@ public enum ACPForkPointFailure: String, Codable, Equatable, Error, Sendable {
     /// The adapter's own refusal of a fork target: `-32602` with
     /// `data.forkPoint`, `reason: notFound` for a message it cannot locate,
     /// `reason: notNegotiated` when it doesn't take targets from this client,
-    /// and `field` for a malformed target. Any other error is not a refusal.
+    /// and `field` for a malformed target. `-32602` with `data.cursorId` is
+    /// a fork cursor the agent no longer holds. Any other error is not a
+    /// refusal.
     public static func rejection(from error: any Error) -> ACPForkPointFailure? {
         let rpc: JSONRPCError
         switch error {
@@ -131,10 +136,9 @@ public enum ACPForkPointFailure: String, Codable, Equatable, Error, Sendable {
         case let e as ACPRawRPCError where e.rpcError != nil: return rejection(fromFrame: e.delivery.frame)
         default: return nil
         }
-        guard rpc.code == -32602,
-              let data = AnyCodable.object(rpc.data),
-              let forkPoint = AnyCodable.object(data["forkPoint"])
-        else { return nil }
+        guard rpc.code == -32602, let data = AnyCodable.object(rpc.data) else { return nil }
+        if data["cursorId"] != nil { return .notFound }
+        guard let forkPoint = AnyCodable.object(data["forkPoint"]) else { return nil }
         return refusal(reason: forkPoint["reason"] as? String, hasField: forkPoint["field"] != nil)
     }
 
@@ -142,9 +146,10 @@ public enum ACPForkPointFailure: String, Codable, Equatable, Error, Sendable {
         guard case .object(let response)? = try? LSPJSONValue.decode(from: frame),
               case .object(let error)? = response["error"],
               let code = error["code"], ACPWireInteger.decode(code, as: Int.self) == -32602,
-              case .object(let data)? = error["data"],
-              case .object(let forkPoint)? = data["forkPoint"]
+              case .object(let data)? = error["data"]
         else { return nil }
+        if data["cursorId"] != nil { return .notFound }
+        guard case .object(let forkPoint)? = data["forkPoint"] else { return nil }
         let reason: String? = if case .string(let reason)? = forkPoint["reason"] { reason } else { nil }
         return refusal(reason: reason, hasField: forkPoint["field"] != nil)
     }

@@ -2296,6 +2296,9 @@ public final class ACPSessionManager: ChangeTracking {
             // A failed attach forgets what the agent reported before it; the
             // import of a targeted fork still saves why.
             let forkPointCapability = sourceCanForkNatively ? source.forkPoint : source.forkPoint ?? reportedForkPoint
+            // A cursor the agent announced cuts where the turn ends without
+            // a `forkPoint` target, and is preferred to one.
+            let forkCursor = snapshot.forkPointTarget == nil ? nil : source.forkCursor(after: boundary)
             let policyCandidate = sourceContextDeliveryPending
                 ? ACPSessionForkCandidate.transcript
                 : ACPSessionForkCandidatePolicy.candidate(
@@ -2305,21 +2308,24 @@ public final class ACPSessionManager: ChangeTracking {
                     sourceRemoteSessionID: source.remoteSessionId,
                     forkCapability: source.sessionCapabilities?.supportsFork,
                     forkPoint: forkPointCapability,
-                    historicalTarget: snapshot.forkPointTarget
+                    historicalTarget: snapshot.forkPointTarget,
+                    hasForkCursor: forkCursor != nil
                 )
             // A detached source that couldn't be attached is imported; a
             // targeted fork saves why it wasn't forked at its message.
             let candidate = sourceCanForkNatively ? policyCandidate : .transcript
-            let forkPoint: ACPSessionForkPoint? = if case .nativeAtMessage(let target) = policyCandidate,
-                                                     let capability = forkPointCapability {
-                ACPSessionForkPoint(
-                    target: target,
-                    boundary: capability.boundary,
-                    outcome: candidate == .transcript ? .unmatched(.unavailable) : nil
-                )
+            var forkPoint: ACPSessionForkPoint? = if case .nativeAtMessage(let target) = policyCandidate {
+                if let forkCursor {
+                    ACPSessionForkPoint.cursor(forkCursor.cursorId, target: target)
+                } else if let capability = forkPointCapability {
+                    ACPSessionForkPoint(target: target, boundary: capability.boundary)
+                } else {
+                    nil
+                }
             } else {
                 nil
             }
+            if candidate == .transcript { forkPoint?.outcome = .unmatched(.unavailable) }
 
             let targetID = UUID().uuidString
             let now = Int64(Date().timeIntervalSince1970)
@@ -2493,7 +2499,9 @@ public final class ACPSessionManager: ChangeTracking {
         if source.forkRecord?.mechanism == .transcriptTransfer, source.forkRecord?.contextDeliveryPending == true {
             return false
         }
-        let supportsForkPoint = source.sessionCapabilities == nil ? nil : source.forkPoint != nil
+        // Announced fork cursors serve a targeted fork as well as `forkPoint`.
+        let supportsForkPoint = source.sessionCapabilities == nil ? nil
+            : source.forkPoint != nil || source.forkCursor(after: boundary) != nil
         func mayForkNatively(boundaryIsRemoteHead: Bool, hasHistoricalTarget: Bool) -> Bool {
             ACPSessionForkCandidatePolicy.mayForkNatively(
                 sourceAgentID: source.agentId,
@@ -5174,7 +5182,11 @@ public final class ACPSessionManager: ChangeTracking {
         let forkPoint = fork.forkPoint
         // An adapter that can't cut where this fork was planned (an older
         // version, or another agent build) never sees the target.
-        let forkPointUnsupported = forkPoint.map { initialized.forkPoint?.boundary != $0.boundary } ?? false
+        // A cursor fork needs no `forkPoint` support: an agent that no longer
+        // holds the cursor refuses it, which imports the conversation.
+        let forkPointUnsupported = forkPoint.map {
+            $0.cursorId == nil && initialized.forkPoint?.boundary != $0.boundary
+        } ?? false
         let canAttemptNativeFork = !forkPointUnsupported
             && initialized.sessionCapabilities.supportsFork
             && connection.client.providesDurableOperationKeyDeduplication
@@ -5263,6 +5275,7 @@ public final class ACPSessionManager: ChangeTracking {
                         sessionId: sourceRemoteSessionID,
                         mcpServers: wireMCPServers,
                         forkPoint: forkPoint?.target,
+                        cursorId: forkPoint?.cursorId,
                         configOptions: startupConfigOptions,
                         brokerOperationKey: Self.brokerStartupOperationKey(
                             sessionId: session.id,
@@ -5351,7 +5364,10 @@ public final class ACPSessionManager: ChangeTracking {
             }
 
             var matchedForkPoint: ACPSessionForkPoint?
-            if var forkPoint {
+            if var forkPoint, let cursorMatch = forkPoint.cursorMatch {
+                forkPoint.outcome = cursorMatch
+                matchedForkPoint = forkPoint
+            } else if var forkPoint {
                 switch ACPForkPointVerifier.verify(
                     echo: result.forkPoint,
                     target: forkPoint.target,

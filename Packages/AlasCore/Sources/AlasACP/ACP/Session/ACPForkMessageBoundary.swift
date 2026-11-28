@@ -80,11 +80,32 @@ public struct ACPSessionForkPoint: Codable, Equatable, Sendable {
     public let target: ACPForkPointTarget
     public let boundary: ACPForkPointBoundary
     public var outcome: Outcome?
+    /// The session cursor to fork at, in place of the `forkPoint` target:
+    /// the one the source's agent announced before the user message after
+    /// `target`, which ends the turn. Its fork holds that whole turn.
+    public var cursorId: String?
 
-    public init(target: ACPForkPointTarget, boundary: ACPForkPointBoundary, outcome: Outcome? = nil) {
+    public init(
+        target: ACPForkPointTarget,
+        boundary: ACPForkPointBoundary,
+        outcome: Outcome? = nil,
+        cursorId: String? = nil
+    ) {
         self.target = target
         self.boundary = boundary
         self.outcome = outcome
+        self.cursorId = cursorId
+    }
+
+    /// A cursor fork at `target`, whose turn it holds whole.
+    public static func cursor(_ cursorId: String, target: ACPForkPointTarget) -> ACPSessionForkPoint {
+        ACPSessionForkPoint(target: target, boundary: .turn, cursorId: cursorId)
+    }
+
+    /// The outcome of a native fork at the cursor: the agent placed it, and
+    /// sends no `forkPoint` echo.
+    public var cursorMatch: Outcome? {
+        cursorId == nil ? nil : .matched(ACPForkPointEcho(boundary: .turn, messageId: target.messageId, matchedBy: .cursor))
     }
 }
 
@@ -109,7 +130,8 @@ public enum ACPSessionForkCandidatePolicy: Sendable {
         sourceRemoteSessionID: String?,
         forkCapability: Bool?,
         forkPoint: ACPForkPointCapability?,
-        historicalTarget: ACPForkPointTarget?
+        historicalTarget: ACPForkPointTarget?,
+        hasForkCursor: Bool = false
     ) -> ACPSessionForkCandidate {
         guard sourceAgentID == targetAgentID,
               sourceRemoteSessionID?.isEmpty == false,
@@ -117,7 +139,7 @@ public enum ACPSessionForkCandidatePolicy: Sendable {
         else { return .transcript }
 
         if boundaryIsRemoteHead { return .native }
-        if forkPoint != nil, let historicalTarget { return .nativeAtMessage(historicalTarget) }
+        if forkPoint != nil || hasForkCursor, let historicalTarget { return .nativeAtMessage(historicalTarget) }
         return .transcript
     }
 
@@ -186,6 +208,9 @@ public enum ACPForkPointVerifier: Sendable {
         case .fingerprint:
             // A fingerprint can also match an equal message after the target.
             guard !later.contains(unsegmented(echo.messageId)) else { return .failure(.mismatchedEcho) }
+        case .cursor:
+            // Alas records a cursor fork's match itself; an echo never says so.
+            return .failure(.mismatchedEcho)
         }
         if boundary == .turn {
             guard echo.turnId?.isEmpty == false,

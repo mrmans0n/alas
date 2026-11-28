@@ -1123,6 +1123,53 @@ struct ACPSessionForkAttachTests {
         #expect(target.forkRecord?.mechanism == .nativeACP)
     }
 
+    @Test("a fork at an earlier turn goes through the cursor the agent announced, with or without forkPoint",
+          arguments: [("message", true), (nil, true), ("message", false)] as [(String?, Bool)])
+    func forkAtEarlierTurnUsesTheCursor(forkPoint: String?, agentHoldsCursor: Bool) async throws {
+        let store = try seededForkStore(forkPoint: Self.targetedForkPoint(.message), seedsFork: false)
+        let sourceClient = ACPMockClient()
+        scriptInitialize(sourceClient, supportsFork: true, forkPoint: forkPoint)
+        scriptSessionResult(sourceClient, method: "session/load", sessionId: "source-remote")
+        let targetClient = durableMockClient()
+        scriptInitialize(targetClient, supportsFork: true, forkPoint: forkPoint)
+        if agentHoldsCursor {
+            scriptSessionResult(targetClient, method: "session/fork", sessionId: "forked-remote")
+        } else {
+            targetClient.script(method: "session/fork") { _ in
+                throw ACPClientError.jsonrpc(.init(
+                    code: -32602, message: "no such cursor", data: AnyCodable(["cursorId": "before:later"])))
+            }
+            scriptSessionResult(targetClient, method: "session/new", sessionId: "new-remote")
+        }
+        let (manager, source, _) = try await makeManagerWithDetachedSource(
+            store: store, clients: [sourceClient, targetClient]
+        )
+        await manager.attach(to: source.id, freshlyCreated: false)
+        // The cursor before the later prompt: after the answer the fork keeps.
+        sourceClient.emit(.init(sessionId: "source-remote", update: .cursorUpdate(.init(
+            cursorId: "before:later", anchor: .init(entity: .agentMessage("a1"), position: .after)))))
+        let boundary = try forkBoundary(of: source, at: 1)
+        try await waitUntil { source.forkCursor(after: boundary) != nil }
+
+        let target = try await manager.createFork(
+            sourceSessionID: source.id, boundary: boundary,
+            targetAgentID: "claude", autoRunDefault: false
+        )
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        let fork = try #require(targetClient.sent.first { $0.method == "session/fork" }?.params as? ACPSessionForkParams)
+        #expect(fork.cursorId == "before:later")
+        #expect(fork.meta?.forkPoint == nil)
+        if agentHoldsCursor {
+            #expect(target.forkRecord?.mechanism == .nativeACP)
+            #expect(target.forkRecord?.forkPoint?.outcome == .matched(
+                .init(boundary: .turn, messageId: "a1", matchedBy: .cursor)))
+        } else {
+            #expect(target.forkRecord?.mechanism == .transcriptTransfer)
+            #expect(target.forkRecord?.forkPoint?.outcome == .unmatched(.notFound))
+        }
+    }
+
     enum DetachedSourceAttach: String, CaseIterable, Sendable {
         case launchFails
         case agentLostSession

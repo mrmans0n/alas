@@ -500,6 +500,8 @@ struct ACPConnectionTests {
             frame: Data(#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"m","data":{"forkPoint":{"reason":"notFound"}}}}"#.utf8),
             connectionID: UUID(), source: .stdio(requestID: .number(1), method: "session/fork")),
             rpcError: .init(code: -32602, message: "m", data: nil)), .notFound),
+        // Both adapters refuse a cursor they don't hold this way.
+        (ACPClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["cursorId": "before:gone"]))), .notFound),
         (ACPClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["other": "x"]))), nil),
         (ACPClientError.jsonrpc(.init(code: -32603, message: "m", data: AnyCodable(["forkPoint": ["reason": "notFound"]]))), nil),
         (CancellationError(), nil),
