@@ -7,6 +7,7 @@ final class ReviewDraftCommentController {
     private let sessionID: ReviewDraftSessionID
     private let store: ReviewDraftCommentStore
     private let now: () -> Date
+    private let didChange: @MainActor () -> Void
 
     private(set) var comments: [ReviewDraftComment] = []
     var errorMessage: String?
@@ -18,11 +19,18 @@ final class ReviewDraftCommentController {
     init(
         sessionID: ReviewDraftSessionID,
         store: ReviewDraftCommentStore = .init(),
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        didChange: @escaping @MainActor () -> Void = ReviewDraftCommentController.notifyOpenPanes
     ) {
         self.sessionID = sessionID
         self.store = store
         self.now = now
+        self.didChange = didChange
+    }
+
+    /// Tells this Mac's open review panes only; `AppState.reviewDraftsDidChange` tells paired devices too.
+    static func notifyOpenPanes() {
+        NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
     }
 
     func load() throws {
@@ -90,7 +98,7 @@ final class ReviewDraftCommentController {
             try store.save(comment)
             comments = ReviewDraftCommentPlacement.sorted(comments + [comment])
             errorMessage = nil
-            NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+            didChange()
         } catch {
             errorMessage = error.localizedDescription
             throw error
@@ -140,7 +148,7 @@ final class ReviewDraftCommentController {
             try store.delete(commentID: commentID, sessionID: sessionID)
             comments = updated
             errorMessage = nil
-            NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+            didChange()
         } catch {
             comments = previous
             errorMessage = error.localizedDescription
@@ -157,11 +165,19 @@ final class ReviewDraftCommentController {
             try store.save(comment)
             comments = updated
             errorMessage = nil
-            NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+            didChange()
         } catch {
             comments = previous
             errorMessage = error.localizedDescription
             throw error
         }
+    }
+}
+
+extension AppState {
+    /// A `ReviewDraftCommentController`'s `didChange` for worktree `worktreeID`: tells this Mac's open
+    /// panes, and the paired Macs and phones following the worktree, that its review comments changed.
+    func reviewDraftsDidChange(worktreeID: String) -> @MainActor () -> Void {
+        { [host] in host.reviews.didChange(worktreeID: worktreeID) }
     }
 }
