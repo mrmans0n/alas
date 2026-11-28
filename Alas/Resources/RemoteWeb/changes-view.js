@@ -267,9 +267,10 @@ function unlistedComments(comments, state) {
   return openComments(comments).filter(comment => !comment.fileID || !listed.has(comment.fileID.namespace + "\u0000" + comment.fileID.path));
 }
 
-// Whether the user wrote it, by its encoded author, not a name an agent could share.
+// Whether the user wrote it, by its encoded author, not a name an agent could share. No author is the
+// user's, as ReviewDraftComment.effectiveAuthor reads it: the Mac saves its own comments without one.
 function isUserComment(comment) {
-  return !!(comment && comment.author && comment.author.user);
+  return !!comment && (!comment.author || !!comment.author.user);
 }
 
 // "You" for the user, else the agent's name, as the Mac names comment authors.

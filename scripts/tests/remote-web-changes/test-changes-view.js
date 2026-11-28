@@ -266,6 +266,7 @@ assert.deepEqual(view.unlistedComments([reviewComment("x", here, null)], { loade
 // Only the user's own comments, by encoded author: an agent named "You" is still an agent.
 assert.equal(view.isUserComment({ author: { user: {} } }), true);
 assert.equal(view.isUserComment({ author: { agent: { name: "You" } } }), false);
+assert.equal(view.isUserComment({}), true, "the Mac saves the user's comments without an author");
 
 // The id the host gives the worktree's local-changes review, field separators escaped.
 assert.equal(view.localChangesReviewID("w1", "/repo/a\u001fb/"), "local-changes\u001fw1\u001f/repo/a\\u001fb\u001fall");
