@@ -256,6 +256,22 @@ function commentAnnotations(hunks, comments, namespace, path) {
   });
 }
 
+// Open comments on files the loaded changes list doesn't show any more (staged, reverted or committed
+// since), which the review bar lists so they can still be read and resolved.
+function unlistedComments(comments, state) {
+  if (!state || !state.loaded) return [];
+  const listed = new Set();
+  for (const stage of ["staged", "unstaged"]) {
+    for (const file of state[stage] || []) listed.add(stage + "\u0000" + file.path);
+  }
+  return openComments(comments).filter(comment => !comment.fileID || !listed.has(comment.fileID.namespace + "\u0000" + comment.fileID.path));
+}
+
+// Whether the user wrote it, by its encoded author, not a name an agent could share.
+function isUserComment(comment) {
+  return !!(comment && comment.author && comment.author.user);
+}
+
 // "You" for the user, else the agent's name, as the Mac names comment authors.
 function commentAuthor(comment) {
   const agent = comment && comment.author && comment.author.agent;
@@ -289,6 +305,8 @@ globalThis.RemoteChangesView = {
   commentAnchor,
   openComments,
   fileComments,
+  unlistedComments,
+  isUserComment,
   commentAnnotations,
   commentAuthor,
   commentLines

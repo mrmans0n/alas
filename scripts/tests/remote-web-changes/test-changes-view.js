@@ -253,6 +253,20 @@ assert.deepEqual(view.commentAnnotations(moved, [
 ], "unstaged", "src/a.swift").map(a => [a.metadata.comment.id, a.lineNumber, view.commentLines(a.metadata.comment, a.metadata.placed)]),
   [["stayed", 3, "Line 3"], ["moved", 5, "Line 5"], ["gone", 0, "Was line 2"], ["ambiguous", 0, "Was line 3"], ["numbers", 3, "Lines 2–3"]]);
 
+// Comments whose file and stage the changes list no longer shows are the review bar's to list.
+const listed = { loaded: true, staged: [{ path: "src/a.swift" }], unstaged: [{ path: "src/b.swift" }] };
+assert.deepEqual(view.unlistedComments([
+  reviewComment("shown", { namespace: "staged", path: "src/a.swift" }, null),
+  reviewComment("restaged", { namespace: "unstaged", path: "src/a.swift" }, null),
+  reviewComment("reverted", { namespace: "unstaged", path: "src/gone.swift" }, null),
+  reviewComment("resolved", { namespace: "unstaged", path: "src/gone.swift" }, null, "resolved"),
+], listed).map(c => c.id), ["restaged", "reverted"]);
+assert.deepEqual(view.unlistedComments([reviewComment("x", here, null)], { loaded: false }), [], "nothing before the list loads");
+
+// Only the user's own comments, by encoded author: an agent named "You" is still an agent.
+assert.equal(view.isUserComment({ author: { user: {} } }), true);
+assert.equal(view.isUserComment({ author: { agent: { name: "You" } } }), false);
+
 // The id the host gives the worktree's local-changes review, field separators escaped.
 assert.equal(view.localChangesReviewID("w1", "/repo/a\u001fb/"), "local-changes\u001fw1\u001f/repo/a\\u001fb\u001fall");
 

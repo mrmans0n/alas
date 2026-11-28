@@ -1447,7 +1447,9 @@ async function refreshReview() {
 async function changeReview(mutation) {
   const target = reviewTarget();
   if (!target) return "This worktree's reviews can't be changed from here.";
-  const failure = hostFailure(await hostRequest({ mutateReview: { ...target, mutation } }));
+  // Only the host's done counts as saved: anything else keeps a draft open with what was typed.
+  const result = await hostRequest({ mutateReview: { ...target, mutation } });
+  const failure = hostFailure(result) || (result.done ? null : "The host's answer couldn't be read, so this may not have been saved.");
   if (!failure) await refreshReview();
   return failure;
 }
@@ -1533,9 +1535,11 @@ function renderCommentComposer(draft) {
   return box;
 }
 
-function renderCommentCard(comment, placed) {
+// `where`: the file and stage, for a card shown outside its diff.
+function renderCommentCard(comment, placed, where) {
   const card = el("div", "review-comment");
   const head = el("div", "review-comment-head");
+  if (where) head.append(el("span", "review-comment-file", where));
   head.append(el("span", "review-comment-author", RemoteChangesView.commentAuthor(comment)),
     el("span", "review-comment-lines", RemoteChangesView.commentLines(comment, placed)));
   const sent = reviewState.sent[comment.id];
@@ -1562,7 +1566,7 @@ function renderCommentCard(comment, placed) {
     actions.append(button);
   };
   act("Resolve", { resolve: { commentID: comment.id } });
-  if (RemoteChangesView.commentAuthor(comment) === "You") act("Delete", { delete: { commentID: comment.id } });
+  if (RemoteChangesView.isUserComment(comment)) act("Delete", { delete: { commentID: comment.id } });
   card.append(error, actions);
   return card;
 }
@@ -1583,6 +1587,18 @@ function renderReviewBar() {
   }
   if (!open) { reviewSending = null; return; }
   bar.append(el("span", "review-bar-count", open === 1 ? "1 open comment" : open + " open comments"));
+  // Comments whose file left the list (staged, reverted or committed since) have no diff to show
+  // them in, so they show here, where they can still be read and resolved.
+  const unlisted = RemoteChangesView.unlistedComments(reviewState.comments, changesState);
+  if (unlisted.length) {
+    const box = el("div", "review-unlisted");
+    box.append(el("p", "review-unlisted-title", "Not in the changes now"));
+    for (const comment of unlisted) {
+      const file = comment.fileID ? comment.fileID.path + " · " + comment.fileID.namespace : comment.path || "";
+      box.append(renderCommentCard(comment, null, file));
+    }
+    bar.append(box);
+  }
   if (!activeCapabilities().includes("host.reviews.agent.phone.v1")) return;
   if (reviewSendsInFlight.has(target.sessionID)) {
     const sending = el("button", "review-btn is-primary", "Sending…");
@@ -1642,7 +1658,8 @@ async function sendReviewTo(agent) {
   reviewSending = null;
   renderReviewBar();
   // A new chat on the host can take a while to start; giving up early would invite a second send.
-  const failure = hostFailure(await hostRequest({ sendReviewToAgent: { ...target, target: agent } }, 300000));
+  const result = await hostRequest({ sendReviewToAgent: { ...target, target: agent } }, 300000);
+  const failure = hostFailure(result) || (result.reviewSentToAgent ? null : "The host's answer couldn't be read, so the comments may not have been sent.");
   reviewSendsInFlight.delete(target.sessionID);
   const current = reviewTarget();
   if (current && current.sessionID === target.sessionID) reviewSending = failure ? { targets: [agent], error: failure } : null;

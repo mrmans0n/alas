@@ -804,3 +804,7 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 .review-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
 .review-composer textarea { box-sizing: border-box; width: 100%; padding: 7px 9px; border: none; border-radius: 8px; background: var(--bg); box-shadow: inset 0 0 0 0.5px var(--ring); color: var(--fg); font: inherit; resize: vertical; }
 .review-composer .sheet-error { margin: 8px 0 0; }
+.review-unlisted { flex-basis: 100%; order: 1; }
+.review-unlisted-title { margin: 4px 0 0; color: var(--fg-faint); font-size: 11.5px; }
+.review-unlisted .review-comment { margin: 6px 0 0; }
+.review-comment-file { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-muted); overflow-wrap: anywhere; }
