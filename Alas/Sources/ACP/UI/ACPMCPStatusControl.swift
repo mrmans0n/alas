@@ -229,7 +229,7 @@ private struct ACPMCPStatusPopover: View {
                     .padding(.vertical, scale.space[2])
             }
 
-            if status.isStale || status.hasBuiltInWarning, let onReconnect {
+            if status.showsReconnectAction, let onReconnect {
                 AlasButton(title: "Reconnect session", icon: "arrow.clockwise", style: .normal) {
                     onReconnect()
                 }

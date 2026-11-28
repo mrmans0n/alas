@@ -368,6 +368,22 @@ struct ACPMCPStatusPolicyTests {
         #expect(registered?.accessibilitySummary == "MCP: 1 requested")
     }
 
+    @Test("only a skip a reconnect can fix offers the reconnect action", arguments: [
+        (MCPAttachmentSkipReason.remoteRelayUnavailable("Remote helper is not running."), true),
+        (.missingVariable("TOKEN"), false),
+    ])
+    func reconnectActionForSkip(reason: MCPAttachmentSkipReason, offersReconnect: Bool) {
+        let status = MCPAttachmentServerStatus(
+            id: BuiltInAlasMCP.statusId, name: "alas",
+            transport: .stdio, disposition: .skipped(reason))
+        let state = ACPMCPStatusState(
+            summary: MCPAttachmentSummary(
+                statuses: [status],
+                configurationFingerprint: MCPAttachmentPlanner.configurationFingerprint(for: [])),
+            currentServers: [])
+        #expect(state?.showsReconnectAction == offersReconnect)
+    }
+
     @Test("registered shows no warning")
     func registeredNoWarning() {
         let state = ACPMCPStatusState(
