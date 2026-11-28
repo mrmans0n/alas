@@ -988,8 +988,8 @@ struct AppKitDiffReviewRowPlanTests {
                 header: "@@ -1,15 +1,15 @@",
                 oldStart: 1,
                 newStart: 1,
-                lines: (1...15).map {
-                    .init(kind: .context, text: "let value\(String(describing: $0)) = \(String(describing: $0))", oldNumber: $0, newNumber: $0)
+                lines: (1...15).map { (line: Int) in
+                    .init(kind: .context, text: "let value\(line) = \(line)", oldNumber: line, newNumber: line)
                 }
             ),
         ])
