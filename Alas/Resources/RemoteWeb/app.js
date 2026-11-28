@@ -952,7 +952,8 @@ function openSession(id) {
   renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
   changesTree.reset();
   changesState = { comparisonRef: null, metricsAvailable: true, files: [], staged: [], unstaged: [], commits: [], truncated: false, loaded: false };
-  reviewState = { sessionId: id, comments: [], sent: {} };
+  reviewState = { sessionId: id, comments: [], sent: {}, readError: "" };
+  reviewSending = null;
   fileTreeTruncatedPaths = new Set();
   detailStack = [];
   resetChangesAndFilesDOM();
@@ -1402,10 +1403,11 @@ function hostFailure(result) {
   return typeof text === "string" && text ? text : "The host refused it.";
 }
 
-let reviewState = { sessionId: null, comments: [], sent: {} };
+let reviewState = { sessionId: null, comments: [], sent: {}, readError: "" };
 let reviewDraft = null;    // { anchor, error } while a comment is being written in the open diff
 let diffContext = null;    // { path, stage, hunks } of the diff showing in #diff-rows
-let reviewSending = null;  // { targets, error } while Send to agent picks a chat
+let reviewSending = null;  // { targets, error } while Send to agent picks a chat; targets null while they load
+const reviewSendsInFlight = new Set();   // review session ids being sent, so a second send waits for the first
 
 function activeCapabilities() {
   return (links.activeLink() || {}).capabilities || [];
@@ -1422,14 +1424,17 @@ function reviewTarget() {
   return { worktree: { projectID: summary.projectId, path }, sessionID: RemoteChangesView.localChangesReviewID(summary.worktreeId, path) };
 }
 
+// A failed read keeps what was shown and says so in the review bar, with a Retry that only reads again.
 async function refreshReview() {
   const target = reviewTarget();
   const sessionId = currentSession;
   if (!target) return;
   const result = await hostRequest({ readReview: target });
+  if (sessionId !== currentSession) return;
   const review = result.review && result.review.review;
-  if (!review || sessionId !== currentSession) return;
-  reviewState = { sessionId, comments: review.comments || [], sent: review.sent || {} };
+  reviewState = review
+    ? { sessionId, comments: review.comments || [], sent: review.sent || {}, readError: "" }
+    : { ...reviewState, readError: "Couldn't load this worktree's review comments: " + (hostFailure(result) || "the host's answer couldn't be read.") };
   renderChanges();
   refreshDiffAnnotations();
 }
@@ -1560,12 +1565,27 @@ function renderCommentCard(comment) {
 // "N open comments" over the changes, with Send to agent where the host offers it.
 function renderReviewBar() {
   const bar = $("review-bar");
-  const open = reviewTarget() ? RemoteChangesView.openComments(reviewState.comments).length : 0;
-  bar.classList.toggle("hidden", open === 0);
+  const target = reviewTarget();
+  const open = target ? RemoteChangesView.openComments(reviewState.comments).length : 0;
+  const readError = target ? reviewState.readError : "";
+  bar.classList.toggle("hidden", open === 0 && !readError);
   bar.innerHTML = "";
+  if (readError) {
+    const retry = el("button", "review-btn", "Retry");
+    retry.type = "button";
+    retry.onclick = () => { retry.disabled = true; refreshReview(); };
+    bar.append(el("p", "sheet-error", readError), retry);
+  }
   if (!open) { reviewSending = null; return; }
   bar.append(el("span", "review-bar-count", open === 1 ? "1 open comment" : open + " open comments"));
   if (!activeCapabilities().includes("host.reviews.agent.phone.v1")) return;
+  if (reviewSendsInFlight.has(target.sessionID)) {
+    const sending = el("button", "review-btn is-primary", "Sending…");
+    sending.type = "button";
+    sending.disabled = true;
+    bar.append(sending);
+    return;
+  }
   if (!reviewSending) {
     const send = el("button", "review-btn is-primary", "Send to agent");
     send.type = "button";
@@ -1592,27 +1612,35 @@ function agentTargetTitle(target) {
   return detail.title || "Agent";
 }
 
+// The targets' answer counts only for the picker that asked, still open on the same review: one canceled
+// or replaced meanwhile drops it, so a canceled lookup never sends.
 async function pickReviewAgent() {
   const target = reviewTarget();
   if (!target) return;
-  reviewSending = { targets: null, error: "" };
+  const picker = reviewSending = { targets: null, error: "" };
   renderReviewBar();
   const result = await hostRequest({ reviewAgentTargets: target });
-  if (!reviewSending) return;
+  const current = reviewTarget();
+  if (reviewSending !== picker || !current || current.sessionID !== target.sessionID) return;
   const targets = (result.reviewAgentTargets && result.reviewAgentTargets.targets) || [];
   if (targets.length === 1) return sendReviewTo(targets[0]);
-  reviewSending = { targets, error: hostFailure(result) || (targets.length ? "" : "No agent to send to. Open a chat in this worktree first.") };
+  picker.targets = targets;
+  picker.error = hostFailure(result) || (targets.length ? "" : "No agent to send to. Open a chat in this worktree first.");
   renderReviewBar();
 }
 
+// One send per review at a time: the bar shows Sending… until the host answers, with nothing to click.
 async function sendReviewTo(agent) {
   const target = reviewTarget();
-  if (!target || !reviewSending) return;
-  reviewSending = { targets: null, error: "" };
+  if (!target || reviewSendsInFlight.has(target.sessionID)) return;
+  reviewSendsInFlight.add(target.sessionID);
+  reviewSending = null;
   renderReviewBar();
   // A new chat on the host can take a while to start; giving up early would invite a second send.
   const failure = hostFailure(await hostRequest({ sendReviewToAgent: { ...target, target: agent } }, 300000));
-  reviewSending = failure ? { targets: [agent], error: failure } : null;
+  reviewSendsInFlight.delete(target.sessionID);
+  const current = reviewTarget();
+  if (current && current.sessionID === target.sessionID) reviewSending = failure ? { targets: [agent], error: failure } : null;
   await refreshReview();
   renderReviewBar();
 }

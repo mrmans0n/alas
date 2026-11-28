@@ -215,18 +215,43 @@ function fileComments(comments, namespace, path) {
   return openComments(comments).filter(comment => comment.fileID && comment.fileID.namespace === namespace && comment.fileID.path === path);
 }
 
-// A file's open comments as diff annotations: under a comment's last line when the diff shows it,
-// else above the first hunk (line 0), as the phone drops a comment whose lines are gone.
-// ponytail: placed by saved line numbers, without the phone's relocation by quoted lines
-// (ReviewQuotedLines.locate); port it if comments whose code moved land on the wrong lines.
+// A file's open comments as diff annotations, under the last line they sit on; line 0 (above the first
+// hunk) when they can't be placed. A port of ReviewCommentPlacement.place, so the web and the phone put a
+// comment in the same spot: one that quotes its lines stays at its anchor while the lines there still read
+// the same, else moves to the one run of lines on that side that does; with none, or several, it goes to
+// line 0. One without a usable quote (none, or not spanning its anchor) places by line numbers.
 function commentAnnotations(hunks, comments, namespace, path) {
   const rows = diffRows(hunks).filter(row => row.type === "line");
-  const shown = { new: new Set(rows.map(row => row.newNumber)), old: new Set(rows.map(row => row.oldNumber)) };
+  const trimEnd = text => String(text).replace(/\s+$/, "");
+  const sides = { new: [], old: [] };
+  for (const row of rows) {
+    if (row.newNumber !== null) sides.new.push({ number: row.newNumber, text: trimEnd(row.text) });
+    if (row.oldNumber !== null) sides.old.push({ number: row.oldNumber, text: trimEnd(row.text) });
+  }
+  const place = line => {
+    if (!line || (line.side !== "new" && line.side !== "old")) return 0;
+    const all = sides[line.side];
+    const start = line.startLine;
+    const end = line.endLine || start;
+    const at = number => all.findIndex(entry => entry.number === number);
+    const byNumber = at(end) >= 0 ? end : 0;
+    if (typeof line.selectedText !== "string") return byNumber;
+    const span = end - start + 1;
+    const quoted = line.selectedText.split("\n");
+    // A blank last line counts while the quote spans its lines; past that it's the newline the Mac trims.
+    while (quoted.length > span && quoted[quoted.length - 1] === "") quoted.pop();
+    const wanted = quoted.map(trimEnd);
+    if (wanted.length !== span || !wanted.some(text => text !== "")) return byNumber;
+    const reads = i => i + wanted.length <= all.length
+      && wanted.every((text, k) => all[i + k].text === text && all[i + k].number === all[i].number + k);
+    const here = at(start);
+    if (here >= 0 && reads(here)) return all[here + wanted.length - 1].number;
+    const runs = all.map((_, i) => i).filter(reads);
+    return runs.length === 1 ? all[runs[0] + wanted.length - 1].number : 0;
+  };
   return fileComments(comments, namespace, path).map(comment => {
     const line = comment.anchor && comment.anchor.line;
-    const side = line && line.side === "old" ? "old" : "new";
-    const end = line ? line.endLine || line.startLine : 0;
-    return { side: side === "old" ? "deletions" : "additions", lineNumber: line && shown[side].has(end) ? end : 0, metadata: { comment } };
+    return { side: line && line.side === "old" ? "deletions" : "additions", lineNumber: place(line), metadata: { comment } };
   });
 }
 

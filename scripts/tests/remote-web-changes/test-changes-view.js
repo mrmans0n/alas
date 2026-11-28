@@ -231,6 +231,24 @@ const annotations = view.commentAnnotations(reviewHunks, [
 assert.deepEqual(annotations.map(a => [a.metadata.comment.id, a.side, a.lineNumber]), [
   ["shown", "additions", 11], ["removed", "deletions", 11], ["gone", "additions", 0], ["file", "additions", 0]]);
 
+// A comment that quotes its lines follows them: it stays while its anchor still reads the quote, moves
+// to the one other run that does, and goes above the diff when the quote reads nowhere or in two places.
+const moved = [{ header: "@@ -1,3 +1,5 @@", oldStart: 1, newStart: 1, lines: [
+  { kind: "add", text: "inserted", oldNumber: null, newNumber: 1 },
+  { kind: "context", text: "a", oldNumber: 1, newNumber: 2 },
+  { kind: "context", text: "b", oldNumber: 2, newNumber: 3 },
+  { kind: "add", text: "a", oldNumber: null, newNumber: 4 },
+  { kind: "context", text: "c", oldNumber: 3, newNumber: 5 }] }];
+const quoting = (id, startLine, endLine, selectedText) => reviewComment(id, here, { side: "new", startLine, endLine, selectedText });
+assert.deepEqual(view.commentAnnotations(moved, [
+  quoting("stayed", 3, 3, "b"),
+  quoting("moved", 2, 2, "c"),
+  quoting("gone", 2, 2, "zzz"),
+  quoting("ambiguous", 3, 3, "a"),
+  quoting("numbers", 2, 3, "only one line"),
+], "unstaged", "src/a.swift").map(a => [a.metadata.comment.id, a.lineNumber]),
+  [["stayed", 3], ["moved", 5], ["gone", 0], ["ambiguous", 0], ["numbers", 3]]);
+
 // The id the host gives the worktree's local-changes review, field separators escaped.
 assert.equal(view.localChangesReviewID("w1", "/repo/a\u001fb/"), "local-changes\u001fw1\u001f/repo/a\\u001fb\u001fall");
 
