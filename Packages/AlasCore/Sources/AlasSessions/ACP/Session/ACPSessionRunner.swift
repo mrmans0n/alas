@@ -3551,8 +3551,8 @@ extension ACPSessionRunner {
 
     /// Resolve deferred attachment blocks just before sending. When the agent
     /// supports inline images, read the staged image file, downscale, and
-    /// base64-encode it; otherwise degrade to a `file://` resource link the
-    /// agent reads from disk. When the agent supports embedded context,
+    /// base64-encode it; otherwise fall back to a file link only for local agents.
+    /// When the agent supports embedded context,
     /// readable text resource links inside the worktree become ACP `resource`
     /// blocks. Persisted queue state stays lightweight either way.
     ///
@@ -3569,21 +3569,23 @@ extension ACPSessionRunner {
         promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
         worktreePath: String,
         agentInfo: ACPImplementationInfo?,
-        attachmentsDirectory: URL
+        attachmentsDirectory: URL,
+        allowsLocalImageLinks: Bool = true
     ) async throws(ACPPromptRefusal) -> [ACPContentBlock] {
         let embeddedPDFs = try ACPAttachmentStaging.embeddedPDFBlocks(
             in: blocks, agentInfo: agentInfo,
             promptCapabilities: promptCapabilities, attachmentsDirectory: attachmentsDirectory)
-        return blocks.enumerated().map { index, block in
+        return try blocks.enumerated().map { (index, block) throws(ACPPromptRefusal) in
             if let pdf = embeddedPDFs[index] { return pdf }
             if case .image(let data, let uri, _) = block, data == nil, let uri {
-                let name = (URL(string: uri)?.lastPathComponent) ?? "image"
+                let imageURL = URL(string: uri)
                 if promptCapabilities.image,
-                   let fileURL = URL(string: uri),
+                   let fileURL = imageURL,
                    let encoded = ACPImageEncoding.inlineBase64(fileURL: fileURL, maxDimension: inlineImageMaxDimension) {
                     return .image(data: encoded.data, uri: nil, mimeType: encoded.mimeType)
                 }
-                return .resourceLink(uri: uri, name: name)
+                guard allowsLocalImageLinks || imageURL?.isFileURL == false else { throw .imageCannotReachRemoteAgent }
+                return .resourceLink(uri: uri, name: imageURL?.lastPathComponent ?? "image")
             }
             if case .resourceLink(let uri, let name) = block,
                promptCapabilities.embeddedContext,
@@ -4675,7 +4677,8 @@ extension ACPSessionRunner {
                     in: try await self.expandingSessionReferences(Self.hydrate(
                         blocks, promptCapabilities: self.session.promptCapabilities,
                         worktreePath: self.worktreePath, agentInfo: self.session.agentInfo,
-                        attachmentsDirectory: self.session.attachmentsDirectory)),
+                        attachmentsDirectory: self.session.attachmentsDirectory,
+                        allowsLocalImageLinks: self.remoteHost == nil)),
                     with: symbolExpansion)
                 // Before the row. Context is measured again once it is fetched:
                 // that stays after the row, which must be saved before a slow
@@ -5177,7 +5180,8 @@ extension ACPSessionRunner {
                         promptCapabilities: self.session.promptCapabilities,
                         worktreePath: self.worktreePath,
                         agentInfo: self.session.agentInfo,
-                        attachmentsDirectory: self.session.attachmentsDirectory
+                        attachmentsDirectory: self.session.attachmentsDirectory,
+                        allowsLocalImageLinks: self.remoteHost == nil
                     )
                     hydratedBlocks = ACPSymbolReference.replacingReferences(
                         in: await self.expandingSessionReferences(hydrated),

@@ -16,6 +16,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Keep inline charts and their legends from overlapping the text or callouts below them.
 - Turn on **Fast Android screen reads** in **Settings → Computer Use** for faster accessibility snapshots on Android 16 emulators. Physical phones keep the standard reader.
 - Settle a horizontal fling past the code editor's left edge with one smooth bounce instead of a wobble.
+- Send a device bug to an agent chat from the Devices menu on iOS simulators and Android, with a note, the frozen screenshot, and a crop.
 
 ## [0.24.10] - 2026-11-24
 

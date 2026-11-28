@@ -27,6 +27,7 @@ struct DeviceEntryActions: View {
     let onShutDown: (() -> Void)?
     /// Names the agent session recording the device.
     var agentName: (String) -> String = { _ in "An agent" }
+    var onSendBug: (() -> Void)? = nil
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     /// "Saved to Desktop", or why it wasn't, for a moment after a click. In
@@ -108,6 +109,10 @@ struct DeviceEntryActions: View {
             .disabled(!canChange)
         Button("Logs", action: onOpenLogs)
             .disabled(!ready)
+        if let onSendBug {
+            Button("Send to agent…", action: onSendBug)
+                .disabled(!ready)
+        }
         if case .simulator = kind {
             Button(
                 accessibilityOverlay ? "Hide Accessibility Overlay" : "Show Accessibility Overlay",
@@ -274,8 +279,25 @@ struct DeviceEntryLiveActions: View {
     let state: AppState
     let worktree: Worktree
     let device: DevicesTabState.Running
+    @State private var bugCapture: DeviceBugCapture?
+    @State private var bugCaptureTask: Task<Void, Never>?
+    @State private var captureFailed = false
 
     var body: some View {
+        actions
+            .sheet(item: $bugCapture, onDismiss: { bugCaptureTask?.cancel() }) { capture in
+                DeviceBugHandoffSheet(capture: capture, recipients: DeviceBugRecipients(state: state, worktreeID: worktree.id))
+            }
+            .alert("Couldn't capture the device screen", isPresented: $captureFailed) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Wait for the device to show a picture and try again.")
+            }
+            .onDisappear { bugCaptureTask?.cancel() }
+    }
+
+    @ViewBuilder
+    private var actions: some View {
         switch device.screen {
         case .simulator(let simulator, let stage):
             DeviceEntryActions(
@@ -291,7 +313,8 @@ struct DeviceEntryLiveActions: View {
                     return Self.saveScreenshot(frame, name: simulator.name)
                 },
                 onShutDown: { Task { await state.devicePane.shutDown(simulator) } },
-                agentName: { state.computerUseAgentName($0) }
+                agentName: { state.computerUseAgentName($0) },
+                onSendBug: { captureBug(simulator.udid, name: simulator.name, runtime: simulator.runtimeName, platform: .ios) }
             )
         case .android(let target, let stage):
             if let android = target.device {
@@ -310,7 +333,11 @@ struct DeviceEntryLiveActions: View {
                             await state.androidPane.shutDown(android)
                         }
                     } : nil,
-                    agentName: { state.computerUseAgentName($0) }
+                    agentName: { state.computerUseAgentName($0) },
+                    onSendBug: {
+                        captureBug(android.serial, name: android.title,
+                                   runtime: android.release.map { "Android \($0)" } ?? "Android", platform: .android)
+                    }
                 )
             }
         case .vm(let guest, let status):
@@ -318,6 +345,33 @@ struct DeviceEntryLiveActions: View {
             VMEntryActions(canStop: status == .running || status == .starting) {
                 Task { await state.vmManager.stopVM(worktreeID: worktree.id, guest: guest) }
             }
+        }
+    }
+
+    private func captureBug(_ id: String, name: String, runtime: String, platform: AgentDevice.Platform) {
+        guard bugCaptureTask == nil, let backend = state.deviceControl.backend(for: platform) else { return }
+        // Keep the same stream alive until both the frame and its optional context are captured.
+        let client = backend.input
+        let subscription = client.subscribe(udid: id, onFrame: { _ in }, onStop: { _ in })
+        bugCaptureTask = Task {
+            defer {
+                client.unsubscribe(udid: id, token: subscription)
+                bugCaptureTask = nil
+            }
+            for _ in 0..<60 {
+                guard !Task.isCancelled else { return }
+                if let frame = client.lastFrame(udid: id) {
+                    guard let capture = DeviceBugCapture(frame: frame, name: name, runtime: runtime) else {
+                        captureFailed = true
+                        return
+                    }
+                    bugCapture = capture
+                    await capture.readContext(from: backend, deviceID: id)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            if !Task.isCancelled { captureFailed = true }
         }
     }
 
