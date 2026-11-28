@@ -1323,6 +1323,23 @@ struct DiffReviewSurfaceTests {
         #expect(placement.fileLevel.map(\.id) == ["draft-unmatched"])
     }
 
+    /// The fixture's new side reads "let a = 1", "let b = 3". A comment that quotes its lines follows them
+    /// when they moved, and drops to the file level once no line reads its quote.
+    @Test(arguments: [
+        ("let a = 1", 1 as Int?), // still at its anchor
+        ("let b = 3", 2), // its code moved down a line
+        ("let gone = 0", nil), // its code is gone
+    ])
+    func quotedDraftCommentsFollowTheirLines(quote: String, row: Int?) {
+        let comment = draftComment(id: "draft", path: "A.swift", side: .new, startLine: 1, selectedText: quote)
+
+        let placement = ReviewDraftCommentPlacement.position([comment], in: displayModel().groups)
+
+        let placedRows = placement.byRowAnchor.filter { !$0.value.isEmpty }.map(\.key)
+        #expect(placedRows == row.map { [ReviewDraftCommentPlacement.RowKey(side: .new, line: $0)] } ?? [])
+        #expect(placement.fileLevel.map(\.id) == (row == nil ? ["draft"] : []))
+    }
+
     @Test func localDraftCommentsSegmentSameHunkByExactRow() throws {
         let model = displayModel()
         let group = try #require(model.groups.first)
@@ -3403,6 +3420,7 @@ struct DiffReviewSurfaceTests {
         side: DiffReviewInlineFeedbackSide = .new,
         startLine: Int,
         endLine: Int? = nil,
+        selectedText: String? = nil,
         state: ReviewDraftCommentState = .active
     ) -> ReviewDraftComment {
         ReviewDraftComment(
@@ -3418,7 +3436,7 @@ struct DiffReviewSurfaceTests {
             side: side,
             startLine: startLine,
             endLine: endLine,
-            selectedText: "let b = 3",
+            selectedText: selectedText,
             bodyMarkdown: "Please revisit this line.",
             state: state,
             createdAt: Date(timeIntervalSince1970: 1),
