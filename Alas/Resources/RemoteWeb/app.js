@@ -377,6 +377,7 @@ function resetServerScopedState() {
   renderSessions([]);
   showRepos();
   notifiedOpen = null;
+  failHostRequests();
 }
 
 function switchServer(id) {
@@ -420,6 +421,7 @@ function handle(msg) {
     case "transcriptDelta": applyDelta(msg); break;
     case "transcriptPage": applyPage(msg); break;
     case "stopPending": if (msg.sessionId === currentSession) markStopping(true); break;
+    case "host": receiveHostReply(msg.host); break;
     case "pong": receivePong(msg.requestId); break;
     case "queueState": applyQueueState(msg); break;
     case "turnCaptions": applyTurnCaptions(msg); break;
@@ -494,6 +496,7 @@ function handle(msg) {
         loaded: true
       };
       renderChanges();
+      refreshReview();
       break;
     case "changeListFailed":
       if (msg.sessionId !== currentSession) break;
@@ -949,6 +952,7 @@ function openSession(id) {
   renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
   changesTree.reset();
   changesState = { comparisonRef: null, metricsAvailable: true, files: [], staged: [], unstaged: [], commits: [], truncated: false, loaded: false };
+  reviewState = { sessionId: id, comments: [], sent: {} };
   fileTreeTruncatedPaths = new Set();
   detailStack = [];
   resetChangesAndFilesDOM();
@@ -1092,6 +1096,7 @@ $("changes-refresh").addEventListener("click", requestChanges);
 
 function renderChanges() {
   updateChangesTabBadge();
+  renderReviewBar();
   const list = $("changes-list");
   list.innerHTML = "";
   $("changes-summary").textContent = changesState.loaded
@@ -1123,6 +1128,8 @@ function renderChanges() {
       row.onclick = () => openDiff(file.path, section.stage || null);
       row.append(el("span", "change-name", item.name));
       if (file.conflict) row.append(el("span", "change-conflict", "conflict"));
+      const commentCount = RemoteChangesView.fileComments(reviewState.comments, RemoteChangesView.reviewNamespace(section.stage), file.path).length;
+      if (commentCount) row.append(el("span", "change-comments", String(commentCount)));
       row.append(el("span", "change-status status-" + file.status, file.status));
       if (file.add || file.del) {   // a binary file has no line counts to show
         const counts = el("span", "change-counts");
@@ -1276,6 +1283,8 @@ let diffRender = 0;    // bumped whenever #diff-rows changes, so a late load kno
 
 function clearDiff() {
   diffRender += 1;
+  diffContext = null;
+  reviewDraft = null;
   if (diffView) diffView.cleanUp();
   diffView = null;
   $("diff-rows").innerHTML = "";
@@ -1311,14 +1320,20 @@ async function renderDiff(path, stage, hunks, truncated, metadataNote) {
     const { FileDiff, getSingularPatch } = await loadDiffs();
     if (current !== diffRender) return;
     const fileDiff = getSingularPatch(RemoteChangesView.unifiedPatch(path, hunks));
+    diffContext = { path, stage, hunks };
+    const commentable = !!reviewTarget();
     diffView = new FileDiff({
       theme: "pierre-dark", themeType: "dark", disableFileHeader: true, overflow: "scroll", hunkSeparators: "line-info-basic",
       unsafeCSS: DIFF_CSS,
       diffStyle: container.clientWidth >= 760 ? "split" : "unified",   // side by side only where both sides fit
+      // The gutter's + comments on a line; dragging it comments on a range.
+      enableGutterUtility: commentable,
+      onGutterUtilityClick: commentable ? startComment : undefined,
+      renderAnnotation: renderCommentAnnotation,
     });
     const holder = el("div", "diff-rich");
     container.append(holder);
-    diffView.render({ fileDiff, containerWrapper: holder });
+    diffView.render({ fileDiff, containerWrapper: holder, lineAnnotations: diffAnnotations() });
   } catch (error) {
     if (current !== diffRender) return;
     console.warn("Showing a plain diff:", error);
@@ -1344,6 +1359,262 @@ function renderPlainDiff(container, hunks) {
     }
     container.appendChild(line);
   }
+}
+
+// --- Host requests and draft review comments ----------------------------------
+// Host-protocol requests ride the socket as { type: "host" }; each answer names its request's id.
+
+const HOST_PROTOCOL_VERSION = 1;
+let hostRequestSeq = 0;
+const hostRequests = new Map();   // id → resolve
+
+// Resolves with the request's result: { failure: { error } } when the host refused it or never answered.
+function hostRequest(request, timeoutMs = 30000) {
+  const id = ++hostRequestSeq;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => finishHostRequest(id, { failure: { error: { timedOut: { message: "The host didn't answer." } } } }), timeoutMs);
+    hostRequests.set(id, (result) => { clearTimeout(timer); resolve(result); });
+    send({ type: "host", host: { version: HOST_PROTOCOL_VERSION, id, request } });
+  });
+}
+
+function finishHostRequest(id, result) {
+  const resolve = hostRequests.get(id);
+  if (!resolve) return;
+  hostRequests.delete(id);
+  resolve(result || {});
+}
+
+function receiveHostReply(message) {
+  const response = message && message.response;
+  if (response) finishHostRequest(response.id, response.result);
+}
+
+function failHostRequests() {
+  for (const id of [...hostRequests.keys()]) finishHostRequest(id, { failure: { error: { disconnected: { message: "Switched to another host." } } } });
+}
+
+function hostFailure(result) {
+  const error = result && result.failure && result.failure.error;
+  if (!error) return null;
+  const detail = Object.values(error)[0];
+  const text = detail && (detail.reason || detail.message || detail.what);
+  return typeof text === "string" && text ? text : "The host refused it.";
+}
+
+let reviewState = { sessionId: null, comments: [], sent: {} };
+let reviewDraft = null;    // { anchor, error } while a comment is being written in the open diff
+let diffContext = null;    // { path, stage, hunks } of the diff showing in #diff-rows
+let reviewSending = null;  // { targets, error } while Send to agent picks a chat
+
+function activeCapabilities() {
+  return (links.activeLink() || {}).capabilities || [];
+}
+
+// The current session's worktree and its local-changes review, when this host serves the browser
+// its reviews. A session a gateway relays lives on another machine, whose worktrees this one can't name.
+function reviewTarget() {
+  const caps = activeCapabilities();
+  if (!caps.includes("host.reviews.v1") && !caps.includes("host.reviews.browser.v1")) return null;
+  const summary = currentSession ? listedSessions.get(currentSession) : null;
+  const path = summary && summary.worktree && summary.worktree.path;
+  if (!summary || summary.serverId || !summary.projectId || !summary.worktreeId || typeof path !== "string" || !path.startsWith("/")) return null;
+  return { worktree: { projectID: summary.projectId, path }, sessionID: RemoteChangesView.localChangesReviewID(summary.worktreeId, path) };
+}
+
+async function refreshReview() {
+  const target = reviewTarget();
+  const sessionId = currentSession;
+  if (!target) return;
+  const result = await hostRequest({ readReview: target });
+  const review = result.review && result.review.review;
+  if (!review || sessionId !== currentSession) return;
+  reviewState = { sessionId, comments: review.comments || [], sent: review.sent || {} };
+  renderChanges();
+  refreshDiffAnnotations();
+}
+
+async function changeReview(mutation) {
+  const target = reviewTarget();
+  if (!target) return "This worktree's reviews can't be changed from here.";
+  const failure = hostFailure(await hostRequest({ mutateReview: { ...target, mutation } }));
+  if (!failure) await refreshReview();
+  return failure;
+}
+
+function diffAnnotations() {
+  if (!diffContext) return [];
+  const { path, stage, hunks } = diffContext;
+  const annotations = RemoteChangesView.commentAnnotations(hunks, reviewState.comments, RemoteChangesView.reviewNamespace(stage), path);
+  if (reviewDraft) {
+    const anchor = reviewDraft.anchor;
+    annotations.push({ side: anchor.side === "old" ? "deletions" : "additions", lineNumber: anchor.endLine, metadata: { draft: reviewDraft } });
+  }
+  return annotations;
+}
+
+// Not while a comment is being written: redrawing the annotations would drop what was typed.
+function refreshDiffAnnotations() {
+  if (!reviewDraft) showDiffAnnotations();
+}
+
+function showDiffAnnotations() {
+  if (!diffView || !diffContext) return;
+  diffView.setLineAnnotations(diffAnnotations());
+  diffView.rerender();   // setLineAnnotations only stages them
+}
+
+function startComment(range) {
+  if (!diffContext || reviewDraft) return;
+  const anchor = RemoteChangesView.commentAnchor(diffContext.hunks, range);
+  if (!anchor) return;
+  reviewDraft = { anchor, error: "" };
+  showDiffAnnotations();
+}
+
+function closeCommentDraft() {
+  reviewDraft = null;
+  // The gutter keeps the commented lines selected, and its + pinned to them, until told otherwise.
+  if (diffView) diffView.setSelectedLines(null);
+  refreshDiffAnnotations();
+}
+
+function renderCommentAnnotation(annotation) {
+  const meta = annotation.metadata || {};
+  return meta.draft ? renderCommentComposer(meta.draft) : renderCommentCard(meta.comment);
+}
+
+function renderCommentComposer(draft) {
+  const box = el("div", "review-composer");
+  const input = document.createElement("textarea");
+  input.rows = 3;
+  input.placeholder = "Comment on " + RemoteChangesView.commentLines({ anchor: { line: draft.anchor } }).toLowerCase() + "…";
+  const error = el("p", "sheet-error" + (draft.error ? "" : " hidden"), draft.error);
+  const cancel = el("button", "review-btn", "Cancel");
+  const submit = el("button", "review-btn is-primary", "Comment");
+  cancel.type = submit.type = "button";
+  cancel.onclick = closeCommentDraft;
+  submit.onclick = async () => {
+    const body = input.value.trim();
+    if (!body || !diffContext) return;
+    submit.disabled = true;
+    const { path, stage } = diffContext;
+    const failure = await changeReview({ add: {
+      fileID: { namespace: RemoteChangesView.reviewNamespace(stage), path }, path,
+      anchor: { line: draft.anchor }, body
+    } });
+    if (reviewDraft !== draft) return;
+    if (failure) {
+      submit.disabled = false;
+      error.textContent = draft.error = failure;
+      error.classList.remove("hidden");
+      return;
+    }
+    closeCommentDraft();
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) submit.click();
+    if (event.key === "Escape") { event.stopPropagation(); closeCommentDraft(); }
+  });
+  const actions = el("div", "review-actions");
+  actions.append(cancel, submit);
+  box.append(input, error, actions);
+  setTimeout(() => input.focus(), 0);
+  return box;
+}
+
+function renderCommentCard(comment) {
+  const card = el("div", "review-comment");
+  const head = el("div", "review-comment-head");
+  head.append(el("span", "review-comment-author", RemoteChangesView.commentAuthor(comment)),
+    el("span", "review-comment-lines", RemoteChangesView.commentLines(comment)));
+  const sent = reviewState.sent[comment.id];
+  if (sent && sent.title) head.append(el("span", "review-comment-sent", "Sent to " + sent.title));
+  card.append(head, el("div", "review-comment-body", comment.bodyMarkdown || ""));
+  for (const reply of comment.replies || []) {
+    const row = el("div", "review-reply");
+    row.append(el("span", "review-comment-author", RemoteChangesView.commentAuthor(reply)), el("div", "review-comment-body", reply.bodyMarkdown || ""));
+    card.append(row);
+  }
+  const error = el("p", "sheet-error hidden");
+  const actions = el("div", "review-actions");
+  const act = (label, mutation) => {
+    const button = el("button", "review-btn", label);
+    button.type = "button";
+    button.onclick = async () => {
+      button.disabled = true;
+      const failure = await changeReview(mutation);
+      if (!failure) return;
+      button.disabled = false;
+      error.textContent = failure;
+      error.classList.remove("hidden");
+    };
+    actions.append(button);
+  };
+  act("Resolve", { resolve: { commentID: comment.id } });
+  if (RemoteChangesView.commentAuthor(comment) === "You") act("Delete", { delete: { commentID: comment.id } });
+  card.append(error, actions);
+  return card;
+}
+
+// "N open comments" over the changes, with Send to agent where the host offers it.
+function renderReviewBar() {
+  const bar = $("review-bar");
+  const open = reviewTarget() ? RemoteChangesView.openComments(reviewState.comments).length : 0;
+  bar.classList.toggle("hidden", open === 0);
+  bar.innerHTML = "";
+  if (!open) { reviewSending = null; return; }
+  bar.append(el("span", "review-bar-count", open === 1 ? "1 open comment" : open + " open comments"));
+  if (!activeCapabilities().includes("host.reviews.agent.phone.v1")) return;
+  if (!reviewSending) {
+    const send = el("button", "review-btn is-primary", "Send to agent");
+    send.type = "button";
+    send.onclick = pickReviewAgent;
+    bar.append(send);
+    return;
+  }
+  for (const target of reviewSending.targets || []) {
+    const button = el("button", "review-btn", agentTargetTitle(target));
+    button.type = "button";
+    button.onclick = () => sendReviewTo(target);
+    bar.append(button);
+  }
+  const cancel = el("button", "review-btn", reviewSending.targets ? "Cancel" : "Loading…");
+  cancel.type = "button";
+  cancel.onclick = () => { reviewSending = null; renderReviewBar(); };
+  bar.append(cancel);
+  if (reviewSending.error) bar.append(el("p", "sheet-error", reviewSending.error));
+}
+
+// A ReviewFeedbackAgentTarget as the host encodes it: { newChat: {…} } or { existingSession: {…} }.
+function agentTargetTitle(target) {
+  const detail = Object.values(target || {})[0] || {};
+  return detail.title || "Agent";
+}
+
+async function pickReviewAgent() {
+  const target = reviewTarget();
+  if (!target) return;
+  reviewSending = { targets: null, error: "" };
+  renderReviewBar();
+  const result = await hostRequest({ reviewAgentTargets: target });
+  if (!reviewSending) return;
+  const targets = (result.reviewAgentTargets && result.reviewAgentTargets.targets) || [];
+  if (targets.length === 1) return sendReviewTo(targets[0]);
+  reviewSending = { targets, error: hostFailure(result) || (targets.length ? "" : "No agent to send to. Open a chat in this worktree first.") };
+  renderReviewBar();
+}
+
+async function sendReviewTo(agent) {
+  const target = reviewTarget();
+  if (!target || !reviewSending) return;
+  reviewSending = { targets: null, error: "" };
+  renderReviewBar();
+  // A new chat on the host can take a while to start; giving up early would invite a second send.
+  const failure = hostFailure(await hostRequest({ sendReviewToAgent: { ...target, target: agent } }, 300000));
+  reviewSending = failure ? { targets: [agent], error: failure } : null;
+  await refreshReview();
+  renderReviewBar();
 }
 
 function renderFileTree() {

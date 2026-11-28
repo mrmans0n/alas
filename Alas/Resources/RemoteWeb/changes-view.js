@@ -166,6 +166,83 @@ function unifiedPatch(path, hunks) {
   return out.join("\n") + "\n";
 }
 
+// --- Draft review comments (host.reviews.*) -----------------------------------
+// The web files diff comments where the phone does: the worktree's local-changes review, under the
+// diff's stage, or "branch" for the branch diff.
+
+// ReviewDraftSessionID.localChanges(worktreeID:worktreePath:scope: .all), as RemoteReviewRequest builds it.
+// ponytail: trims trailing slashes but doesn't resolve "." or ".."; host paths come already standardized.
+function localChangesReviewID(worktreeId, worktreePath) {
+  const path = String(worktreePath).replace(/\/+$/, "") || "/";
+  return ["local-changes", String(worktreeId), path, "all"]
+    .map(field => field.replace(/\\/g, "\\\\").replace(/\u001f/g, "\\u001f"))
+    .join("\u001f");
+}
+
+function reviewNamespace(stage) {
+  return stage || "branch";
+}
+
+// The comment anchor for a gutter selection ({ start, side, end, endSide }, sides "additions" or
+// "deletions"): one side, as the Mac anchors lines, with the quoted lines a comment follows when its
+// code moves. A range over both added and removed lines anchors to the new side.
+function commentAnchor(hunks, range) {
+  if (!range) return null;
+  const rows = diffRows(hunks).filter(row => row.type === "line");
+  const index = (side, line) => rows.findIndex(row => (side === "deletions" ? row.oldNumber : row.newNumber) === line);
+  let from = index(range.side, range.start);
+  let to = index(range.endSide || range.side, range.end);
+  if (from < 0 || to < 0) return null;
+  if (from > to) [from, to] = [to, from];
+  const slice = rows.slice(from, to + 1);
+  const oldOnly = range.side === "deletions" && (range.endSide || range.side) === "deletions";
+  const useNew = !oldOnly && slice.some(row => row.newNumber !== null);
+  const picked = slice.filter(row => (useNew ? row.newNumber : row.oldNumber) !== null);
+  const numbers = picked.map(row => (useNew ? row.newNumber : row.oldNumber));
+  return {
+    side: useNew ? "new" : "old",
+    startLine: Math.min(...numbers),
+    endLine: Math.max(...numbers),
+    selectedText: picked.map(row => row.text).join("\n")
+  };
+}
+
+function openComments(comments) {
+  return (comments || []).filter(comment => comment && comment.state === "active");
+}
+
+function fileComments(comments, namespace, path) {
+  return openComments(comments).filter(comment => comment.fileID && comment.fileID.namespace === namespace && comment.fileID.path === path);
+}
+
+// A file's open comments as diff annotations: under a comment's last line when the diff shows it,
+// else above the first hunk (line 0), as the phone drops a comment whose lines are gone.
+// ponytail: placed by saved line numbers, without the phone's relocation by quoted lines
+// (ReviewQuotedLines.locate); port it if comments whose code moved land on the wrong lines.
+function commentAnnotations(hunks, comments, namespace, path) {
+  const rows = diffRows(hunks).filter(row => row.type === "line");
+  const shown = { new: new Set(rows.map(row => row.newNumber)), old: new Set(rows.map(row => row.oldNumber)) };
+  return fileComments(comments, namespace, path).map(comment => {
+    const line = comment.anchor && comment.anchor.line;
+    const side = line && line.side === "old" ? "old" : "new";
+    const end = line ? line.endLine || line.startLine : 0;
+    return { side: side === "old" ? "deletions" : "additions", lineNumber: line && shown[side].has(end) ? end : 0, metadata: { comment } };
+  });
+}
+
+// "You" for the user, else the agent's name, as the Mac names comment authors.
+function commentAuthor(comment) {
+  const agent = comment && comment.author && comment.author.agent;
+  return agent ? agent.name || "Agent" : "You";
+}
+
+function commentLines(comment) {
+  const line = comment && comment.anchor && comment.anchor.line;
+  if (!line) return "File";
+  const end = line.endLine || line.startLine;
+  return end > line.startLine ? "Lines " + line.startLine + "–" + end : "Line " + line.startLine;
+}
+
 globalThis.RemoteChangesView = {
   sortFiles,
   splitPath,
@@ -178,5 +255,13 @@ globalThis.RemoteChangesView = {
   truncationNotice,
   metadataOnlyNotice,
   toolDiffText,
-  unifiedPatch
+  unifiedPatch,
+  localChangesReviewID,
+  reviewNamespace,
+  commentAnchor,
+  openComments,
+  fileComments,
+  commentAnnotations,
+  commentAuthor,
+  commentLines
 };

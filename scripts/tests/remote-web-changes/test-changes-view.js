@@ -198,6 +198,42 @@ const view = globalThis.RemoteChangesView;
   assert.equal(view.toolDiffText(undefined, diffs), undefined);
 }
 
+// --- Draft review comments ---------------------------------------------------
+
+// Old 10–12 → new 10–12: line 11 "b" became "B", with context around it.
+const reviewHunks = [{ header: "@@ -10,3 +10,3 @@", oldStart: 10, newStart: 10, lines: [
+  { kind: "context", text: "a", oldNumber: 10, newNumber: 10 },
+  { kind: "delete", text: "b", oldNumber: 11, newNumber: null },
+  { kind: "add", text: "B", oldNumber: null, newNumber: 11 },
+  { kind: "context", text: "c", oldNumber: 12, newNumber: 12 }] }];
+
+// One side stays on that side; a range over both sides, either way round, anchors to the new side.
+for (const [range, expected] of [
+  [{ start: 11, side: "additions", end: 12, endSide: "additions" }, { side: "new", startLine: 11, endLine: 12, selectedText: "B\nc" }],
+  [{ start: 11, side: "deletions", end: 11, endSide: "deletions" }, { side: "old", startLine: 11, endLine: 11, selectedText: "b" }],
+  [{ start: 11, side: "deletions", end: 11, endSide: "additions" }, { side: "new", startLine: 11, endLine: 11, selectedText: "B" }],
+  [{ start: 12, side: "additions", end: 10, endSide: "additions" }, { side: "new", startLine: 10, endLine: 12, selectedText: "a\nB\nc" }],
+]) assert.deepEqual(view.commentAnchor(reviewHunks, range), expected, JSON.stringify(range));
+assert.equal(view.commentAnchor(reviewHunks, { start: 99, side: "additions", end: 99 }), null, "a line the diff doesn't show");
+
+// Open comments on this file and namespace sit under their last line, or above the diff once their
+// lines are gone; resolved ones and other files or stages are left out.
+const reviewComment = (id, fileID, line, state = "active") => ({ id, fileID, state, anchor: line ? { line } : { file: {} } });
+const here = { namespace: "unstaged", path: "src/a.swift" };
+const annotations = view.commentAnnotations(reviewHunks, [
+  reviewComment("shown", here, { side: "new", startLine: 10, endLine: 11 }),
+  reviewComment("removed", here, { side: "old", startLine: 11, endLine: 11 }),
+  reviewComment("gone", here, { side: "new", startLine: 40, endLine: 41 }),
+  reviewComment("file", here, null),
+  reviewComment("resolved", here, { side: "new", startLine: 10 }, "resolved"),
+  reviewComment("staged", { namespace: "staged", path: "src/a.swift" }, { side: "new", startLine: 10 }),
+], "unstaged", "src/a.swift");
+assert.deepEqual(annotations.map(a => [a.metadata.comment.id, a.side, a.lineNumber]), [
+  ["shown", "additions", 11], ["removed", "deletions", 11], ["gone", "additions", 0], ["file", "additions", 0]]);
+
+// The id the host gives the worktree's local-changes review, field separators escaped.
+assert.equal(view.localChangesReviewID("w1", "/repo/a\u001fb/"), "local-changes\u001fw1\u001f/repo/a\\u001fb\u001fall");
+
 // The bundled @pierre/diffs parses the patch built from the host's hunks: the file keeps its own
 // name, counts come from the lines even when the host's header disagrees, and a missing final
 // newline survives.
