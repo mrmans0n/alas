@@ -4411,6 +4411,43 @@ public final class ACPSessionManager: ChangeTracking {
         recent.insert(row, at: insertionIndex)
     }
 
+    /// Asks `agentId` what a session in this worktree would offer, through
+    /// `session/options`, without starting one, and reports it like a live
+    /// session's chips so the model catalog has real values for surfaces
+    /// that configure a session before it exists. False when the agent has
+    /// no `session/options`, or could not be reached.
+    @discardableResult
+    public func previewSessionOptions(agentId: String) async -> Bool {
+        guard !isDisposed, let spec = ACPLaunchCatalog.spec(for: agentId) else { return false }
+        await previousManagerDisposal?.value
+        guard !isDisposed else { return false }
+        let host = effectiveRemoteHost()
+        guard case .ready = await evaluateSetup(for: launchSpecTransformer(spec, true)),
+              let resolved = try? await resolvedLaunchSpec(for: spec, host: host),
+              let connection = try? connectionFactory(launchSpecTransformer(resolved, true), host, worktreePath)
+        else { return false }
+        let preview: ACPSessionNewResult?
+        do {
+            let initialized = try await connection.initialize()
+            preview = initialized.sessionCapabilities.supportsOptions
+                ? try await connection.sessionOptions(cwd: worktreePath)
+                : nil
+        } catch {
+            preview = nil
+        }
+        await connection.shutdown()
+        guard let preview, !isDisposed else { return false }
+        onChipsObserved?(agentId, host, ACPChipState.normalize(
+            agentId: agentId,
+            availableModels: preview.availableModels,
+            currentModel: preview.currentModel,
+            availableModes: preview.availableModes,
+            currentMode: preview.currentMode,
+            configOptions: preview.configOptions
+        ))
+        return true
+    }
+
     /// `worktreeResolver` maps a listed session's cwd to the Alas worktree
     /// whose path it is, for the linked-worktree scope of the session index.
     public func makeSessionDiscoveryHandle(

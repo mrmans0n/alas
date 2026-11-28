@@ -344,6 +344,8 @@ final class AppState {
     /// The models each ACP agent last advertised, for surfaces that configure
     /// a session before it exists (the schedule editor's model picker).
     let acpModelCatalog: ACPAgentModelCatalog
+    /// Agents `previewACPAgentOptions` already asked during this launch.
+    private var previewedACPAgentOptions: Set<String> = []
     /// Worktree VMs (and the golden VM during its setup) this process runs.
     @ObservationIgnored let vmManager = WorktreeVMManager()
     /// Sessions that made a computer use call in their worktree's VMs, with the registry ids
@@ -15442,6 +15444,40 @@ extension AppState: RemoteSessionPresenter {
 }
 
 extension AppState {
+    /// Fills the model catalog for `agentID` through `session/options` when no
+    /// session of it has reported during this launch, so a picker shown before
+    /// any session exists offers the agent's real models and thinking levels.
+    /// Asked once per agent and launch: an agent without `session/options`
+    /// would otherwise start an adapter every time a picker appears.
+    func previewACPAgentOptions(agentID: String) async {
+        // A manager first: with no local worktree yet nothing is asked, so a
+        // later picker, after a project is added, may still ask.
+        guard acpModelCatalog.launchReport(for: agentID) == .notObserved,
+              !previewedACPAgentOptions.contains(agentID),
+              let manager = localACPManagerForPreview()
+        else { return }
+        previewedACPAgentOptions.insert(agentID)
+        // Owned here, not by the picker's task: closing the picker or picking
+        // another agent mid-preview would cancel the setup check, and the agent
+        // would stay counted as asked with nothing learned.
+        await Task { @MainActor in await manager.previewSessionOptions(agentId: agentID) }.value
+    }
+
+    /// A manager of a worktree on this Mac: the selected one when it is local.
+    private func localACPManagerForPreview() -> ACPSessionManager? {
+        func isLocal(_ worktree: Worktree) -> Bool {
+            projects.first { $0.id == worktree.projectId }?.host == nil
+        }
+        if let id = selectedWorktreeId, let worktree = worktree(withId: id), isLocal(worktree) {
+            return acpManager(for: worktree)
+        }
+        return projects.lazy
+            .filter { $0.host == nil }
+            .compactMap { self.projectsManager.worktrees(projectId: $0.id).first }
+            .first
+            .flatMap { acpManager(for: $0) }
+    }
+
     private func recordObservedChips(agentId: String, host: String?, chips: ACPChipState) {
         acpModelCatalog.record(
             agentID: agentId,
