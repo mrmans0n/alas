@@ -1425,12 +1425,16 @@ function reviewTarget() {
 }
 
 // A failed read keeps what was shown and says so in the review bar, with a Retry that only reads again.
+// Only the newest read lands: an older one finishing later, read or timed out, would bring back
+// comments since resolved, or an error over a fresh review.
+let reviewReadGeneration = 0;
 async function refreshReview() {
   const target = reviewTarget();
   const sessionId = currentSession;
   if (!target) return;
+  const generation = ++reviewReadGeneration;
   const result = await hostRequest({ readReview: target });
-  if (sessionId !== currentSession) return;
+  if (generation !== reviewReadGeneration || sessionId !== currentSession) return;
   const review = result.review && result.review.review;
   reviewState = review
     ? { sessionId, comments: review.comments || [], sent: review.sent || {}, readError: "" }
@@ -1486,14 +1490,14 @@ function closeCommentDraft() {
 
 function renderCommentAnnotation(annotation) {
   const meta = annotation.metadata || {};
-  return meta.draft ? renderCommentComposer(meta.draft) : renderCommentCard(meta.comment);
+  return meta.draft ? renderCommentComposer(meta.draft) : renderCommentCard(meta.comment, meta.placed);
 }
 
 function renderCommentComposer(draft) {
   const box = el("div", "review-composer");
   const input = document.createElement("textarea");
   input.rows = 3;
-  input.placeholder = "Comment on " + RemoteChangesView.commentLines({ anchor: { line: draft.anchor } }).toLowerCase() + "…";
+  input.placeholder = "Comment on " + RemoteChangesView.commentLines({ anchor: { line: draft.anchor } }, draft.anchor).toLowerCase() + "…";
   const error = el("p", "sheet-error" + (draft.error ? "" : " hidden"), draft.error);
   const cancel = el("button", "review-btn", "Cancel");
   const submit = el("button", "review-btn is-primary", "Comment");
@@ -1528,11 +1532,11 @@ function renderCommentComposer(draft) {
   return box;
 }
 
-function renderCommentCard(comment) {
+function renderCommentCard(comment, placed) {
   const card = el("div", "review-comment");
   const head = el("div", "review-comment-head");
   head.append(el("span", "review-comment-author", RemoteChangesView.commentAuthor(comment)),
-    el("span", "review-comment-lines", RemoteChangesView.commentLines(comment)));
+    el("span", "review-comment-lines", RemoteChangesView.commentLines(comment, placed)));
   const sent = reviewState.sent[comment.id];
   if (sent && sent.title) head.append(el("span", "review-comment-sent", "Sent to " + sent.title));
   card.append(head, el("div", "review-comment-body", comment.bodyMarkdown || ""));

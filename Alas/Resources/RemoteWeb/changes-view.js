@@ -199,6 +199,8 @@ function commentAnchor(hunks, range) {
   const useNew = !oldOnly && slice.some(row => row.newNumber !== null);
   const picked = slice.filter(row => (useNew ? row.newNumber : row.oldNumber) !== null);
   const numbers = picked.map(row => (useNew ? row.newNumber : row.oldNumber));
+  // A drag from one hunk into the next skips lines the diff doesn't show, which the quote can't hold.
+  if (numbers.some((number, i) => i > 0 && number !== numbers[i - 1] + 1)) return null;
   return {
     side: useNew ? "new" : "old",
     startLine: Math.min(...numbers),
@@ -216,7 +218,7 @@ function fileComments(comments, namespace, path) {
 }
 
 // A file's open comments as diff annotations, under the last line they sit on; line 0 (above the first
-// hunk) when they can't be placed. A port of ReviewCommentPlacement.place, so the web and the phone put a
+// hunk) when they can't be placed; `metadata.placed` is { startLine, endLine } where one sits, else null. A port of ReviewCommentPlacement.place, so the web and the phone put a
 // comment in the same spot: one that quotes its lines stays at its anchor while the lines there still read
 // the same, else moves to the one run of lines on that side that does; with none, or several, it goes to
 // line 0. One without a usable quote (none, or not spanning its anchor) places by line numbers.
@@ -229,12 +231,13 @@ function commentAnnotations(hunks, comments, namespace, path) {
     if (row.oldNumber !== null) sides.old.push({ number: row.oldNumber, text: trimEnd(row.text) });
   }
   const place = line => {
-    if (!line || (line.side !== "new" && line.side !== "old")) return 0;
+    if (!line || (line.side !== "new" && line.side !== "old")) return null;
     const all = sides[line.side];
     const start = line.startLine;
     const end = line.endLine || start;
     const at = number => all.findIndex(entry => entry.number === number);
-    const byNumber = at(end) >= 0 ? end : 0;
+    const range = (from, to) => ({ startLine: from, endLine: to });
+    const byNumber = at(end) >= 0 ? range(start, end) : null;
     if (typeof line.selectedText !== "string") return byNumber;
     const span = end - start + 1;
     const quoted = line.selectedText.split("\n");
@@ -245,13 +248,14 @@ function commentAnnotations(hunks, comments, namespace, path) {
     const reads = i => i + wanted.length <= all.length
       && wanted.every((text, k) => all[i + k].text === text && all[i + k].number === all[i].number + k);
     const here = at(start);
-    if (here >= 0 && reads(here)) return all[here + wanted.length - 1].number;
+    if (here >= 0 && reads(here)) return range(start, end);
     const runs = all.map((_, i) => i).filter(reads);
-    return runs.length === 1 ? all[runs[0] + wanted.length - 1].number : 0;
+    return runs.length === 1 ? range(all[runs[0]].number, all[runs[0] + wanted.length - 1].number) : null;
   };
   return fileComments(comments, namespace, path).map(comment => {
     const line = comment.anchor && comment.anchor.line;
-    return { side: line && line.side === "old" ? "deletions" : "additions", lineNumber: place(line), metadata: { comment } };
+    const placed = place(line);
+    return { side: line && line.side === "old" ? "deletions" : "additions", lineNumber: placed ? placed.endLine : 0, metadata: { comment, placed } };
   });
 }
 
@@ -261,11 +265,14 @@ function commentAuthor(comment) {
   return agent ? agent.name || "Agent" : "You";
 }
 
-function commentLines(comment) {
+// "Line 5" or "Lines 5–6" where a comment sits; given no `placed` range, where it was written
+// ("Was line 2"), since its lines aren't in the diff now.
+function commentLines(comment, placed) {
   const line = comment && comment.anchor && comment.anchor.line;
   if (!line) return "File";
-  const end = line.endLine || line.startLine;
-  return end > line.startLine ? "Lines " + line.startLine + "–" + end : "Line " + line.startLine;
+  const { startLine, endLine } = placed || { startLine: line.startLine, endLine: line.endLine || line.startLine };
+  const label = endLine > startLine ? "ines " + startLine + "–" + endLine : "ine " + startLine;
+  return (placed ? "L" : "Was l") + label;
 }
 
 globalThis.RemoteChangesView = {

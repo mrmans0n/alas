@@ -215,6 +215,10 @@ for (const [range, expected] of [
   [{ start: 12, side: "additions", end: 10, endSide: "additions" }, { side: "new", startLine: 10, endLine: 12, selectedText: "a\nB\nc" }],
 ]) assert.deepEqual(view.commentAnchor(reviewHunks, range), expected, JSON.stringify(range));
 assert.equal(view.commentAnchor(reviewHunks, { start: 99, side: "additions", end: 99 }), null, "a line the diff doesn't show");
+const twoHunks = reviewHunks.concat([{ header: "@@ -40,1 +40,1 @@", oldStart: 40, newStart: 40, lines: [
+  { kind: "context", text: "z", oldNumber: 40, newNumber: 40 }] }]);
+assert.equal(view.commentAnchor(twoHunks, { start: 12, side: "additions", end: 40, endSide: "additions" }), null,
+  "a range across hunks, whose quote would miss the lines between them");
 
 // Open comments on this file and namespace sit under their last line, or above the diff once their
 // lines are gone; resolved ones and other files or stages are left out.
@@ -246,8 +250,8 @@ assert.deepEqual(view.commentAnnotations(moved, [
   quoting("gone", 2, 2, "zzz"),
   quoting("ambiguous", 3, 3, "a"),
   quoting("numbers", 2, 3, "only one line"),
-], "unstaged", "src/a.swift").map(a => [a.metadata.comment.id, a.lineNumber]),
-  [["stayed", 3], ["moved", 5], ["gone", 0], ["ambiguous", 0], ["numbers", 3]]);
+], "unstaged", "src/a.swift").map(a => [a.metadata.comment.id, a.lineNumber, view.commentLines(a.metadata.comment, a.metadata.placed)]),
+  [["stayed", 3, "Line 3"], ["moved", 5, "Line 5"], ["gone", 0, "Was line 2"], ["ambiguous", 0, "Was line 3"], ["numbers", 3, "Lines 2–3"]]);
 
 // The id the host gives the worktree's local-changes review, field separators escaped.
 assert.equal(view.localChangesReviewID("w1", "/repo/a\u001fb/"), "local-changes\u001fw1\u001f/repo/a\\u001fb\u001fall");
