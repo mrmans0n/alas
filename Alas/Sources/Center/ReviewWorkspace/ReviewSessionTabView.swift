@@ -184,7 +184,8 @@ struct ReviewSessionTabView: View {
         if let record {
             let controller = ReviewDraftCommentController(
                 sessionID: record.target.draftSessionID,
-                store: draftCommentStore
+                store: draftCommentStore,
+                didChange: Self.draftsDidChange(appState: appState, worktreeID: tabState.worktreeId, persistsState: persistsState)
             )
             try? controller.load()
             self._draftCommentController = State(initialValue: controller)
@@ -936,7 +937,8 @@ struct ReviewSessionTabView: View {
         if loadedDraftSessionID != sessionID {
             draftCommentController = ReviewDraftCommentController(
                 sessionID: sessionID,
-                store: draftCommentStore
+                store: draftCommentStore,
+                didChange: Self.draftsDidChange(appState: appState, worktreeID: tabState.worktreeId, persistsState: persistsState)
             )
             loadedDraftSessionID = sessionID
             draftCommentScrollCommand = nil
@@ -1389,6 +1391,12 @@ struct ReviewSessionTabView: View {
             draftController: draftCommentController,
             now: now
         )
+    }
+
+    /// Only a pane that saves its state tells paired devices; a preview's comments never reach the store they read.
+    private static func draftsDidChange(appState: AppState?, worktreeID: String, persistsState: Bool) -> @MainActor () -> Void {
+        guard persistsState, let appState else { return ReviewDraftCommentController.notifyOpenPanes }
+        return appState.reviewDraftsDidChange(worktreeID: worktreeID)
     }
 
     private func recordSessionHandoff(_ handoff: ReviewFeedbackHandoff, originRecordID: ReviewSessionID?) {

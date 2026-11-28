@@ -933,7 +933,9 @@ struct DraftReviewRequestTabView: View {
     private func loadDraftCommentController() {
         let sessionID = reviewDraftSessionID
         if loadedDraftSessionID != sessionID {
-            draftCommentController = ReviewDraftCommentController(sessionID: sessionID)
+            draftCommentController = ReviewDraftCommentController(
+                sessionID: sessionID, didChange: appState.reviewDraftsDidChange(worktreeID: worktreeId)
+            )
             loadedDraftSessionID = sessionID
             focusedDraftCommentID = nil
             draftCommentScrollCommand = nil

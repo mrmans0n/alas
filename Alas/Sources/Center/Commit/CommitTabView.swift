@@ -729,7 +729,11 @@ struct CommitReviewBody: View {
             return
         }
         if loadedDraftSessionID != sessionID {
-            draftCommentController = ReviewDraftCommentController(sessionID: sessionID)
+            draftCommentController = ReviewDraftCommentController(
+                sessionID: sessionID,
+                didChange: appState.flatMap { app in worktreeId.map { app.reviewDraftsDidChange(worktreeID: $0) } }
+                    ?? ReviewDraftCommentController.notifyOpenPanes
+            )
             loadedDraftSessionID = sessionID
             focusedDraftCommentID = nil
             draftCommentScrollCommand = nil
