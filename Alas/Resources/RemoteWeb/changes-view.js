@@ -168,7 +168,8 @@ function unifiedPatch(path, hunks) {
 
 // --- Draft review comments (host.reviews.*) -----------------------------------
 // The web files diff comments where the phone does: the worktree's local-changes review, under the
-// diff's stage, or "branch" for the branch diff.
+// diff's stage. That review takes only staged and unstaged files, so the branch diff takes no comments,
+// as on the phone.
 
 // ReviewDraftSessionID.localChanges(worktreeID:worktreePath:scope: .all), as RemoteReviewRequest builds it.
 // ponytail: trims trailing slashes but doesn't resolve "." or ".."; host paths come already standardized.
@@ -177,10 +178,6 @@ function localChangesReviewID(worktreeId, worktreePath) {
   return ["local-changes", String(worktreeId), path, "all"]
     .map(field => field.replace(/\\/g, "\\\\").replace(/\u001f/g, "\\u001f"))
     .join("\u001f");
-}
-
-function reviewNamespace(stage) {
-  return stage || "branch";
 }
 
 // The comment anchor for a gutter selection ({ start, side, end, endSide }, sides "additions" or
@@ -289,7 +286,6 @@ globalThis.RemoteChangesView = {
   toolDiffText,
   unifiedPatch,
   localChangesReviewID,
-  reviewNamespace,
   commentAnchor,
   openComments,
   fileComments,

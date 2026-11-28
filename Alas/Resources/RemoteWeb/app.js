@@ -1129,7 +1129,7 @@ function renderChanges() {
       row.onclick = () => openDiff(file.path, section.stage || null);
       row.append(el("span", "change-name", item.name));
       if (file.conflict) row.append(el("span", "change-conflict", "conflict"));
-      const commentCount = RemoteChangesView.fileComments(reviewState.comments, RemoteChangesView.reviewNamespace(section.stage), file.path).length;
+      const commentCount = RemoteChangesView.fileComments(reviewState.comments, section.stage, file.path).length;
       if (commentCount) row.append(el("span", "change-comments", String(commentCount)));
       row.append(el("span", "change-status status-" + file.status, file.status));
       if (file.add || file.del) {   // a binary file has no line counts to show
@@ -1322,7 +1322,8 @@ async function renderDiff(path, stage, hunks, truncated, metadataNote) {
     if (current !== diffRender) return;
     const fileDiff = getSingularPatch(RemoteChangesView.unifiedPatch(path, hunks));
     diffContext = { path, stage, hunks };
-    const commentable = !!reviewTarget();
+    // Only working-tree diffs: the local-changes review the comments go to takes no branch changes.
+    const commentable = !!stage && !!reviewTarget();
     diffView = new FileDiff({
       theme: "pierre-dark", themeType: "dark", disableFileHeader: true, overflow: "scroll", hunkSeparators: "line-info-basic",
       unsafeCSS: DIFF_CSS,
@@ -1454,7 +1455,7 @@ async function changeReview(mutation) {
 function diffAnnotations() {
   if (!diffContext) return [];
   const { path, stage, hunks } = diffContext;
-  const annotations = RemoteChangesView.commentAnnotations(hunks, reviewState.comments, RemoteChangesView.reviewNamespace(stage), path);
+  const annotations = RemoteChangesView.commentAnnotations(hunks, reviewState.comments, stage, path);
   if (reviewDraft) {
     const anchor = reviewDraft.anchor;
     annotations.push({ side: anchor.side === "old" ? "deletions" : "additions", lineNumber: anchor.endLine, metadata: { draft: reviewDraft } });
@@ -1509,7 +1510,7 @@ function renderCommentComposer(draft) {
     submit.disabled = true;
     const { path, stage } = diffContext;
     const failure = await changeReview({ add: {
-      fileID: { namespace: RemoteChangesView.reviewNamespace(stage), path }, path,
+      fileID: { namespace: stage, path }, path,
       anchor: { line: draft.anchor }, body
     } });
     if (reviewDraft !== draft) return;
